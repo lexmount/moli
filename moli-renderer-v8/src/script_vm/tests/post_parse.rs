@@ -300,6 +300,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
             redirected: true,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         "globalThis.__redirectScriptRan = true;".to_owned(),
@@ -324,50 +325,141 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
 }
 
 #[test]
-fn module_graph_redirect_final_url_obeys_script_src_csp() {
+fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     let mut vm = new_storage_test_vm("https://app.test/page.html");
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
         r#"
-        globalThis.__moduleCspEvents = [];
-        document.addEventListener("securitypolicyviolation", event => {
-            globalThis.__moduleCspEvents.push({
-                blockedURI: event.blockedURI,
-                effectiveDirective: event.effectiveDirective,
-                disposition: event.disposition,
-                instance: event instanceof SecurityPolicyViolationEvent,
-            });
-        });
-        "#,
+      globalThis.__moduleCspEvents = [];
+      document.addEventListener('securitypolicyviolation', event => {
+        __moduleCspEvents.push({blockedURI:event.blockedURI, disposition:event.disposition});
+      });
+    "#,
     )
-    .expect("install module CSP listener");
-    let final_url = Url::parse("https://cdn.test/dependency.js").unwrap();
-    let fetched_source = crate::module_runtime::ModuleGraphFetchedSource::new(
-        final_url.clone(),
-        true,
-        crate::module_runtime::ModuleSource::text("export default 1;".to_owned()),
+    .unwrap();
+    let original = Url::parse("https://app.test/dependency.js").unwrap();
+    let middle = Url::parse("https://cdn.test/private.js?token=SECRET").unwrap();
+    let final_url = Url::parse("https://app.test/final.js").unwrap();
+    let context = vm.document_runtime.module_fetch_csp_context(
+        &original,
+        crate::module_runtime::ModuleKind::JavaScript,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
     );
-
-    let error = vm
-        .module_graph_fetched_source_or_csp_error(
-            7,
-            fetched_source,
-            &crate::module_runtime::ModuleFetchMetadata::default(),
-        )
-        .expect_err("redirected module final URL should be blocked by script-src");
-    assert!(error.message().contains("Content Security Policy"));
+    // A cache/coalesced consumer has no transport-time checks of its own. Its
+    // captured policy still governs every hop after the live policy changes.
+    vm.set_response_content_security_report_only_policies(&["script-src *".to_owned()]);
+    vm.set_response_content_security_policies(&["script-src *".to_owned()]);
+    let redirect = |from: &Url, to: &Url| moli_fetch::RedirectInfo {
+        from_url: from.clone(),
+        to_url: to.clone(),
+        status: 302,
+        source: moli_fetch::RedirectSource::Network,
+        headers: Vec::new(),
+        network_extra_info_available: false,
+        request_extra_info: None,
+        response_extra_info: None,
+        redirect_has_extra_info: false,
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        from_cache: true,
+        negotiated_http_version: None,
+    };
+    let response = moli_fetch::Response::from_head_and_text_body(
+        moli_fetch::ResponseHead {
+            final_url: final_url.clone(),
+            status: 200,
+            status_text: None,
+            headers: Vec::new(),
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: true,
+            redirect_chain: vec![redirect(&original, &middle), redirect(&middle, &final_url)],
+            from_cache: true,
+            cache_state: moli_fetch::ResponseCacheState::Local,
+            negotiated_http_version: None,
+        },
+        "export default 1;".to_owned(),
+    );
+    let error = context
+        .check_response(&response)
+        .expect_err("cached middle hop must be checked by the captured policy");
+    assert!(error.to_string().contains("Content Security Policy"));
+    assert!(!error.to_string().contains("SECRET"));
+    assert!(!error.to_string().contains("cdn.test"));
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
         2
     );
     assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__moduleCspEvents)")
-            .expect("read module CSP events"),
+        vm.eval("JSON.stringify(__moduleCspEvents)").unwrap(),
         format!(
-            r#"[{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"report","instance":true}},{{"blockedURI":"{}","effectiveDirective":"script-src-elem","disposition":"enforce","instance":true}}]"#,
-            final_url, final_url
+            r#"[{{"blockedURI":"{original}","disposition":"report"}},{{"blockedURI":"{original}","disposition":"enforce"}}]"#,
         )
+    );
+    assert!(
+        context.check_response(&response).is_err(),
+        "a previously denied cached middle hop must remain denied after its reports are drained"
+    );
+    vm.dispatch_module_fetch_csp_violations(Some(&context));
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        0,
+        "replaying a response must not report the same hop twice"
+    );
+}
+
+#[test]
+fn module_csp_admission_reports_once_for_service_worker_response_alias() {
+    let mut vm = new_storage_test_vm("https://app.test/page.html");
+    vm.set_response_content_security_policies(&[
+        "script-src https://app.test/request.js".to_owned()
+    ]);
+    vm.set_response_content_security_report_only_policies(&["script-src 'none'".to_owned()]);
+    let original = Url::parse("https://app.test/request.js").unwrap();
+    let context = vm.document_runtime.module_fetch_csp_context(
+        &original,
+        crate::module_runtime::ModuleKind::JavaScript,
+        &crate::module_runtime::ModuleFetchMetadata::default(),
+    );
+    context.check_initial_request(&original).unwrap();
+    let violations = context.take_violations();
+    assert_eq!(
+        violations.len(),
+        1,
+        "Main-Document admission must check report-only policy"
+    );
+    assert_eq!(violations[0].blocked_uri, original.as_str());
+    assert_eq!(
+        violations[0].disposition,
+        crate::content_security_policy::ContentSecurityPolicyDisposition::Report
+    );
+    context.check_initial_request(&original).unwrap();
+    assert!(context.take_violations().is_empty());
+    // respondWith(fetch(...)) can supply a different response URL without a
+    // redirect. It does not turn this request into a fetch of that URL.
+    let response = moli_fetch::Response::from_head_and_text_body(
+        moli_fetch::ResponseHead {
+            final_url: Url::parse("https://app.test/private.js").unwrap(),
+            status: 200,
+            status_text: None,
+            headers: Vec::new(),
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: moli_fetch::ResponseCacheState::None,
+            negotiated_http_version: None,
+        },
+        "export default 42;".to_owned(),
+    );
+    context.check_response(&response).unwrap();
+    assert!(
+        context.take_violations().is_empty(),
+        "completion must not duplicate admission's report"
     );
 }
 
@@ -4014,7 +4106,7 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBFactory.prototype, "databases", 0],
                 [IDBDatabase.prototype, "createObjectStore", 2],
                 [IDBDatabase.prototype, "deleteObjectStore", 1],
-                [IDBDatabase.prototype, "transaction", 2],
+                [IDBDatabase.prototype, "transaction", 1],
                 [IDBDatabase.prototype, "close", 0],
                 [IDBDatabase.prototype, "addEventListener", 2],
                 [IDBDatabase.prototype, "removeEventListener", 2],
@@ -4029,28 +4121,30 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBRequest.prototype, "removeEventListener", 2],
                 [IDBRequest.prototype, "dispatchEvent", 1],
                 [IDBObjectStore.prototype, "get", 1],
-                [IDBObjectStore.prototype, "getAll", 2],
+                [IDBObjectStore.prototype, "getAll", 0],
                 [IDBObjectStore.prototype, "getKey", 1],
-                [IDBObjectStore.prototype, "getAllKeys", 2],
-                [IDBObjectStore.prototype, "count", 1],
-                [IDBObjectStore.prototype, "put", 2],
-                [IDBObjectStore.prototype, "add", 2],
+                [IDBObjectStore.prototype, "getAllKeys", 0],
+                [IDBObjectStore.prototype, "getAllRecords", 0],
+                [IDBObjectStore.prototype, "count", 0],
+                [IDBObjectStore.prototype, "put", 1],
+                [IDBObjectStore.prototype, "add", 1],
                 [IDBObjectStore.prototype, "delete", 1],
                 [IDBObjectStore.prototype, "clear", 0],
                 [IDBObjectStore.prototype, "createIndex", 3],
                 [IDBObjectStore.prototype, "index", 1],
                 [IDBObjectStore.prototype, "deleteIndex", 1],
-                [IDBObjectStore.prototype, "openCursor", 2],
-                [IDBObjectStore.prototype, "openKeyCursor", 2],
+                [IDBObjectStore.prototype, "openCursor", 0],
+                [IDBObjectStore.prototype, "openKeyCursor", 0],
                 [IDBIndex.prototype, "get", 1],
                 [IDBIndex.prototype, "getKey", 1],
-                [IDBIndex.prototype, "getAll", 2],
-                [IDBIndex.prototype, "getAllKeys", 2],
-                [IDBIndex.prototype, "count", 1],
-                [IDBIndex.prototype, "openCursor", 2],
-                [IDBIndex.prototype, "openKeyCursor", 2],
+                [IDBIndex.prototype, "getAll", 0],
+                [IDBIndex.prototype, "getAllKeys", 0],
+                [IDBIndex.prototype, "getAllRecords", 0],
+                [IDBIndex.prototype, "count", 0],
+                [IDBIndex.prototype, "openCursor", 0],
+                [IDBIndex.prototype, "openKeyCursor", 0],
                 [IDBCursor.prototype, "advance", 1],
-                [IDBCursor.prototype, "continue", 1],
+                [IDBCursor.prototype, "continue", 0],
                 [IDBCursor.prototype, "continuePrimaryKey", 2],
                 [IDBCursor.prototype, "update", 1],
                 [IDBCursor.prototype, "delete", 0],
@@ -4061,7 +4155,10 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBKeyRange, "upperBound", 1],
               ];
               for (const [target, name, length] of methods) {
-                const descriptor = Object.getOwnPropertyDescriptor(target, name);
+                const inherited = ["addEventListener", "removeEventListener", "dispatchEvent"].includes(name);
+                if (inherited && (Object.hasOwn(target, name) || target[name] !== EventTarget.prototype[name]))
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                const descriptor = Object.getOwnPropertyDescriptor(inherited ? EventTarget.prototype : target, name);
                 if (!descriptor || typeof descriptor.value !== "function") {
                   throw new Error(`${name} should be a declared function`);
                 }

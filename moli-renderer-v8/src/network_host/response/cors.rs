@@ -1,10 +1,9 @@
 use moli_fetch::validate_cors_response_for_origin;
 
-use moli_cookie_jar::same_site_urls;
 use moli_fetch::{RedirectSource, RequestCredentialsMode, RequestMode};
 use moli_url::WebOrigin;
 use moli_web_mime::{
-    response_header_value, response_header_values, should_opaque_response_be_blocked_by_orb,
+    response_header_values, should_opaque_response_be_blocked_by_orb,
     should_opaque_response_be_blocked_by_orb_with_body,
 };
 
@@ -84,7 +83,8 @@ pub(crate) fn validate_fetch_response_security_policy(
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
     head.url_list()
-        .validate_request_mode(request_mode, &request_origin)?;
+        .validate_request_mode(request_mode, &request_origin)
+        .map_err(|error| error.to_string())?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
@@ -136,7 +136,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
     let request_origin = request_origin.into();
     head.url_list()
         .validate_request_mode(request_mode, &request_origin)
-        .map_err(FetchResponseSecurityViolation::Rejected)?;
+        .map_err(|error| FetchResponseSecurityViolation::Rejected(error.to_string()))?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
@@ -270,23 +270,13 @@ pub(crate) fn validate_cross_origin_embedder_and_document_isolation_policy(
         requires_corp_due_to_dip,
         document_isolation_policy,
     );
-    let Some(policy) = response_header_value(response_headers, "cross-origin-resource-policy")
-    else {
-        return Err(format!(
-            "{policy_label} check failed: requires Cross-Origin-Resource-Policy for {} to load {response_url}",
-            request_origin.ascii_serialization()
-        ));
-    };
-    let policy = policy.trim().to_ascii_lowercase();
-    match policy.as_str() {
-        "same-origin" | "same-site" | "cross-origin" => {
-            validate_cross_origin_resource_policy(&request_origin, response_url, response_headers)
-        }
-        _ => Err(format!(
-            "{policy_label} check failed: treats invalid Cross-Origin-Resource-Policy `{policy}` as same-origin for {} to load {response_url}",
-            request_origin.ascii_serialization()
-        )),
+    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
+        return policy.check(&request_origin, response_url);
     }
+    Err(format!(
+        "{policy_label} check failed: requires a valid Cross-Origin-Resource-Policy for {} to load {response_url}",
+        request_origin.ascii_serialization()
+    ))
 }
 
 fn defaulted_corp_policy_label(
@@ -331,28 +321,10 @@ pub(crate) fn validate_cross_origin_resource_policy(
     response_headers: &[(String, Vec<u8>)],
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
-    if !matches!(response_url.scheme(), "http" | "https") {
-        return Ok(());
+    if let Some(policy) = moli_fetch::CrossOriginResourcePolicy::from_headers(response_headers) {
+        policy.check(&request_origin, response_url)?;
     }
-    let Some(policy) = response_header_value(response_headers, "cross-origin-resource-policy")
-    else {
-        return Ok(());
-    };
-    let policy = policy.trim().to_ascii_lowercase();
-    let allowed = match policy.as_str() {
-        "same-origin" => request_origin.same_origin(&response_url.into()),
-        "same-site" => url::Url::parse(request_origin.ascii_serialization())
-            .is_ok_and(|origin| same_site_urls(&origin, response_url, true)),
-        "cross-origin" => true,
-        _ => true,
-    };
-    if allowed {
-        return Ok(());
-    }
-    Err(format!(
-        "Cross-Origin-Resource-Policy check failed: `{policy}` does not allow {} to load {response_url}",
-        request_origin.ascii_serialization()
-    ))
+    Ok(())
 }
 
 pub(crate) fn cors_preflight_request_headers(
@@ -487,7 +459,8 @@ pub(crate) fn filter_cors_exposed_response_headers(
             if name.is_empty() {
                 continue;
             }
-            if name == "*" {
+            // With credentials, `*` exposes only a header literally named `*`.
+            if name == "*" && credentials_mode != RequestCredentialsMode::Include {
                 wildcard = true;
             } else if !exposed_names.iter().any(|existing| existing == &name) {
                 exposed_names.push(name);
@@ -495,7 +468,7 @@ pub(crate) fn filter_cors_exposed_response_headers(
         }
     }
 
-    if wildcard && credentials_mode != RequestCredentialsMode::Include {
+    if wildcard {
         return response_headers
             .iter()
             .filter(|(name, _)| !is_forbidden_response_header_name(name))
@@ -556,6 +529,7 @@ fn parsed_header_name(name: &str) -> Option<http::HeaderName> {
 mod tests {
     use super::*;
     use moli_url::origin_ascii_serialization;
+    use moli_web_mime::response_header_value;
 
     fn url(value: &str) -> url::Url {
         url::Url::parse(value).expect("valid URL")
@@ -575,6 +549,7 @@ mod tests {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         }
     }
@@ -606,6 +581,7 @@ mod tests {
                     negotiated_http_version: None,
                 }],
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             };
             let document_url = url("https://document.test/page.html");
@@ -1027,6 +1003,55 @@ mod tests {
     }
 
     #[test]
+    fn cors_exposed_headers_star_matches_literal_field_with_credentials() {
+        for expose_values in [
+            &["*", "*"][..],
+            &["X-Visible, *", "*, x-visible, Set-Cookie, set-cookie2"][..],
+        ] {
+            let fields = |pairs: &[(&str, &str)]| {
+                pairs
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), value.as_bytes().to_vec()))
+                    .collect::<Vec<_>>()
+            };
+            let all_exposed = fields(&[
+                ("Content-Type", "text/plain"),
+                ("*", "literal"),
+                ("X-Visible", "explicit"),
+                ("X-Hidden", "private"),
+                ("Access-Control-Expose-Headers", expose_values[0]),
+                ("access-control-expose-headers", expose_values[1]),
+            ]);
+            let mut headers = all_exposed.clone();
+            headers.extend(fields(&[
+                ("Set-Cookie", "secret=1"),
+                ("set-cookie2", "secret=2"),
+            ]));
+            let response = header_response(url("http://other.test/data"), headers);
+            let mut credentialed = fields(&[("Content-Type", "text/plain"), ("*", "literal")]);
+            if expose_values[0] == "X-Visible, *" {
+                credentialed.extend(fields(&[("X-Visible", "explicit")]));
+            }
+
+            for (credentials, expected) in [
+                (RequestCredentialsMode::Include, &credentialed),
+                (RequestCredentialsMode::Omit, &all_exposed),
+                (RequestCredentialsMode::SameOrigin, &all_exposed),
+            ] {
+                assert_eq!(
+                    &filter_cors_exposed_response_headers(
+                        &url("http://example.test/page"),
+                        &response,
+                        credentials,
+                    ),
+                    expected,
+                    "credentials={credentials:?}, expose_values={expose_values:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cors_exposed_headers_same_origin_keeps_existing_surface() {
         let headers: Vec<(String, Vec<u8>)> = vec![
             ("X-Internal".to_owned(), b"ok".to_vec()),
@@ -1195,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn corp_same_site_uses_schemeful_site_comparison() {
+    fn corp_same_site_uses_schemeless_site_with_asymmetric_https_requirement() {
         let same_site = validate_cross_origin_resource_policy(
             &url("https://app.example.test/page"),
             &url("https://cdn.example.test/data"),
@@ -1214,7 +1239,18 @@ mod tests {
                 b"same-site".to_vec(),
             )],
         );
-        assert!(cross_scheme.is_err());
+        assert!(cross_scheme.is_ok());
+        assert!(
+            validate_cross_origin_resource_policy(
+                &url("http://app.example.test/page"),
+                &url("https://cdn.example.test/data"),
+                &[(
+                    "Cross-Origin-Resource-Policy".to_owned(),
+                    b"same-site".to_vec()
+                )],
+            )
+            .is_err()
+        );
     }
 
     #[test]

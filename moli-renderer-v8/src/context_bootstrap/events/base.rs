@@ -477,12 +477,14 @@ pub(in crate::context_bootstrap) fn event_constructor_callback<'s>(
     }
 
     let wrapper = args.this();
-    let event = new_event_state(scope);
     let Some(event_type) = event_type_argument(scope, &args, "Event") else {
         return;
     };
 
-    let (bubbles, cancelable, composed) = read_event_init(scope, &args);
+    let Some((bubbles, cancelable, composed)) = read_event_init(scope, &args) else {
+        return;
+    };
+    let event = new_event_state(scope);
     initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
         scope,

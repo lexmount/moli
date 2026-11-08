@@ -11,6 +11,7 @@ mod client;
 mod client_hints;
 mod config;
 mod cors;
+mod cross_origin_resource_policy;
 mod dns;
 mod error;
 mod fetch_url_list;
@@ -42,17 +43,19 @@ pub use cancellation::{FetchCancelHandle, FetchResponseTiming};
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
 pub use cors::validate_cors_response_for_origin;
+pub use cross_origin_resource_policy::CrossOriginResourcePolicy;
 pub use error::{
-    FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success, is_fetch_cancelled,
+    FetchCacheMiss, FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success,
+    is_fetch_cancelled,
 };
-pub use fetch_url_list::FetchUrlList;
+pub use fetch_url_list::{FetchUrlList, RequestModeError};
 pub use headers::{
-    cors_unsafe_request_header_names, is_cors_safelisted_method,
-    is_cors_safelisted_request_content_type, is_cors_safelisted_request_header,
-    is_cors_safelisted_request_range, is_cors_unsafe_request_header_byte,
-    is_forbidden_request_header_name, is_forbidden_request_header_override_value,
-    is_forbidden_response_header_name, is_no_cors_safelisted_request_header,
-    split_http_header_list,
+    DefaultAcceptKind, cors_unsafe_request_header_names, default_accept_header,
+    encode_redirect_location, is_cors_safelisted_method, is_cors_safelisted_request_content_type,
+    is_cors_safelisted_request_header, is_cors_safelisted_request_range,
+    is_cors_unsafe_request_header_byte, is_forbidden_request_header_name,
+    is_forbidden_request_header_override_value, is_forbidden_response_header_name,
+    is_no_cors_safelisted_request_header, split_http_header_list,
 };
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;
@@ -75,16 +78,17 @@ pub use referrer_policy::{
     response_referrer_policy_from_headers, sanitized_referrer_url,
 };
 pub use request::{
-    BrowserNavigationRequestKind, BrowserRequestMetadata, FetchPriorityHint, Request, RequestAuth,
-    RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
-    RequestHeaderOverride, RequestMode, RequestPriorityHints, RequestRedirectHandling,
-    RequestRedirectMode, RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
-    ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, FetchPriorityHint,
+    Request, RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCacheMode,
+    RequestCredentialsMode, RequestHeaderOverride, RequestMode, RequestPriorityHints,
+    RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
+    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RawResponse,
-    RedirectInfo, RedirectSource, Response, ResponseBody, ResponseHead,
+    RedirectInfo, RedirectSource, Response, ResponseBody, ResponseCacheState, ResponseHead,
 };
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{

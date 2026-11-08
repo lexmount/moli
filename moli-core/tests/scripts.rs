@@ -2,6 +2,8 @@
 mod child_script_text;
 #[path = "scripts/integrity.rs"]
 mod integrity;
+#[path = "scripts/worker_fetch_metadata.rs"]
+mod worker_fetch_metadata;
 
 use moli_test_support as support;
 
@@ -784,11 +786,10 @@ async fn runtime_inserted_stylesheet_load_waits_for_fetch_completion() -> Result
 async fn runtime_inserted_stylesheet_load_mutation_syncs_back_into_parser_before_later_script()
 -> Result<()> {
     // Runtime-inserted stylesheets are intentionally not parser/script-blocking
-    // stylesheets under HTML's parser-created stylesheet rule. The fixture keeps
-    // the runtime stylesheet fast and the parser-owned stylesheet slow, so this
-    // test covers only the renderer/parser snapshot boundary: a mutation made by
-    // an already-fired runtime stylesheet load handler must be visible before
-    // the later parser-inserted script executes.
+    // stylesheets under HTML's parser-created stylesheet rule. The fixture
+    // releases the parser-owned stylesheet after the runtime load handler
+    // appends its marker. This establishes the exact snapshot boundary without
+    // racing two network delays under parallel load.
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
@@ -841,9 +842,15 @@ async fn runtime_inserted_stylesheet_href_mutation_uses_fresh_fetch_for_parser_b
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
-        .fetch(&server.url("/compat/runtime-inserted-stylesheet-href-mutation-uses-fresh-fetch"))
-        .await?;
+    // The second parser script releases the stale stylesheet response. If it
+    // waits on that stale request, the fixture never supplies CSS to unblock it.
+    let page = tokio::time::timeout(
+        Duration::from_secs(5),
+        browser.fetch(
+            &server.url("/compat/runtime-inserted-stylesheet-href-mutation-uses-fresh-fetch"),
+        ),
+    )
+    .await??;
 
     assert_eq!(
         diagnostic_global(&page, "runtimeInsertedHrefMutationParserNotBlocked"),
@@ -4486,7 +4493,7 @@ async fn module_import_attributes_and_dynamic_options_execute() -> Result<()> {
     browser
         .wait_for_script_truthy(
             &mut page,
-            "window.moduleImportAttributesDynamicValue === 'comment-ok' && window.moduleImportAttributesTextRejected === true",
+            "window.moduleImportAttributesDynamicValue === 'comment-ok' && window.moduleImportAttributesUnsupportedRejected === true",
             Duration::from_secs(2),
         )
         .await?;
@@ -4505,7 +4512,7 @@ async fn module_import_attributes_and_dynamic_options_execute() -> Result<()> {
         ))
     );
     assert_eq!(
-        diagnostic_global(&page, "moduleImportAttributesTextErrorName"),
+        diagnostic_global(&page, "moduleImportAttributesUnsupportedErrorName"),
         Some(&JsValueSnapshot::String("TypeError".to_owned()))
     );
 
@@ -6736,3 +6743,6 @@ mod document_close;
 
 #[path = "scripts/post_parse_async.rs"]
 mod post_parse_async;
+
+#[path = "scripts/text_modules.rs"]
+mod text_modules;

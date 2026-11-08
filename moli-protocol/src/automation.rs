@@ -6,7 +6,8 @@
 
 use std::{fmt, str::FromStr, sync::Arc};
 
-use moli_cookie_jar::{StoredCookiePartitionKey, StoredCookieQueryReport};
+use moli_cookie_jar::StoredCookieQueryReport;
+pub use moli_cookie_jar::{StoredCookieDomainMatch, StoredCookiePartitionFilter};
 use moli_core::page::{
     DomScrollIntoViewRect, SelectedFile, SubresourceResourceType, is_renderer_backend_node_id,
 };
@@ -86,6 +87,8 @@ pub fn webdriver_bidi_navigation_id_from_loader_id(loader_id: &str) -> DevToolsN
 
 const WEBDRIVER_BIDI_RENDERER_NODE_SHARED_ID_PREFIX: &str = "moli:bidi-renderer-node:";
 
+/// Classic and BiDi use the same reference. Its authority is retained by the
+/// exporting session's native node registry and renderer binding.
 pub fn webdriver_bidi_node_shared_id_for_backend_node_id(
     backend_node_id: u32,
 ) -> DevToolsRemoteHandleId {
@@ -247,6 +250,7 @@ pub enum AutomationCommand {
     SetGeolocationOverride(DevToolsSetGeolocationOverrideCommand),
     SetNetworkConditions(DevToolsSetNetworkConditionsCommand),
     GetFrameOwner(DevToolsGetFrameOwnerCommand),
+    GetOrCreateNodeReference(DevToolsGetOrCreateNodeReferenceCommand),
     LocateNodes(DevToolsLocateNodesCommand),
     GetDocument(DevToolsGetDocumentCommand),
     RequestChildNodes(DevToolsRequestChildNodesCommand),
@@ -334,6 +338,7 @@ impl AutomationCommand {
             AutomationCommand::SetGeolocationOverride(command) => &command.context,
             AutomationCommand::SetNetworkConditions(command) => &command.context,
             AutomationCommand::GetFrameOwner(command) => &command.context,
+            AutomationCommand::GetOrCreateNodeReference(command) => &command.context,
             AutomationCommand::LocateNodes(command) => &command.context,
             AutomationCommand::GetDocument(command) => &command.context,
             AutomationCommand::RequestChildNodes(command) => &command.context,
@@ -806,10 +811,18 @@ pub enum DevToolsDevicePixelRatioSetting {
     Scale(f64),
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DevToolsCookieScope {
+    /// Storage owner, resolved from the target when not explicitly provided.
+    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    /// Cookie partition constraints, independent of the owning browser context.
+    pub partition_filter: StoredCookiePartitionFilter,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsGetCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    pub scope: DevToolsCookieScope,
     pub urls: Option<Vec<String>>,
     pub filter: Option<DevToolsCookieFilter>,
 }
@@ -817,19 +830,28 @@ pub struct DevToolsGetCookiesCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDeleteCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
-    pub name: Option<String>,
-    pub url: Option<String>,
-    pub domain: Option<String>,
-    pub path: Option<String>,
-    pub partition_key: Option<StoredCookiePartitionKey>,
-    pub filter: Option<DevToolsCookieFilter>,
+    pub scope: DevToolsCookieScope,
+    pub filter: DevToolsCookieDeleteFilter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevToolsCookieDeleteFilter {
+    Scope {
+        name: Option<String>,
+        url: Option<String>,
+        domain: Option<String>,
+        domain_match: StoredCookieDomainMatch,
+        path: Option<String>,
+    },
+    Properties(DevToolsCookieFilter),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesCommand {
     pub context: AutomationContext,
-    pub browser_context_id: Option<DevToolsBrowserContextId>,
+    /// An explicit partition in this scope determines every cookie's write
+    /// identity. `All` retains per-cookie partition keys for CDP batches.
+    pub scope: DevToolsCookieScope,
     pub cookies: Vec<DevToolsCookieParam>,
 }
 
@@ -851,7 +873,7 @@ pub struct DevToolsCookieParam {
     pub expires: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DevToolsCookieFilter {
     pub name: Option<String>,
     pub value: Option<String>,
@@ -868,6 +890,32 @@ pub struct DevToolsCookieFilter {
 pub struct DevToolsGetFrameOwnerCommand {
     pub context: AutomationContext,
     pub frame_id: DevToolsFrameId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebDriverNodeKind {
+    Element,
+    ShadowRoot,
+    Other,
+}
+
+impl WebDriverNodeKind {
+    pub(crate) fn from_snapshot(snapshot: &moli_core::page::DocumentNodeSnapshot) -> Self {
+        if snapshot.is_element {
+            Self::Element
+        } else if snapshot.shadow_root_type.is_some() {
+            Self::ShadowRoot
+        } else {
+            Self::Other
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevToolsGetOrCreateNodeReferenceCommand {
+    pub context: AutomationContext,
+    pub reference: DevToolsDomNodeReference,
+    pub kind: WebDriverNodeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -923,6 +971,22 @@ pub enum DevToolsDomNodeReference {
 }
 
 impl DevToolsDomNodeReference {
+    pub(crate) fn into_renderer_reference_for_protocol(
+        self,
+        inspector_session_id: Option<String>,
+        protocol: FrontendProtocol,
+    ) -> moli_core::page::RendererDomNodeReference {
+        if protocol != FrontendProtocol::Cdp
+            && let Self::FrontendNodeId(frontend_node_id) = self
+        {
+            return moli_core::page::RendererDomNodeReference::InternalFrontendNodeBinding {
+                inspector_session_id,
+                frontend_node_id,
+            };
+        }
+        self.into_renderer_reference(inspector_session_id)
+    }
+
     pub(crate) fn into_renderer_reference(
         self,
         inspector_session_id: Option<String>,
@@ -1381,22 +1445,13 @@ pub struct DevToolsContinueWithAuthCommand {
 }
 
 /// A protocol-requested failure. Cancellation is a cause, not a display string.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DevToolsRequestFailure {
+    #[error("Aborted")]
     Aborted,
+    #[error("{0}")]
     Failed(String),
 }
-
-impl std::fmt::Display for DevToolsRequestFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Aborted => formatter.write_str("Aborted"),
-            Self::Failed(message) => formatter.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for DevToolsRequestFailure {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsFailInterceptedRequestCommand {
@@ -1449,6 +1504,7 @@ pub enum AutomationResult {
     Realms(DevToolsGetRealmsResult),
     Script(Box<DevToolsScriptResult>),
     LocateNodes(DevToolsLocateNodesResult),
+    NodeReference(DevToolsRemoteHandleId),
     DescribeNode(DevToolsDescribeNodeResult),
     GetFrameOwner(DevToolsGetFrameOwnerResult),
     QuerySelector(DevToolsQuerySelectorResult),
@@ -1602,6 +1658,14 @@ pub struct DevToolsTargetInfo {
 }
 
 impl DevToolsTargetInfo {
+    /// The initiating Frame survives in attribution even after its Page closes.
+    pub fn original_opener_id(&self) -> Option<&str> {
+        self.opener_frame_id
+            .as_ref()
+            .map(DevToolsFrameId::as_str)
+            .or_else(|| self.opener_id.as_ref().map(DevToolsTargetId::as_str))
+    }
+
     pub(crate) fn into_cdp_value(self) -> Value {
         let mut payload = json!({
             "type": self.kind.as_cdp_type(),
@@ -1629,18 +1693,19 @@ impl DevToolsTargetInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsGetCookiesResult {
     pub cookies: Vec<Value>,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsDeleteCookiesResult {
-    pub partition_key: Value,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsSetCookiesResult {
     pub success: bool,
     pub cookie_reports: Vec<Value>,
-    pub partition_key: Value,
+    pub scope: DevToolsCookieScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2012,10 +2077,10 @@ pub struct DevToolsError {
 }
 
 impl DevToolsError {
-    pub fn new(kind: DevToolsErrorKind, message: impl Into<String>) -> Self {
+    pub fn new(kind: DevToolsErrorKind, message: impl std::fmt::Display) -> Self {
         Self {
             kind,
-            message: message.into(),
+            message: format!("{message:#}"),
         }
     }
 }
@@ -2026,11 +2091,11 @@ pub enum AutomationEvent {
     TargetDestroyed(TargetLifecycleEvent),
     TargetAttached(TargetAttachmentEvent),
     TargetDetached(TargetDetachmentEvent),
+    FrameAttached(crate::frame_index::FrameRecord),
+    FrameDetached(FrameDetachedEvent),
     NavigationFrame(NavigationFrameEvent),
     NavigationStarted(NavigationLifecycleEvent),
-    DomContentLoaded(NavigationLifecycleEvent),
-    Load(NavigationLifecycleEvent),
-    PageLifecycle(PageLifecycleEvent),
+    DocumentLifecycle(DocumentLifecycleEvent),
     SameDocumentNavigation(SameDocumentNavigationEvent),
     LogEntryAdded(LogEntryEvent),
     RuntimeConsoleApiCalled(RuntimeConsoleEvent),
@@ -2129,6 +2194,12 @@ pub struct TargetDetachmentEvent {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameDetachedEvent {
+    pub frame: crate::frame_index::FrameRecord,
+    pub descendants: Vec<crate::frame_index::FrameRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NavigationFrameEventKind {
     Scheduled,
@@ -2164,6 +2235,69 @@ pub struct NavigationLifecycleEvent {
     pub timestamp: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DocumentLifecyclePhase {
+    Init,
+    DomContentLoaded,
+    Load,
+    NetworkAlmostIdle,
+    NetworkIdle,
+    Other(String),
+}
+
+impl DocumentLifecyclePhase {
+    pub fn from_cdp_name(name: &str) -> Self {
+        match name {
+            "init" => Self::Init,
+            "DOMContentLoaded" => Self::DomContentLoaded,
+            "load" => Self::Load,
+            "networkAlmostIdle" => Self::NetworkAlmostIdle,
+            "networkIdle" => Self::NetworkIdle,
+            name => Self::Other(name.to_owned()),
+        }
+    }
+
+    pub fn as_cdp_name(&self) -> &str {
+        match self {
+            Self::Init => "init",
+            Self::DomContentLoaded => "DOMContentLoaded",
+            Self::Load => "load",
+            Self::NetworkAlmostIdle => "networkAlmostIdle",
+            Self::NetworkIdle => "networkIdle",
+            Self::Other(name) => name,
+        }
+    }
+}
+
+/// A lifecycle fact before CDP or BiDi serialization. The loader identifies
+/// the Document generation; the delivery envelope retains its renderer epoch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentLifecycleEvent {
+    pub target_id: DevToolsTargetId,
+    pub frame_id: DevToolsFrameId,
+    pub navigation_id: Option<DevToolsNavigationId>,
+    pub loader_id: Option<DevToolsLoaderId>,
+    pub url: String,
+    pub timestamp: f64,
+    pub phase: DocumentLifecyclePhase,
+    pub document: Option<moli_core::page::RendererDocumentLifecycleIdentity>,
+}
+
+impl NavigationLifecycleEvent {
+    pub fn at_phase(self, phase: DocumentLifecyclePhase) -> DocumentLifecycleEvent {
+        DocumentLifecycleEvent {
+            target_id: self.target_id,
+            frame_id: self.frame_id,
+            navigation_id: self.navigation_id,
+            loader_id: self.loader_id,
+            url: self.url,
+            timestamp: self.timestamp,
+            phase,
+            document: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLifecycleEvent {
     pub target_id: DevToolsTargetId,
@@ -2171,6 +2305,21 @@ pub struct PageLifecycleEvent {
     pub loader_id: DevToolsLoaderId,
     pub name: String,
     pub timestamp: f64,
+}
+
+impl From<PageLifecycleEvent> for DocumentLifecycleEvent {
+    fn from(event: PageLifecycleEvent) -> Self {
+        Self {
+            target_id: event.target_id,
+            frame_id: event.frame_id,
+            navigation_id: None,
+            loader_id: Some(event.loader_id),
+            url: String::new(),
+            timestamp: event.timestamp,
+            phase: DocumentLifecyclePhase::from_cdp_name(&event.name),
+            document: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2343,6 +2492,7 @@ impl DevToolsNetworkResourceType {
             SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
             | SubresourceResourceType::Xhr => Self::Xhr,
+            SubresourceResourceType::TextTrack => Self::Media,
             _ => value.into(),
         }
     }
@@ -2351,6 +2501,7 @@ impl DevToolsNetworkResourceType {
 impl From<SubresourceResourceType> for DevToolsNetworkResourceType {
     fn from(value: SubresourceResourceType) -> Self {
         match value {
+            SubresourceResourceType::Document => Self::Document,
             SubresourceResourceType::Script => Self::Script,
             SubresourceResourceType::Stylesheet => Self::Stylesheet,
             SubresourceResourceType::Image => Self::Image,
@@ -2418,6 +2569,16 @@ mod network_resource_type_tests {
 
     #[test]
     fn subresource_resource_types_convert_without_stringly_typed_intermediate_state() {
+        assert_eq!(
+            DevToolsNetworkResourceType::from(SubresourceResourceType::TextTrack),
+            DevToolsNetworkResourceType::TextTrack
+        );
+        assert_eq!(
+            DevToolsNetworkResourceType::from_fetch_interception_type(
+                SubresourceResourceType::TextTrack
+            ),
+            DevToolsNetworkResourceType::Media
+        );
         assert_eq!(
             DevToolsNetworkResourceType::from(SubresourceResourceType::Audio),
             DevToolsNetworkResourceType::Media

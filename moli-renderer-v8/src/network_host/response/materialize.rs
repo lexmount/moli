@@ -1,7 +1,7 @@
 use super::super::fetch_surface::{
     RESPONSE_BODY_USED_SLOT, RESPONSE_INTERNAL_HEADERS_SLOT, RESPONSE_INTERNAL_STATUS_SLOT,
-    RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_INTERNAL_URL_SLOT, mark_response_object,
-    response_slot_number,
+    RESPONSE_INTERNAL_STATUS_TEXT_SLOT, RESPONSE_INTERNAL_URL_SLOT, body_already_used,
+    mark_response_object, response_slot_number,
 };
 use super::*;
 use crate::network_host::headers::headers_list;
@@ -567,14 +567,14 @@ pub(crate) fn materialize_response_object_head<'s>(
     if response_type == "error" {
         return Err(format!("{context} rejected an error Response."));
     }
+    if body_already_used(scope, response, RESPONSE_BODY_USED_SLOT) {
+        return Err(format!(
+            "{context} rejected a Response whose body is already used."
+        ));
+    }
     if response_body_locked(scope, response) {
         return Err(format!(
             "{context} rejected a Response whose body is locked."
-        ));
-    }
-    if response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT) {
-        return Err(format!(
-            "{context} rejected a Response whose body is already used."
         ));
     }
     let status = response_slot_value(scope, response, RESPONSE_STATUS_SLOT)
@@ -655,6 +655,22 @@ pub(crate) fn materialize_response_object_body<'s>(
     response: v8::Local<'s, v8::Object>,
     context: &str,
 ) -> MaterializedResponseBody<'s> {
+    match materialize_response_object_body_preserving_error(scope, response, context) {
+        Ok(body) => body,
+        Err(error) => MaterializedResponseBody::Failure(format!(
+            "{context} failed to materialize Response body: {}",
+            js_value_string(scope, error)
+        )),
+    }
+}
+
+/// Cache's ReadAllBytes rejection preserves the stream's original reason.
+/// In particular an AbortError or author sentinel must not be stringified.
+pub(crate) fn materialize_response_object_body_preserving_error<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    response: v8::Local<'s, v8::Object>,
+    context: &str,
+) -> Result<MaterializedResponseBody<'s>, v8::Local<'s, v8::Value>> {
     set_response_slot_bool(scope, response, RESPONSE_BODY_USED_SLOT, true);
     let consumption = consume_filtered_response_internal_body_value_from_object(
         scope,
@@ -664,22 +680,19 @@ pub(crate) fn materialize_response_object_body<'s>(
     .unwrap_or_else(|| {
         consume_network_body_value_from_object(scope, response, NetworkBodyConsumptionKind::Bytes)
     });
-    match consumption {
+    Ok(match consumption {
         NetworkBodyConsumption::Ready(value) => {
             match materialized_body_bytes_from_value(scope, value) {
                 Ok(bytes) => MaterializedResponseBody::Ready(bytes),
                 Err(error) => MaterializedResponseBody::Failure(format!("{context} {error}")),
             }
         }
-        NetworkBodyConsumption::Rejected(error) => MaterializedResponseBody::Failure(format!(
-            "{context} failed to materialize Response body: {}",
-            js_value_string(scope, error)
-        )),
+        NetworkBodyConsumption::Rejected(error) => return Err(error),
         NetworkBodyConsumption::Pending(promise) => MaterializedResponseBody::Pending(promise),
         NetworkBodyConsumption::Failed => MaterializedResponseBody::Failure(format!(
             "{context} requires a materialized Response body."
         )),
-    }
+    })
 }
 
 pub(crate) fn materialize_response_object_body_with_chunk_callback<'s>(

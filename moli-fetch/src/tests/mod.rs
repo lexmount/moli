@@ -1,9 +1,15 @@
 mod cache_request_controls;
+mod cache_request_controls_modes;
+mod cache_request_modes;
 mod cookie_context;
 mod cookie_store;
+mod corp;
+mod fetch_metadata;
 mod header_bytes;
 mod header_eof;
 mod mixed_transport;
+mod redirect_auth;
+mod redirect_policy;
 mod request_security;
 mod response_progress;
 mod response_timing;
@@ -76,6 +82,7 @@ fn sample_response_head() -> ResponseHead {
         redirected: false,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     }
 }
@@ -3291,7 +3298,7 @@ fn critical_client_hints_restart_navigation_before_exposing_the_first_response()
     let later = requests[2].to_ascii_lowercase();
     assert!(!first.contains("sec-ch-ua-arch:"));
     for expected in [
-        "sec-ch-ua-full-version: \"145.0.0.0\"",
+        "sec-ch-ua-full-version: \"156.0.8078.74\"",
         "sec-ch-ua-full-version-list:",
         "sec-ch-ua-arch: \"x86\"",
         "sec-ch-ua-bitness: \"64\"",
@@ -4300,6 +4307,7 @@ async fn network_metadata_failure_preserves_request_sent_before_empty_response()
     let cookie_store = new_shared_browser_cookie_store();
     cookie_store
         .lock()
+        .unwrap()
         .set_document_cookie(&url, "failedRequestCookie=present; Path=/");
     let client = FetchClient::new(&FetchConfig::default(), cookie_store);
 
@@ -4457,11 +4465,19 @@ fn network_metadata_keeps_raw_304_separate_from_merged_cached_response() {
         fetch_raw_with_network_metadata_for_test(&client, Request::get(&server.url()).unwrap())
             .unwrap();
     assert_eq!(first.response().status, 200);
+    assert_eq!(
+        first.response().cache_state,
+        crate::ResponseCacheState::None
+    );
     let second =
         fetch_raw_with_network_metadata_for_test(&client, Request::get(&server.url()).unwrap())
             .unwrap();
 
     assert_eq!(second.response().status, 200);
+    assert_eq!(
+        second.response().cache_state,
+        crate::ResponseCacheState::Validated
+    );
     assert_eq!(second.response().body_bytes(), b"cached");
     let exchange = second
         .observation_journal()
@@ -4864,6 +4880,9 @@ fn fetch_client_cache_updates_freshness_after_not_modified() {
     assert_eq!(first.body_text(), "hit-1");
     assert_eq!(second.body_text(), "hit-1");
     assert_eq!(third.body_text(), "hit-1");
+    assert_eq!(first.cache_state, crate::ResponseCacheState::None);
+    assert_eq!(second.cache_state, crate::ResponseCacheState::Validated);
+    assert_eq!(third.cache_state, crate::ResponseCacheState::Local);
     for response in [&first, &second, &third] {
         assert_eq!(response.status, 200);
         assert_eq!(
@@ -5464,6 +5483,72 @@ async fn fetch_with_cancel_aborts_inflight_streaming_transfer() -> Result<()> {
     );
 
     server.await.expect("cancel test server should finish");
+    Ok(())
+}
+
+#[tokio::test]
+async fn captured_raw_cancellation_closes_streaming_and_digest_transports() -> Result<()> {
+    for digest in [false, true] {
+        for before_headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let addr = listener.local_addr()?;
+            let (started, received) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await?;
+                read_http_request_head(&mut stream).await?;
+                if !before_headers {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\npartial").await?;
+                }
+                let _ = started.send(());
+                let mut byte = [0u8; 1];
+                let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+                    .await
+                    .context(
+                        "cancelled raw transport must close without completing its response",
+                    )?;
+                // Cancellation may close an unread socket with either FIN or
+                // RST. Both prove that the held response cannot continue.
+                assert!(
+                    matches!(read, Ok(0))
+                        || read.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset),
+                    "cancelled raw transport remained open: {read:?}"
+                );
+                anyhow::Ok(())
+            });
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            let cancel = FetchCancelHandle::new();
+            let mut request = Request::get(&format!("http://{addr}/held"))?;
+            if digest {
+                request = request.with_auth(RequestAuth {
+                    target: RequestAuthTarget::Server,
+                    scheme: RequestAuthScheme::Digest,
+                    username: "user".to_owned(),
+                    password: "pass".to_owned(),
+                });
+            }
+            let fetch = {
+                let client = client.clone();
+                let cancellation = cancel.clone();
+                tokio::spawn(async move {
+                    client
+                        .fetch_raw_with_cancel_and_network_metadata(request, cancellation)
+                        .await
+                })
+            };
+            tokio::time::timeout(Duration::from_secs(5), received).await??;
+            assert!(
+                !fetch.is_finished(),
+                "the fixture must keep the response incomplete"
+            );
+            cancel.cancel();
+            let error = tokio::time::timeout(Duration::from_secs(5), fetch)
+                .await??
+                .unwrap_err();
+            assert!(crate::is_fetch_cancelled(&error), "{error:#}");
+            server.await??;
+        }
+    }
     Ok(())
 }
 

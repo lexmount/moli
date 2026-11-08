@@ -63,6 +63,11 @@ impl RendererPublicationProjection {
         }
         match item {
             RendererOutputItem::NativeTerminal(_) => true,
+            RendererOutputItem::OwnerAction(
+                moli_core::RendererOwnerAction::DedicatedWorkerTargetLifecycle(
+                    moli_core::page::RendererDedicatedWorkerTargetEvent::Destroyed { .. },
+                ),
+            ) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::Network { .. }) => true,
             RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
                 batch,
@@ -195,6 +200,20 @@ impl RendererPublicationOwner {
                          route_target_id: String,
                          session_id: Option<String>| {
                             projection_for(runtime_slot).map(|projection| {
+                                // Preparing an attachment can declare the primary
+                                // before its frontend route commits. Keep the Page
+                                // source usable for other sessions during that wait.
+                                let session_id = session_id.filter(|session_id| {
+                                    matches!(
+                                        conn.session_route(Some(session_id)),
+                                        Some(CdpSessionRoute::PageTarget {
+                                            browser_context_id,
+                                            target_id,
+                                            session_key: moli_page_types::DevToolsSessionKey::Primary,
+                                        }) if browser_context_id == browser_context.id
+                                            && target_id == route_target_id
+                                    )
+                                });
                                 RendererPublicationRoute::for_target(
                                     browser_context.id.clone(),
                                     route_target_id,

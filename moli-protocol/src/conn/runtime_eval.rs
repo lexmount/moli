@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
@@ -13,9 +15,7 @@ use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
     page::{
-        DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
-        RendererDomBidiNodeBindingResolution, RendererDomBidiNodeSharedIdResolution,
         RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
         RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
@@ -33,6 +33,38 @@ use crate::domains::runtime_context_events::{
 };
 
 use super::*;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RuntimeInspectorError {
+    #[error("UnknownSession")]
+    UnknownSession,
+    #[error("UnknownMethod")]
+    UnknownMethod,
+    #[error("InvalidParams")]
+    InvalidParams,
+    #[error("Cannot find object with given id")]
+    CannotFindObject,
+    #[error("ConsoleCommandCompletionFailed: {0}")]
+    ConsoleCompletion(&'static str),
+    #[error("SessionResponseSenderMissing")]
+    SessionResponseSenderMissing,
+    #[error("RuntimeInspectorResponseCanceled")]
+    ResponseCanceled,
+    #[error("runtime Inspector command must be a JSON object")]
+    CommandNotObject,
+    #[error("runtime Inspector command id mismatch: expected {expected}, got {actual}")]
+    CommandIdMismatch { expected: u64, actual: String },
+    #[error("Runtime.enable completed from an unexpected renderer attachment")]
+    UnexpectedRendererAttachment,
+    #[error("Runtime.enable completed after session owner disappeared")]
+    EnableOwnerDisappeared,
+    #[error("Runtime.enable succeeded after session owner disappeared")]
+    EnableProjectionOwnerDisappeared,
+    #[error("Runtime.disable succeeded after session owner disappeared")]
+    DisableProjectionOwnerDisappeared,
+    #[error("BrowserContextNotLoaded")]
+    BrowserContextNotLoaded,
+}
 
 type RuntimeInspectorResponseReceiver = RuntimeInspectorAsyncCompletionReceiver;
 
@@ -95,39 +127,29 @@ impl RuntimeBindingCallEvent {
     }
 }
 
-#[cfg(test)]
-fn runtime_protocol_message_id(raw_json: &str) -> Option<u64> {
-    let message = serde_json::from_str::<Value>(raw_json).ok()?;
-    match message.get("id")? {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|id| u64::try_from(id).ok())),
-        _ => None,
-    }
-}
-
 fn rewrite_runtime_inspector_command_for_renderer(
     raw_json: &str,
     command_id_rewrite: Option<(FrontendCommandId, RendererCallId)>,
     owner_target_id: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String> {
+    use anyhow::Context as _;
     let mut message = serde_json::from_str::<Value>(raw_json)
-        .map_err(|error| format!("invalid runtime Inspector command JSON: {error}"))?;
+        .context("invalid runtime Inspector command JSON")?;
     let Some(object) = message.as_object_mut() else {
-        return Err("runtime Inspector command must be a JSON object".to_owned());
+        return Err(RuntimeInspectorError::CommandNotObject.into());
     };
 
     if let Some((frontend_command_id, renderer_call_id)) = command_id_rewrite {
         let wire_command_id = object.get("id").and_then(Value::as_u64);
         if wire_command_id != Some(frontend_command_id.get()) {
-            return Err(format!(
-                "runtime Inspector command id mismatch: expected {}, got {}",
-                frontend_command_id.get(),
-                object
+            return Err(RuntimeInspectorError::CommandIdMismatch {
+                expected: frontend_command_id.get(),
+                actual: object
                     .get("id")
                     .map(Value::to_string)
-                    .unwrap_or_else(|| "missing".to_owned())
-            ));
+                    .unwrap_or_else(|| "missing".to_owned()),
+            }
+            .into());
         }
         object.insert("id".to_owned(), json!(renderer_call_id.get()));
     }
@@ -156,11 +178,10 @@ fn rewrite_runtime_inspector_command_for_renderer(
         }
     }
 
-    serde_json::to_string(&message)
-        .map_err(|error| format!("failed to encode runtime Inspector command: {error}"))
+    serde_json::to_string(&message).context("failed to encode runtime Inspector command")
 }
 
-pub(crate) fn renderer_command_turn_frontend_protocol_response(
+fn renderer_command_turn_frontend_protocol_response(
     output: &RendererCommandTurnOutput,
     frontend_command_id: u64,
 ) -> Option<&Value> {
@@ -384,12 +405,14 @@ enum PendingRuntimeProtocolMessageDispatchKind {
 }
 
 pub struct PendingSharedWorkerRuntimeProtocolMessageDispatch {
+    scope: WorkerRuntimeScope,
     session_id: Option<String>,
     pending: SharedWorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct PendingServiceWorkerRuntimeProtocolMessageDispatch {
+    scope: WorkerRuntimeScope,
     session_id: Option<String>,
     pending: ServiceWorkerRuntimeProtocolDispatchFuture,
     response_route: RuntimeProtocolResponseRoute,
@@ -470,7 +493,7 @@ impl CompletedWorkerRuntimeProtocolDispatch {
         }
     }
 
-    async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    async fn wait_for_session_response(&mut self) -> Result<()> {
         let Some(pending) = self.pending_session_response.take() else {
             return Ok(());
         };
@@ -488,13 +511,23 @@ pub struct CompletedMoliDiagnosticsDispatch {
 struct CompletedMoliDiagnosticsPageSnapshot {
     browser_context_id: String,
     target_id: Option<String>,
-    completion: Result<moli_core::page::CompletedPageCommand, String>,
+    completion: Result<moli_core::page::CompletedPageCommand>,
 }
 
 pub struct CompletedRuntimeEnableEventsDispatch {
     owner: CommandOwnerScope,
     route: RuntimeProtocolMessagePageRoute,
     completion: moli_core::page::CompletedPageCommand,
+}
+
+impl CompletedRuntimeProtocolMessageDispatch {
+    pub(crate) fn host_scope(&self) -> ProtocolPageHostScope {
+        self.route.host.clone()
+    }
+
+    pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completion.renderer_output_predecessor()
+    }
 }
 
 impl CompletedRuntimeEnableEventsDispatch {
@@ -550,27 +583,34 @@ pub struct CompletedRuntimeBindingPageCommandDispatch {
     completion: moli_core::page::CompletedPageCommand,
 }
 
+impl CompletedRuntimeBindingPageCommandDispatch {
+    pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completion.renderer_output_predecessor()
+    }
+}
+
 pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
     owner: CommandOwnerScope,
     completion: moli_core::page::CompletedPageCommand,
 }
 
 type SharedWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch>>>>;
 type ServiceWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch>>>>;
 
 #[derive(Clone, Debug)]
 struct RuntimeProtocolMessagePageRoute {
     browser_context_id: String,
     target_id: Option<String>,
     renderer_agent_attachment_id: RendererAgentAttachmentId,
+    host: ProtocolPageHostScope,
 }
 
 fn collect_moli_diagnostics_pending_snapshots(
     browser_context: &mut BrowserContext,
     pending: &mut Vec<PendingMoliDiagnosticsPageSnapshot>,
-) -> Result<(), String> {
+) -> Result<()> {
     if browser_context
         .active_page_target()
         .runtime_slot
@@ -581,8 +621,7 @@ fn collect_moli_diagnostics_pending_snapshots(
             .runtime_slot
             .loaded_page()
             .expect("active target loaded page should exist")
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())?;
+            .start_page_diagnostics_snapshot()?;
         pending.push(PendingMoliDiagnosticsPageSnapshot {
             browser_context_id: browser_context.id.clone(),
             target_id: None,
@@ -598,8 +637,7 @@ fn collect_moli_diagnostics_pending_snapshots(
         let pending_snapshot = target
             .loaded_page()
             .expect("background target loaded page should exist")
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())?;
+            .start_page_diagnostics_snapshot()?;
         pending.push(PendingMoliDiagnosticsPageSnapshot {
             browser_context_id: browser_context_id.clone(),
             target_id: Some(target.target_id().to_owned()),
@@ -611,20 +649,22 @@ fn collect_moli_diagnostics_pending_snapshots(
 }
 
 impl PendingRuntimeProtocolMessageDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeProtocolMessageDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeProtocolMessageDispatch> {
+        use anyhow::Context as _;
+
         let completion = match self.pending {
             PendingRuntimeProtocolMessageDispatchKind::Page(pending) => {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(Box::new(
                     pending
                         .wait()
                         .await
-                        .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
+                        .context("runtime inspector dispatch failed")?,
                 ))
             }
             PendingRuntimeProtocolMessageDispatchKind::Routable(pending) => pending
                 .wait()
                 .await
-                .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
+                .context("runtime inspector dispatch failed")?,
         };
         Ok(CompletedRuntimeProtocolMessageDispatch {
             owner: self.owner,
@@ -636,7 +676,11 @@ impl PendingRuntimeProtocolMessageDispatch {
 }
 
 impl PendingSharedWorkerRuntimeProtocolMessageDispatch {
-    pub async fn wait(self) -> Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String> {
+    pub(crate) fn scope(&self) -> &WorkerRuntimeScope {
+        &self.scope
+    }
+
+    pub async fn wait(self) -> Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch> {
         let dispatch = self.pending.await?;
         Ok(CompletedSharedWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
@@ -647,9 +691,11 @@ impl PendingSharedWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl PendingServiceWorkerRuntimeProtocolMessageDispatch {
-    pub async fn wait(
-        self,
-    ) -> Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String> {
+    pub(crate) fn scope(&self) -> &WorkerRuntimeScope {
+        &self.scope
+    }
+
+    pub async fn wait(self) -> Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch> {
         let dispatch = self.pending.await?;
         Ok(CompletedServiceWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
@@ -712,7 +758,7 @@ impl CompletedRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedSharedWorkerRuntimeProtocolMessageDispatch {
-    pub(crate) async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    pub(crate) async fn wait_for_session_response(&mut self) -> Result<()> {
         self.dispatch.wait_for_session_response().await
     }
 
@@ -736,7 +782,7 @@ impl CompletedSharedWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedServiceWorkerRuntimeProtocolMessageDispatch {
-    pub(crate) async fn wait_for_session_response(&mut self) -> Result<(), String> {
+    pub(crate) async fn wait_for_session_response(&mut self) -> Result<()> {
         self.dispatch.wait_for_session_response().await
     }
 
@@ -760,7 +806,9 @@ impl CompletedServiceWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl PendingMoliDiagnosticsDispatch {
-    pub async fn wait(self) -> Result<CompletedMoliDiagnosticsDispatch, String> {
+    pub async fn wait(self) -> CompletedMoliDiagnosticsDispatch {
+        use anyhow::Context as _;
+
         let mut completed = Vec::with_capacity(self.pending.len());
         for pending in self.pending {
             completed.push(CompletedMoliDiagnosticsPageSnapshot {
@@ -770,20 +818,22 @@ impl PendingMoliDiagnosticsDispatch {
                     .pending
                     .wait()
                     .await
-                    .map_err(|error| format!("moli diagnostics snapshot failed: {error}")),
+                    .context("moli diagnostics snapshot failed"),
             });
         }
-        Ok(CompletedMoliDiagnosticsDispatch { completed })
+        CompletedMoliDiagnosticsDispatch { completed }
     }
 }
 
 impl PendingRuntimeEnableEventsDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeEnableEventsDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeEnableEventsDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
+            .context("runtime enable event replay failed")?;
         Ok(CompletedRuntimeEnableEventsDispatch {
             owner: self.owner,
             route: self.route,
@@ -793,12 +843,14 @@ impl PendingRuntimeEnableEventsDispatch {
 }
 
 impl PendingRuntimeBindingPageCommandDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeBindingPageCommandDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeBindingPageCommandDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("{} failed: {error}", self.operation))?;
+            .with_context(|| format!("{} failed", self.operation))?;
         Ok(CompletedRuntimeBindingPageCommandDispatch {
             owner: self.owner,
             operation: self.operation,
@@ -808,12 +860,14 @@ impl PendingRuntimeBindingPageCommandDispatch {
 }
 
 impl PendingRuntimeChildDefaultContextLookupDispatch {
-    pub async fn wait(self) -> Result<CompletedRuntimeChildDefaultContextLookupDispatch, String> {
+    pub async fn wait(self) -> Result<CompletedRuntimeChildDefaultContextLookupDispatch> {
+        use anyhow::Context as _;
+
         let completion = self
             .pending
             .wait()
             .await
-            .map_err(|error| format!("runtime child default context lookup failed: {error}"))?;
+            .context("runtime child default context lookup failed")?;
         Ok(CompletedRuntimeChildDefaultContextLookupDispatch {
             owner: self.owner,
             completion,
@@ -883,11 +937,35 @@ fn bidi_channel_listener_call_function_json(
     .to_string()
 }
 
+mod page_scope;
+pub(crate) use page_scope::RuntimePageScope;
+
+mod bidi_workflow;
+pub(crate) use bidi_workflow::{
+    BidiChannelDispatchIdentity, BidiChannelDispatchOutput, BidiChannelObjectGroupLease,
+    BidiChannelOutput, PreparedBidiChannelAction,
+};
+
+mod helper_workflow;
+#[cfg(test)]
+pub(crate) use helper_workflow::dispatch_runtime_helper_using;
+pub(crate) use helper_workflow::{PreparedRuntimeHelper, RuntimeHelperIdentity};
+mod page_query;
+pub(crate) use page_query::{PreparedRuntimeDomQuery, PreparedRuntimePageQuery};
 mod execution_contexts;
+pub(crate) use execution_contexts::PreparedRuntimeRealmInventory;
+#[cfg(test)]
+pub(crate) use execution_contexts::runtime_realm_inventory_using;
 mod inspector_awaits;
 mod inspector_routing;
 mod protocol_dispatch;
 mod remote_objects;
+mod replay;
+mod worker_cleanup;
+pub(crate) use replay::{
+    CompletedRendererCallReplay, PendingRendererCallReplay, PreparedRendererNavigationFinish,
+};
+pub(crate) use worker_cleanup::{CompletedSessionWorkerCleanup, SessionWorkerCleanup};
 mod runtime_dispatch;
 
 fn send_renderer_replacement_error(
@@ -908,7 +986,7 @@ fn runtime_realm_info_to_execution_context_event(
     realm: RendererRuntimeRealmInfo,
     owner_frame_id: Option<&str>,
     target_id: Option<DevToolsTargetId>,
-) -> Result<RuntimeExecutionContextEvent, String> {
+) -> RuntimeExecutionContextEvent {
     let realm_frame_id = realm
         .frame_id
         .as_deref()
@@ -919,7 +997,7 @@ fn runtime_realm_info_to_execution_context_event(
         .filter(|realm_id| !realm_id.is_empty())
         .map(|realm_id| protocol_global_realm_id(realm_id, target_id.as_ref(), realm_frame_id))
         .map(DevToolsRealmId::from);
-    Ok(RuntimeExecutionContextEvent {
+    RuntimeExecutionContextEvent {
         target_id,
         context_id: Some(realm.context_id),
         realm_id,
@@ -929,7 +1007,7 @@ fn runtime_realm_info_to_execution_context_event(
         is_default: Some(realm.is_default),
         context_type: Some(realm.context_type),
         grant_universal_access: None,
-    })
+    }
 }
 
 fn protocol_global_realm_id(
@@ -1000,3 +1078,6 @@ pub(crate) fn runtime_remote_object_ids_in_map(map: &Map<String, Value>) -> Vec<
 
 #[cfg(test)]
 mod tests;
+
+mod worker_scope;
+pub(crate) use worker_scope::WorkerRuntimeScope;

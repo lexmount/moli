@@ -120,9 +120,8 @@ pub(crate) use registry::{
     AdoptionCallbackTarget, CustomElementAdoptionPlan, CustomElementRegistryAssociation,
     CustomElementRegistryKey, RegistryAssociationRetarget,
 };
-mod registry_adoption_callbacks;
 mod registry_adoption_retarget;
-pub(crate) use registry_adoption_retarget::adoption_plan_for_roots_before_adoption;
+pub(crate) use registry_adoption_retarget::adoption_plan_before_adoption;
 mod registry_clone_association;
 mod registry_clone_retarget;
 pub(crate) use registry_clone_retarget::{
@@ -134,8 +133,9 @@ pub(crate) use registry_install::{
 };
 mod registry_runtime;
 pub(crate) use registry_runtime::{
-    mark_scoped_custom_elements_registry, registry_association_from_value,
-    registry_association_matches_document, registry_store_key,
+    mark_custom_elements_registry_owner, mark_scoped_custom_elements_registry,
+    registry_association_from_value, registry_association_matches_document, registry_owner_host,
+    registry_store_key,
 };
 mod registry_initializer;
 pub(crate) use registry_initializer::initialize_registry_for_subtree;

@@ -17,7 +17,7 @@ pub(super) use install::{
 #[cfg(test)]
 pub(crate) use install::{
     interface_materialization_count, interface_template_build_count, lazy_window_interface_names,
-    materialized_interface_names, ready_interface_template_names,
+    materialized_interface_names, ready_interface_template_names, realm_interface_is_materialized,
     storage_interface_materialization_count,
 };
 pub(crate) use materialize::{
@@ -29,4 +29,5 @@ pub(in crate::context_bootstrap) use metadata::TemplateBuildProfile;
 pub(super) use metadata::constructor_spec_is_eager;
 #[cfg(test)]
 pub(crate) use metadata::dedicated_worker_lazy_interface_names_for_test;
+pub(crate) use realm_registry::has_intrinsic_interface_registry;
 pub(in crate::context_bootstrap) use template_registry::ExposedInterfaceTemplateRegistry;

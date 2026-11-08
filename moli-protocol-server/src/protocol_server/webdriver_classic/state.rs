@@ -7,7 +7,6 @@ use std::{
 };
 
 use axum::extract::ws::WebSocket;
-use moli_cookie_jar::StoredCookie;
 use moli_core::{page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig};
 use moli_protocol::{
     CdpInitialStoragePartition, DevToolsDocumentResidenceIdentity,
@@ -22,7 +21,6 @@ use moli_protocol_webdriver_classic::{
     ClassicActionTick, ClassicDevToolsCommandContext, ClassicElementOriginViewportPoints,
     ClassicError, ClassicErrorCode, ClassicPageLoadStrategy, ClassicSessionRegistry,
     ClassicTimeouts, ClassicUnhandledPromptBehavior, ClassicViewportBounds, ClassicWindowPosition,
-    cdp_node_id_from_classic_element_id, cdp_node_id_from_classic_shadow_root_id,
     perform_actions_ticks_with_state_and_viewport,
     release_actions_commands as build_release_actions_commands,
 };
@@ -38,8 +36,7 @@ use super::super::webdriver_bidi::{
     BidiSocketActor, BidiSocketActorInput, SharedBidiSessionRegistry,
 };
 use super::super::{
-    CookieProfileCommit, SharedCookieProfile, instance_shutdown::InstanceConnection,
-    protocol_local_executor::spawn_protocol_local_task,
+    instance_shutdown::InstanceConnection, protocol_local_executor::spawn_protocol_local_task,
 };
 
 const CLASSIC_SCRIPT_TERMINATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,10 +47,7 @@ pub(in crate::protocol_server) struct SharedClassicSessionRegistry {
 }
 
 impl SharedClassicSessionRegistry {
-    pub(in crate::protocol_server) async fn shutdown(
-        &self,
-        cookie_profile: &SharedCookieProfile,
-    ) -> anyhow::Result<()> {
+    pub(in crate::protocol_server) async fn shutdown(&self) -> anyhow::Result<()> {
         let runtimes = {
             let mut manager = self.inner.lock();
             let session_ids = manager.runtimes.keys().cloned().collect::<Vec<_>>();
@@ -62,15 +56,15 @@ impl SharedClassicSessionRegistry {
                 .filter_map(|id| manager.release_session(id))
                 .collect::<Vec<_>>()
         };
-        let commits = futures_util::future::join_all(
+        let completions = futures_util::future::join_all(
             runtimes
                 .into_iter()
                 .map(ClassicSessionRuntimeHandle::shutdown_and_join),
         )
         .await;
         let mut result = Ok(());
-        for commit in commits {
-            if let Err(error) = commit.and_then(|commit| cookie_profile.commit_and_save(commit))
+        for completion in completions {
+            if let Err(error) = completion
                 && result.is_ok()
             {
                 result = Err(error);
@@ -108,30 +102,9 @@ impl SharedClassicSessionRegistry {
 pub(super) struct ClassicSessionManager {
     registry: ClassicSessionRegistry,
     runtimes: BTreeMap<String, ClassicSessionRuntimeHandle>,
-    next_element_id: u64,
-    next_shadow_root_id: u64,
-    element_owners: BTreeMap<(String, String), ClassicElementOwner>,
-    element_ids_by_owner: BTreeMap<(String, ClassicElementOwner), String>,
-    shadow_root_owners: BTreeMap<(String, String), ClassicShadowRootOwner>,
     window_positions: BTreeMap<(String, String), ClassicWindowPosition>,
     uploaded_files: BTreeMap<String, Vec<PathBuf>>,
     download_directories: BTreeMap<String, PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ClassicElementOwner {
-    node_id: u32,
-    reference: ClassicPageBoundDomReference,
-    target_id: String,
-    browsing_context_target_id: String,
-}
-
-#[derive(Debug, Clone)]
-struct ClassicShadowRootOwner {
-    node_id: u32,
-    reference: ClassicPageBoundDomReference,
-    target_id: String,
-    browsing_context_target_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -255,140 +228,6 @@ impl ClassicSessionManager {
         self.download_directories.get(session_id).cloned()
     }
 
-    pub(super) fn register_element_reference(
-        &mut self,
-        binding: &ClassicSessionBinding,
-        node_id: u32,
-        reference: ClassicPageBoundDomReference,
-    ) -> String {
-        let owner = ClassicElementOwner {
-            node_id,
-            reference,
-            target_id: binding.target_id.clone(),
-            browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-        };
-        let owner_key = (binding.session_id.clone(), owner.clone());
-        if let Some(element_id) = self.element_ids_by_owner.get(&owner_key) {
-            return element_id.clone();
-        }
-
-        self.next_element_id += 1;
-        let element_id = format!("moli-node-{node_id}-element-{}", self.next_element_id);
-        self.element_owners
-            .insert((binding.session_id.clone(), element_id.clone()), owner);
-        self.element_ids_by_owner
-            .insert(owner_key, element_id.clone());
-        element_id
-    }
-
-    pub(super) fn register_shadow_root_reference(
-        &mut self,
-        binding: &ClassicSessionBinding,
-        node_id: u32,
-        reference: ClassicPageBoundDomReference,
-    ) -> String {
-        if let Some(((_, shadow_root_id), _)) =
-            self.shadow_root_owners
-                .iter()
-                .find(|((session_id, _), owner)| {
-                    session_id == &binding.session_id
-                        && owner.node_id == node_id
-                        && owner.reference == reference
-                        && owner.target_id == binding.target_id
-                        && owner.browsing_context_target_id == binding.browsing_context_target_id()
-                })
-        {
-            return shadow_root_id.clone();
-        }
-
-        self.next_shadow_root_id += 1;
-        let shadow_root_id = format!("moli-shadow-{node_id}-shadow-{}", self.next_shadow_root_id);
-        self.shadow_root_owners.insert(
-            (binding.session_id.clone(), shadow_root_id.clone()),
-            ClassicShadowRootOwner {
-                node_id,
-                reference,
-                target_id: binding.target_id.clone(),
-                browsing_context_target_id: binding.browsing_context_target_id().to_owned(),
-            },
-        );
-        shadow_root_id
-    }
-
-    pub(super) fn resolve_element_reference(
-        &self,
-        binding: &ClassicSessionBinding,
-        element_id: &str,
-    ) -> Result<ClassicPageBoundDomReference, ClassicError> {
-        Ok(self
-            .resolve_element_owner(binding, element_id)?
-            .reference
-            .clone())
-    }
-
-    fn resolve_element_owner(
-        &self,
-        binding: &ClassicSessionBinding,
-        element_id: &str,
-    ) -> Result<&ClassicElementOwner, ClassicError> {
-        cdp_node_id_from_classic_element_id(element_id)?;
-        let Some(owner) = self
-            .element_owners
-            .get(&(binding.session_id.clone(), element_id.to_owned()))
-        else {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchElement,
-                "element not found",
-            ));
-        };
-        if owner.target_id != binding.target_id
-            || owner.browsing_context_target_id != binding.browsing_context_target_id()
-        {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchElement,
-                "element not found in the current browsing context",
-            ));
-        }
-        Ok(owner)
-    }
-
-    pub(super) fn resolve_shadow_root_reference(
-        &self,
-        binding: &ClassicSessionBinding,
-        shadow_root_id: &str,
-    ) -> Result<ClassicPageBoundDomReference, ClassicError> {
-        Ok(self
-            .resolve_shadow_root_owner(binding, shadow_root_id)?
-            .reference
-            .clone())
-    }
-
-    fn resolve_shadow_root_owner(
-        &self,
-        binding: &ClassicSessionBinding,
-        shadow_root_id: &str,
-    ) -> Result<&ClassicShadowRootOwner, ClassicError> {
-        cdp_node_id_from_classic_shadow_root_id(shadow_root_id)?;
-        let Some(owner) = self
-            .shadow_root_owners
-            .get(&(binding.session_id.clone(), shadow_root_id.to_owned()))
-        else {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchShadowRoot,
-                "shadow root not found",
-            ));
-        };
-        if owner.target_id != binding.target_id
-            || owner.browsing_context_target_id != binding.browsing_context_target_id()
-        {
-            return Err(ClassicError::new(
-                ClassicErrorCode::NoSuchShadowRoot,
-                "shadow root not found",
-            ));
-        }
-        Ok(owner)
-    }
-
     pub(super) fn timeouts(&self, session_id: &str) -> Option<ClassicTimeouts> {
         self.registry.timeouts(session_id)
     }
@@ -462,12 +301,6 @@ impl ClassicSessionManager {
         if !self.registry.release_session(session_id) {
             return None;
         }
-        self.element_owners
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
-        self.element_ids_by_owner
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
-        self.shadow_root_owners
-            .retain(|(owner_session_id, _), _| owner_session_id != session_id);
         self.window_positions
             .retain(|(owner_session_id, _), _| owner_session_id != session_id);
         if let Some(paths) = self.uploaded_files.remove(session_id) {
@@ -505,12 +338,11 @@ impl ClassicSessionBinding {
 #[derive(Debug, Clone)]
 pub(in crate::protocol_server) struct ClassicSessionRuntimeHandle {
     tx: mpsc::UnboundedSender<ClassicSessionRuntimeRequest>,
-    completion: Arc<tokio::sync::Mutex<Option<oneshot::Receiver<CookieProfileCommit>>>>,
+    completion: Arc<tokio::sync::Mutex<Option<oneshot::Receiver<()>>>>,
 }
 
 impl ClassicSessionRuntimeHandle {
     pub(super) fn spawn(
-        initial_cookie_snapshot: Vec<StoredCookie>,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         instance_connection: InstanceConnection,
@@ -521,7 +353,6 @@ impl ClassicSessionRuntimeHandle {
                 let _instance_connection = instance_connection;
                 classic_session_runtime_loop(
                     rx,
-                    initial_cookie_snapshot,
                     initial_storage_partition,
                     navigation_runtime_config,
                 )
@@ -538,6 +369,30 @@ impl ClassicSessionRuntimeHandle {
         command: AutomationCommand,
     ) -> Result<AutomationResult, DevToolsError> {
         self.execute_inner(command, None).await
+    }
+
+    pub(super) async fn webdriver_node_reference(
+        &self,
+        context: AutomationContext,
+        shared_id: String,
+        kind: moli_protocol::automation::WebDriverNodeKind,
+    ) -> Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let closed = || {
+            DevToolsError::new(
+                DevToolsErrorKind::NoSuchSession,
+                "Classic session runtime is closed",
+            )
+        };
+        self.tx
+            .send(ClassicSessionRuntimeRequest::WebDriverNodeReference {
+                context,
+                shared_id,
+                kind,
+                response_tx,
+            })
+            .map_err(|_| closed())?;
+        response_rx.await.map_err(|_| closed())?
     }
 
     pub(super) async fn execute_inner(
@@ -811,18 +666,10 @@ impl ClassicSessionRuntimeHandle {
         })?
     }
 
-    pub(super) async fn set_javascript_dialog_handler_enabled(
-        &self,
-        enabled: bool,
-    ) -> Result<(), DevToolsError> {
+    pub(super) async fn register_javascript_dialog_handler(&self) -> Result<(), DevToolsError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.tx
-            .send(
-                ClassicSessionRuntimeRequest::SetJavaScriptDialogHandlerEnabled {
-                    enabled,
-                    response_tx,
-                },
-            )
+            .send(ClassicSessionRuntimeRequest::RegisterJavaScriptDialogHandler { response_tx })
             .map_err(|_| {
                 DevToolsError::new(
                     DevToolsErrorKind::NoSuchSession,
@@ -837,21 +684,19 @@ impl ClassicSessionRuntimeHandle {
         })?
     }
 
-    pub(super) async fn shutdown(self) -> CookieProfileCommit {
+    pub(super) async fn shutdown(self) {
         let (response_tx, response_rx) = oneshot::channel();
         if self
             .tx
             .send(ClassicSessionRuntimeRequest::Shutdown { response_tx })
             .is_err()
         {
-            return CookieProfileCommit::unchanged();
+            return;
         }
-        response_rx
-            .await
-            .unwrap_or_else(|_| CookieProfileCommit::unchanged())
+        let _ = response_rx.await;
     }
 
-    async fn shutdown_and_join(self) -> anyhow::Result<CookieProfileCommit> {
+    pub(super) async fn shutdown_and_join(self) -> anyhow::Result<()> {
         let completion = self.completion.clone();
         let _ = self.shutdown().await;
         let receiver = completion
@@ -861,7 +706,7 @@ impl ClassicSessionRuntimeHandle {
             .ok_or_else(|| anyhow::anyhow!("Classic runtime completion already consumed"))?;
         receiver
             .await
-            .map_err(|_| anyhow::anyhow!("Classic runtime stopped before checkpoint completion"))
+            .map_err(|_| anyhow::anyhow!("Classic runtime stopped before shutdown completion"))
     }
 
     pub(in crate::protocol_server) async fn attach_bidi_socket(
@@ -906,6 +751,13 @@ impl ClassicSessionRuntimeCommandExecution {
 }
 
 enum ClassicSessionRuntimeRequest {
+    WebDriverNodeReference {
+        context: AutomationContext,
+        shared_id: String,
+        kind: moli_protocol::automation::WebDriverNodeKind,
+        response_tx:
+            oneshot::Sender<Result<Option<moli_protocol::WebDriverNodeReference>, DevToolsError>>,
+    },
     Execute {
         command: Box<AutomationCommand>,
         timeout: Option<Duration>,
@@ -955,12 +807,11 @@ enum ClassicSessionRuntimeRequest {
         frame_id: Option<String>,
         response_tx: oneshot::Sender<Result<bool, DevToolsError>>,
     },
-    SetJavaScriptDialogHandlerEnabled {
-        enabled: bool,
+    RegisterJavaScriptDialogHandler {
         response_tx: oneshot::Sender<Result<(), DevToolsError>>,
     },
     Shutdown {
-        response_tx: oneshot::Sender<CookieProfileCommit>,
+        response_tx: oneshot::Sender<()>,
     },
 }
 
@@ -985,17 +836,26 @@ enum ClassicSessionRuntimeRequestOutcome {
     Continue,
     AttachedBidi(Box<ClassicAttachedBidiSocket>),
     DetachBidi,
-    Shutdown(CookieProfileCommit),
+    Shutdown,
 }
 
 async fn handle_classic_session_runtime_request(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    initial_cookie_snapshot: &[StoredCookie],
     request: ClassicSessionRuntimeRequest,
     mut attached_bidi: Option<&mut ClassicAttachedBidiSocket>,
 ) -> ClassicSessionRuntimeRequestOutcome {
     match request {
+        ClassicSessionRuntimeRequest::WebDriverNodeReference {
+            context,
+            shared_id,
+            kind,
+            response_tx,
+        } => {
+            let _ =
+                response_tx.send(scheduler.webdriver_node_reference(&context, &shared_id, kind));
+            ClassicSessionRuntimeRequestOutcome::Continue
+        }
         ClassicSessionRuntimeRequest::Execute {
             command,
             timeout,
@@ -1133,6 +993,10 @@ async fn handle_classic_session_runtime_request(
                 let _ = response_tx.send(false);
                 return ClassicSessionRuntimeRequestOutcome::Continue;
             }
+            scheduler.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverBidi,
+                false,
+            );
             actor.install_runtime_response_ready_sender(scheduler);
             actor.set_file_prompt_handler_for_script_commands(file_prompt_handler.as_deref());
             let _ = response_tx.send(true);
@@ -1215,29 +1079,17 @@ async fn handle_classic_session_runtime_request(
             let _ = response_tx.send(result);
             ClassicSessionRuntimeRequestOutcome::Continue
         }
-        ClassicSessionRuntimeRequest::SetJavaScriptDialogHandlerEnabled {
-            enabled,
-            response_tx,
-        } => {
-            let result = scheduler
-                .set_automation_javascript_dialog_handler_enabled(enabled)
-                .then_some(())
-                .ok_or_else(|| {
-                    DevToolsError::new(
-                        DevToolsErrorKind::NoSuchTarget,
-                        "Classic session has no browser context",
-                    )
-                });
-            let _ = response_tx.send(result);
+        ClassicSessionRuntimeRequest::RegisterJavaScriptDialogHandler { response_tx } => {
+            scheduler.register_automation_javascript_dialog_handler(
+                FrontendProtocol::WebDriverClassic,
+                true,
+            );
+            let _ = response_tx.send(Ok(()));
             ClassicSessionRuntimeRequestOutcome::Continue
         }
         ClassicSessionRuntimeRequest::Shutdown { response_tx } => {
-            let cookie_commit = CookieProfileCommit::from_optional_profile_backed_snapshot(
-                initial_cookie_snapshot.to_vec(),
-                scheduler.snapshot_profile_backed_cookies(),
-            );
-            let _ = response_tx.send(cookie_commit.clone());
-            ClassicSessionRuntimeRequestOutcome::Shutdown(cookie_commit)
+            let _ = response_tx.send(());
+            ClassicSessionRuntimeRequestOutcome::Shutdown
         }
     }
 }
@@ -1271,9 +1123,7 @@ async fn execute_classic_automation_command_with_pending_navigation_retry(
             execution.execution.result = Err(classic_pending_navigation_timeout_error());
             return execution;
         };
-        let mut progress = scheduler
-            .complete_ready_protocol_residences_for_external_load_wait()
-            .await;
+        let mut progress = scheduler.complete_ready_protocol_residences_for_external_load_wait();
         if progress.is_empty() {
             let input = match tokio::time::timeout(remaining, receivers.recv_interleaved_input())
                 .await
@@ -1382,10 +1232,9 @@ fn classic_pending_navigation_timeout_error() -> DevToolsError {
 
 async fn classic_session_runtime_loop(
     mut rx: mpsc::UnboundedReceiver<ClassicSessionRuntimeRequest>,
-    initial_cookie_snapshot: Vec<StoredCookie>,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
-) -> CookieProfileCommit {
+) {
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
         initial_storage_partition,
         navigation_runtime_config,
@@ -1398,13 +1247,22 @@ async fn classic_session_runtime_loop(
         }
         if attached_bidi.is_some() {
             let mut detach_bidi = false;
-            let mut shutdown_cookies = None;
+            let mut shutdown_requested = false;
             {
                 let attached = attached_bidi.as_mut().expect("attached BiDi socket");
                 let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    completion = receivers.protocol_work_completion_rx.recv() => {
+                        let Some(completion) = completion else { break; };
+                        if !attached.actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await {
+                            detach_bidi = true;
+                        }
+                    }
+                    _ = receivers.state_events_ready.notified() => {
+                        scheduler.apply_protocol_state_events();
+                    }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
                             break;
@@ -1490,6 +1348,10 @@ async fn classic_session_runtime_loop(
                                     detach_bidi = true;
                                 }
                             }
+                            BidiSocketActorInput::RuntimeWorkflowReady(Some(ready)) => {
+                                if !attached.actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
+                            }
+                            BidiSocketActorInput::RuntimeWorkflowReady(None) => { detach_bidi = true; }
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }
@@ -1502,7 +1364,6 @@ async fn classic_session_runtime_loop(
                         match handle_classic_session_runtime_request(
                             &mut scheduler,
                             &mut receivers,
-                            &initial_cookie_snapshot,
                             request,
                             Some(attached),
                         )
@@ -1517,18 +1378,15 @@ async fn classic_session_runtime_loop(
                             ClassicSessionRuntimeRequestOutcome::DetachBidi => {
                                 detach_bidi = true;
                             }
-                            ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => {
-                                attached
-                                    .release_session(&mut scheduler, &mut receivers)
-                                    .await;
-                                shutdown_cookies = Some(cookies);
+                            ClassicSessionRuntimeRequestOutcome::Shutdown => {
+                                shutdown_requested = true;
                             }
                         }
                     }
                 }
             }
-            if let Some(cookies) = shutdown_cookies {
-                return cookies;
+            if shutdown_requested {
+                break;
             }
             if detach_bidi && let Some(mut attached) = attached_bidi.take() {
                 attached
@@ -1540,6 +1398,13 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                completion = receivers.protocol_work_completion_rx.recv() => {
+                    let Some(completion) = completion else { break; };
+                    if scheduler.complete_protocol_work(completion).is_err() { break; }
+                }
+                _ = receivers.state_events_ready.notified() => {
+                    scheduler.apply_protocol_state_events();
+                }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {
                         break;
@@ -1570,13 +1435,11 @@ async fn classic_session_runtime_loop(
                         break;
                     };
                     let _ = adapter_scheduler
-                        .ingest_renderer_publication(&mut scheduler, publication)
-                        .await;
+                        .ingest_renderer_publication(&mut scheduler, publication);
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
                     let _ = adapter_scheduler
-                        .advance_input(&mut scheduler, input)
-                        .await;
+                        .advance_input(&mut scheduler, input);
                 }
                 request = rx.recv() => {
                     let Some(request) = request else {
@@ -1585,7 +1448,6 @@ async fn classic_session_runtime_loop(
                     match handle_classic_session_runtime_request(
                         &mut scheduler,
                         &mut receivers,
-                        &initial_cookie_snapshot,
                         request,
                         None,
                     )
@@ -1596,7 +1458,7 @@ async fn classic_session_runtime_loop(
                             attached_bidi = Some(*attached);
                         }
                         ClassicSessionRuntimeRequestOutcome::DetachBidi => {}
-                        ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => return cookies,
+                        ClassicSessionRuntimeRequestOutcome::Shutdown => break,
                     }
                     if attached_bidi.is_none() {
                         classic_session_ingest_ready_renderer_publications(
@@ -1610,10 +1472,13 @@ async fn classic_session_runtime_loop(
             }
         }
     }
-    CookieProfileCommit::from_optional_profile_backed_snapshot(
-        initial_cookie_snapshot,
-        scheduler.snapshot_profile_backed_cookies(),
-    )
+    let _ = scheduler
+        .unregister_automation_javascript_dialog_handler(FrontendProtocol::WebDriverClassic);
+    if let Some(mut attached) = attached_bidi {
+        attached
+            .release_session(&mut scheduler, &mut receivers)
+            .await;
+    }
 }
 
 async fn resolve_classic_frame_id_for_index(
@@ -1922,9 +1787,7 @@ async fn classic_session_ingest_ready_renderer_publications(
     receivers: &mut CdpSchedulerEventReceivers,
 ) {
     while let Ok(publication) = receivers.renderer_publication_rx.try_recv() {
-        let _ = adapter_scheduler
-            .ingest_renderer_publication(scheduler, publication)
-            .await;
+        let _ = adapter_scheduler.ingest_renderer_publication(scheduler, publication);
     }
 }
 #[cfg(test)]

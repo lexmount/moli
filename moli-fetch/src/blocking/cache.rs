@@ -90,10 +90,13 @@ pub(crate) struct CachedStreamingResponseLookup {
     pub(crate) body: std::io::BufReader<std::fs::File>,
     pub(crate) expires_at_unix_ms: Option<u64>,
     pub(crate) force_validate: bool,
+    pub(crate) allow_stale: bool,
+    pub(crate) cache_state: crate::ResponseCacheState,
 }
 
 pub(crate) fn cached_streaming_response_is_stale(record: &CachedStreamingResponseLookup) -> bool {
-    cached_response_is_stale(record.expires_at_unix_ms, record.force_validate)
+    !record.allow_stale
+        && cached_response_is_stale(record.expires_at_unix_ms, record.force_validate)
 }
 
 pub(super) fn request_cache_control_requires_validation(
@@ -119,7 +122,7 @@ pub(crate) fn next_redirect_url_from_parts(
     let Some(location) = headers
         .iter()
         .find(|(name, _)| name == "location")
-        .map(|(_, value)| crate::decode_header_value(value))
+        .map(|(_, value)| crate::encode_redirect_location(value))
     else {
         return Ok(None);
     };
@@ -149,6 +152,9 @@ pub(crate) fn next_followed_redirect_url_from_parts(
 ) -> Result<Option<Url>> {
     // HTTP fetch checks the network response before HTTP-redirect fetch. This
     // also applies to cached redirects and manual/error redirect modes.
+    request
+        .validate_cross_origin_resource_policy_for_url(final_url, headers)
+        .map_err(anyhow::Error::msg)?;
     if matches!(status, 301 | 302 | 303 | 307 | 308) {
         request
             .validate_cors_response_for_url(final_url, headers)
@@ -169,6 +175,7 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     {
         ensure_http_network_transport_url(next_url)?;
         request.validate_request_mode_for_url(next_url)?;
+        request.check_redirect_policy(next_url)?;
     }
     Ok(next_url)
 }

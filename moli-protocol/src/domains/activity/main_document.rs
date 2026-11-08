@@ -5,11 +5,9 @@ use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 
 use crate::automation::FrontendProtocol;
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
-    CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact,
-    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, NavigationDispatchState,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
-    RendererPageResidenceIdentity,
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, CommittedRendererDocumentBinding,
+    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, LoadPublicationState,
+    NavigationDispatchState, RendererPageResidenceIdentity,
 };
 use crate::domains::command_output::{BackgroundProtocolEventBuffer, CommandOutputBuffer};
 use crate::domains::network::{
@@ -34,7 +32,10 @@ pub(crate) struct MainDocumentNavigationActivity {
 
 enum LoadedNavigationResultMode {
     Success,
-    NetworkErrorPage { error_text: String },
+    NetworkErrorPage {
+        error_text: String,
+        commit: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    },
 }
 
 pub(crate) struct MainDocumentFailedNavigationActivity {
@@ -43,36 +44,34 @@ pub(crate) struct MainDocumentFailedNavigationActivity {
     response_mode: FailedNavigationResponseMode,
 }
 
-pub(crate) struct MainDocumentDownloadNavigationActivity {
-    navigation_activity: MainDocumentNavigationActivity,
-    body_artifact: CompletedDownloadBodyArtifact,
-}
-
-struct DeferredMainDocumentLoadCompletionState {
+/// The Document owns its load output until the navigation's commit prefix is
+/// installed and a concrete lifecycle fact reaches the load boundary. No
+/// waiter owns, releases, or discards these notifications.
+pub(crate) struct MainDocumentLoadPublication {
     navigation_activity: MainDocumentNavigationActivity,
     renderer_document_binding: Option<CommittedRendererDocumentBinding>,
     pending_download: Option<RendererPendingDownloadActivation>,
-}
-
-pub(crate) struct DeferredMainDocumentLoadCompletionAdmission {
-    state: DeferredMainDocumentLoadCompletionState,
-}
-
-pub(crate) struct DeferredMainDocumentLoadCompletionActivity {
-    state: DeferredMainDocumentLoadCompletionState,
     observation_id: DeferredMainDocumentLoadObservationId,
     renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
-    lifecycle_observer: RendererDocumentLifecycleObserver,
 }
 
-pub(crate) struct PendingDeferredMainDocumentLoadCompletionActivity {
-    completion: DeferredMainDocumentLoadCompletionActivity,
-}
-
-pub(crate) struct CompletedDeferredMainDocumentLoadCompletionActivity {
-    state: DeferredMainDocumentLoadCompletionState,
+/// Ready post-load work retains its scheduler identity even after interruption,
+/// when completing an empty action still settles exact output predecessors.
+pub(crate) struct MainDocumentPostLoadAction {
+    navigation_activity: MainDocumentNavigationActivity,
+    renderer_document: Option<RendererDocumentLifecycleIdentity>,
+    pending_download: Option<RendererPendingDownloadActivation>,
     observation_id: DeferredMainDocumentLoadObservationId,
-    observation: RendererDocumentLifecycleObservation,
+    renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
+    run_post_load: bool,
+}
+
+impl std::fmt::Debug for MainDocumentLoadPublication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MainDocumentLoadPublication")
+            .field("observation_id", &self.observation_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MainDocumentNavigationActivity {
@@ -92,8 +91,16 @@ impl MainDocumentNavigationActivity {
         }
     }
 
-    pub(crate) fn with_network_error_page_result(mut self, error_text: String) -> Self {
-        self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text };
+    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
+        &self.state.owner
+    }
+
+    pub(crate) fn with_network_error_page_result(
+        mut self,
+        error_text: String,
+        commit: std::sync::Arc<moli_core::page::RendererMainDocumentCommit>,
+    ) -> Self {
+        self.result_mode = LoadedNavigationResultMode::NetworkErrorPage { error_text, commit };
         self
     }
 
@@ -115,7 +122,7 @@ impl MainDocumentNavigationActivity {
         );
     }
 
-    pub(crate) async fn emit_loaded_navigation_commit_async(
+    pub(crate) fn emit_loaded_navigation_commit(
         mut self,
         conn: &mut CdpConnection,
         out: &mut CommandOutputBuffer,
@@ -136,7 +143,9 @@ impl MainDocumentNavigationActivity {
         }
         let network_error_text = match &self.result_mode {
             LoadedNavigationResultMode::Success => None,
-            LoadedNavigationResultMode::NetworkErrorPage { error_text } => Some(error_text.clone()),
+            LoadedNavigationResultMode::NetworkErrorPage { error_text, .. } => {
+                Some(error_text.clone())
+            }
         };
         if let Some(error_text) = network_error_text.as_deref() {
             let mut failure_events = Vec::new();
@@ -166,6 +175,11 @@ impl MainDocumentNavigationActivity {
             let mut response_metadata_events = Vec::new();
             self.expose_loaded_response_metadata(&mut response_metadata_events);
             out.extend_background_events_after_messages(response_metadata_events);
+        }
+        if let LoadedNavigationResultMode::NetworkErrorPage { commit, .. } = &self.result_mode {
+            out.extend_background_events_after_messages(
+                page::main_document_commit_background_events(conn, &self.state.owner, commit),
+            );
         }
         if let Some(renderer_output_boundary) = renderer_output_boundary {
             // Chromium can send Page.navigate/Fetch command responses and the
@@ -199,28 +213,34 @@ impl MainDocumentNavigationActivity {
         );
         out.extend_background_events_after_messages(pre_domcontentloaded_events);
 
-        let terminated_before_domcontentloaded = initial_renderer_document_lifecycle_events
+        // Adoption can include a terminated epoch followed by document.open().
+        // Only the bound epoch can cancel the replacement's load publication.
+        let mut current_lifecycle_events = initial_renderer_document_lifecycle_events
             .iter()
-            .any(|event| {
-                matches!(
-                    event.kind,
-                    RendererDocumentLifecycleEventKind::Terminated {
-                        last_reached: None,
-                        ..
-                    }
-                )
+            .filter(|event| {
+                renderer_document_binding.as_ref().is_none_or(|binding| {
+                    event.frame == binding.renderer_frame
+                        && event.document == binding.renderer_document
+                        && event.epoch == binding.renderer_epoch
+                })
             });
-        let reached_domcontentloaded =
-            initial_renderer_document_lifecycle_events
-                .iter()
-                .any(|event| {
-                    matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Milestone(
-                            RendererDocumentLifecycleMilestone::DomContentLoaded
-                        )
-                    )
-                });
+        let terminated_before_domcontentloaded = current_lifecycle_events.clone().any(|event| {
+            matches!(
+                event.kind,
+                RendererDocumentLifecycleEventKind::Terminated {
+                    last_reached: None,
+                    ..
+                }
+            )
+        });
+        let reached_domcontentloaded = current_lifecycle_events.any(|event| {
+            matches!(
+                event.kind,
+                RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::DomContentLoaded
+                )
+            )
+        });
         if let Some(binding) = renderer_document_binding.as_ref() {
             let mut renderer_lifecycle_events = Vec::new();
             page::emit_bound_renderer_document_lifecycle_background_events(
@@ -254,26 +274,23 @@ impl MainDocumentNavigationActivity {
                 elapsed_ms = timing_started.elapsed().as_millis(),
             );
         }
-        conn.enqueue_deferred_main_document_load_completion(
-            DeferredMainDocumentLoadCompletionAdmission::new(self, pending_download)
-                .with_renderer_document_binding(renderer_document_binding),
+        let load_output = conn.enqueue_main_document_load_publication(
+            self,
+            renderer_document_binding,
+            pending_download,
         );
+        out.extend_background_events_after_messages(load_output);
     }
 
-    async fn emit_deferred_load_completion_async(
+    fn prepare_deferred_load_completion(
         &mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
         pending_download: Option<RendererPendingDownloadActivation>,
-        renderer_document: Option<RendererDocumentLifecycleIdentity>,
-    ) {
+    ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let timing_started = std::time::Instant::now();
         if !self.is_still_current(conn) {
-            conn.cancel_renderer_document_load_visibility_barrier_for_owner(
-                &self.state.owner,
-                &self.state.loader_id,
-            );
             if timing_enabled {
                 tracing::info!(
                     target: "moli_cdp_nav_timing",
@@ -282,11 +299,9 @@ impl MainDocumentNavigationActivity {
                     reason = "stale_navigation",
                 );
             }
-            return;
+            return None;
         }
-        let post_load_observation_armed = self
-            .emit_renderer_load_completion_async(conn, out, renderer_document)
-            .await;
+        let post_load_observation_armed = self.emit_renderer_load_completion(conn, out);
         if post_load_observation_armed {
             conn.settle_root_frame_stopped_loading_observation_for_owner(&self.state.owner)
             .expect(
@@ -302,9 +317,21 @@ impl MainDocumentNavigationActivity {
             );
         }
 
-        if pending_download.is_some() {
-            self.activate_pending_download_async(conn, out, pending_download)
-                .await;
+        let download = pending_download?;
+        match conn.prepare_pending_download_activation_delivery(&self.state.owner, download, false)
+        {
+            Ok(pending) => Some(pending),
+            Err(error) => {
+                let mut output = CommandOutputBuffer::default();
+                self.emit_navigation_error_into_buffer(&mut output, &format!("{error:#}"));
+                out.extend_background_events(
+                    output.into_plan().into_background_events(
+                        self.state.navigate_id,
+                        self.state.owner.session_id(),
+                    ),
+                );
+                None
+            }
         }
     }
 
@@ -317,26 +344,6 @@ impl MainDocumentNavigationActivity {
         }
         conn.runtime_session_owner_target_url_for_owner(&self.state.owner)
             .is_some_and(|url| url == self.final_url.as_str())
-    }
-
-    async fn emit_download_navigation_commit_into_buffer_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        self.emit_download_navigation_result_into_buffer(out);
-        let mut background_events = Vec::new();
-        self.emit_download_frame_stop_background_events(&mut background_events);
-        out.extend_background_events_after_messages(background_events);
-        self.emit_navigation_download_response_into_buffer_async(
-            conn,
-            out,
-            body_artifact,
-            command_context,
-        )
-        .await;
     }
 
     fn emit_navigation_result_from_state_into_buffer(&mut self, out: &mut CommandOutputBuffer) {
@@ -433,7 +440,7 @@ impl MainDocumentNavigationActivity {
         out.extend(
             background_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(BackgroundProtocolEvent::into_wire_message),
         );
         if navigate_id.is_some() {
             crate::domains::command_output::CommandOutputPlan::error(-32000, message).emit_into(
@@ -461,13 +468,11 @@ impl MainDocumentNavigationActivity {
         }
     }
 
-    async fn emit_renderer_load_completion_async(
+    fn emit_renderer_load_completion(
         &mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
-        _renderer_document: Option<RendererDocumentLifecycleIdentity>,
     ) -> bool {
-        self.emit_renderer_load_boundary_facts(conn, out);
         let armed =
             conn.arm_root_post_load_observation_for_owner(&self.state.owner, &self.state.loader_id);
         if armed {
@@ -487,11 +492,9 @@ impl MainDocumentNavigationActivity {
         self.flush_body_complete_activity_background_events(&mut body_complete_events);
         out.extend_background_events(body_complete_events);
 
-        // Reaching this boundary means the protocol-side exact lifecycle
-        // observer has already consumed the live concrete load record. Only
-        // commit-time events and the visibility-barrier tail remain to be
-        // projected; rescanning renderer state here would rediscover output
-        // owned by an earlier turn.
+        // The Document's admitted lifecycle facts authorize this output.
+        // Drain the network prefix before releasing the frozen load tail;
+        // navigation waiters never participate in this publication boundary.
         let renderer_events =
             std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
         let (binding, mut accepted_events) = conn
@@ -526,32 +529,6 @@ impl MainDocumentNavigationActivity {
         out.extend_background_events(renderer_lifecycle_events);
     }
 
-    async fn emit_navigation_download_response_into_buffer_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        body_artifact: CompletedDownloadBodyArtifact,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        let mut background_events = Vec::new();
-        self.flush_body_complete_activity_background_events(&mut background_events);
-        let final_url = self.final_url.clone();
-        let error = conn
-            .handle_navigation_download_response_async(
-                &mut background_events,
-                self.state(),
-                final_url,
-                body_artifact,
-                command_context,
-            )
-            .await
-            .err();
-        out.extend_background_events_after_messages(background_events);
-        if let Some(error) = error {
-            self.emit_navigation_error_into_buffer(out, &format!("{error:#}"));
-        }
-    }
-
     fn flush_body_complete_activity_background_events(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
@@ -560,43 +537,6 @@ impl MainDocumentNavigationActivity {
             out,
             &mut self.progress_gate,
         );
-    }
-
-    async fn activate_pending_download_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut BackgroundProtocolEventBuffer,
-        pending_download: Option<RendererPendingDownloadActivation>,
-    ) {
-        let mut command_context = CommandDispatchContext::default();
-        let error = if let Some(download) = pending_download {
-            let mut download_events = Vec::new();
-            let error = conn
-                .handle_pending_download_activation_inline_async(
-                    &mut download_events,
-                    &self.state.owner,
-                    download,
-                    &mut command_context,
-                )
-                .await
-                .err();
-            out.extend_background_events(download_events);
-            error
-        } else {
-            None
-        };
-        if let Some(error) = error {
-            let navigate_id = self.state.navigate_id;
-            let navigate_session_id = self.state.owner.session_id().map(str::to_owned);
-            let mut command_output = CommandOutputBuffer::default();
-            self.emit_navigation_error_into_buffer(&mut command_output, &format!("{error:#}"));
-            out.extend_background_events(
-                command_output
-                    .into_plan()
-                    .into_background_events(navigate_id, navigate_session_id.as_deref()),
-            );
-        }
-        out.extend_background_events(command_context.take_protocol_events());
     }
 
     fn emit_pre_domcontentloaded_network_backlog_background_events(
@@ -624,76 +564,60 @@ impl MainDocumentNavigationActivity {
     }
 }
 
-impl DeferredMainDocumentLoadCompletionAdmission {
-    fn new(
+impl MainDocumentLoadPublication {
+    pub(crate) fn new(
         navigation_activity: MainDocumentNavigationActivity,
+        renderer_document_binding: Option<CommittedRendererDocumentBinding>,
         pending_download: Option<RendererPendingDownloadActivation>,
+        observation_id: DeferredMainDocumentLoadObservationId,
+        renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
     ) -> Self {
         Self {
-            state: DeferredMainDocumentLoadCompletionState {
-                navigation_activity,
-                renderer_document_binding: None,
-                pending_download,
-            },
+            navigation_activity,
+            renderer_document_binding,
+            pending_download,
+            observation_id,
+            renderer_page_residence_identity,
         }
     }
 
-    fn with_renderer_document_binding(
+    pub(crate) fn state(&self, conn: &CdpConnection) -> LoadPublicationState {
+        conn.main_document_load_publication_state_for_owner(
+            self.navigation_activity.owner_scope(),
+            self.renderer_document_binding.as_ref(),
+        )
+    }
+
+    pub(crate) fn publish(
         mut self,
-        binding: Option<CommittedRendererDocumentBinding>,
-    ) -> Self {
-        self.state.renderer_document_binding = binding;
-        self
-    }
-
-    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.navigation_activity.state.owner
-    }
-
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.owner_scope().session_id()
-    }
-
-    pub(crate) fn is_still_current_for_scheduler(&self, conn: &CdpConnection) -> bool {
-        self.state.navigation_activity.is_still_current(conn)
-    }
-
-    pub(crate) fn bind_lifecycle_observer(
-        self,
         conn: &mut CdpConnection,
-        observation_id: DeferredMainDocumentLoadObservationId,
-    ) -> DeferredMainDocumentLoadCompletionActivity {
-        let is_current = self.is_still_current_for_scheduler(conn);
-        let renderer_page_residence_identity = is_current
-            .then(|| conn.renderer_page_residence_identity_for_owner(self.owner_scope()))
-            .flatten();
-        let lifecycle_observer = if is_current {
-            conn.register_exact_renderer_document_lifecycle_observer_for_owner(
-                self.owner_scope(),
-                self.state.renderer_document_binding.as_ref(),
-                RendererDocumentLifecycleMilestone::Load,
-            )
-        } else {
-            RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Superseded,
-            )
-        };
-        DeferredMainDocumentLoadCompletionActivity {
-            state: self.state,
-            observation_id,
-            renderer_page_residence_identity,
-            lifecycle_observer,
+        run_post_load: bool,
+        out: &mut BackgroundProtocolEventBuffer,
+    ) -> MainDocumentPostLoadAction {
+        self.navigation_activity
+            .emit_renderer_load_boundary_facts(conn, out);
+        let renderer_document = self
+            .renderer_document_binding
+            .as_ref()
+            .map(CommittedRendererDocumentBinding::renderer_document_identity);
+        MainDocumentPostLoadAction {
+            navigation_activity: self.navigation_activity,
+            renderer_document,
+            pending_download: self.pending_download,
+            observation_id: self.observation_id,
+            renderer_page_residence_identity: self.renderer_page_residence_identity,
+            run_post_load,
         }
     }
 }
 
-impl DeferredMainDocumentLoadCompletionActivity {
+impl MainDocumentPostLoadAction {
     pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.navigation_activity.state.owner
+        self.navigation_activity.owner_scope()
     }
 
     pub(crate) fn renderer_document_identity(&self) -> Option<RendererDocumentLifecycleIdentity> {
-        self.state.renderer_document_identity()
+        self.renderer_document
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
@@ -701,14 +625,12 @@ impl DeferredMainDocumentLoadCompletionActivity {
     }
 
     pub(crate) fn target_id(&self) -> &str {
-        self.state
-            .navigation_activity
+        self.navigation_activity
             .document_navigation_token
             .as_ref()
-            .map_or(
-                self.state.navigation_activity.state.frame_id.as_str(),
-                |token| token.target_id.as_str(),
-            )
+            .map_or(self.navigation_activity.state.frame_id.as_str(), |token| {
+                token.target_id.as_str()
+            })
     }
 
     pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
@@ -719,124 +641,17 @@ impl DeferredMainDocumentLoadCompletionActivity {
         self.renderer_page_residence_identity
     }
 
-    pub(crate) fn has_terminal_lifecycle_observation(&self) -> bool {
-        self.lifecycle_observer.observation().is_terminal()
-    }
-
-    pub(crate) fn try_complete(
-        self: Box<Self>,
-    ) -> Result<CompletedDeferredMainDocumentLoadCompletionActivity, Box<Self>> {
-        let observation = self.lifecycle_observer.observation();
-        if !observation.is_terminal() {
-            return Err(self);
-        }
-        let completion = *self;
-        Ok(CompletedDeferredMainDocumentLoadCompletionActivity {
-            state: completion.state,
-            observation_id: completion.observation_id,
-            observation,
-        })
-    }
-
-    pub(crate) fn start_scheduler_step(self) -> PendingDeferredMainDocumentLoadCompletionActivity {
-        PendingDeferredMainDocumentLoadCompletionActivity { completion: self }
-    }
-}
-
-impl DeferredMainDocumentLoadCompletionState {
-    fn renderer_document_identity(&self) -> Option<RendererDocumentLifecycleIdentity> {
-        self.renderer_document_binding
-            .as_ref()
-            .map(CommittedRendererDocumentBinding::renderer_document_identity)
-    }
-
-    async fn emit_load_completion_after_lifecycle_ready_async(
-        &mut self,
-        conn: &mut CdpConnection,
-        out: &mut BackgroundProtocolEventBuffer,
-    ) {
-        let pending_download = self.pending_download.take();
-        let renderer_document = self.renderer_document_identity();
-        self.navigation_activity
-            .emit_deferred_load_completion_async(conn, out, pending_download, renderer_document)
-            .await;
-    }
-}
-
-impl PendingDeferredMainDocumentLoadCompletionActivity {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.completion.session_id()
-    }
-
-    pub(crate) fn renderer_page_residence_identity(&self) -> Option<RendererPageResidenceIdentity> {
-        self.completion.renderer_page_residence_identity()
-    }
-
-    pub(crate) fn renderer_document_identity(&self) -> Option<RendererDocumentLifecycleIdentity> {
-        self.completion.renderer_document_identity()
-    }
-
-    pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.completion.observation_id()
-    }
-
-    pub(crate) async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletionActivity {
-        let DeferredMainDocumentLoadCompletionActivity {
-            state,
-            observation_id,
-            renderer_page_residence_identity: _,
-            lifecycle_observer,
-        } = self.completion;
-        let observation = lifecycle_observer.wait().await;
-        CompletedDeferredMainDocumentLoadCompletionActivity {
-            state,
-            observation_id,
-            observation,
-        }
-    }
-}
-
-impl CompletedDeferredMainDocumentLoadCompletionActivity {
-    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.navigation_activity.state.owner
-    }
-
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.owner_scope().session_id()
-    }
-
-    pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.observation_id
-    }
-
-    pub(crate) async fn emit_async(
+    pub(crate) fn prepare_emission(
         mut self,
         conn: &mut CdpConnection,
         out: &mut BackgroundProtocolEventBuffer,
-    ) {
-        match self.observation {
-            RendererDocumentLifecycleObservation::Reached => {}
-            RendererDocumentLifecycleObservation::Pending => {
-                unreachable!("a completed lifecycle observer cannot remain pending")
-            }
-            RendererDocumentLifecycleObservation::Interrupted => {
-                self.state
-                    .navigation_activity
-                    .emit_renderer_load_boundary_facts(conn, out);
-                return;
-            }
-            RendererDocumentLifecycleObservation::Superseded
-            | RendererDocumentLifecycleObservation::Unavailable => {
-                conn.cancel_renderer_document_load_visibility_barrier_for_owner(
-                    self.owner_scope(),
-                    &self.state.navigation_activity.state.loader_id,
-                );
-                return;
-            }
+    ) -> Option<crate::conn::PreparedDownloadActivationDelivery> {
+        if !self.run_post_load {
+            return None;
         }
-        self.state
-            .emit_load_completion_after_lifecycle_ready_async(conn, out)
-            .await;
+        let pending_download = self.pending_download.take();
+        self.navigation_activity
+            .prepare_deferred_load_completion(conn, out, pending_download)
     }
 }
 
@@ -885,31 +700,53 @@ impl MainDocumentFailedNavigationActivity {
     }
 }
 
-impl MainDocumentDownloadNavigationActivity {
-    pub(crate) fn new(
-        navigation_activity: MainDocumentNavigationActivity,
-        body_artifact: CompletedDownloadBodyArtifact,
+pub(crate) struct PreparedMainDocumentDownload {
+    pending: Option<crate::conn::PreparedDownloadActivationDelivery>,
+}
+
+impl PreparedMainDocumentDownload {
+    pub(crate) fn prepare_with_output(
+        conn: &mut CdpConnection,
+        state: NavigationDispatchState,
+        download: crate::domains::network::MaterializedDownloadDocumentProgress,
+        context: &mut crate::conn::CommandWorkflowContext,
+        output_mode: crate::domains::page::NavigationCommandOutput,
+        prefix: Vec<crate::conn::BackgroundProtocolEvent>,
     ) -> Self {
-        Self {
-            navigation_activity,
-            body_artifact,
-        }
+        let mut activity = MainDocumentNavigationActivity::new(
+            state,
+            download.final_url,
+            download.progress_gate,
+            None,
+        );
+        let mut output = CommandOutputBuffer::default();
+        output.extend_background_events_after_messages(prefix);
+        activity.emit_download_navigation_result_into_buffer(&mut output);
+        let mut events = Vec::new();
+        activity.emit_download_frame_stop_background_events(&mut events);
+        activity.flush_body_complete_activity_background_events(&mut events);
+        output.extend_background_events_after_messages(events);
+        let pending = match conn.prepare_navigation_download_delivery(
+            activity.state(),
+            activity.final_url.clone(),
+            download.body_artifact,
+        ) {
+            Ok(pending) => pending,
+            Err(error) => {
+                activity.emit_navigation_error_into_buffer(&mut output, &format!("{error:#}"));
+                None
+            }
+        };
+        output_mode.retain(context, activity.state(), output.into_plan());
+        Self { pending }
     }
 
-    pub(crate) async fn emit_commit_into_buffer_async(
-        mut self,
-        conn: &mut CdpConnection,
-        out: &mut CommandOutputBuffer,
-        command_context: &mut CommandDispatchContext,
-    ) {
-        self.navigation_activity
-            .emit_download_navigation_commit_into_buffer_async(
-                conn,
-                out,
-                self.body_artifact,
-                command_context,
-            )
-            .await;
+    pub(crate) async fn run(self, context: &mut crate::conn::CommandWorkflowContext) {
+        if let Some(pending) = self.pending {
+            let mut events = Vec::new();
+            pending.run(&mut events, context.context_mut()).await;
+            context.context_mut().protocol_events_mut().extend(events);
+        }
     }
 }
 
@@ -949,6 +786,7 @@ mod tests {
             request_id: Some("REQ-1".to_owned()),
             loader_id: "LID-1".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: Url::parse("https://example.test/start").unwrap(),
             request_method: "GET".to_owned(),
             request_body: None,
@@ -966,8 +804,8 @@ mod tests {
         RendererDocumentLifecycleEvent,
     ) {
         let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-deferred-load-observer".to_owned());
-        browser_context.set_active_target_id("TID-deferred-load-observer");
+        let mut browser_context = BrowserContext::new("BID-load-publication".to_owned());
+        browser_context.set_active_target_id("TID-load-publication");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
         browser_context
@@ -1059,17 +897,24 @@ mod tests {
         }
     }
 
-    fn deferred_load_admission_for_test(
-        binding: CommittedRendererDocumentBinding,
-    ) -> DeferredMainDocumentLoadCompletionAdmission {
-        let navigation_activity = MainDocumentNavigationActivity::new(
+    fn load_publication_navigation_for_test() -> MainDocumentNavigationActivity {
+        MainDocumentNavigationActivity::new(
             navigation_state(),
             Url::parse("https://example.test/start").unwrap(),
             empty_main_document_progress_gate_for_test(),
             None,
-        );
-        DeferredMainDocumentLoadCompletionAdmission::new(navigation_activity, None)
-            .with_renderer_document_binding(Some(binding))
+        )
+    }
+
+    fn enqueue_load_publication_for_test(
+        conn: &mut CdpConnection,
+        binding: CommittedRendererDocumentBinding,
+    ) -> Vec<BackgroundProtocolEvent> {
+        conn.enqueue_main_document_load_publication(
+            load_publication_navigation_for_test(),
+            Some(binding),
+            None,
+        )
     }
 
     fn take_deferred_load_work_for_test(conn: &mut CdpConnection) -> ProtocolSchedulerWork {
@@ -1375,8 +1220,8 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        let mut conn = CdpConnection::new();
-        conn.install_browser_context_fixture_for_test(browser_context);
+        let ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         let state = navigation_state();
         let activity = MainDocumentNavigationActivity::new(
             state.clone(),
@@ -1422,16 +1267,16 @@ mod tests {
             },
         ];
 
-        activity
-            .emit_loaded_navigation_commit_async(
-                &mut conn,
+        ctx.with_fixture(|conn| {
+            activity.emit_loaded_navigation_commit(
+                conn,
                 &mut output,
                 None,
                 Some(renderer_document_binding),
                 renderer_lifecycle_events,
                 None,
             )
-            .await;
+        });
 
         let mut out = Vec::new();
         output
@@ -1447,13 +1292,15 @@ mod tests {
             "main-document commit must not synthesize child output by reading current Page state"
         );
         assert_eq!(out[dcl_index]["params"]["timestamp"], json!(12.345678));
-        assert!(
-            conn.runtime_session_owner_slot(Some("SID-nav"))
-                .expect("owner slot should exist")
-                .loaded_page()
-                .is_none(),
-            "main-document lifecycle emission must not read back from a live page"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.runtime_session_owner_slot(Some("SID-nav"))
+                    .expect("owner slot should exist")
+                    .loaded_page()
+                    .is_none(),
+                "main-document lifecycle emission must not read back from a live page"
+            )
+        });
     }
 
     #[test]
@@ -1539,200 +1386,605 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn deferred_load_observer_waits_for_load_not_domcontentloaded() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
-            &CommandOwnerScope::for_session("SID-nav"),
-            Some(&binding),
-            RendererDocumentLifecycleMilestone::Load,
-        );
-        assert_eq!(
-            observer.observation(),
-            RendererDocumentLifecycleObservation::Pending,
-            "DOMContentLoaded must not satisfy an exact Load observer"
-        );
-
-        let load = renderer_load_event_for_test(started);
-        let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            vec![load],
-        );
-        assert_eq!(accepted, vec![load]);
-        assert_eq!(
-            observer.wait().await,
-            RendererDocumentLifecycleObservation::Reached
-        );
+    fn enable_page_events(conn: &mut CdpConnection) {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .page_domain_enabled = true;
     }
 
-    #[tokio::test]
-    async fn deferred_load_terminal_before_adapter_wait_is_not_lost() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let admission = deferred_load_admission_for_test(binding);
-        conn.enqueue_deferred_main_document_load_completion(admission);
-        let work = take_deferred_load_work_for_test(&mut conn);
+    fn project_lifecycle(
+        conn: &mut CdpConnection,
+        events: Vec<RendererDocumentLifecycleEvent>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        page::project_renderer_document_lifecycle_background_events(
+            conn,
+            &CommandOwnerScope::for_session("SID-nav"),
+            events,
+        )
+    }
 
-        let load = renderer_load_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            vec![load],
-        );
-        let pending = work.start_main_document_load_wait();
-        let observation_id = pending.observation_id();
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(1), pending.wait())
-            .await
-            .expect("an already-published Load terminal must complete without another wake");
-
-        assert_eq!(completed.observation_id(), observation_id);
+    fn load_count(events: Vec<BackgroundProtocolEvent>) -> usize {
+        events
+            .into_iter()
+            .filter(|event| event.has_protocol_wire_message())
+            .map(|event| event.into_protocol_message())
+            .filter(|event| event["method"] == "Page.loadEventFired")
+            .count()
     }
 
     #[test]
-    fn same_owner_load_admissions_publish_distinct_ordered_work() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let first = deferred_load_admission_for_test(binding.clone());
-        let second = deferred_load_admission_for_test(binding);
-        conn.enqueue_deferred_main_document_load_completion(first);
-        conn.enqueue_deferred_main_document_load_completion(second);
-
-        let events = conn.take_scheduler_events();
-        assert_eq!(events.len(), 2);
-        let sequences = events
-            .into_iter()
-            .map(|event| {
-                let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-                    panic!("each load admission must publish concrete scheduler work");
-                };
-                assert_eq!(
-                    work.kind(),
-                    ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                );
-                assert_eq!(work.main_document_load_session_id(), Some("SID-nav"));
-                work.publish_sequence().get()
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            sequences,
-            [1, 2],
-            "same-session load actions must not collapse into one source-shaped capture"
-        );
-    }
-
-    #[tokio::test]
-    async fn deferred_load_work_remains_resident_without_republication_until_terminal() {
+    fn publication_state_distinguishes_stale_owners_from_restarted_epochs() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let admission = deferred_load_admission_for_test(binding);
-        conn.enqueue_deferred_main_document_load_completion(admission);
-        let work = take_deferred_load_work_for_test(&mut conn);
-        assert!(
-            !work.is_ready(),
-            "DOMContentLoaded alone must leave the exact load owner action pending"
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        let state = |conn: &CdpConnection, expected: Option<&CommittedRendererDocumentBinding>| {
+            conn.main_document_load_publication_state_for_owner(&owner, expected)
+        };
+        assert_eq!(state(&conn, Some(&binding)), LoadPublicationState::Pending);
+        assert_eq!(state(&conn, None), LoadPublicationState::Stale);
+        assert_eq!(
+            conn.main_document_load_publication_state_for_owner(
+                &CommandOwnerScope::for_session("SID-retired"),
+                Some(&binding),
+            ),
+            LoadPublicationState::Stale
         );
 
-        let load = renderer_load_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            vec![load],
-        );
-        assert!(
-            conn.take_scheduler_events().is_empty(),
-            "a typed lifecycle terminal wakes the existing observer and must not rebuild a source-shaped scheduler ticket"
-        );
-        assert!(
-            work.is_ready(),
-            "the same durable owner-action residence must observe the terminal"
-        );
-        let outcome = conn.complete_ready_protocol_scheduler_work_turn(work).await;
-        let (_, scheduler_events) = outcome.into_protocol_event_parts();
-        assert!(
-            scheduler_events.iter().all(|event| !matches!(
-                event,
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.kind()
-                        == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
             )),
-            "consuming the exact owner action must not recreate another load residence"
+            0
+        );
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Reached,
+            "the authoritative Load must classify as reached while its output is still hidden"
+        );
+        assert!(
+            conn.renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-nav"))
+                .unwrap()
+                .1
+                .load
+                .is_none()
+        );
+
+        let terminated = RendererDocumentLifecycleEvent {
+            sequence: 4,
+            timestamp_micros: 40,
+            kind: RendererDocumentLifecycleEventKind::Terminated {
+                last_reached: Some(RendererDocumentLifecycleMilestone::Load),
+                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            },
+            ..started
+        };
+        let restarted = RendererDocumentLifecycleEvent {
+            epoch: RendererLifecycleEpoch(2),
+            sequence: 5,
+            timestamp_micros: 50,
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+            },
+            ..started
+        };
+        assert!(project_lifecycle(&mut conn, vec![terminated, restarted]).is_empty());
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Interrupted
+        );
+        let mut foreign = binding.clone();
+        foreign.renderer_document =
+            RendererDocumentToken::new_for_testing(started.frame.page_id, 2);
+        assert_eq!(
+            state(&conn, Some(&foreign)),
+            LoadPublicationState::Stale,
+            "a different Document must be stale even when its epoch also differs"
+        );
+        foreign = binding.clone();
+        foreign.page_attachment_id = crate::conn::TargetPageAttachmentId::from_raw_for_test(2);
+        assert_eq!(state(&conn, Some(&foreign)), LoadPublicationState::Stale);
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .runtime_slot
+            .replace_page_attachment_id_for_test();
+        assert_eq!(
+            state(&conn, Some(&binding)),
+            LoadPublicationState::Stale,
+            "an obsolete binding must not survive replacement of the current Page attachment"
         );
     }
 
     #[tokio::test]
-    async fn deferred_load_observer_reports_exact_document_interruption() {
+    async fn interrupted_publication_retains_its_scheduler_settlement_identity() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
-            &CommandOwnerScope::for_session("SID-nav"),
-            Some(&binding),
-            RendererDocumentLifecycleMilestone::Load,
-        );
-        let terminated = renderer_termination_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            vec![terminated],
-        );
-
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
         assert_eq!(
-            observer.wait().await,
-            RendererDocumentLifecycleObservation::Interrupted
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_termination_event_for_test(started)]
+            )),
+            0
         );
-    }
-
-    #[tokio::test]
-    async fn newer_document_navigation_supersedes_deferred_load_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
-            &CommandOwnerScope::for_session("SID-nav"),
-            Some(&binding),
-            RendererDocumentLifecycleMilestone::Load,
-        );
-        conn.start_document_navigation_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            "LID-2".to_owned(),
-        )
-        .expect("replacement navigation token");
-
-        assert_eq!(
-            observer.wait().await,
-            RendererDocumentLifecycleObservation::Superseded
-        );
-    }
-
-    #[tokio::test]
-    async fn losing_page_slot_terminates_deferred_load_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
-            &CommandOwnerScope::for_session("SID-nav"),
-            Some(&binding),
-            RendererDocumentLifecycleMilestone::Load,
-        );
-        conn.browser_context = None;
-
-        assert_eq!(
-            observer.wait().await,
-            RendererDocumentLifecycleObservation::Unavailable
-        );
-    }
-
-    #[tokio::test]
-    async fn superseded_deferred_load_completion_is_consumed_through_its_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let old_completion = deferred_load_admission_for_test(binding);
-        conn.enqueue_deferred_main_document_load_completion(old_completion);
         let work = take_deferred_load_work_for_test(&mut conn);
+        let observation_id = work.main_document_load_observation_id().unwrap();
+        let owner = crate::conn::ProtocolStateOwner::new(conn);
+        let handle = owner.handle();
+        let pending = handle
+            .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+            .unwrap()
+            .unwrap_or_else(|_| panic!("post-load workflow"))
+            .unwrap();
+        let completed = pending.wait().await;
+        assert_eq!(
+            completed.main_document_load_observation_id(),
+            Some(observation_id),
+            "interruption must still settle the exact scheduler predecessor"
+        );
+        let (events, scheduler) = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+            .unwrap()
+            .into_protocol_event_parts();
+        assert!(
+            events.is_empty() && scheduler.is_empty(),
+            "an interrupted lifecycle must complete without loaded/idle/stopped notifications"
+        );
+    }
 
-        conn.start_document_navigation_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
-            "LID-2".to_owned(),
-        )
-        .expect("replacement navigation token");
+    #[test]
+    fn lifecycle_load_is_delivered_without_navigation_observers() {
+        let (mut conn, _, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let load = renderer_load_event_for_test(started);
+        assert_eq!(load_count(project_lifecycle(&mut conn, vec![load])), 1);
+        assert_eq!(
+            load_count(project_lifecycle(&mut conn, vec![load])),
+            0,
+            "duplicate Native records must not replay Load"
+        );
+    }
 
+    #[test]
+    fn document_load_is_published_before_post_load_work_is_started() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
         assert!(
             conn.take_scheduler_events().is_empty(),
-            "replacement must resolve the existing observer without manufacturing another scheduler admission"
+            "DCL must not admit a load-waiting owner task"
         );
-        assert!(work.is_ready(), "replacement must publish Superseded");
-        let pending = work.start_main_document_load_wait();
-        let completed = pending.wait().await;
-        let _ = conn
-            .complete_deferred_main_document_load_completion_for_scheduler(completed)
-            .await;
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            1
+        );
+        let work = take_deferred_load_work_for_test(&mut conn);
+        drop(work);
+        assert!(
+            conn.renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-nav"))
+                .unwrap()
+                .1
+                .load
+                .is_some(),
+            "dropping post-load work cannot revoke a published load"
+        );
+    }
+
+    #[test]
+    fn late_load_publication_releases_recorded_facts_exactly_once() {
+        let (mut conn, mut binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            0,
+            "the commit prefix still owns its output barrier"
+        );
+        // Replacement metadata is not part of the owning Document identity.
+        binding.document_open_replacement_epoch = Some(RendererLifecycleEpoch(99));
+        assert_eq!(
+            load_count(enqueue_load_publication_for_test(&mut conn, binding)),
+            1
+        );
+        assert_eq!(
+            load_count(conn.publish_ready_main_document_load_output(&owner)),
+            0
+        );
+        drop(take_deferred_load_work_for_test(&mut conn));
+    }
+
+    #[test]
+    fn cancelling_an_external_lifecycle_wait_does_not_cancel_load_delivery() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
+        let context = crate::automation::AutomationContext {
+            protocol: FrontendProtocol::Cdp,
+            session_id: Some("SID-nav".into()),
+            target_id: None,
+            browser_context_id: None,
+        };
+        let key = conn
+            .capture_devtools_document_lifecycle_wait_key(
+                &context,
+                "LID-1",
+                RendererDocumentLifecycleMilestone::Load,
+            )
+            .expect("external lifecycle wait");
+        assert!(conn.release_devtools_document_lifecycle_wait_key(&context, &key));
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            1
+        );
+    }
+
+    #[test]
+    fn pending_successor_navigation_does_not_cancel_committed_documents_load() {
+        for late in [false, true] {
+            let (mut conn, _, started) = connection_with_dcl_only_renderer_lifecycle();
+            let owner = CommandOwnerScope::for_session("SID-nav");
+            let token = conn
+                .start_document_navigation_for_owner(&owner, "LID-1".into())
+                .unwrap();
+            conn.commit_document_navigation_for_owner_if_matches(&owner, &token);
+            let (_, snapshot) = conn
+                .renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-nav"))
+                .unwrap();
+            let (binding, _) = conn.bind_renderer_document_lifecycle_for_owner(
+                &owner,
+                moli_core::page::RendererPageCreationArtifacts {
+                    active_document: started.document,
+                    active_epoch: started.epoch,
+                    lifecycle_snapshot: snapshot,
+                    initial_lifecycle_events: Vec::new(),
+                },
+                Some(token.clone()),
+                "FRAME-1".into(),
+                "LID-1".into(),
+            );
+            enable_page_events(&mut conn);
+            assert!(
+                conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")
+            );
+            let binding = binding.unwrap();
+            let mut activity = load_publication_navigation_for_test();
+            activity.document_navigation_token = Some(token);
+            let mut activity = Some(activity);
+            if !late {
+                assert!(
+                    conn.enqueue_main_document_load_publication(
+                        activity.take().unwrap(),
+                        Some(binding.clone()),
+                        None,
+                    )
+                    .is_empty()
+                );
+            }
+            conn.start_document_navigation_for_owner(&owner, "LID-2".into())
+                .unwrap();
+            let mut output =
+                project_lifecycle(&mut conn, vec![renderer_load_event_for_test(started)]);
+            if let Some(activity) = activity {
+                output.extend(conn.enqueue_main_document_load_publication(
+                    activity,
+                    Some(binding),
+                    None,
+                ));
+            }
+            assert_eq!(
+                load_count(output),
+                1,
+                "a pending navigation has not replaced the committed Document; publication late: {late}"
+            );
+        }
+    }
+
+    #[test]
+    fn late_external_lifecycle_wait_observes_load_without_replaying_it() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            1
+        );
+        let context = crate::automation::AutomationContext {
+            protocol: FrontendProtocol::Cdp,
+            session_id: Some("SID-nav".into()),
+            target_id: None,
+            browser_context_id: None,
+        };
+        let key = conn
+            .capture_devtools_document_lifecycle_wait_key(
+                &context,
+                "LID-1",
+                RendererDocumentLifecycleMilestone::Load,
+            )
+            .expect("late external lifecycle wait");
+        assert_eq!(
+            conn.devtools_document_lifecycle_wait_state(&context, &key),
+            crate::conn::DevToolsDocumentLifecycleWaitState::Reached
+        );
+        assert!(conn.release_devtools_document_lifecycle_wait_key(&context, &key));
+        assert!(
+            conn.publish_ready_main_document_load_output(&owner)
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_load_work_rejoins_without_replaying_lifecycle_output() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        let _ = enqueue_load_publication_for_test(&mut conn, binding);
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            1
+        );
+        let work = take_deferred_load_work_for_test(&mut conn);
+        let state = crate::conn::ProtocolStateOwner::new(conn);
+        let handle = state.handle();
+        let pending = handle
+            .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
+            .unwrap()
+            .unwrap_or_else(|_| panic!("post-load workflow"))
+            .unwrap();
+        drop(pending.clone().wait().await);
+        let completed = pending.clone().wait().await;
+        let (events, _) = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+            .unwrap()
+            .into_protocol_event_parts();
+        assert_eq!(
+            load_count(events),
+            0,
+            "post-load work never generates the load event"
+        );
+        let duplicate = pending.wait().await;
+        let (events, scheduler) = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(duplicate))
+            .unwrap()
+            .into_protocol_event_parts();
+        assert!(events.is_empty() && scheduler.is_empty());
+    }
+
+    #[test]
+    fn navigation_adoption_keeps_load_after_document_open_before_domcontentloaded() {
+        let (mut conn, _, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        let terminated = RendererDocumentLifecycleEvent {
+            kind: RendererDocumentLifecycleEventKind::Terminated {
+                last_reached: None,
+                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+            },
+            ..renderer_termination_event_for_test(started)
+        };
+        let restarted = RendererDocumentLifecycleEvent {
+            sequence: 4,
+            timestamp_micros: 40,
+            epoch: RendererLifecycleEpoch(2),
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+            },
+            ..started
+        };
+        let dcl = RendererDocumentLifecycleEvent {
+            sequence: 5,
+            timestamp_micros: 50,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::DomContentLoaded,
+            ),
+            ..restarted
+        };
+        let load = RendererDocumentLifecycleEvent {
+            sequence: 6,
+            timestamp_micros: 60,
+            kind: RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::Load,
+            ),
+            ..restarted
+        };
+        let (binding, events) = conn.bind_renderer_document_lifecycle_for_owner(
+            &owner,
+            moli_core::page::RendererPageCreationArtifacts {
+                active_document: started.document,
+                active_epoch: restarted.epoch,
+                lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
+                    frame: started.frame,
+                    document: started.document,
+                    epoch: restarted.epoch,
+                    started: RendererLifecycleEventStamp {
+                        sequence: restarted.sequence,
+                        timestamp_micros: restarted.timestamp_micros,
+                    },
+                    dom_content_loaded: Some(RendererLifecycleEventStamp {
+                        sequence: dcl.sequence,
+                        timestamp_micros: dcl.timestamp_micros,
+                    }),
+                    load: None,
+                    terminated: None,
+                },
+                initial_lifecycle_events: vec![started, terminated, restarted, dcl],
+            },
+            None,
+            "FRAME-1".into(),
+            "LID-1".into(),
+        );
+        assert_eq!(events, vec![started, terminated, restarted, dcl]);
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert_eq!(load_count(project_lifecycle(&mut conn, vec![load])), 0);
+
+        let mut output = CommandOutputBuffer::default();
+        MainDocumentNavigationActivity::new(
+            navigation_state(),
+            Url::parse("https://example.test/start").unwrap(),
+            empty_main_document_progress_gate_for_test(),
+            None,
+        )
+        .emit_loaded_navigation_commit(&mut conn, &mut output, None, binding, events, None);
+        assert_eq!(
+            load_count(output.into_plan().into_background_events(None, None)),
+            1,
+            "a retired epoch's termination must not discard the replacement's load"
+        );
+        assert_eq!(
+            load_count(conn.publish_ready_main_document_load_output(&owner)),
+            0,
+            "the replacement's load must be published exactly once"
+        );
+        drop(take_deferred_load_work_for_test(&mut conn));
+    }
+
+    #[test]
+    fn document_open_restarts_deliver_load_for_early_and_late_publication() {
+        for late in [false, true] {
+            let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+            enable_page_events(&mut conn);
+            let owner = CommandOwnerScope::for_session("SID-nav");
+            assert!(
+                conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")
+            );
+            if !late {
+                let _ = enqueue_load_publication_for_test(&mut conn, binding.clone());
+            }
+            let terminated = RendererDocumentLifecycleEvent {
+                kind: RendererDocumentLifecycleEventKind::Terminated {
+                    last_reached: Some(RendererDocumentLifecycleMilestone::DomContentLoaded),
+                    reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+                },
+                ..renderer_termination_event_for_test(started)
+            };
+            let restarted = RendererDocumentLifecycleEvent {
+                sequence: 4,
+                timestamp_micros: 40,
+                epoch: RendererLifecycleEpoch(2),
+                kind: RendererDocumentLifecycleEventKind::Started {
+                    reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+                },
+                ..started
+            };
+            let dcl = RendererDocumentLifecycleEvent {
+                sequence: 5,
+                timestamp_micros: 50,
+                kind: RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::DomContentLoaded,
+                ),
+                ..restarted
+            };
+            let load = RendererDocumentLifecycleEvent {
+                sequence: 6,
+                timestamp_micros: 60,
+                kind: RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::Load,
+                ),
+                ..restarted
+            };
+            let mut output = Vec::new();
+            for event in [terminated, restarted, dcl, load] {
+                output.extend(project_lifecycle(&mut conn, vec![event]));
+            }
+            if late {
+                output.extend(enqueue_load_publication_for_test(&mut conn, binding));
+            }
+            assert_eq!(load_count(output), 1, "publication registered late: {late}");
+        }
+    }
+
+    #[test]
+    fn replacing_the_document_discards_only_its_outgoing_load_publication() {
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        enable_page_events(&mut conn);
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
+
+        let token = conn
+            .start_document_navigation_for_owner(&owner, "LID-2".into())
+            .unwrap();
+        conn.commit_document_navigation_for_owner_if_matches(&owner, &token);
+        let (_, snapshot) = conn
+            .renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-nav"))
+            .unwrap();
+        let replacement = RendererDocumentToken::new_for_testing(started.frame.page_id, 2);
+        conn.bind_renderer_document_lifecycle_for_owner(
+            &owner,
+            moli_core::page::RendererPageCreationArtifacts {
+                active_document: replacement,
+                active_epoch: started.epoch,
+                lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
+                    document: replacement,
+                    ..snapshot
+                },
+                initial_lifecycle_events: Vec::new(),
+            },
+            Some(token),
+            "FRAME-1".into(),
+            "LID-2".into(),
+        );
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-2"));
+        assert_eq!(
+            load_count(project_lifecycle(
+                &mut conn,
+                vec![renderer_load_event_for_test(started)]
+            )),
+            0
+        );
+        assert!(
+            conn.take_scheduler_events().is_empty(),
+            "a retired Document cannot publish post-load work"
+        );
+        assert!(
+            conn.release_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-2")
+                .is_some(),
+            "retiring the outgoing publication must preserve the replacement's barrier"
+        );
+    }
+
+    #[test]
+    fn superseded_publication_cannot_release_another_documents_load_barrier() {
+        let (mut conn, mut binding, _) = connection_with_dcl_only_renderer_lifecycle();
+        let owner = CommandOwnerScope::for_session("SID-nav");
+        assert!(conn.begin_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1"));
+        binding.page_attachment_id = crate::conn::TargetPageAttachmentId::from_raw_for_test(2);
+        assert!(enqueue_load_publication_for_test(&mut conn, binding).is_empty());
+        assert!(conn.take_scheduler_events().is_empty());
+        assert!(
+            conn.release_renderer_document_load_visibility_barrier_for_owner(&owner, "LID-1")
+                .is_some(),
+            "foreign publication must not clear the current barrier"
+        );
     }
 }

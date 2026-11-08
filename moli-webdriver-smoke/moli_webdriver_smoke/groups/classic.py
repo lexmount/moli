@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Awaitable, Callable
+from uuid import RFC_4122, UUID
 
 from ..assertions import assert_equal, assert_true, record
 from ..client import (
@@ -80,6 +81,14 @@ async def run_classic_group(
     results: list[dict[str, Any]],
     continue_on_failure: bool = False,
 ) -> None:
+    client = ClassicClient(endpoint)
+    try:
+        await _run_session_lifecycle_smoke(client, results)
+    except Exception as error:
+        if not continue_on_failure:
+            raise
+        record_failure(results, "classic", "classic_session_lifecycle", error)
+
     if continue_on_failure:
         for name, scenario in _classic_scenarios():
             try:
@@ -88,7 +97,6 @@ async def run_classic_group(
                 record_failure(results, "classic", name, error)
         return
 
-    client = ClassicClient(endpoint)
     status = client.get("/status")
     assert_equal(classic_value(status)["ready"], True, "WebDriver Classic status ready")
 
@@ -103,6 +111,85 @@ async def run_classic_group(
     finally:
         client.delete(f"/session/{session_id}")
         record(results, "classic_session_delete")
+
+
+async def _run_session_lifecycle_smoke(
+    client: ClassicClient,
+    results: list[dict[str, Any]],
+) -> None:
+    active_sessions: set[str] = set()
+    session_ids: list[str] = []
+
+    async def create_session() -> str:
+        response = await asyncio.to_thread(
+            client.post, "/session", {"capabilities": {"alwaysMatch": {}}}
+        )
+        session_id = classic_value(response)["sessionId"]
+        assert_true(isinstance(session_id, str) and bool(session_id), "Classic session ID")
+        active_sessions.add(session_id)
+        parsed = UUID(session_id)
+        assert_equal(parsed.version, 4, "Classic session ID UUID version")
+        assert_equal(parsed.variant, RFC_4122, "Classic session ID UUID variant")
+        assert_equal(str(parsed), session_id, "Classic session ID canonical UUID")
+        assert_true(session_id not in session_ids, f"Classic session ID reused: {session_id}")
+        session_ids.append(session_id)
+        return session_id
+
+    def delete_session(session_id: str) -> None:
+        assert_equal(client.delete(f"/session/{session_id}"), {"value": None}, "Classic delete session")
+        active_sessions.remove(session_id)
+
+    assert_equal(classic_value(client.get("/status"))["ready"], True, "Classic ready before sessions")
+    try:
+        # Wait for both requests, including on failure, so every created session is cleaned up.
+        concurrent_sessions = await asyncio.gather(
+            create_session(), create_session(), return_exceptions=True
+        )
+        for session in concurrent_sessions:
+            if isinstance(session, BaseException):
+                raise session
+        first, second = concurrent_sessions
+        assert_equal(classic_value(client.get("/status"))["ready"], False, "Classic ready with sessions")
+        for session_id, timeout in ((first, 1111), (second, 2222)):
+            client.post(f"/session/{session_id}/timeouts", {"script": timeout})
+        for session_id, timeout in ((first, 1111), (second, 2222)):
+            assert_equal(
+                classic_value(client.get(f"/session/{session_id}/timeouts"))["script"],
+                timeout,
+                "Classic concurrent session timeout isolation",
+            )
+
+        delete_session(first)
+        assert_equal(classic_value(client.get("/status"))["ready"], False, "Classic ready with survivor")
+        third = await create_session()
+        assert_equal(
+            classic_value(client.get(f"/session/{second}/timeouts"))["script"],
+            2222,
+            "Classic surviving session after delete and recreate",
+        )
+        delete_session(second)
+        delete_session(third)
+        assert_equal(classic_value(client.get("/status"))["ready"], True, "Classic ready after deleting all")
+
+        fourth = await create_session()
+        assert_equal(
+            classic_value(client.get(f"/session/{fourth}/timeouts"))["script"],
+            30000,
+            "Classic new session after deleting all has default timeouts",
+        )
+        for deleted_id in (first, second, third):
+            deleted = client.get(f"/session/{deleted_id}/timeouts", expected_status=404)
+            assert_equal(classic_value(deleted)["error"], "invalid session id", "Classic deleted session routing")
+    finally:
+        cleanup = await asyncio.gather(
+            *(asyncio.to_thread(client.delete, f"/session/{session_id}") for session_id in active_sessions),
+            return_exceptions=True,
+        )
+        for outcome in cleanup:
+            if isinstance(outcome, BaseException):
+                raise outcome
+    assert_equal(classic_value(client.get("/status"))["ready"], True, "Classic ready after lifecycle smoke")
+    record(results, "classic_session_lifecycle", {"sessionIds": session_ids, "concurrentSessions": 2})
 
 
 def _classic_scenarios() -> tuple[tuple[str, ClassicScenario], ...]:

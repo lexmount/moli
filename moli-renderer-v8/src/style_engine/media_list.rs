@@ -1,171 +1,59 @@
-use cssparser::Parser;
 use euclid::{Scale, Size2D};
-use std::fmt::Debug;
-use style::{
-    context::QuirksMode,
-    device::{Device, servo::FontMetricsProvider},
-    font_metrics::FontMetrics,
-    media_queries::MediaList,
-    parser::ParserContext,
-    properties::{ComputedValues, style_structs::Font},
-    servo::media_features::PointerCapabilities,
-    stylesheets::{CssRuleType, Origin, UrlExtraData},
-    values::{
-        computed::{
-            CSSPixelLength, Length,
-            font::{GenericFontFamily, SingleFontFamily},
-        },
-        specified::font::QueryFontMetricsFlags,
-    },
+use style::context::QuirksMode;
+
+pub(crate) use moli_css_parse::{
+    append_media_query_list_medium, delete_media_query_list_medium, media_query_list_items,
+    normalize_media_query_list, parse_media_query_list_with_context,
 };
-use style_traits::{CSSPixel, DevicePixel, ParsingMode, ToCss};
 
 use super::{StyleViewport, StyloStyleEnvironment};
 use crate::style_engine::world_key::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH};
-
-pub(crate) fn normalize_media_query_list(media_text: &str) -> String {
-    with_stylo_media_context(|context| parse_stylo_media_list(context, media_text).to_css_string())
-}
-
-pub(crate) fn parse_media_query_list_with_context(
-    media_text: &str,
-    base_url: &url::Url,
-    quirks_mode: QuirksMode,
-) -> MediaList {
-    crate::style_engine::ensure_stylo_browser_compat_prefs();
-    let url_data = UrlExtraData::from(base_url.clone());
-    let mut context = ParserContext::new(
-        Origin::Author,
-        &url_data,
-        Some(CssRuleType::Media),
-        ParsingMode::DEFAULT,
-        quirks_mode,
-        Default::default(),
-        None,
-        None,
-        Default::default(),
-    );
-    parse_stylo_media_list(&mut context, media_text)
-}
 
 pub(crate) fn evaluate_media_query_list(
     media_text: &str,
     emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
     viewport: StyleViewport,
 ) -> bool {
-    with_stylo_media_context(|context| {
-        let media_list = parse_stylo_media_list(context, media_text);
-        let device = media_query_device(emulated_media, viewport);
-        let mut custom_media = style::stylesheets::CustomMediaEvaluator::none();
-        media_list.evaluate(&device, QuirksMode::NoQuirks, &mut custom_media)
-    })
-}
-
-pub(crate) fn media_query_list_items(media_text: &str) -> Vec<String> {
-    with_stylo_media_context(|context| {
-        parse_stylo_media_list(context, media_text)
-            .media_queries
-            .iter()
-            .map(ToCss::to_css_string)
-            .collect()
-    })
-}
-
-pub(crate) fn append_media_query_list_medium(media_text: &str, medium: &str) -> Option<String> {
-    with_stylo_media_context(|context| {
-        let mut media_list = parse_stylo_media_list(context, media_text);
-        media_list
-            .append_medium(context, medium)
-            .then(|| media_list.to_css_string())
-    })
-}
-
-pub(crate) fn delete_media_query_list_medium(media_text: &str, medium: &str) -> Option<String> {
-    with_stylo_media_context(|context| {
-        let mut media_list = parse_stylo_media_list(context, media_text);
-        media_list
-            .delete_medium(context, medium)
-            .then(|| media_list.to_css_string())
-    })
-}
-
-fn parse_stylo_media_list(context: &mut ParserContext, media_text: &str) -> MediaList {
-    let input = media_text;
-    let mut parser = Parser::new(input);
-    MediaList::parse(context, &mut parser)
-}
-
-fn with_stylo_media_context<R>(f: impl FnOnce(&mut ParserContext) -> R) -> R {
-    crate::style_engine::ensure_stylo_browser_compat_prefs();
-    let url_data = UrlExtraData::from(
-        url::Url::parse("about:blank").expect("static about:blank URL should parse"),
-    );
-    let mut context = ParserContext::new(
-        Origin::Author,
-        &url_data,
-        Some(CssRuleType::Media),
-        ParsingMode::DEFAULT,
+    evaluate_media_query_list_with_context(
+        media_text,
+        emulated_media,
+        viewport,
+        &url::Url::parse("about:blank").expect("static URL"),
         QuirksMode::NoQuirks,
-        Default::default(),
-        None,
-        None,
-        Default::default(),
-    );
-    f(&mut context)
+    )
 }
 
-#[derive(Debug)]
-struct MediaQueryFontMetricsProvider;
-
-fn media_query_device(
+pub(crate) fn evaluate_media_query_list_with_context(
+    media_text: &str,
     emulated_media: Option<&crate::protocol_types::EmulatedMediaOverrides>,
     viewport: StyleViewport,
-) -> Device {
+    base_url: &url::Url,
+    quirks_mode: QuirksMode,
+) -> bool {
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    if media_text.is_empty() {
+        return true;
+    }
+
     let environment = emulated_media
         .map(StyloStyleEnvironment::from_emulated_media)
         .unwrap_or_default();
-    let initial_style = ComputedValues::initial_values_with_font_override(Font::initial_values());
-    let viewport_width = viewport.width.unwrap_or(DEFAULT_VIEWPORT_WIDTH as f64) as f32;
-    let viewport_height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
-    let screen_width = viewport.screen_width.unwrap_or(viewport_width as f64) as f32;
-    let screen_height = viewport.screen_height.unwrap_or(viewport_height as f64) as f32;
+    let width = viewport.width.unwrap_or(DEFAULT_VIEWPORT_WIDTH as f64) as f32;
+    let height = viewport.height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT as f64) as f32;
     let ratio = viewport.device_pixel_ratio.unwrap_or(1.0) as f32;
-    let mut device = Device::new(
+    let device = moli_css_parse::create_media_query_device(
         environment.stylo_media_type(),
-        QuirksMode::NoQuirks,
-        Size2D::<f32, CSSPixel>::new(viewport_width, viewport_height),
-        Size2D::<f32, DevicePixel>::new(screen_width * ratio, screen_height * ratio),
-        Scale::<f32, CSSPixel, DevicePixel>::new(ratio),
-        Box::new(MediaQueryFontMetricsProvider),
-        initial_style,
+        quirks_mode,
+        Size2D::new(width, height),
+        Size2D::new(
+            viewport.screen_width.unwrap_or(f64::from(width)) as f32 * ratio,
+            viewport.screen_height.unwrap_or(f64::from(height)) as f32 * ratio,
+        ),
+        Scale::new(ratio),
         environment.stylo_prefers_color_scheme(),
-        PointerCapabilities::default(),
-        PointerCapabilities::default(),
+        environment.stylo_media_feature_preferences(),
     );
-    device.set_media_feature_preferences(environment.stylo_media_feature_preferences());
-    device
-}
-
-impl FontMetricsProvider for MediaQueryFontMetricsProvider {
-    fn query_font_metrics(
-        &self,
-        _vertical: bool,
-        font: &Font,
-        base_size: CSSPixelLength,
-        _flags: QueryFontMetricsFlags,
-    ) -> FontMetrics {
-        let mut metrics = FontMetrics::default();
-        if font.clone_font_family().families.iter().next().is_some_and(
-            |family| matches!(family, SingleFontFamily::FamilyName(name) if AsRef::<str>::as_ref(&name.name).eq_ignore_ascii_case("Ahem")),
-        ) {
-            metrics.zero_advance_measure = Some(base_size);
-        }
-        metrics
-    }
-
-    fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
-    }
+    moli_css_parse::evaluate_media_query_list(media_text, &device, base_url, quirks_mode)
 }
 
 #[cfg(test)]

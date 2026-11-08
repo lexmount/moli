@@ -182,7 +182,7 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,console-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -201,12 +201,12 @@ mod tests {
             (23, "Console.clearMessages"),
         ] {
             let raw = json!({"id": id, "method": method, "sessionId": "SID-1"}).to_string();
-            let pending = ctx
-                .conn
-                .try_start_pending_command_dispatch(&raw)
-                .unwrap_or_else(|| {
-                    panic!("loaded page {method} should dispatch through V8 inspector")
-                });
+            let pending = ctx.with_fixture(|conn| {
+                conn.try_start_pending_command_dispatch(&raw)
+                    .unwrap_or_else(|| {
+                        panic!("loaded page {method} should dispatch through V8 inspector")
+                    })
+            });
             let (messages, _) = ctx
                 .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(Box::new(pending)))
                 .await;
@@ -218,14 +218,16 @@ mod tests {
                 "{method} should return V8 inspector success: {messages:?}"
             );
         }
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !browser_context.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled,
-            "transitional observable-output enabled bit should track Console.disable"
-        );
+        ctx.with_fixture(|conn| {
+            let browser_context = conn.browser_context.as_ref().expect("browser context");
+            assert!(
+                !browser_context.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled,
+                "transitional observable-output enabled bit should track Console.disable"
+            );
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -234,21 +236,23 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><body></body>").await;
 
         let raw = json!({"id": 24, "method": "Console.enable", "sessionId": "SID-1"}).to_string();
-        let pending = ctx
-            .conn
-            .try_start_pending_command_dispatch(&raw)
-            .expect("loaded page Console.enable should dispatch through V8 inspector");
-        assert!(
-            !ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context should exist")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled,
-            "transitional Console projection must not flip before V8 Console.enable succeeds"
-        );
+        let pending = ctx.with_fixture(|conn| {
+            conn.try_start_pending_command_dispatch(&raw)
+                .expect("loaded page Console.enable should dispatch through V8 inspector")
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context should exist")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled,
+                "transitional Console projection must not flip before V8 Console.enable succeeds"
+            )
+        });
 
         let (messages, scheduler_events) = ctx
             .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(Box::new(pending)))
@@ -263,17 +267,18 @@ mod tests {
                 .any(|message| message["id"] == json!(24) && message["result"] == json!({})),
             "Console.enable should return V8 inspector success: {messages:?}"
         );
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context should exist")
-                .active_page_target()
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled,
-            "transitional Console projection should flip after V8 Console.enable succeeds"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.browser_context
+                    .as_ref()
+                    .expect("browser context should exist")
+                    .active_page_target()
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled,
+                "transitional Console projection should flip after V8 Console.enable succeeds"
+            )
+        });
     }
 
     fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
@@ -293,7 +298,7 @@ mod tests {
             stack: None,
         });
         bc.insert_shared_worker_target(target);
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     }
 
     #[tokio::test]
@@ -308,24 +313,29 @@ mod tests {
         }))
         .await;
         ctx.expect_result(41, json!({}), Some("SID-shared-worker"));
-        let target = ctx
-            .conn
-            .shared_worker_target_for_session_mut(Some("SID-shared-worker"))
-            .expect("shared worker target session should exist");
-        assert!(
-            target
-                .pending_console_domain_messages("SID-shared-worker")
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            let pending = {
+                let target = {
+                    conn.shared_worker_target_for_session_mut(Some("SID-shared-worker"))
+                        .expect("shared worker target session should exist")
+                };
+                assert!(
+                    target
+                        .pending_console_domain_messages("SID-shared-worker")
+                        .is_empty()
+                );
 
-        target.record_console_message(RendererSharedWorkerConsoleMessage {
-            message: "error: after enable".to_owned(),
-            args: Vec::new(),
-            stack: None,
+                target.record_console_message(RendererSharedWorkerConsoleMessage {
+                    message: "error: after enable".to_owned(),
+                    args: Vec::new(),
+                    stack: None,
+                });
+
+                target.pending_console_domain_messages("SID-shared-worker")
+            };
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].message, "error: after enable");
         });
-        let pending = target.pending_console_domain_messages("SID-shared-worker");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].message, "error: after enable");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -337,56 +347,66 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[]
-        );
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should be loaded");
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .console_output_session_state
-            .console_enabled = true;
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[ObservableOutputProjectionStep::Console]
-        );
-        let bc = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should be loaded");
-        let page = bc.loaded_page().expect("page should be loaded");
-        let script_execution = page.script_execution();
-        let snapshot = super::pending_console_activity_snapshot(super::ConsoleActivitySource {
-            observable: bc
-                .active_page_target()
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[]
+            )
+        });
+        ctx.with_fixture(|conn| {
+            let bc = {
+                conn.browser_context
+                    .as_mut()
+                    .expect("browser context should be loaded")
+            };
+            bc.active_page_target_mut().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state
+                .console_enabled = true;
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[ObservableOutputProjectionStep::Console]
+            )
+        });
+        let snapshot = ctx.with_fixture(|conn| {
+            let bc = conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should be loaded");
+            let page = bc.loaded_page().expect("page should be loaded");
+            let script_execution = page.script_execution();
+            super::pending_console_activity_snapshot(super::ConsoleActivitySource {
+                observable: bc
+                    .active_page_target()
+                    .owner_state
+                    .console_output_state
+                    .console_domain_emission_snapshot(
+                        script_execution.console_messages(),
+                        script_execution.lifecycle_errors(),
+                    ),
+            })
+            .expect("console output should be pending")
+        });
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should be loaded")
+                .active_page_target_mut()
                 .owner_state
                 .console_output_state
-                .console_domain_emission_snapshot(
-                    script_execution.console_messages(),
-                    script_execution.lifecycle_errors(),
-                ),
-        })
-        .expect("console output should be pending");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should be loaded")
-            .active_page_target_mut()
-            .owner_state
-            .console_output_state
-            .advance_console_domain_to_current(
-                snapshot.observable().console_end(),
-                snapshot.observable().lifecycle_end(),
-            );
-        assert_eq!(
-            observable_backlog_activity_outputs(&ctx.conn, None).console_outputs(),
-            &[]
-        );
+                .advance_console_domain_to_current(
+                    snapshot.observable().console_end(),
+                    snapshot.observable().lifecycle_end(),
+                )
+        });
+        ctx.with_fixture(|conn| {
+            assert_eq!(
+                observable_backlog_activity_outputs(conn, None).console_outputs(),
+                &[]
+            )
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -558,7 +578,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
         ctx.process_async(json!({
             "id": 13,
@@ -568,22 +588,24 @@ mod tests {
         .await;
 
         ctx.expect_result(13, json!({}), Some("SID-background"));
-        let active = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled
-        );
-        assert!(
-            active
-                .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
-                .is_some_and(|state| state.devtools_sessions
+        ctx.with_fixture(|conn| {
+            let active = conn.browser_context.as_ref().expect("browser context");
+            assert!(
+                !active.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .console_output_session_state
-                    .console_enabled),
-            "background target should stage Console.enable"
-        );
+                    .console_enabled
+            );
+            assert!(
+                active
+                    .background_target("TID-background")
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .console_output_session_state
+                        .console_enabled),
+                "background target should stage Console.enable"
+            );
+        });
     }
 }

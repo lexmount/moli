@@ -504,12 +504,9 @@ impl ScriptVm {
                     "authorized shared module-map terminal {load_id} has no module map key"
                 )
             })?;
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
-                load_id,
-                fetched_source,
-                graph_continuation.request().fetch_metadata(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!("native module script fetch completion {load_id} failed: {error}"),
@@ -839,86 +836,32 @@ impl ScriptVm {
             .borrow_mut()
             .record_css_module_failure_for_url(key.url());
     }
-    pub(crate) fn module_graph_fetched_source_or_csp_error(
+    /// Admission must not enter child JavaScript while its modulator is borrowed.
+    pub(crate) fn queue_module_fetch_csp_violations(
         &mut self,
-        load_id: u64,
-        fetched_source: ModuleGraphFetchedSource,
-        fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-    ) -> std::result::Result<ModuleGraphFetchedSource, ModuleLoadError> {
-        if fetched_source.redirected() {
-            let redirect_status =
-                crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-            let request = module_fetch_csp_request(fetch_metadata);
-            if let Some(violation) = self
-                .document_runtime
-                .script_element_request_csp_report_only_violation_with_redirect_status(
-                    fetched_source.final_url(),
-                    redirect_status,
-                    request,
-                )
-            {
-                self.queue_content_security_policy_violation_event_best_effort(&violation);
-            }
-            if let Some(violation) = self
-                .document_runtime
-                .script_element_request_csp_violation_with_redirect_status(
-                    fetched_source.final_url(),
-                    redirect_status,
-                    request,
-                )
-            {
-                self.queue_content_security_policy_violation_event_best_effort(&violation);
-                return Err(ModuleLoadError::new(
-                    ModuleLoadStage::Fetch,
-                    format!(
-                        "native module graph fetch completion {load_id} blocked by document Content Security Policy for `{}`",
-                        violation.blocked_uri
-                    ),
-                ));
-            }
-        }
-        Ok(fetched_source)
-    }
-    pub(crate) fn csp_blocked_module_fetch_error_for_owner(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError> {
-        if !matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
-            return None;
-        }
-        let violation = self
-            .document_runtime
-            .script_element_request_csp_violation_with_request(
-                key.url(),
-                module_fetch_csp_request(fetch_metadata),
-            )?;
-        self.queue_content_security_policy_violation_event_best_effort(&violation);
-        Some(ModuleLoadError::new(
-            ModuleLoadStage::Fetch,
-            format!(
-                "Refused to load module `{}` because it violates the document Content Security Policy directive `{}`",
-                key.url(),
-                violation.effective_directive
-            ),
-        ))
-    }
-    pub(crate) fn dispatch_module_fetch_csp_report_only_violation_for_owner(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
-        if !matches!(key.kind(), ModuleKind::JavaScript | ModuleKind::WebAssembly) {
-            return;
+        for violation in context.take_violations() {
+            if let Some(owner) = context.owner_scope() {
+                self.queue_captured_module_csp_violation(owner, violation);
+            } else {
+                self.queue_content_security_policy_violation_event_best_effort(&violation);
+            }
         }
-        if let Some(violation) = self
-            .document_runtime
-            .script_element_request_csp_report_only_violation_with_request(
-                key.url(),
-                module_fetch_csp_request(fetch_metadata),
-            )
-        {
-            self.queue_content_security_policy_violation_event_best_effort(&violation);
+    }
+
+    pub(crate) fn dispatch_module_fetch_csp_violations(
+        &mut self,
+        context: Option<&crate::content_security_policy::ModuleFetchCspContext>,
+    ) {
+        if let Some(context) = context {
+            for violation in context.take_violations() {
+                if let Some(owner) = context.owner_scope() {
+                    self.dispatch_captured_module_csp_violation(owner, &violation);
+                } else {
+                    self.queue_content_security_policy_violation_event_best_effort(&violation);
+                }
+            }
         }
     }
     #[cfg(test)]
@@ -1344,12 +1287,9 @@ impl ScriptVm {
                 ModuleScriptGraphFetchResume::RestoredMissingGraphContinuation,
             ));
         };
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
-                load_id,
-                fetched_source,
-                graph_continuation.request().fetch_metadata(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!("native module script fetch completion {load_id} failed: {error}"),
@@ -1410,12 +1350,9 @@ impl ScriptVm {
             ));
         };
 
+        self.dispatch_module_fetch_csp_violations(graph_continuation.request().csp_context());
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
-                load_id,
-                fetched_source,
-                graph_continuation.request().fetch_metadata(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!("native module script fetch completion {load_id} failed: {error}"),
@@ -1475,12 +1412,9 @@ impl ScriptVm {
             target.import_owner(),
             "dynamic-import resolver claim must match the authorized exact import owner"
         );
+        self.dispatch_module_fetch_csp_violations(inflight.csp_context());
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
-                target.load_id(),
-                fetched_source,
-                inflight.fetch_metadata(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(
                 ModuleLoadStage::Fetch,
                 format!(

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from os import PathLike
+from pathlib import Path
+from typing import Any
 
 
 _PROCESS_CLEANUP_TIMEOUT_SECONDS = 2.0
@@ -50,6 +53,71 @@ async def wait_for_process_exit(
         while process.returncode is None:
             await asyncio.sleep(0.01)
     return process.returncode
+
+
+def process_exit_diagnostics(process: asyncio.subprocess.Process) -> dict[str, Any]:
+    """Snapshot a failed natural exit before cleanup changes the evidence."""
+    result: dict[str, Any] = {"pid": process.pid, "returncode": process.returncode}
+    if not sys.platform.startswith("linux"):
+        result["procfsUnavailable"] = sys.platform
+        return result
+
+    def read(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError as error:
+            return f"{type(error).__name__}: {error}"
+
+    def describe(pid: int) -> dict[str, Any]:
+        directory = Path(f"/proc/{pid}")
+        status = read(directory / "status")
+        fields = ("Name", "State", "PPid", "Threads", "VmRSS")
+        description: dict[str, Any] = {"pid": pid, "wchan": read(directory / "wchan")}
+        if directory.exists():
+            description.update(
+                (key, value.strip())
+                for line in status.splitlines()
+                if ":" in line
+                for key, value in [line.split(":", 1)]
+                if key in fields
+            )
+        else:
+            description["procfsError"] = status
+        return description
+
+    result["process"] = describe(process.pid)
+    tasks = Path(f"/proc/{process.pid}/task")
+    try:
+        thread_dirs = sorted(tasks.iterdir(), key=lambda path: int(path.name))
+    except OSError as error:
+        result["threadsError"] = f"{type(error).__name__}: {error}"
+        thread_dirs = []
+    result["threads"] = [
+        {"tid": int(path.name), "name": read(path / "comm"),
+         "wchan": read(path / "wchan"), "syscall": read(path / "syscall")}
+        for path in thread_dirs[:64]
+    ]
+    result["threadsTruncated"] = len(thread_dirs) > 64
+    descendants = []
+    pending = [process.pid]
+    seen = {process.pid}
+    while pending and len(descendants) < 64:
+        pid = pending.pop(0)
+        children = read(Path(f"/proc/{pid}/task/{pid}/children"))
+        for value in children.split():
+            if not value.isdecimal():
+                continue
+            child = int(value)
+            if child in seen:
+                continue
+            seen.add(child)
+            pending.append(child)
+            descendants.append(describe(child))
+            if len(descendants) == 64:
+                break
+    result["descendants"] = descendants
+    result["descendantsTruncated"] = len(descendants) == 64
+    return result
 
 
 def _consume_task_result(task: asyncio.Task[object]) -> None:

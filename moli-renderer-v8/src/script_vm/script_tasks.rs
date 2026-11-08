@@ -355,36 +355,31 @@ impl ScriptVm {
                 .deferred_page_tasks_mut()
                 .enter_scope();
         }
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| -> std::result::Result<(), String> {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let checkpoint_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
-                Self::reset_dom_binding_trace_window();
-                let dom_binding_checkpoint_started =
-                    moli_trace::dom_binding_timing_enabled().then(Instant::now);
-                Self::perform_microtask_checkpoints(scope, Some(&script.url))
-                    .map_err(|error| error.to_string())?;
-                if let Some(started) = dom_binding_checkpoint_started {
-                    Self::emit_dom_binding_trace_window(
-                        "renderer_prepared_script_dom_binding_summary",
-                        "post_script_checkpoint",
-                        Some(&script.url),
-                        started.elapsed(),
-                    );
-                }
-                if let Some(started) = checkpoint_started {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url = %script.url,
-                        stage = "renderer_prepared_script_checkpoint_done",
-                        elapsed_ms = started.elapsed().as_millis(),
-                    );
-                }
-                Ok(())
-            })?;
+        self.with_current_main_world_scope(|scope, _| {
+            let checkpoint_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
+            Self::reset_dom_binding_trace_window();
+            let dom_binding_checkpoint_started =
+                moli_trace::dom_binding_timing_enabled().then(Instant::now);
+            Self::perform_microtask_checkpoints(scope, Some(&script.url))?;
+            if let Some(started) = dom_binding_checkpoint_started {
+                Self::emit_dom_binding_trace_window(
+                    "renderer_prepared_script_dom_binding_summary",
+                    "post_script_checkpoint",
+                    Some(&script.url),
+                    started.elapsed(),
+                );
+            }
+            if let Some(started) = checkpoint_started {
+                tracing::info!(
+                    target: "moli_cdp_nav_timing",
+                    url = %script.url,
+                    stage = "renderer_prepared_script_checkpoint_done",
+                    elapsed_ms = started.elapsed().as_millis(),
+                );
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
         let current_script_load_disposition = if skip_current_script_load_enqueue {
             FollowupPageTaskDisposition::Skipped
         } else {
@@ -598,25 +593,21 @@ impl ScriptVm {
         &mut self,
         script_url: Option<&Url>,
     ) -> anyhow::Result<()> {
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                Self::reset_dom_binding_trace_window();
-                let dom_binding_checkpoint_started =
-                    moli_trace::dom_binding_timing_enabled().then(Instant::now);
-                Self::perform_microtask_checkpoints(scope, script_url)?;
-                if let Some(started) = dom_binding_checkpoint_started {
-                    Self::emit_dom_binding_trace_window(
-                        "renderer_script_task_dom_binding_summary",
-                        "pre_task_checkpoint",
-                        script_url,
-                        started.elapsed(),
-                    );
-                }
-                Ok(())
-            })
+        self.with_current_main_world_scope(|scope, _| {
+            Self::reset_dom_binding_trace_window();
+            let dom_binding_checkpoint_started =
+                moli_trace::dom_binding_timing_enabled().then(Instant::now);
+            Self::perform_microtask_checkpoints(scope, script_url)?;
+            if let Some(started) = dom_binding_checkpoint_started {
+                Self::emit_dom_binding_trace_window(
+                    "renderer_script_task_dom_binding_summary",
+                    "pre_task_checkpoint",
+                    script_url,
+                    started.elapsed(),
+                );
+            }
+            Ok(())
+        })
+        .map(|_| ())
     }
 }

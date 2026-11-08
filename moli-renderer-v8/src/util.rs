@@ -13,8 +13,7 @@ pub use moli_v8_util::{
     object_own_static_string_property, object_property_as_array, object_property_as_object,
     object_string_property, private_key, register_ecmascript_intrinsic,
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
-    set_private_value, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,
-    walk_object_chain,
+    set_private_value, throw_range_error, throw_type_error, v8_string, v8str, walk_object_chain,
 };
 use moli_webapi_declare::WebApiValue;
 pub(crate) use moli_webapi_declare::define_array_data_property as define_v8_array_data_property;
@@ -509,6 +508,26 @@ pub(crate) fn script_parser_inserted_from_host_defined_options(
     }
 }
 
+pub(crate) fn script_eval_cache_partition<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::String>> {
+    let partition = (|| {
+        let options = scope.get_current_host_defined_options()?;
+        let options = script_host_defined_options_as_fixed_array(options)?;
+        if options.length() < 5 {
+            return None;
+        }
+        let marker = v8::Local::<v8::String>::try_from(options.get(scope, 0)?).ok()?;
+        if marker.to_rust_string_lossy(scope) != SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER {
+            return None;
+        }
+        v8::Local::<v8::String>::try_from(options.get(scope, 4)?).ok()
+    })();
+    // Untracked callers need a distinct suffix too: otherwise author-provided
+    // source could match a tracked caller's already-partitioned cache key.
+    partition.or_else(|| v8_string(scope, "\n// moli-referrer:untracked"))
+}
+
 fn script_host_defined_options_as_fixed_array<'s>(
     host_defined_options: v8::Local<'s, v8::Data>,
 ) -> Option<v8::Local<'s, v8::FixedArray>> {
@@ -524,7 +543,7 @@ fn script_host_defined_options_as_fixed_array<'s>(
 pub(crate) fn script_base_url_from_continuation_data(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<Url> {
-    let value = scope.get_continuation_preserved_embedder_data();
+    let value = crate::resource_initiator::base_url_value(scope);
     let value = v8::Local::<v8::String>::try_from(value).ok()?;
     Url::parse(&value.to_rust_string_lossy(scope)).ok()
 }
@@ -533,7 +552,8 @@ pub(crate) fn script_base_url_continuation_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     base_url: &Url,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    v8_string(scope, base_url.as_str()).map(Into::into)
+    let base = v8_string(scope, base_url.as_str())?.into();
+    Some(crate::resource_initiator::with_base_url(scope, base))
 }
 
 pub(crate) fn script_host_defined_options_with_base_url_and_nonce<'s>(
@@ -550,6 +570,16 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
     nonce: Option<&str>,
     parser_inserted: bool,
 ) -> Option<v8::Local<'s, v8::Data>> {
+    // V8 15.2 looks up Function/indirect-eval cache entries before resolving
+    // the caller script. Partition caller metadata without disabling caching.
+    // The trailing comment stays outside generated functions' source ranges.
+    let partition = format!(
+        "\n// moli-referrer:{}",
+        moli_crypto::sha256_hex(format!(
+            "{base_url}\0{}\0{parser_inserted}",
+            nonce.unwrap_or_default()
+        ))
+    );
     let marker = v8_string(scope, SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER)?;
     let value = v8_string(scope, base_url.as_str())?;
     let nonce = v8_string(scope, nonce.unwrap_or_default())?;
@@ -561,11 +591,13 @@ pub(crate) fn script_host_defined_options_with_fetch_metadata<'s>(
             "not-parser-inserted"
         },
     )?;
-    let options = v8::PrimitiveArray::new(scope, 4);
+    let partition = v8_string(scope, &partition)?;
+    let options = v8::PrimitiveArray::new(scope, 5);
     options.set(scope, 0, marker.into());
     options.set(scope, 1, value.into());
     options.set(scope, 2, nonce.into());
     options.set(scope, 3, parser_metadata.into());
+    options.set(scope, 4, partition.into());
     Some(options.into())
 }
 
@@ -595,10 +627,11 @@ pub(super) fn call_global_bridge_method<'s>(
     crate::script_execution::call_function(scope, method, bridge.into(), args)
 }
 
-/// Obtain a raw `*mut JsContextHost` pointer from the V8 global bridge.
+/// Resolve the current Context's native Window owner inside V8 callbacks.
 ///
-/// This is the standard way to access the host inside **V8 callbacks**. It reads
-/// the pointer stored in bridge internal field 0 (set during `install_into_bridge`).
+/// Document retention and lifecycle validation belong to native Context slots.
+/// A Context without a live Window binding has no host, regardless of its global
+/// properties.
 ///
 /// We return a raw pointer instead of a `&mut` reference because V8 callbacks are
 /// inherently re-entrant: any V8 API call (property access, object creation, scope
@@ -627,9 +660,11 @@ pub(super) fn context_host_ptr_from_global_bridge(
     if let Some(host_ptr) = context_host_ptr_from_context_slot(context) {
         return Some(host_ptr);
     }
-    // Read directly from bridge internal field 0 — no Rc ref-count overhead.
-    let global = context.global(scope);
-    context_host_ptr_from_window_object(scope, global)
+    // A Worker or an unbound Context has no Window host. Do not probe its
+    // global, including when cleanup has an exception pending.
+    context
+        .get_slot::<crate::common_runtime::CommonRuntimeBinding>()?
+        .window_host_ptr()
 }
 
 pub(super) fn install_context_host_pointer_slot(
@@ -1038,6 +1073,10 @@ pub(crate) fn utf16_units_contain_unpaired_surrogate(units: &[u16]) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+#[path = "util_codegen_tests.rs"]
+mod generated_code_tests;
 
 #[cfg(test)]
 mod tests {

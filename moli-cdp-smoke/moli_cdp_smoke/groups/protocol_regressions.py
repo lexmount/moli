@@ -6,6 +6,7 @@ from typing import Any
 
 from ..config import is_moli_browser
 from ..assertions import SmokeError, assert_equal, record
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 
 
@@ -454,35 +455,7 @@ async def _create_running_page(client: RawCdpClient, url: str) -> RunningPage:
         enable_id = await client.send(method, session_id=session_id)
         await client.recv_until_id(enable_id, timeout=5)
 
-    navigate_id = await client.send(
-        "Page.navigate",
-        {"url": url},
-        session_id=session_id,
-    )
-    saw_response = False
-    saw_load = False
-    seen: list[dict[str, Any]] = []
-    deadline = asyncio.get_running_loop().time() + 10
-    while not (saw_response and saw_load):
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError(f"timed out creating running page; seen={seen[-20:]}")
-        try:
-            message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        except TimeoutError as error:
-            raise SmokeError(
-                f"timed out creating running page; seen={seen[-20:]}"
-            ) from error
-        seen.append(message)
-        if message.get("id") == navigate_id:
-            if "error" in message:
-                raise SmokeError(f"Page.navigate failed: {message}")
-            saw_response = True
-        if (
-            message.get("sessionId") == session_id
-            and message.get("method") == "Page.loadEventFired"
-        ):
-            saw_load = True
+    await navigate_document(client, session_id, {"url": url})
     return RunningPage(
         browser_context_id=browser_context_id,
         target_id=target_id,

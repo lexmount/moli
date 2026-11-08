@@ -52,7 +52,7 @@ pub(crate) fn build_file_list_object<'s>(
         .ok()?;
     for (index, file) in files.iter().enumerate() {
         let index = u32::try_from(index).ok()?;
-        if object.set_index(scope, index, (*file).into()) != Some(true) {
+        if define_file_list_index(scope, object, index, *file) != Some(true) {
             return None;
         }
     }
@@ -82,11 +82,22 @@ pub(crate) fn sync_file_list_contents<'s>(
         let _ = object.delete_index(scope, index);
     }
     for (index, file) in files.iter().enumerate() {
-        let _ = object.set_index(scope, index as u32, (*file).into());
+        let _ = define_file_list_index(scope, object, index as u32, *file);
     }
     set_private_value(scope, object, FILE_LIST_FILES_SLOT, contents.into());
     let length = v8::Number::new(scope, f64::from(length));
     set_private_value(scope, object, FILE_LIST_LENGTH_SLOT, length.into());
+}
+
+fn define_file_list_index<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    index: u32,
+    file: v8::Local<'s, v8::Object>,
+) -> Option<bool> {
+    // Native indexed properties must not invoke inherited author setters.
+    let key = v8::String::new(scope, &index.to_string())?;
+    object.create_data_property(scope, key.into(), file.into())
 }
 
 fn build_file_list_contents_array<'s>(

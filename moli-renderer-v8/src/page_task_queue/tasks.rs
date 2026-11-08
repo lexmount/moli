@@ -5,38 +5,28 @@ use crate::{
     frame_owner_model::FrameDocumentTaskOwner,
     host::ScriptEventTask,
     planning::PreparedScript,
-    stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
+    stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput,
     types::ScriptErrorConstructorKind,
     types::ScriptRun,
 };
-use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MainDocumentMetaRefreshNavigationTask {
     owner: FrameDocumentTaskOwner,
-    delay_ms: u32,
-    url: Url,
+    revision: u64,
 }
 
 impl MainDocumentMetaRefreshNavigationTask {
-    pub(crate) fn new(owner: FrameDocumentTaskOwner, delay_ms: u32, url: Url) -> Self {
-        Self {
-            owner,
-            delay_ms,
-            url,
-        }
+    pub(crate) fn new(owner: FrameDocumentTaskOwner, revision: u64) -> Self {
+        Self { owner, revision }
     }
 
     pub(crate) const fn owner(&self) -> FrameDocumentTaskOwner {
         self.owner
     }
 
-    pub(crate) const fn delay_ms(&self) -> u32 {
-        self.delay_ms
-    }
-
-    pub(crate) fn into_url(self) -> Url {
-        self.url
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
     }
 }
 
@@ -94,6 +84,9 @@ impl WindowScriptFailureReportTask {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContentSecurityPolicyViolationEventTask {
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    // The task resides in the root Page queue; a captured Window additionally
+    // requires its exact Document to remain current before entering JavaScript.
+    window_target: Option<crate::native_bridge::WindowDocumentTaskTarget>,
     target: Option<DomHandle>,
     violation: ContentSecurityPolicyUrlViolation,
 }
@@ -105,6 +98,7 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            window_target: None,
             target: None,
             violation,
         }
@@ -117,9 +111,27 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            window_target: None,
             target: Some(target),
             violation,
         }
+    }
+
+    pub(crate) fn for_window(
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        window_target: crate::native_bridge::WindowDocumentTaskTarget,
+        violation: ContentSecurityPolicyUrlViolation,
+    ) -> Self {
+        Self {
+            owner,
+            window_target: Some(window_target),
+            target: None,
+            violation,
+        }
+    }
+
+    pub(crate) fn window_target(&self) -> Option<crate::native_bridge::WindowDocumentTaskTarget> {
+        self.window_target
     }
 
     pub(crate) fn owner(&self) -> crate::frame_owner_model::FrameDocumentTaskOwner {
@@ -145,7 +157,7 @@ impl ContentSecurityPolicyViolationEventTask {
 // surface and can be unconstructed in focused test binaries.
 #[derive(Debug)]
 pub(crate) enum PageTask {
-    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>),
+    SeedDocumentOwnedBlockingStylesheets(Vec<DocumentOwnedStylesheetDiscoveryInput>),
     RecordDocumentScriptRun { position: usize, run: ScriptRun },
     DispatchContentSecurityPolicyViolation(ContentSecurityPolicyViolationEventTask),
     DispatchScriptEvent(ScriptEventTask),

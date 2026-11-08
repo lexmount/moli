@@ -1,7 +1,5 @@
 use super::super::media_queries::{
     dispatch_simple_event_target_event, initialize_simple_event_target,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback,
 };
 use super::super::*;
 use crate::util::{
@@ -121,44 +119,6 @@ struct ScreenOrientationPrototypeMethodsDeclaration {
     unlock: (),
 }
 
-#[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Screen, enumerable)]
-struct ScreenEventTargetMethodsDeclaration {
-    #[webapi(method, length = 2, callback = screen_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-    #[webapi(
-        method,
-        length = 2,
-        callback = screen_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-    #[webapi(method, length = 1, callback = screen_event_target_dispatch_event_callback)]
-    dispatch_event: (),
-}
-
-#[derive(Default, WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::ScreenOrientation, enumerable)]
-struct ScreenOrientationEventTargetMethodsDeclaration {
-    #[webapi(
-        method,
-        length = 2,
-        callback = screen_orientation_event_target_add_event_listener_callback
-    )]
-    add_event_listener: (),
-    #[webapi(
-        method,
-        length = 2,
-        callback = screen_orientation_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-    #[webapi(
-        method,
-        length = 1,
-        callback = screen_orientation_event_target_dispatch_event_callback
-    )]
-    dispatch_event: (),
-}
-
 fn new_not_supported_dom_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     message: &str,
@@ -228,78 +188,6 @@ fn screen_orientation_unlock_callback<'s>(
     rv.set(v8::undefined(scope).into());
 }
 
-fn screen_event_target_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn screen_event_target_remove_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_remove_event_listener_callback(scope, args, rv);
-}
-
-fn screen_event_target_dispatch_event_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::Screen::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_dispatch_event_callback(scope, args, rv);
-}
-
-fn screen_orientation_event_target_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn screen_orientation_event_target_remove_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_remove_event_listener_callback(scope, args, rv);
-}
-
-fn screen_orientation_event_target_dispatch_event_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::ScreenOrientation::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    simple_event_target_dispatch_event_callback(scope, args, rv);
-}
-
 pub(in crate::context_bootstrap) fn install_screen_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -309,13 +197,9 @@ pub(in crate::context_bootstrap) fn install_screen_template_bindings<'s>(
     match interface_name {
         "Screen" => {
             ScreenPrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
-            ScreenEventTargetMethodsDeclaration::initialize_prototype_template(scope, prototype);
         }
         "ScreenOrientation" => {
             ScreenOrientationPrototypeAccessorsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
-            ScreenOrientationEventTargetMethodsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
             ScreenOrientationPrototypeMethodsDeclaration::initialize_prototype_template(

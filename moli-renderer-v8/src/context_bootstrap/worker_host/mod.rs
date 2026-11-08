@@ -1,7 +1,4 @@
-use super::media_queries::{
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, simple_object_event_set_handler,
-};
+use super::media_queries::simple_object_event_set_handler;
 use super::shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT;
 use crate::{
     util::context_host_ptr_from_global_bridge,
@@ -26,7 +23,7 @@ mod dispatch;
 mod methods;
 
 pub(in crate::context_bootstrap) use constructor::{
-    document_query_encoding_override, is_cross_origin_http_worker_script,
+    WorkerOptionsMembers, document_query_encoding_override, is_cross_origin_http_worker_script,
     materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
     trusted_worker_script_url_string_or_throw, worker_constructor_base_url,
     worker_script_resource_url, worker_script_scheme_can_load,

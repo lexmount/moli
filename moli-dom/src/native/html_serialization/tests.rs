@@ -10,6 +10,84 @@ fn scripting_enabled(_: NativeNodeId) -> bool {
 }
 
 #[test]
+fn template_contents_require_the_exact_html_element_identity() {
+    for (namespace, name, is_template) in [
+        (None, "template", false),
+        (Some(""), "template", false),
+        (Some("http://www.w3.org/2000/svg"), "template", false),
+        (
+            Some("http://www.w3.org/1998/Math/MathML"),
+            "template",
+            false,
+        ),
+        (Some("urn:template-test"), "template", false),
+        (Some("http://www.w3.org/1999/xhtml"), "TEMPLATE", false),
+        (Some("http://www.w3.org/1999/xhtml"), "TeMpLaTe", false),
+        (Some("http://www.w3.org/1999/xhtml"), "template", true),
+        (Some("http://www.w3.org/1999/xhtml"), "h:template", true),
+    ] {
+        let mut dom = NativeDom::new_html(test_url());
+        let native = dom.create_element_ns(namespace, name).unwrap();
+        let mut host = DomHost::from_dom(dom);
+        let document = host.document_handle();
+        let (prefix, local_name) = name
+            .split_once(':')
+            .map_or((None, name), |(prefix, local)| {
+                (Some(prefix.to_owned()), local)
+            });
+        let allocated = host.create_element_without_attributes_for_document(
+            document,
+            local_name.into(),
+            namespace.unwrap_or_default().into(),
+            prefix.clone(),
+        );
+        let parsed = host.create_parser_element_without_attributes_for_document(
+            document,
+            local_name.into(),
+            namespace.unwrap_or_default().into(),
+            prefix,
+        );
+        for element in [native, allocated, parsed] {
+            let contents = host
+                .node(element)
+                .and_then(|node| node.as_element())
+                .unwrap()
+                .template_contents();
+            assert_eq!(
+                contents.is_some(),
+                is_template,
+                "namespace={namespace:?}, name={name}"
+            );
+            let child = host.create_element("probe");
+            let root = if is_template {
+                contents.unwrap()
+            } else {
+                element
+            };
+            assert!(host.append_child(root, child));
+            assert_eq!(
+                host.dom().inner_html(element).as_deref(),
+                Some("<probe></probe>")
+            );
+            let clone = host.clone_node(element, true).unwrap();
+            assert_eq!(
+                host.dom().inner_html(clone).as_deref(),
+                Some("<probe></probe>")
+            );
+        }
+    }
+    let mut dom = NativeDom::new_html(test_url());
+    let normalized = dom.create_element("TEMPLATE");
+    assert_eq!(dom.element(normalized).unwrap().local_name(), "template");
+    assert!(
+        dom.element(normalized)
+            .unwrap()
+            .template_contents()
+            .is_some()
+    );
+}
+
+#[test]
 fn html_serializers_share_the_complete_void_element_set() {
     let mut dom = NativeDom::new_html(test_url());
     let container = dom.create_element("div");

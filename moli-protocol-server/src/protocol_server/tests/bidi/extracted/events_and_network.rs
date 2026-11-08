@@ -1,6 +1,134 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_global_iframe_subscription_without_get_tree() {
+    assert_bidi_iframe_subscription_without_get_tree(false).await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_user_context_iframe_subscription_without_get_tree() {
+    assert_bidi_iframe_subscription_without_get_tree(true).await;
+}
+
+async fn assert_bidi_iframe_subscription_without_get_tree(user_context_scope: bool) {
+    let fixture = Router::new()
+        .route(
+            "/",
+            get(|| async { axum::response::Html("<!doctype html><body>parent</body>") }),
+        )
+        .route(
+            "/child",
+            get(|| async { axum::response::Html("<!doctype html><body>child</body>") }),
+        );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "bidi-subscribe-without-tree");
+    let parent_url = format!("http://{fixture_addr}/");
+    let child_url = format!("http://{fixture_addr}/child");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session_id = classic_new_session_on_server(addr).await;
+    classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/url"),
+        json!({"url": parent_url}),
+    )
+    .await;
+    let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+
+    // The first BiDi command subscribes to an existing Classic Page. Neither
+    // getTree nor create has populated the adapter's context map yet.
+    let mut params = json!({
+        "events": ["browsingContext.domContentLoaded", "browsingContext.load"]
+    });
+    if user_context_scope {
+        params["userContexts"] = json!(["default"]);
+    }
+    let subscribe = send_bidi_command_response(&mut socket, 1, "session.subscribe", params).await;
+    assert_eq!(subscribe["type"], "success", "{subscribe:?}");
+    let realms = send_bidi_command_response(
+        &mut socket,
+        2,
+        "script.getRealms",
+        json!({"type": "window"}),
+    )
+    .await;
+    assert_eq!(realms["type"], "success", "{realms:?}");
+    let context = realms["result"]["realms"][0]["context"]
+        .as_str()
+        .expect("initial window context");
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 3,
+                "method": "script.evaluate",
+                "params": {
+                    "expression": format!(
+                        "new Promise(resolve => {{ const frame = document.createElement('iframe'); \
+                         frame.onload = () => resolve(true); frame.src = {}; \
+                         document.body.appendChild(frame); }})",
+                        json!(child_url)
+                    ),
+                    "target": {"context": context},
+                    "awaitPromise": true
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("insert child iframe after subscribing without getTree");
+    let messages = recv_until_id(&mut socket, 3).await;
+    let messages = collect_bidi_messages_until(
+        &mut socket,
+        messages,
+        |messages| {
+            ["browsingContext.domContentLoaded", "browsingContext.load"]
+                .into_iter()
+                .all(|method| {
+                    messages.iter().any(|message| {
+                        message["method"] == method && message["params"]["url"] == child_url
+                    })
+                })
+        },
+        "subscribed child iframe lifecycle events without getTree",
+    )
+    .await;
+    let evaluate = bidi_message_by_id(&messages, 3);
+    assert_eq!(evaluate["type"], "success", "{evaluate:?}");
+    assert_eq!(
+        evaluate["result"]["result"],
+        json!({"type": "boolean", "value": true})
+    );
+    let lifecycle: Vec<_> = messages
+        .iter()
+        .filter(|message| message["params"]["url"] == child_url)
+        .collect();
+    assert_eq!(lifecycle.len(), 2, "{messages:?}");
+    assert_eq!(lifecycle[0]["method"], "browsingContext.domContentLoaded");
+    assert_eq!(lifecycle[1]["method"], "browsingContext.load");
+    assert_ne!(lifecycle[0]["params"]["context"], context);
+    assert_eq!(
+        lifecycle[0]["params"]["context"],
+        lifecycle[1]["params"]["context"]
+    );
+
+    let tree = send_bidi_command_response(
+        &mut socket,
+        4,
+        "browsingContext.getTree",
+        json!({"root": context}),
+    )
+    .await;
+    assert_eq!(tree["type"], "success", "{tree:?}");
+    assert_eq!(
+        tree["result"]["contexts"][0]["children"][0]["context"],
+        lifecycle[0]["params"]["context"]
+    );
+    let _ = socket.close(None).await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_existing_classic_session_uses_file_prompt_capability() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let session_id = classic_new_session_on_server_with_body(

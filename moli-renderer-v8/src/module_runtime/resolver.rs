@@ -1,7 +1,8 @@
+use crate::module_runtime::import_attributes_key;
 use std::cell::Cell;
 use std::ptr;
 
-use super::{ModuleAttributesKey, NativeDocumentModulator};
+use super::NativeDocumentModulator;
 use crate::util::v8_string;
 
 thread_local! {
@@ -103,27 +104,4 @@ fn throw_source_phase_syntax_error<'s>(
     let exception = v8::Exception::syntax_error(scope, message);
     scope.throw_exception(exception);
     None
-}
-
-fn import_attributes_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    attributes: v8::Local<'_, v8::FixedArray>,
-) -> ModuleAttributesKey {
-    let mut pairs = Vec::with_capacity(attributes.length() / 2);
-    let mut index = 0;
-    while index + 1 < attributes.length() {
-        let key = attributes
-            .get(scope, index)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let value = attributes
-            .get(scope, index + 1)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        if let (Some(key), Some(value)) = (key, value) {
-            pairs.push((key, value));
-        }
-        index += 2;
-    }
-    ModuleAttributesKey::from_pairs(pairs)
 }

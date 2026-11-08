@@ -1,3 +1,6 @@
+#[path = "websocket/split30_websocket_native_receivers.rs"]
+mod split30_websocket_native_receivers;
+
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
@@ -498,12 +501,14 @@ fn websocket_wpt_target_event_target_listener_options_and_objects() {
                 throw new Error(`WebSocket simple EventTarget internals should not be reflected: ${simpleOwn.join(',')}`);
             }
             const expected = {
-                addEventListener: 'true:true:true:true:function:0:addEventListener',
-                removeEventListener: 'true:true:true:true:function:0:removeEventListener',
-                dispatchEvent: 'true:true:true:true:function:0:dispatchEvent'
+                addEventListener: 'true:true:true:true:function:2:addEventListener',
+                removeEventListener: 'true:true:true:true:function:2:removeEventListener',
+                dispatchEvent: 'true:true:true:true:function:1:dispatchEvent'
             };
             for (const [name, shape] of Object.entries(expected)) {
-                const descriptor = Object.getOwnPropertyDescriptor(socket, name);
+                if (Object.hasOwn(socket, name) || socket[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                 const actual = [
                     !!descriptor,
                     descriptor && descriptor.enumerable,
@@ -1091,7 +1096,7 @@ fn websocket_wpt_target_constructor_identity_and_string_tags() {
 
     assert_eq!(
         result,
-        "1|WebSocket|true|[object WebSocket]|[object WebSocket]|[object WebSocketPrototype]"
+        "1|WebSocket|true|[object WebSocket]|[object WebSocket]|[object WebSocket]"
     );
 }
 
@@ -1131,7 +1136,7 @@ fn websocket_wpt_target_global_constructor_and_prototype_descriptors() {
 }
 
 #[test]
-fn websocket_wpt_target_close_event_reason_usvstring_conversion() {
+fn websocket_wpt_target_close_event_reason_domstring_conversion() {
     let mut vm = new_storage_test_vm("https://websocket-wpt-target.test/");
 
     let result = vm
@@ -1146,9 +1151,9 @@ fn websocket_wpt_target_close_event_reason_usvstring_conversion() {
             })()
             "#,
         )
-        .expect("target CloseEvent USVString conversion test should evaluate");
+        .expect("target CloseEvent DOMString conversion test should evaluate");
 
-    assert_eq!(result, "1|fffd");
+    assert_eq!(result, "1|d800");
 }
 
 #[test]
@@ -1468,22 +1473,12 @@ fn websocket_wpt_target_binary_type_accessor_surface() {
             if (socket.binaryType !== 'arraybuffer') {
                 throw new Error('binaryType should accept arraybuffer');
             }
-            let invalidDidThrow = (() => {
-                try {
-                    socket.binaryType = 'notBlobOrArrayBuffer';
-                    return false;
-                } catch (error) {
-                    if (error?.name !== 'SyntaxError') {
-                        throw error;
-                    }
-                    return true;
+            for (const value of ['notBlobOrArrayBuffer', 'ArrayBuffer', '', undefined,
+                                 null, false, 7, 7n, '\ud800']) {
+                socket.binaryType = value;
+                if (socket.binaryType !== 'arraybuffer') {
+                    throw new Error('invalid binaryType assignments should preserve the previous value');
                 }
-            })();
-            if (!invalidDidThrow) {
-                throw new Error('invalid binaryType assignments should throw SyntaxError');
-            }
-            if (socket.binaryType !== 'arraybuffer') {
-                throw new Error('invalid binaryType assignments should preserve the previous value');
             }
             Object.defineProperty(WebSocket.prototype, 'binaryType', {
                 configurable: true,
@@ -1506,7 +1501,53 @@ fn websocket_wpt_target_binary_type_accessor_surface() {
         })()
         "#,
     )
-    .expect("target WebSocket binaryType accessor surface test should pass once implemented");
+    .expect("WebSocket binaryType descriptors, enum values, and overrides should evaluate");
+}
+
+#[test]
+fn websocket_binary_type_conversion_preserves_reentry_and_errors() {
+    let mut vm = new_storage_test_vm("https://websocket-binary-type.test/");
+    let result = vm.eval(
+        r#"
+        (() => {
+            function check(value, message) { if (!value) throw new Error(message); }
+            const socket = new WebSocket('wss://example.test/socket');
+            socket.binaryType = 'arraybuffer';
+            const calls = [];
+            socket.binaryType = {
+                [Symbol.toPrimitive](hint) {
+                    calls.push(hint);
+                    check(socket.binaryType === 'arraybuffer', 'read the current value during conversion');
+                    socket.binaryType = 'blob';
+                    return 'invalid';
+                }
+            };
+            check(calls.join(',') === 'string', 'convert exactly once with a string hint');
+            check(socket.binaryType === 'blob', 'an invalid outer value keeps reentrant mutations');
+            socket.binaryType = {
+                toString() { calls.push('toString'); return 'arraybuffer'; }
+            };
+            check(calls.join(',') === 'string,toString', 'ordinary ToString also runs once');
+            check(socket.binaryType === 'arraybuffer', 'accept a converted enum value');
+            let caught;
+            try { socket.binaryType = Symbol('invalid'); } catch (error) { caught = error; }
+            check(caught instanceof TypeError, 'Symbol conversion must still throw TypeError');
+            check(socket.binaryType === 'arraybuffer', 'Symbol failure preserves the current value');
+            const marker = {};
+            caught = undefined;
+            try { socket.binaryType = {toString() { throw marker; }}; }
+            catch (error) { caught = error; }
+            check(caught === marker, 'propagate the original conversion exception');
+            check(socket.binaryType === 'arraybuffer', 'conversion failure preserves the current value');
+            socket.close();
+            socket.binaryType = 'blob';
+            socket.binaryType = 'invalid';
+            check(socket.binaryType === 'blob', 'enum assignment remains available after close');
+            return 'ok';
+        })()
+        "#,
+    ).expect("WebSocket binaryType should preserve observable conversion semantics");
+    assert_eq!(result, "ok");
 }
 
 #[test]
@@ -2247,5 +2288,21 @@ fn readable_stream_async_iterator_declared_shape_keeps_symbol_and_tag() {
     assert_eq!(
         result,
         r#"{"toString":"[object ReadableStream AsyncIterator]","asyncIteratorReturnsSelf":true,"globalNamesBefore":"","globalNamesAfterCache":"","globalNamesAfterSpoof":"__moliReadableStreamAsyncIteratorPrototype","ownNames":[],"ownSymbols":[],"leaksReader":false,"leaksClosed":false,"leaksPreventCancel":false,"asyncDescriptor":"false,true,true,0","prototypeParentIsIntrinsic":true,"prototypeStableAfterSpoof":true,"prototypeNames":["next","return"],"prototypeHasConstructor":false,"tagDescriptor":"false,false,true,ReadableStream AsyncIterator"}"#
+    );
+}
+
+#[test]
+fn websocket_error_messages_preserve_utf16_code_units() {
+    let mut vm = new_parsed_test_vm(
+        "https://websocket-conversion.test/",
+        "<html><body></body></html>",
+    );
+    let probe = include_str!("../../../tests/fixtures/websocket-error-message-utf16.js");
+    assert_eq!(
+        vm.eval(&format!(
+            "{probe}\ndocument.body.innerHTML = '<iframe></iframe>';\n\
+             JSON.stringify([websocketErrorMessageUtf16Probe(window), websocketErrorMessageUtf16Probe(document.querySelector('iframe').contentWindow)])"
+        )).unwrap(),
+        r#"["ok","ok"]"#
     );
 }

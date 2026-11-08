@@ -1,4 +1,5 @@
 use super::*;
+use crate::native_bridge::document::attributes::nullable_state_string as nullable_attr_state_string;
 use crate::native_bridge::node_runtime_and_handle_from_object;
 
 pub(super) fn attr_owner_element_object<'s>(
@@ -96,20 +97,4 @@ fn attr_current_live_native_value<'s>(
     unsafe { &*runtime_ptr }
         .dom_host()
         .get_attribute(handle, name)
-}
-
-fn nullable_attr_state_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    property: &str,
-) -> Option<String> {
-    let key = v8_string(scope, property)?;
-    let value = state.get(scope, key.into())?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
 }

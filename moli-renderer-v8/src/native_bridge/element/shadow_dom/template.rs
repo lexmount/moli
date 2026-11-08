@@ -166,6 +166,7 @@ fn template_content_for_object<'s>(
         rv.set_null();
         return;
     };
+    runtime.bind_template_document_execution_context(scope, object, handle, contents_handle);
     set_wrapped_handle_or_null_for_receiver(
         scope,
         &mut rv,

@@ -38,7 +38,6 @@ pub(in crate::context_bootstrap) const WINDOW_TOP_SLOT: &str = "__moliWindowTop"
 pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowFrames";
 // Each SimpleEventTarget stores its own listener registry directly under this key.
 pub(crate) const SIMPLE_EVENT_TARGET_LISTENERS_SLOT: &str = "__moliEventTargetListeners";
-pub(in crate::context_bootstrap) const OFFLINE_AUDIO_BUFFER_SLOT: &str = "__moliOfflineAudioBuffer";
 pub(in crate::context_bootstrap) const DOM_IMPLEMENTATION_SINGLETON_SLOT: &str =
     "__moliDOMImplementationSingleton";
 pub(in crate::context_bootstrap) const URL_HREF_SLOT: &str = "__moliUrlHref";
@@ -72,16 +71,11 @@ pub(in crate::context_bootstrap) const MESSAGE_PORT_ONCLOSE_HANDLER_SLOT: &str =
     "__lmMessagePortOncloseHandler";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_STARTED_SLOT: &str = "__moliMessagePortStarted";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_CLOSED_SLOT: &str = "__moliMessagePortClosed";
-pub(in crate::context_bootstrap) const FILE_READER_QUEUE_SLOT: &str = "__moliFileReaderQueue";
-pub(in crate::context_bootstrap) const FILE_READER_SCHEDULED_SLOT: &str =
-    "__moliFileReaderScheduled";
 pub(in crate::context_bootstrap) const FILE_READER_PENDING_RESULT_SLOT: &str =
     "__moliFileReaderPendingResult";
 pub(in crate::context_bootstrap) const FILE_READER_PENDING_TOTAL_SLOT: &str =
     "__moliFileReaderPendingTotal";
 pub(in crate::context_bootstrap) const FILE_READER_READ_ID_SLOT: &str = "__moliFileReaderReadId";
-pub(in crate::context_bootstrap) const FILE_READER_TASK_PHASE_SLOT: &str =
-    "__moliFileReaderTaskPhase";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_CALLBACK_ID_SLOT: &str =
     "__moliResizeObserverCallbackId";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_CALLBACK_VALUE_SLOT: &str =
@@ -94,10 +88,6 @@ pub(in crate::context_bootstrap) const RESIZE_OBSERVER_TARGETS_SLOT: &str =
     "__moliResizeObserverTargets";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_PENDING_TARGETS_SLOT: &str =
     "__moliResizeObserverPendingTargets";
-pub(in crate::context_bootstrap) const RESIZE_OBSERVER_QUEUE_SLOT: &str =
-    "__moliResizeObserverQueue";
-pub(in crate::context_bootstrap) const RESIZE_OBSERVER_REGISTRY_SLOT: &str =
-    "__moliResizeObservers";
 pub(in crate::context_bootstrap) const RESIZE_OBSERVER_SCHEDULED_SLOT: &str =
     "__moliResizeObserverScheduled";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_CALLBACK_ID_SLOT: &str =
@@ -120,6 +110,8 @@ pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_ACTIVE_SLOT: &str =
     "__moliPerformanceObserverActive";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SCHEDULED_SLOT: &str =
     "__moliPerformanceObserverScheduled";
+pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_REQUIRES_DROPPED_ENTRIES_SLOT: &str =
+    "__moliPerformanceObserverRequiresDroppedEntries";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_QUEUE_SLOT: &str =
     "__moliPerformanceObserverQueue";
 pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT: &str =

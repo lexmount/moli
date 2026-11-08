@@ -5,12 +5,40 @@ use std::collections::HashSet;
 
 const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
+        interface: web_api_interfaces::BatteryManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::NetworkInformation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerContainer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorkerRegistration::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ServiceWorker::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PaymentRequestUpdateEvent::DESCRIPTOR,
         kind: ConstructorKind::PaymentRequestUpdateEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PaymentMethodChangeEvent::DESCRIPTOR,
         kind: ConstructorKind::PaymentMethodChangeEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedAudioFrame::DESCRIPTOR,
+        kind: ConstructorKind::RtcEncodedAudioFrame,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCEncodedVideoFrame::DESCRIPTOR,
+        kind: ConstructorKind::RtcEncodedVideoFrame,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
@@ -301,6 +329,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TransitionEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MIDIMessageEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIMessageEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIConnectionEvent::DESCRIPTOR,
+        kind: ConstructorKind::MIDIConnectionEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::BlobEvent::DESCRIPTOR,
         kind: ConstructorKind::BlobEvent,
     },
@@ -559,6 +595,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::WorkerLocation::DESCRIPTOR,
         kind: ConstructorKind::WorkerLocation,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportError::DESCRIPTOR,
+        kind: ConstructorKind::WebTransportError,
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebTransportBidirectionalStream::DESCRIPTOR,
@@ -1109,7 +1149,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
-        kind: ConstructorKind::Shell { length: 1 },
+        kind: ConstructorKind::EncodedVideoChunk,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
@@ -1341,7 +1381,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPointReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPoint::DESCRIPTOR,
@@ -1353,11 +1393,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMQuad::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomQuad,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrixReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrix::DESCRIPTOR,
@@ -1528,12 +1568,64 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioScheduledSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioBufferSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::AudioBufferSourceNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ConstantSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::ConstantSourceNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ConvolverNode::DESCRIPTOR,
+        kind: ConstructorKind::ConvolverNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::IIRFilterNode::DESCRIPTOR,
+        kind: ConstructorKind::IIRFilterNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PeriodicWave::DESCRIPTOR,
+        kind: ConstructorKind::PeriodicWave,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WaveShaperNode::DESCRIPTOR,
+        kind: ConstructorKind::WaveShaperNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChannelMergerNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelMergerNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChannelSplitterNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelSplitterNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DelayNode::DESCRIPTOR,
+        kind: ConstructorKind::DelayNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::StereoPannerNode::DESCRIPTOR,
+        kind: ConstructorKind::StereoPannerNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },
     ConstructorSpec {
         interface: web_api_interfaces::OscillatorNode::DESCRIPTOR,
         kind: ConstructorKind::OscillatorNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::GainNode::DESCRIPTOR,
+        kind: ConstructorKind::GainNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaElementAudioSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::MediaElementAudioSourceNode,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DynamicsCompressorNode::DESCRIPTOR,
@@ -1629,6 +1721,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::IDBCursorWithValue::DESCRIPTOR,
+        kind: ConstructorKind::IndexedDb,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::IDBRecord::DESCRIPTOR,
         kind: ConstructorKind::IndexedDb,
     },
     ConstructorSpec {

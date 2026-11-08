@@ -339,6 +339,18 @@ globalThis.emptyMedia = document.createElement({kind:?});
 emptyMedia.defaultMuted = true;
 emptyMedia.muted = false;
 emptyMedia.volume = 0.25;
+"#,
+                ))?;
+                // Finish setup changes before observing loading notifications.
+                while page
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::MediaElementEvent,
+                        &loader,
+                    )
+                    .await?
+                {}
+                page.vm_mut().eval(&format!(
+                    r#"
 for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'volumechange']) {{
   emptyMedia.addEventListener(type, () => emptyMediaTrace.push(type));
 }}
@@ -591,4 +603,121 @@ media.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
     })
     .await
     .expect("load sequence replacement cancels only the old terminal event");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn volume_changes_use_ordered_media_tasks_only_when_state_changes() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://example.test/volume-events")?,
+        );
+        page_vm.vm_mut().eval(r#"
+            globalThis.__volumeTrace = [];
+            const media = document.createElement('video');
+            document.body.append(media);
+            media.addEventListener('volumechange', event => {
+                if (!event.isTrusted || event.target !== media || event.bubbles || event.cancelable || event.composed)
+                    throw Error('volumechange native event flags');
+                __volumeTrace.push(`event:${media.volume}:${media.muted}`);
+                Promise.resolve().then(() => __volumeTrace.push('microtask'));
+            });
+            // Volume already equals its initial value. Explicitly setting muted
+            // leaves its distinct initial default state and queues one event.
+            media.volume = 1;
+            media.muted = false;
+            media.volume = 0.5;
+            media.volume = 0.5;
+            media.muted = true;
+            media.muted = true;
+            media.volume = 1;
+            __volumeTrace.push('synchronous');
+        "#)?;
+        assert_eq!(page_vm.vm_mut().eval("__volumeTrace.join('|')")?, "synchronous");
+        for _ in 0..4 {
+            let task = page_vm.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent)
+                .expect("each changed state queues one media event");
+            assert_eq!(task.media_element_event_kind(), Some(RendererPageMediaElementEventTaskKind::VolumeChange));
+            page_vm.run_claimed_selected_page_task_for_test(task, &loader).await?;
+        }
+        assert!(page_vm.claim_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MediaElementEvent).is_none());
+        assert_eq!(page_vm.vm_mut().eval("__volumeTrace.join('|')")?,
+            "synchronous|event:1:true|microtask|event:1:true|microtask|event:1:true|microtask|event:1:true|microtask");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("volumechange uses the media task source");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cold_volume_writes_and_conversion_reentry_queue_only_actual_changes() {
+    run_page_vm_async_test(async move {
+        for tag in ["audio", "video"] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page, _source, _wake) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://example.test/cold-volume")?,
+            );
+            page.vm_mut().eval(&format!(
+                r#"
+globalThis.coldVolumeTrace = [];
+globalThis.coldVolumeConversions = 0;
+globalThis.coldMedia = document.createElement({tag:?});
+document.body.append(coldMedia);
+coldMedia.onvolumechange = () => {{
+  coldVolumeTrace.push(coldMedia.volume);
+  Promise.resolve().then(() => coldVolumeTrace.push('microtask'));
+}};
+if (coldMedia.volume !== 1) throw Error('initial playback volume');
+coldMedia.volume = coldMedia.volume;
+coldMedia.volume = 1;
+coldMedia.volume = {{valueOf() {{coldVolumeConversions++; return 1;}}}};
+if (coldVolumeConversions !== 1 || coldMedia.volume !== 1) throw Error('cold conversion');
+"#
+            ))?;
+            assert!(
+                page.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .is_none(),
+                "{tag}: equal cold values must not queue volumechange"
+            );
+            assert_eq!(page.vm_mut().eval("coldVolumeTrace.join('|')")?, "");
+            page.vm_mut().eval(
+                r#"
+coldVolumeConversions = 0;
+coldMedia.volume = {valueOf() {
+  coldVolumeConversions++;
+  coldMedia.volume = 0.7;
+  return 0.7;
+}};
+if (coldVolumeConversions !== 1 || coldMedia.volume !== 0.7) throw Error('reentrant conversion');
+"#,
+            )?;
+            assert_eq!(page.vm_mut().eval("coldVolumeTrace.join('|')")?, "");
+            let task = page
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .expect("inner conversion must queue its one actual volume change");
+            assert_eq!(
+                task.media_element_event_kind(),
+                Some(RendererPageMediaElementEventTaskKind::VolumeChange)
+            );
+            page.run_claimed_selected_page_task_for_test(task, &loader)
+                .await?;
+            assert_eq!(
+                page.vm_mut().eval("coldVolumeTrace.join('|')")?,
+                "0.7|microtask"
+            );
+            assert!(
+                page.claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::MediaElementEvent,
+                )
+                .is_none(),
+                "{tag}: outer equality after conversion must not queue a duplicate"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("cold writes and reentrant conversion use current native volume");
 }

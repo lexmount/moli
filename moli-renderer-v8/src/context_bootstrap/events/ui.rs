@@ -11,7 +11,7 @@ fn nullable_window_value<'s>(
         .unwrap_or_else(|| v8::null(scope).into())
 }
 
-/// Own UIEventInit members, including legacy which, in dictionary order.
+/// UIEventInit members, converted after EventInit in dictionary order.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "UIEventInit", snapshot)]
 pub(super) struct UiEventInit<'s> {
@@ -19,10 +19,10 @@ pub(super) struct UiEventInit<'s> {
     base: super::EventInit,
     #[webidl(default = 0)]
     detail: i32,
+    #[webidl(nullable, interface = crate::web_api_interfaces::InputDeviceCapabilities)]
+    source_capabilities: Option<v8::Local<'s, v8::Object>>,
     #[webidl(nullable, interface = crate::web_api_interfaces::Window, brand_check = crate::context_bootstrap::is_window_receiver)]
     view: Option<v8::Local<'s, v8::Object>>,
-    #[webidl(default = 0)]
-    which: u32,
 }
 
 impl<'s> UiEventInit<'s> {
@@ -31,7 +31,7 @@ impl<'s> UiEventInit<'s> {
     }
 
     pub(super) fn initialize(
-        self,
+        &self,
         scope: &mut v8::PinScope<'s, '_>,
         event: v8::Local<'s, v8::Object>,
     ) {

@@ -328,7 +328,7 @@ async fn serve_streaming_request(
 
 #[test]
 fn cli_redirect_chain_httpbin_json_destinations() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let fixture = runtime.block_on(RedirectFixture::spawn())?;
     for (path, count) in [
         ("/redirect/3", 3),
@@ -346,7 +346,7 @@ fn cli_redirect_chain_httpbin_json_destinations() -> Result<()> {
 
 #[test]
 fn cli_redirect_chain_is_independent_of_trace_and_readiness() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let fixture = runtime.block_on(RedirectFixture::spawn())?;
     for path in [
         "/redirect/3",
@@ -381,7 +381,7 @@ fn cli_redirect_chain_is_independent_of_trace_and_readiness() -> Result<()> {
 
 #[test]
 fn cli_redirect_chain_survives_cached_hops_and_cached_final_response() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let fixture = runtime.block_on(RedirectFixture::spawn())?;
     let cache = unique_temp_dir("redirect-chain-cache")?;
     let cache_arg = cache.to_string_lossy();
@@ -405,7 +405,7 @@ fn cli_redirect_chain_survives_cached_hops_and_cached_final_response() -> Result
 
 #[test]
 fn cli_redirect_chain_process_stdout_reports_all_httpbin_hops() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let fixture = runtime.block_on(RedirectFixture::spawn())?;
     for (path, count) in [
         ("/redirect/3", 3),
@@ -434,7 +434,7 @@ fn cli_redirect_chain_process_stdout_reports_all_httpbin_hops() -> Result<()> {
 
 #[test]
 fn cli_redirect_chain_survives_streaming_parser_suspension() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     for html in [false, true] {
         let fixture = runtime.block_on(RedirectFixture::spawn_streaming(html))?;
         let path = if html {

@@ -24,6 +24,27 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
     let owner = scope.get_current_context().global(scope);
     let history = window_history_for_holder(scope, owner)?;
     let entries = super::navigation_serialize::serialize_history_entries(scope, history);
+    let current = super::navigation_entry::history_index(scope, history);
+    let navigation_index =
+        super::navigation_entry::navigation_current_entry_index(scope, owner).unwrap_or(0);
+    let mut seed = inherited_history_seed_for_browser_commit(
+        entries,
+        current,
+        navigation_index,
+        url,
+        position,
+    )?;
+    super::session_history::capture_for_navigation(scope, owner, &mut seed);
+    Some(seed)
+}
+
+pub(crate) fn inherited_history_seed_for_browser_commit(
+    entries: Vec<moli_page_types::NavigationHistorySerializedEntry>,
+    current: u32,
+    navigation_index: u32,
+    url: &url::Url,
+    position: moli_session_history::SessionHistoryPosition,
+) -> Option<NavigationHistoryEntrySeed> {
     if !entries.iter().any(|entry| {
         entry
             .inherited_origin
@@ -32,9 +53,8 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
     }) {
         return None;
     }
-    let current = super::navigation_entry::history_index(scope, history);
     let target = u32::try_from(position.index()).ok()?;
-    let mut seed = if position.length() == entries.len()
+    let seed = if position.length() == entries.len()
         && entries
             .iter()
             .any(|entry| entry.history_index == target && entry.url == url.as_str())
@@ -54,8 +74,6 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
         } else {
             return None;
         };
-        let navigation_index =
-            super::navigation_entry::navigation_current_entry_index(scope, owner).unwrap_or(0);
         moli_page_types::cross_document_navigation_seed(
             entries,
             current,
@@ -64,7 +82,6 @@ pub(crate) fn capture_inherited_history_for_browser_commit(
             mutation,
         )
     };
-    super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)
 }
 

@@ -17,34 +17,41 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
     params: Value,
     replacement_marker: &str,
 ) {
-    let original_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(Some(&page.session_id))
-        .expect("the input command should have a Page owner");
-    let original_attachment = ctx
-        .conn
-        .runtime_session_owner_slot(Some(&page.session_id))
-        .expect("the input command should route to a Page slot")
-        .page_attachment_id()
-        .expect("the input command should have a concrete Page attachment");
-    let raw = json!({
-        "id": command_id,
-        "method": method,
-        "sessionId": page.session_id,
-        "params": params
-    })
-    .to_string();
-    let mut pending = match ctx.conn.start_command_dispatch(&raw) {
-        CdpCommandTaskStep::Pending(pending) => pending,
-        CdpCommandTaskStep::Complete(_) => {
-            panic!("{method} should wait for a renderer ACK")
-        }
-    };
-    assert_eq!(pending.kind_name(), "Input");
-    assert!(
-        pending.hold_input_renderer_ack_for_test(),
-        "{method} should use Chromium's renderer-host ACK cleanup queue"
-    );
+    let original_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(Some(&page.session_id))
+            .expect("the input command should have a Page owner")
+    });
+    let original_attachment = ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot(Some(&page.session_id))
+            .expect("the input command should route to a Page slot")
+            .page_attachment_id()
+            .expect("the input command should have a concrete Page attachment")
+    });
+    let pending = ctx.with_fixture(|conn| {
+        let raw = json!({"id": command_id, "method": method, "params": params, "sessionId": page.session_id}).to_string();
+        let parsed = crate::conn::ParsedCdpCommand::parse_str(&raw).unwrap();
+        let cmd = crate::conn::Cmd::from_parsed(&parsed).unwrap();
+        let crate::domains::input::InputCommandDispatchStep::Pending(mut input) =
+            crate::domains::input::try_start_input_command_dispatch(conn, &cmd)
+        else {
+            panic!("{method} should wait for a renderer ACK");
+        };
+        assert!(
+            input.hold_renderer_ack_for_test(),
+            "{method} should use Chromium's renderer-host ACK cleanup queue"
+        );
+        let workflow = input.into_workflow(conn.protocol_state_access());
+        let CdpCommandTaskStep::Pending(pending) = conn.start_command_workflow(
+            workflow,
+            Some(command_id),
+            Some(&page.session_id),
+            &mut crate::conn::CommandDispatchContext::default(),
+        ) else {
+            panic!("input owns its wait");
+        };
+        assert_eq!(pending.kind_name(), "Workflow");
+        pending
+    });
 
     let mut completion = Box::pin(pending.wait());
     let mut poll_context = Context::from_waker(Waker::noop());
@@ -58,23 +65,31 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
     );
     ctx.install_navigation_fixture_for_session_owner(&replacement_url, Some(&page.session_id))
         .await;
-    let replacement_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(Some(&page.session_id))
-        .expect("the replacement should install a Page owner");
-    let replacement_attachment = ctx
-        .conn
-        .runtime_session_owner_slot(Some(&page.session_id))
-        .expect("the replacement should route to a Page slot")
-        .page_attachment_id()
-        .expect("the replacement should have a concrete Page attachment");
+    let replacement_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(Some(&page.session_id))
+            .expect("the replacement should install a Page owner")
+    });
+    let replacement_attachment = ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot(Some(&page.session_id))
+            .expect("the replacement should route to a Page slot")
+            .page_attachment_id()
+            .expect("the replacement should have a concrete Page attachment")
+    });
     assert_ne!(original_owner, replacement_owner);
     assert_ne!(original_attachment, replacement_attachment);
 
     let completed = tokio::time::timeout(Duration::from_secs(5), &mut completion)
         .await
         .unwrap_or_else(|_| panic!("{method} did not acknowledge Page replacement"));
-    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    let step = ctx
+        .state
+        .with_state(|state| {
+            state.complete_command_dispatch_with_context(
+                completed,
+                &mut crate::conn::CommandDispatchContext::default(),
+            )
+        })
+        .expect("live test owner");
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(step).await;
     assert!(scheduler_events.is_empty());
     assert_eq!(

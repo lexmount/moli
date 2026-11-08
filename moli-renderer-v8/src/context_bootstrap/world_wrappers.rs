@@ -53,18 +53,40 @@ fn identity<'s>(
         .map(|id| id.u64_value().0)
 }
 
+fn cached_wrappers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<Vec<WeakWrapper>> {
+    let id = identity(scope, object)?;
+    // Do not hold a RefCell borrow across V8 operations/weak finalizers.
+    Some(store(scope).borrow().objects.get(&id)?.clone())
+}
+
 pub(super) fn get<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let id = identity(scope, object)?;
-    // Do not hold a RefCell borrow across V8 operations/weak finalizers.
-    let candidates = store(scope).borrow().objects.get(&id)?.clone();
+    let candidates = cached_wrappers(scope, object)?;
     candidates.into_iter().find_map(|(_, candidate)| {
         let wrapper = candidate.to_local(scope)?;
         belongs_to_world(scope, wrapper, context).then_some(wrapper)
     })
+}
+
+/// A default wrapper world can contain several Window realms. Native drag
+/// views need a File in their particular receiving context, not just its world.
+pub(super) fn get_in_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    cached_wrappers(scope, object)?
+        .into_iter()
+        .find_map(|(_, candidate)| {
+            let wrapper = candidate.to_local(scope)?;
+            (wrapper.get_creation_context(scope) == Some(context)).then_some(wrapper)
+        })
 }
 
 pub(super) fn insert<'s>(

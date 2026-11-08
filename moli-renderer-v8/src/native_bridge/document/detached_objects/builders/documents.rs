@@ -13,9 +13,6 @@ struct DetachedDocumentObjectDeclaration<'scope, 'tag> {
 
     #[webapi(to_string_tag)]
     to_string_tag: Option<&'tag str>,
-
-    #[webapi(data_property, readonly)]
-    location: v8::Local<'scope, v8::Value>,
 }
 
 fn detached_document_bridge_prototype_name(kind: &str) -> &'static str {
@@ -47,11 +44,12 @@ fn new_detached_document_object<'s>(
         .or_else(|| {
         bridge_prototype_object(scope, detached_document_bridge_prototype_name(kind))
     })?;
-    let document =
-        DetachedDocumentObjectDeclaration::new(prototype, to_string_tag, v8::null(scope).into())
-            .bind(scope)
-            .ok()?;
+    let document = DetachedDocumentObjectDeclaration::new(prototype, to_string_tag)
+        .bind(scope)
+        .ok()?;
     web_api_interfaces::initialize(scope, document, detached_document_constructor_name(kind))
+        .ok()?;
+    crate::context_bootstrap::install_constructed_document_location_runtime_state(scope, document)
         .ok()?;
     Some(document)
 }
@@ -63,11 +61,14 @@ fn create_native_detached_document_handle_with_url(
 ) -> Option<DomHandle> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *runtime_ptr };
-    Some(if kind == "html" {
+    let source = runtime.current_realm_document_execution_context(scope);
+    let handle = if kind == "html" {
         runtime.create_detached_html_document_with_url(url)
     } else {
         runtime.create_detached_xml_document_with_url(url)
-    })
+    };
+    runtime.set_inert_document_execution_context(handle, source);
+    Some(handle)
 }
 
 fn detached_document_url(parsed: &DomHost) -> Url {
@@ -76,18 +77,6 @@ fn detached_document_url(parsed: &DomHost) -> Url {
         .final_url()
         .cloned()
         .unwrap_or_else(|| Url::parse("about:blank").expect("static about:blank parses"))
-}
-
-fn set_detached_document_url_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    url: &Url,
-) -> Option<()> {
-    let url = v8_string(scope, url.as_str())?;
-    let _ = state.set(scope, v8str(scope, "url").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "documentURI").into(), url.into());
-    let _ = state.set(scope, v8str(scope, "baseURI").into(), url.into());
-    Some(())
 }
 
 fn new_detached_document_shell<'s>(
@@ -115,7 +104,6 @@ fn new_detached_document_shell<'s>(
         v8str(scope, "readyState").into(),
         v8_string(scope, "complete")?.into(),
     );
-    set_detached_document_url_state(scope, state, &url)?;
     define_detached_state(scope, document, state);
     let handle = create_native_detached_document_handle_with_url(scope, kind, url)?;
     define_detached_native_handle(scope, document, handle);

@@ -22,6 +22,33 @@ pub fn load_browser_cookie_file(browser: &Browser, path: impl AsRef<Path>) -> Re
     browser.import_cookies(load_cookie_file(path)?)
 }
 
+pub fn save_browser_cookie_file(
+    browser: &Browser,
+    path: impl AsRef<Path>,
+) -> Result<moli_cookie_cache::CookieFileSaveReport> {
+    let path = path.as_ref();
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        anyhow::ensure!(parent.is_dir(), "cookie jar directory does not exist");
+    }
+    let cookies = browser
+        .cookies()
+        .context("failed to snapshot browser cookies for cookie jar")?;
+    moli_cookie_cache::save_cookie_file(path, cookies)
+}
+
+pub fn write_browser_cookie_file(
+    browser: &Browser,
+    writer: impl std::io::Write,
+) -> Result<moli_cookie_cache::CookieFileSaveReport> {
+    let cookies = browser
+        .cookies()
+        .context("failed to snapshot browser cookies for cookie jar")?;
+    moli_cookie_cache::write_cookie_file(writer, cookies)
+}
+
 pub fn save_browser_cookie_cache(browser: &Browser, path: impl AsRef<Path>) -> Result<()> {
     save_cookie_cache(
         path,

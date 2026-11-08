@@ -735,7 +735,9 @@ fn broadcast_channel_ordered_handler_slot_ignores_reflection_and_spoofing() {
                   name === "__moliSimpleEventTargetOrderedHandlers"
                 );
               const summarize = name => {
-                const descriptor = Object.getOwnPropertyDescriptor(channel, name);
+                if (Object.hasOwn(channel, name) || channel[name] !== EventTarget.prototype[name])
+                    throw new Error(`inherited EventTarget method ${name}`);
+                const descriptor = Object.getOwnPropertyDescriptor(EventTarget.prototype, name);
                 return [
                   !!descriptor,
                   descriptor && descriptor.enumerable,
@@ -774,7 +776,7 @@ fn broadcast_channel_ordered_handler_slot_ignores_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownBefore":[],"publicSpoof":["spoofedListeners",false],"add":"true:true:true:true:function:0:addEventListener","remove":"true:true:true:true:function:0:removeEventListener","dispatch":"true:true:true:true:function:0:dispatchEvent","calls":["listener","handler"]}"#
+        r#"{"ownBefore":[],"publicSpoof":["spoofedListeners",false],"add":"true:true:true:true:function:2:addEventListener","remove":"true:true:true:true:function:2:removeEventListener","dispatch":"true:true:true:true:function:1:dispatchEvent","calls":["listener","handler"]}"#
     );
 }
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import asyncio
 import os
 import sys
@@ -8,6 +9,7 @@ from typing import Any, Awaitable
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..config import is_moli_browser
 from ..helpers import read_io_to_eof, attach_cdp_event_collector
@@ -147,22 +149,23 @@ async def _close_startup_target_if_present(browser: Any) -> bool:
         startup_targets = [
             target
             for target in targets.get("targetInfos", [])
-            if target.get("type") == "page" and target.get("targetId") == "moli-default"
+            if target.get("type") == "page" and target.get("url") == "about:blank"
         ]
         if len(startup_targets) > 1:
             raise SmokeError(f"multiple startup targets were published: {startup_targets!r}")
         if startup_targets:
+            startup_target_id = startup_targets[0]["targetId"]
             close_result = await _send_cdp(
                 browser_cdp,
                 "Target.closeTarget",
-                {"targetId": "moli-default"},
+                {"targetId": startup_target_id},
             )
             assert_equal(close_result.get("success"), True, "close startup Page target")
 
             async def startup_target_is_absent() -> bool:
                 current = await _send_cdp(browser_cdp, "Target.getTargets")
                 return all(
-                    target.get("targetId") != "moli-default"
+                    target.get("targetId") != startup_target_id
                     for target in current.get("targetInfos", [])
                 )
 
@@ -1616,7 +1619,7 @@ async def _fetch_response_stage_result(page: Any, owner: str) -> dict[str, Any]:
 
 async def _new_cdp_session(context: Any, page: Any, label: str) -> Any:
     try:
-        return await asyncio.wait_for(context.new_cdp_session(page), timeout=5)
+        return await asyncio.wait_for(new_cdp_session(context, page), timeout=5)
     except asyncio.TimeoutError as error:
         raise SmokeError(f"{label} new_cdp_session timed out") from error
 

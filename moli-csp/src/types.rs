@@ -7,6 +7,7 @@ pub enum ContentSecurityPolicyResourceKind {
     DocumentImage,
     DocumentManifest,
     DocumentMedia,
+    DocumentFont,
     DocumentScriptElement,
     DocumentStyleElement,
     SharedWorkerScript,

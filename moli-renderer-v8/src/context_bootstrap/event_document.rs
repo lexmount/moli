@@ -1,4 +1,6 @@
-use super::events::{new_uninitialized_text_event, set_event_initialized};
+use super::events::{
+    new_uninitialized_before_unload_event, new_uninitialized_text_event, set_event_initialized,
+};
 use super::*;
 use crate::webidl;
 use std::str::FromStr;
@@ -36,28 +38,28 @@ enum DocumentCreateEventKind {
     KeyboardEvent,
     MessageEvent,
     StorageEvent,
-    SubmitEvent,
+    TouchEvent,
 }
 
 impl DocumentCreateEventKind {
     fn constructor_name(self) -> &'static str {
         match self {
-            DocumentCreateEventKind::BeforeUnloadEvent => "Event",
+            DocumentCreateEventKind::BeforeUnloadEvent => "BeforeUnloadEvent",
             DocumentCreateEventKind::Event => "Event",
             DocumentCreateEventKind::CustomEvent => "CustomEvent",
             DocumentCreateEventKind::DeviceMotionEvent => "DeviceMotionEvent",
             DocumentCreateEventKind::DeviceOrientationEvent => "DeviceOrientationEvent",
-            DocumentCreateEventKind::DragEvent => "Event",
+            DocumentCreateEventKind::DragEvent => "DragEvent",
             DocumentCreateEventKind::UiEvent => "UIEvent",
             DocumentCreateEventKind::TextEvent => "TextEvent",
             DocumentCreateEventKind::CompositionEvent => "CompositionEvent",
             DocumentCreateEventKind::FocusEvent => "FocusEvent",
-            DocumentCreateEventKind::HashChangeEvent => "Event",
+            DocumentCreateEventKind::HashChangeEvent => "HashChangeEvent",
             DocumentCreateEventKind::MouseEvent => "MouseEvent",
             DocumentCreateEventKind::KeyboardEvent => "KeyboardEvent",
             DocumentCreateEventKind::MessageEvent => "MessageEvent",
             DocumentCreateEventKind::StorageEvent => "StorageEvent",
-            DocumentCreateEventKind::SubmitEvent => "SubmitEvent",
+            DocumentCreateEventKind::TouchEvent => "TouchEvent",
         }
     }
 }
@@ -73,8 +75,12 @@ fn new_uninitialized_document_event<'s>(
     let name = kind.constructor_name();
     let constructor =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, name).ok()?;
-    if kind == DocumentCreateEventKind::TextEvent {
-        return new_uninitialized_text_event(scope);
+    match kind {
+        DocumentCreateEventKind::BeforeUnloadEvent => {
+            return new_uninitialized_before_unload_event(scope);
+        }
+        DocumentCreateEventKind::TextEvent => return new_uninitialized_text_event(scope),
+        _ => {}
     }
     let empty_type = v8str(scope, "");
     let event = constructor.new_instance(scope, &[empty_type.into()])?;
@@ -170,11 +176,14 @@ mod tests {
                 .map(DocumentCreateEventKind::constructor_name),
             Ok("MouseEvent")
         );
-        assert_eq!(
-            DocumentCreateEventKind::from_str("SubmitEvent")
-                .map(DocumentCreateEventKind::constructor_name),
-            Ok("SubmitEvent")
-        );
+        for name in ["DragEvent", "HashChangeEvent", "TouchEvent"] {
+            assert_eq!(
+                DocumentCreateEventKind::from_str(name)
+                    .map(DocumentCreateEventKind::constructor_name),
+                Ok(name)
+            );
+        }
+        assert!(DocumentCreateEventKind::from_str("SubmitEvent").is_err());
         assert!(DocumentCreateEventKind::from_str("PointerEvent").is_err());
     }
 }

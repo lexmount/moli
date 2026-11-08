@@ -31,7 +31,7 @@ pub(super) fn get_target_info(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Comman
         AutomationCommand::GetTargetInfo(command),
     ) {
         TargetCommandTaskStep::Complete(plan) => plan,
-        TargetCommandTaskStep::Pending(_) => {
+        TargetCommandTaskStep::Pending(_) | TargetCommandTaskStep::Workflow(_) => {
             CommandOutputPlan::error_without_session(-32000, "UnexpectedPending")
         }
     }

@@ -1,29 +1,5 @@
 use super::*;
-
-pub(super) fn start_set_javascript_dialog_handler_enabled(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    enabled: bool,
-) -> Result<(), String> {
-    if let Some(page) = conn.loaded_page_mut_for_session_owner(session_id) {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-    }
-    if let Some(page) = conn.browser_context.as_mut().and_then(|browser_context| {
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-    }) {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-    }
-    Ok(())
-}
+use crate::automation::AutomationEvent;
 
 pub(super) fn handle_javascript_dialog_command(
     conn: &mut CdpConnection,
@@ -33,16 +9,10 @@ pub(super) fn handle_javascript_dialog_command(
         Ok(command) => command,
         Err(plan) => return plan,
     };
-    match start_devtools_page_command(
-        conn,
-        cmd.id,
-        AutomationCommand::HandleJavaScriptDialog(command),
-    ) {
-        PageCommandTaskStep::Complete(plan) => plan,
-        PageCommandTaskStep::Pending(_) => {
-            CommandOutputPlan::error(-32000, "Unexpected pending handleJavaScriptDialog command")
-        }
+    if !cdp_session_has_pending_dialog(conn, cmd.session_id) {
+        return CommandOutputPlan::error(-32602, "No dialog is showing");
     }
+    complete_devtools_handle_javascript_dialog_command(conn, command)
 }
 
 pub(super) fn build_cdp_handle_javascript_dialog_command(
@@ -53,15 +23,197 @@ pub(super) fn build_cdp_handle_javascript_dialog_command(
         Ok(Some(params)) => params,
         _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
     };
+    Ok(cdp_handle_javascript_dialog_command(
+        conn,
+        cmd,
+        params.accept,
+        params.prompt_text.unwrap_or_default(),
+    ))
+}
+
+fn cdp_handle_javascript_dialog_command(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    accept: bool,
+    prompt_text: String,
+) -> DevToolsHandleJavaScriptDialogCommand {
     let (browser_context_id, target_id) = conn
         .target_owner_identity_for_session(cmd.session_id)
         .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
         .unwrap_or((None, None));
-    Ok(DevToolsHandleJavaScriptDialogCommand {
+    DevToolsHandleJavaScriptDialogCommand {
         context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
-        accept: params.accept,
-        prompt_text: params.prompt_text.unwrap_or_default(),
+        accept,
+        prompt_text,
+    }
+}
+
+fn cdp_session_has_pending_dialog(conn: &CdpConnection, session_id: Option<&str>) -> bool {
+    let Some(generation) = conn.page_domain_subscription_generation_for_session_owner(session_id)
+    else {
+        return false;
+    };
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    let current_page_owner = javascript_dialog_page_owner(conn, &owner);
+    conn.target_javascript_dialog_state_for_owner(&owner)
+        .and_then(|state| state.peek_next())
+        .is_some_and(|dialog| {
+            current_page_owner.as_ref() == Some(dialog.page_owner())
+                && dialog.was_opened_for_subscription(generation)
+        })
+}
+
+fn javascript_dialog_page_owner(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Option<TargetPageResidenceIdentity> {
+    conn.pending_target_page_residence_identity_for_owner(owner)
+        .or_else(|| conn.target_page_residence_identity_for_owner(owner))
+}
+
+fn no_javascript_dialog_error() -> DevToolsError {
+    DevToolsError::new(DevToolsErrorKind::NoSuchAlert, "No dialog is showing")
+}
+
+fn page_dialog_subscriptions(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<(Option<String>, u64)> {
+    conn.page_event_session_ids_for_owner(owner)
+        .into_iter()
+        .filter_map(|session_id| {
+            let event_owner = session_id
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
+            let state = conn.target_devtools_session_state_for_owner(&event_owner)?;
+            if state.is_closing() {
+                return None;
+            }
+            Some((
+                session_id,
+                state
+                    .page_session_state
+                    .page_domain_subscription_generation()?,
+            ))
+        })
+        .collect()
+}
+
+pub(super) enum PageDialogSubscriptionEnd {
+    Disable,
+    Detach,
+}
+
+pub(super) fn end_page_dialog_subscription(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+    reason: PageDialogSubscriptionEnd,
+) -> Option<Vec<BackgroundProtocolEvent>> {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    let generation = conn.page_domain_subscription_generation_for_session_owner(session_id);
+    if !conn.disable_page_domain_for_session_owner(session_id) {
+        return None;
+    }
+    if conn.has_automation_javascript_dialog_handler() {
+        return Some(Vec::new());
+    }
+    Some(match reason {
+        // Chromium's explicit Page.disable cancels this observer's callbacks.
+        PageDialogSubscriptionEnd::Disable => generation
+            .map(|generation| {
+                dismiss_matching_dialogs(conn, &owner, |dialog| {
+                    dialog.was_opened_for_subscription(generation)
+                })
+            })
+            .unwrap_or_default(),
+        // Detach only abandons dialogs with no remaining original observer.
+        PageDialogSubscriptionEnd::Detach => {
+            dismiss_orphaned_javascript_dialogs_for_owner(conn, &owner)
+        }
     })
+}
+
+fn dismiss_matching_dialogs(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    matches: impl FnMut(&crate::conn::TargetJavaScriptDialog) -> bool,
+) -> Vec<BackgroundProtocolEvent> {
+    let current_page = javascript_dialog_page_owner(conn, owner);
+    let dialogs = conn
+        .with_target_javascript_dialog_state_for_owner_mut(owner, |state| {
+            state.take_matching(matches)
+        })
+        .unwrap_or_default();
+    let mut events = Vec::new();
+    for dialog in dialogs {
+        let _ = dialog.finish(false, String::new());
+        if current_page.as_ref() == Some(dialog.page_owner()) {
+            events.extend(broadcast_javascript_dialog_closed(
+                conn,
+                owner,
+                UserPromptClosedEvent {
+                    target_id: dialog.page_owner().target_id().map(Into::into),
+                    frame_id: dialog.source_frame_id().into(),
+                    prompt_type: dialog.dialog_type().to_owned(),
+                    accepted: false,
+                    user_text: String::new(),
+                },
+            ));
+        }
+    }
+    events
+}
+
+pub(in crate::domains) fn prepare_page_session_disposal(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> Vec<BackgroundProtocolEvent> {
+    end_page_dialog_subscription(conn, Some(session_id), PageDialogSubscriptionEnd::Detach)
+        .unwrap_or_default()
+}
+
+fn dismiss_orphaned_javascript_dialogs_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<BackgroundProtocolEvent> {
+    let subscriptions = page_dialog_subscriptions(conn, owner);
+    dismiss_matching_dialogs(conn, owner, |dialog| {
+        !subscriptions
+            .iter()
+            .any(|(_, generation)| dialog.was_opened_for_subscription(*generation))
+    })
+}
+
+pub(crate) fn dismiss_unhandled_javascript_dialogs(
+    conn: &mut CdpConnection,
+) -> Vec<BackgroundProtocolEvent> {
+    if conn.has_automation_javascript_dialog_handler() {
+        return Vec::new();
+    }
+    let owners = conn
+        .browser_context
+        .iter()
+        .chain(conn.inactive_browser_contexts.iter())
+        .flat_map(|context| {
+            context
+                .page_targets
+                .active()
+                .into_iter()
+                .chain(context.background_targets())
+                .map(move |target| {
+                    CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: context.id.clone(),
+                        target_id: target.target_id().to_owned(),
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    owners
+        .iter()
+        .flat_map(|owner| dismiss_orphaned_javascript_dialogs_for_owner(conn, owner))
+        .collect()
 }
 
 pub(super) fn complete_devtools_handle_javascript_dialog_command(
@@ -73,9 +225,11 @@ pub(super) fn complete_devtools_handle_javascript_dialog_command(
         Err(error) => return CommandOutputPlan::from_devtools_error(error),
     };
     match finish_devtools_handle_javascript_dialog_command(conn, command, &owner) {
-        Ok(closed_event) => {
+        Ok(closed_events) => {
             let mut plan = CommandOutputPlan::default();
-            plan.push_background_event(closed_event);
+            for closed_event in closed_events {
+                plan.push_background_event(closed_event);
+            }
             plan.push_success();
             plan
         }
@@ -87,17 +241,12 @@ pub(super) fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(dialog) = conn
-        .target_page_session_state_for_owner(owner)
-        .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
+    let current_page_owner = javascript_dialog_page_owner(conn, owner);
+    let dialog = conn
+        .target_javascript_dialog_state_for_owner(owner)
+        .and_then(|state| state.peek_next())
         .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
+        .ok_or_else(no_javascript_dialog_error)?;
     Ok(DevToolsJavaScriptDialogResult {
         dialog_type: dialog.dialog_type().to_owned(),
         message: dialog.message().to_owned(),
@@ -110,51 +259,33 @@ pub(super) fn finish_devtools_set_javascript_dialog_prompt_text_command(
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
     owner: &CommandOwnerScope,
 ) -> Result<AutomationResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-        let dialog_state = &mut state.page_session_state.javascript_dialog_state;
-        let Some(dialog) = dialog_state
-            .peek_next()
+    let current_page_owner = javascript_dialog_page_owner(conn, owner);
+    conn.with_target_javascript_dialog_state_for_owner_mut(owner, |dialog_state| {
+        let dialog = dialog_state
+            .peek_next_mut()
             .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchAlert,
-                "No dialog is showing",
-            ));
-        };
+            .ok_or_else(no_javascript_dialog_error)?;
         if dialog.dialog_type() != "prompt" {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::InvalidArgument,
                 "Dialog is not a prompt",
             ));
         }
-        if !dialog_state.set_next_prompt_text(command.prompt_text) {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchAlert,
-                "No dialog is showing",
-            ));
-        }
+        dialog.set_prompt_text(command.prompt_text);
         Ok(AutomationResult::Empty)
-    }) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
-    result
+    })
+    .ok_or_else(no_javascript_dialog_error)?
 }
 
 pub(super) fn finish_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
     owner: &CommandOwnerScope,
-) -> Result<BackgroundProtocolEvent, DevToolsError> {
-    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
+) -> Result<Vec<BackgroundProtocolEvent>, DevToolsError> {
     let command_prompt_text = command.prompt_text;
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(dialog) = conn
-        .with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            let dialog_state = &mut state.page_session_state.javascript_dialog_state;
+    let current_page_owner = javascript_dialog_page_owner(conn, owner);
+    let (dialog, stored_prompt_text) = conn
+        .with_target_javascript_dialog_state_for_owner_mut(owner, |dialog_state| {
             if dialog_state
                 .peek_next()
                 .is_some_and(|dialog| current_page_owner.as_ref() != Some(dialog.page_owner()))
@@ -165,13 +296,7 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
             dialog_state.pop_next_with_prompt_text()
         })
         .flatten()
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
-    let (dialog, stored_prompt_text) = dialog;
+        .ok_or_else(no_javascript_dialog_error)?;
     let user_input = if command_prompt_text.is_empty() {
         stored_prompt_text.unwrap_or_default()
     } else {
@@ -185,13 +310,37 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
         accepted: command.accept,
         user_text: user_input,
     };
-    Ok(BackgroundProtocolEvent::page_javascript_dialog_closed(
-        session_id,
+    // Chromium reports the closing dialog to every session attached to the page
+    // that has the Page domain enabled, regardless of which session resolved it.
+    Ok(broadcast_javascript_dialog_closed(
+        conn,
+        owner,
         closed_event,
     ))
 }
 
-pub(in crate::domains) async fn emit_javascript_dialog_activity_background_events_async(
+fn broadcast_javascript_dialog_closed(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    closed_event: UserPromptClosedEvent,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut events = vec![BackgroundProtocolEvent::automation_only(
+        AutomationEvent::UserPromptClosed(closed_event.clone()),
+    )];
+    events.extend(
+        page_dialog_subscriptions(conn, owner)
+            .into_iter()
+            .map(|(session_id, _)| {
+                BackgroundProtocolEvent::page_javascript_dialog_closed(
+                    session_id.as_deref(),
+                    closed_event.clone(),
+                )
+            }),
+    );
+    events
+}
+
+pub(in crate::domains) fn emit_javascript_dialog_activity_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     prepared_outputs: &mut ProtocolOutputPayloads,
@@ -234,7 +383,7 @@ pub(super) fn execute_devtools_handle_javascript_dialog_command(
     };
     let result = finish_devtools_handle_javascript_dialog_command(conn, command, &owner);
     match result {
-        Ok(event) => (Ok(AutomationResult::Empty), vec![event]),
+        Ok(events) => (Ok(AutomationResult::Empty), events),
         Err(error) => (Err(error), Vec::new()),
     }
 }
@@ -243,12 +392,13 @@ pub(super) fn execute_devtools_handle_javascript_dialog_command(
 use moli_core::page::RendererPendingJavaScriptDialog;
 
 use crate::automation::PageJavaScriptDialogOpeningEvent;
+#[cfg(test)]
+use crate::conn::TargetJavaScriptDialogScopeObserver;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, TargetPageProtocolAttachmentIdentity,
-    TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+    TargetPageResidenceIdentity, TargetPreparedJavaScriptDialog,
+    TargetPreparedJavaScriptDialogRoute,
 };
-#[cfg(test)]
-use crate::conn::{TargetJavaScriptDialogScopeObserver, TargetPageResidenceIdentity};
 
 pub(super) type PreparedJavaScriptDialog = TargetPreparedJavaScriptDialog;
 
@@ -308,7 +458,7 @@ fn emit_one(
 }
 
 fn source_is_current(conn: &CdpConnection, dialog: &PreparedJavaScriptDialog) -> bool {
-    conn.target_page_protocol_attachment_identity_is_current(dialog.source_attachment())
+    conn.target_page_output_attachment_is_current(dialog.source_attachment())
         && conn
             .runtime_session_owner_slot(dialog.source_attachment().session_id())
             .is_some_and(|slot| slot.observes_javascript_dialog_scope(dialog.source_dialog_scope()))
@@ -336,53 +486,70 @@ fn emit_to_attachment(
     dialog: PreparedJavaScriptDialog,
 ) {
     if !source_is_current(conn, &dialog)
-        || !conn.target_page_protocol_attachment_identity_is_current(&destination)
+        || !conn.target_page_output_attachment_is_current(&destination)
     {
         trace_stale_source(&dialog);
         dialog.dismiss();
         return;
     }
 
-    let event_session_id = destination.session_id().map(str::to_owned);
+    let event_owner = CommandOwnerScope::for_page_attachment(&destination);
     let destination_page_owner = destination.page_owner().clone();
     let source_url = dialog.source_url().to_owned();
     let message = dialog.message().to_owned();
     let dialog_type = dialog.dialog_type().to_owned();
     let default_prompt = dialog.default_prompt().to_owned();
-    let mut target_dialog =
-        Some(dialog.into_target_dialog(destination_page_owner, source_frame_id.clone()));
-    let installed = conn.with_target_devtools_session_state_for_session_mut(
-        event_session_id.as_deref(),
-        |state| {
-            state.page_session_state.javascript_dialog_state.push(
-                target_dialog
-                    .take()
-                    .expect("dialog installation must consume its exact prepared output"),
-            );
-        },
-    );
-    if installed.is_none() {
-        let dialog = target_dialog
-            .take()
-            .expect("missing target session must leave the prepared dialog unconsumed");
-        let _ = dialog.finish(false, String::new());
+    let audience = page_dialog_subscriptions(conn, &event_owner);
+    let has_handler = !audience.is_empty() || conn.has_automation_javascript_dialog_handler();
+    let opening_event = PageJavaScriptDialogOpeningEvent {
+        frame_id: Some(source_frame_id.clone().into()),
+        url: source_url,
+        message,
+        dialog_type: dialog_type.clone(),
+        // Moli has no native browser UI that can resolve the dialog.
+        has_browser_handler: false,
+        default_prompt,
+    };
+    if !has_handler {
+        // A late prefix without a handler settles only this dialog. Existing
+        // queued dialogs belong to their own subscription cleanup paths.
+        dialog.dismiss();
+        out.push(BackgroundProtocolEvent::automation_only(
+            AutomationEvent::PageJavaScriptDialogOpening(opening_event),
+        ));
+        out.push(BackgroundProtocolEvent::automation_only(
+            AutomationEvent::UserPromptClosed(UserPromptClosedEvent {
+                target_id: destination_page_owner.target_id().map(Into::into),
+                frame_id: source_frame_id.into(),
+                prompt_type: dialog_type,
+                accepted: false,
+                user_text: String::new(),
+            }),
+        ));
         return;
     }
-    out.push(BackgroundProtocolEvent::page_javascript_dialog_opening(
-        event_session_id.as_deref(),
-        PageJavaScriptDialogOpeningEvent {
-            frame_id: Some(source_frame_id.into()),
-            url: source_url,
-            message,
-            dialog_type,
-            // Moli has no native browser UI capable of presenting or resolving
-            // JavaScript dialogs. CDP clients can still resolve this dialog via
-            // Page.handleJavaScriptDialog; `false` also lets the Chromium
-            // DevTools frontend dismiss it instead of waiting for nonexistent UI.
-            has_browser_handler: false,
-            default_prompt,
-        },
+    let subscriptions = audience.iter().map(|(_, generation)| *generation).collect();
+    // The Page owns the completion; sessions only hold permission to handle it.
+    let installed =
+        conn.with_target_javascript_dialog_state_for_owner_mut(&event_owner, move |state| {
+            let mut installed_dialog =
+                dialog.into_target_dialog(destination_page_owner, source_frame_id);
+            installed_dialog.set_opening_subscription_generations(subscriptions);
+            state.push(installed_dialog);
+        });
+    if installed.is_none() {
+        return;
+    }
+
+    out.push(BackgroundProtocolEvent::automation_only(
+        AutomationEvent::PageJavaScriptDialogOpening(opening_event.clone()),
     ));
+    for (event_session_id, _) in audience {
+        out.push(BackgroundProtocolEvent::page_javascript_dialog_opening(
+            event_session_id.as_deref(),
+            opening_event.clone(),
+        ));
+    }
 }
 
 pub(super) fn settle_pending_popup_dialogs(

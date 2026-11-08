@@ -100,20 +100,20 @@ function mediaQueryListEventTargetProbe() {
       methods.addEventListener.call(target, "change", () => calls.push("capture"), true);
       const event = new Event("change", {cancelable: true});
       check(methods.dispatchEvent.call(target, event) === false, name + ":cancellation");
-      check(calls.join() === "capture,legacy,handler,modern", name + ":handler order " + calls);
+      check(calls.join() === "legacy,handler,modern,capture", name + ":handler order " + calls);
       check(event.currentTarget === null && event.eventPhase === 0 && event.target === target,
         name + ":dispatch cleanup");
       target.onchange = null;
       target.onchange = () => calls.push("last-handler");
       calls.length = 0;
       target.dispatchEvent(new Event("change"));
-      check(calls.join() === "capture,legacy,modern,last-handler", name + ":handler re-add " + calls);
+      check(calls.join() === "legacy,modern,capture,last-handler", name + ":handler re-add " + calls);
       methods.removeEventListener.call(target, "change", legacy);
       target.onchange = 12;
       check(target.onchange === null, name + ":handler conversion");
       calls.length = 0;
       target.dispatchEvent(new Event("change"));
-      check(calls.join() === "capture,modern", name + ":legacy removal " + calls);
+      check(calls.join() === "modern,capture", name + ":legacy removal " + calls);
       let once = 0;
       const controller = new AbortController();
       methods.addEventListener.call(target, "probe", () => ++once, {once: true});

@@ -6,6 +6,7 @@ use crate::context_bootstrap::specs::{ConstructorKind, ConstructorSpec};
 use crate::util::v8str;
 
 mod finalization;
+mod url_exposure;
 
 thread_local! {
     static LAZY_GETTER_CALLS: Cell<u32> = const { Cell::new(0) };
@@ -589,7 +590,7 @@ fn failed_intrinsic_finalization_does_not_expose_registered_objects() {
 
 #[test]
 fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
-    fn own_properties(realm: super::RealmKind) -> Vec<bool> {
+    fn own_properties(realm: super::RealmKind, secure_context: bool) -> Vec<bool> {
         crate::ensure_v8_for_test();
         let mut isolate = v8::Isolate::new(Default::default());
         let scope = pin!(v8::HandleScope::new(&mut isolate));
@@ -598,7 +599,10 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         let scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(scope);
         crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
-            scope, global, realm, true,
+            scope,
+            global,
+            realm,
+            secure_context,
         )
         .expect("worker lazy interfaces should install");
         let registry = super::template_registry::ExposedInterfaceTemplateRegistry::current(scope)
@@ -644,6 +648,24 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         );
         assert_eq!(registry.build_count(url_id), 1);
 
+        if secure_context {
+            let event_target = super::ensure_intrinsic_interface_prototype(scope, "EventTarget")
+                .expect("worker EventTarget prototype");
+            let key = v8str(scope, "addEventListener");
+            let canonical_add = event_target.get(scope, key.into()).unwrap();
+            for name in ["ServiceWorkerContainer", "ServiceWorker"] {
+                let prototype = super::ensure_intrinsic_interface_prototype(scope, name)
+                    .expect("native Service Worker objects need their prototype independently of global exposure");
+                let key = v8str(scope, "addEventListener");
+                assert!(
+                    prototype
+                        .get(scope, key.into())
+                        .unwrap()
+                        .strict_equals(canonical_add)
+                );
+            }
+        }
+
         [
             "Worker",
             "XMLHttpRequest",
@@ -653,6 +675,11 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
             "URL",
             "WorkerLocation",
             "webkitURL",
+            "BatteryManager",
+            "NetworkInformation",
+            "ServiceWorkerContainer",
+            "ServiceWorkerRegistration",
+            "ServiceWorker",
         ]
         .iter()
         .map(|name| {
@@ -664,17 +691,33 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
     }
 
     assert_eq!(
-        own_properties(super::RealmKind::DedicatedWorker),
-        vec![true, true, true, false, true, true, false, false]
+        own_properties(super::RealmKind::DedicatedWorker, true),
+        vec![
+            true, true, true, false, true, true, false, false, false, true, false, true, false
+        ]
     );
     assert_eq!(
-        own_properties(super::RealmKind::SharedWorker),
-        vec![true, true, true, false, false, true, false, false]
+        own_properties(super::RealmKind::SharedWorker, true),
+        vec![
+            true, true, true, false, false, true, false, false, false, true, false, true, false
+        ]
     );
     assert_eq!(
-        own_properties(super::RealmKind::ServiceWorker),
-        vec![false, false, false, false, false, true, false, false]
+        own_properties(super::RealmKind::ServiceWorker, true),
+        vec![
+            false, false, false, false, false, true, false, false, false, true, false, true, true
+        ]
     );
+    for realm in [
+        super::RealmKind::DedicatedWorker,
+        super::RealmKind::SharedWorker,
+        super::RealmKind::ServiceWorker,
+    ] {
+        assert_eq!(
+            &own_properties(realm, false)[8..],
+            &[false, true, false, false, false]
+        );
+    }
 }
 
 #[test]
@@ -768,4 +811,104 @@ fn source_buffer_interfaces_are_exposed_only_to_window_and_dedicated_workers() {
             }
         }
     }
+}
+
+#[test]
+fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+        scope,
+        global,
+        super::RealmKind::DedicatedWorker,
+        true,
+    )
+    .expect("worker geometry interfaces should install");
+
+    let source = v8::String::new(
+        scope,
+        r#"
+        (() => {
+          const names = [
+            "DOMPointReadOnly", "DOMPoint", "DOMRectReadOnly", "DOMRect",
+            "DOMQuad", "DOMMatrixReadOnly", "DOMMatrix"
+          ];
+          const errorName = callback => {
+            try {
+              callback();
+              return "missing";
+            } catch (error) {
+              return error.name;
+            }
+          };
+          const operationSets = [
+            [DOMPointReadOnly, ["fromPoint"]],
+            [DOMPointReadOnly.prototype, ["matrixTransform"]],
+            [DOMPoint, ["fromPoint"]],
+            [DOMRectReadOnly, ["fromRect"]],
+            [DOMRect, ["fromRect"]],
+            [DOMQuad, ["fromRect", "fromQuad"]],
+            [DOMMatrixReadOnly, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrixReadOnly.prototype, [
+              "translate", "scale", "scaleNonUniform", "scale3d", "rotate",
+              "rotateFromVector", "rotateAxisAngle", "skewX", "skewY",
+              "multiply", "flipX", "flipY", "inverse", "transformPoint",
+              "toFloat32Array", "toFloat64Array"
+            ]],
+            [DOMMatrix, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrix.prototype, [
+              "multiplySelf", "preMultiplySelf", "translateSelf", "scaleSelf",
+              "scale3dSelf", "rotateSelf", "rotateFromVectorSelf",
+              "rotateAxisAngleSelf", "skewXSelf", "skewYSelf", "invertSelf"
+            ]]
+          ];
+          const hasWebIdlOperationDescriptor = (owner, name) => {
+            const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+            return descriptor !== undefined &&
+              typeof descriptor.value === "function" &&
+              descriptor.enumerable && descriptor.writable && descriptor.configurable;
+          };
+          return JSON.stringify({
+            constructors: names.map(name => typeof globalThis[name]).join(","),
+            strings: [
+              errorName(() => new DOMMatrix("matrix(1,0,0,1,0,0)")),
+              errorName(() => new DOMMatrixReadOnly(""))
+            ].join(","),
+            tags: [
+              String(new DOMMatrix()),
+              String(DOMMatrixReadOnly.fromMatrix({is2D: false})),
+              String(new DOMMatrix([1, 0, 0, NaN, Infinity, -Infinity]))
+            ].join(","),
+            windowOnly: [
+              Object.hasOwn(DOMMatrixReadOnly.prototype, "toString"),
+              "setMatrixValue" in DOMMatrix.prototype,
+              "WebKitCSSMatrix" in globalThis
+            ].join(","),
+            operations: operationSets.every(([owner, operationNames]) =>
+              operationNames.every(name => hasWebIdlOperationDescriptor(owner, name))
+            ),
+            lengths: [DOMMatrix.length, DOMMatrixReadOnly.length].join(",")
+          });
+        })()
+        "#,
+    )
+    .expect("worker geometry test source");
+    let script = v8::Script::compile(scope, source, None).expect("worker geometry test compile");
+    let result = crate::script_execution::execute_compiled_script(scope, script)
+        .expect("worker geometry test evaluation")
+        .to_rust_string_lossy(scope);
+
+    assert_eq!(
+        result,
+        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false","operations":true,"lengths":"0,0"}"#
+    );
 }

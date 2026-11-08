@@ -70,6 +70,8 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 
     #[webapi(
         method = "showNotification",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_show_notification_callback,
         length = 1
     )]
@@ -77,6 +79,8 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 
     #[webapi(
         method = "getNotifications",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_get_notifications_callback,
         length = 0
     )]
@@ -93,25 +97,6 @@ struct ServiceWorkerRegistrationObjectDeclaration<'scope> {
 
     #[webapi(data_property = "navigationPreload", readonly)]
     navigation_preload: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_registration_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -289,27 +274,6 @@ struct ServiceWorkerObjectDeclaration {
 
     #[webapi(method = "postMessage", callback = service_worker_post_message_callback, length = 1)]
     post_message: (),
-
-    #[webapi(
-        method = "addEventListener",
-        callback = service_worker_worker_add_event_listener_callback,
-        length = 2
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method = "removeEventListener",
-        callback = simple_event_target_remove_event_listener_callback,
-        length = 2
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method = "dispatchEvent",
-        callback = simple_event_target_dispatch_event_callback,
-        length = 1
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiObject)]
@@ -1293,16 +1257,8 @@ fn service_worker_registration_show_notification_callback<'s>(
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
 
-    let Some(title) = webidl::required_argument::<webidl::DomString>(
-        scope,
-        &args,
-        0,
-        webidl::Context::argument("ServiceWorkerRegistration.showNotification", 1),
-        "Failed to execute 'showNotification' on 'ServiceWorkerRegistration': 1 argument required, but only 0 present.",
-    ) else {
-        return;
-    };
-    let Some(options) = crate::context_bootstrap::notification_options_payload(scope, args.get(1))
+    let Some((title, options)) =
+        crate::context_bootstrap::notification_options_payload(scope, &args)
     else {
         return;
     };
@@ -1333,7 +1289,7 @@ fn service_worker_registration_show_notification_callback<'s>(
     }
     if !host.show_service_worker_notification(
         &scope_url,
-        title.0,
+        title,
         options.tag,
         options.metadata,
         options.actions,
@@ -2849,22 +2805,6 @@ fn mark_service_worker_worker_event_target<'s>(
     worker: v8::Local<'s, v8::Object>,
 ) {
     initialize_simple_event_target(scope, worker);
-}
-
-fn service_worker_registration_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
-}
-
-fn service_worker_worker_add_event_listener_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    simple_event_target_add_event_listener_callback(scope, args, rv);
 }
 
 fn service_worker_post_message_callback<'s>(

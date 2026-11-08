@@ -2293,12 +2293,15 @@ async fn page_vm_child_module_graph_failure_blocks_host_load_until_error_dispatc
     <script>parent.__childModuleFailureHostLoadEvents.push("before:" + (globalThis === self));<\/script>
     <script id="bad-module" type="module" src="{script_url}"><\/script>
     <script>
-      document.getElementById("bad-module").addEventListener("load", () => {{
-        parent.__childModuleFailureHostLoadEvents.push("script-load");
-      }});
-      document.getElementById("bad-module").addEventListener("error", () => {{
-        parent.__childModuleFailureHostLoadEvents.push("script-error");
-      }});
+      const script = document.getElementById("bad-module");
+      const recordTerminal = event => {{
+        if (!(event instanceof Event) || !event.isTrusted || event.target !== script ||
+            event.bubbles || event.cancelable || event.composed)
+          throw Error("native child script terminal event realm, trust or flags");
+        parent.__childModuleFailureHostLoadEvents.push("script-" + event.type);
+      }};
+      script.addEventListener("load", recordTerminal);
+      script.addEventListener("error", recordTerminal);
       parent.__childModuleFailureHostLoadEvents.push("after");
     <\/script>
   `;

@@ -4,6 +4,7 @@ use crate::{
     util::get_private_value,
     webidl::{self, SnapshotPrototype, WebIdlDictionarySerialize},
 };
+use moli_v8_util::set_resolved_promise;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const MEDIA_CAPABILITIES_SECURE_CONTEXT_SLOT: &str = "__moliMediaCapabilitiesSecureContext";
@@ -390,20 +391,6 @@ fn set_rejected_promise<'s>(
     };
     let promise = resolver.get_promise(scope);
     let _ = resolver.reject(scope, reason);
-    rv.set(promise.into());
-}
-
-fn set_resolved_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
     rv.set(promise.into());
 }
 

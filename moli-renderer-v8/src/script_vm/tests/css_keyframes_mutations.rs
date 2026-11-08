@@ -22,7 +22,7 @@ fn css_keyframes_mutations_accept_native_proxies_and_preserve_intrinsic_exceptio
       const sheet=new other.CSSStyleSheet();sheet.replaceSync('@keyframes native {from {left:0px}}');
       globalThis.keyframes=sheet.cssRules[0];globalThis.frame=keyframes[0];
     "#).unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         for (name, proxy_name) in [("keyframes", "keyframesProxy"), ("frame", "frameProxy")] {

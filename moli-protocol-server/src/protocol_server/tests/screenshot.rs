@@ -164,10 +164,13 @@ async fn websocket_cdp_hidden_scrollbars_follow_targets_navigation_and_resize() 
     )
     .with_scrollbars_hidden(true);
     let (addr, server) = spawn_test_protocol_server_with_runtime_config(config).await;
-    let (mut socket, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("CDP socket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("CDP socket");
     let url = "data:text/html,<!doctype html><body style='margin:0'><div style='width:100vw;height:2000px;background:rgb(0,255,0)'></div>";
     for _ in 0..2 {
         let target = open_screenshot_target(&mut socket, url).await;
@@ -254,9 +257,11 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
     let fixture_url = format!("http://{fixture_addr}/layout-screenshot-poc");
     let (cdp_addr, protocol_server) =
         spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
-    let (mut browser, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect screenshot CDP websocket");
     let target = open_screenshot_target(&mut browser, &fixture_url).await;
@@ -344,9 +349,11 @@ async fn websocket_cdp_capture_screenshot_paints_fresh_canvas_pixels() {
     let fixture_url = format!("http://{fixture_addr}/canvas-screenshot");
     let (cdp_addr, protocol_server) =
         spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
-    let (mut browser, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect canvas screenshot CDP websocket");
     let target = open_screenshot_target(&mut browser, &fixture_url).await;
@@ -410,9 +417,11 @@ async fn websocket_cdp_capture_screenshot_preserves_default_mock_boundary() {
     let fixture_url = format!("http://{fixture_addr}/layout-screenshot-poc");
     let (cdp_addr, protocol_server) =
         spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Mock).await;
-    let (mut browser, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect no-layout CDP websocket");
     let target = open_screenshot_target(&mut browser, &fixture_url).await;

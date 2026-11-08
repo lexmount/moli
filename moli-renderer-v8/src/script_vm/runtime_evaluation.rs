@@ -87,6 +87,9 @@ impl ScriptVm {
         code_generation_policy: RuntimeEvaluateCodeGenerationPolicy,
         result_mode: RuntimeEvaluateResultMode,
     ) -> Result<RuntimeEvaluateOutcome> {
+        if execution_context_id.is_none() {
+            self.ensure_main_world()?;
+        }
         self.validate_runtime_evaluate_context(execution_context_id)?;
         let call_id = self.next_internal_runtime_evaluate_call_id()?;
         let mut params = serde_json::Map::new();
@@ -345,9 +348,8 @@ impl ScriptVm {
     }
 
     pub(super) fn install_runtime_binding_in_default_context(&mut self, name: &str) -> Result<()> {
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let owner = self.runtime_binding_document_owner(None)?;
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
         let execution_context_id = self.default_or_initial_execution_context_id().unwrap_or(0);
         self.install_runtime_binding_in_context(context_ptr, execution_context_id, owner, name)
     }
@@ -452,15 +454,14 @@ impl ScriptVm {
     }
 
     pub(super) fn remove_runtime_binding_from_default_context(&mut self, name: &str) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+        self.with_current_main_world_scope(|scope, _| {
             let global = scope.get_current_context().global(scope);
             let key = v8_string(scope, name)
                 .ok_or_else(|| anyhow!("failed to allocate runtime binding key `{name}`"))?;
             let _ = global.delete(scope, key.into());
             Ok(())
         })
+        .map(|_| ())
     }
 
     pub(super) fn remove_runtime_binding_from_isolated_context(

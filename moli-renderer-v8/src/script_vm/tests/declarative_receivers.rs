@@ -29,8 +29,11 @@ fn webrtc_declarations_validate_foreign_receivers_before_converting_arguments() 
         const channel = pc.createDataChannel('foreign');
         getters(realm, 'RTCPeerConnection', pc, ['signalingState', 'iceGatheringState', 'iceConnectionState',
           'connectionState', 'localDescription', 'currentLocalDescription', 'pendingLocalDescription']);
-        for (const name of ['getConfiguration', 'setConfiguration', 'createDataChannel', 'createOffer', 'setLocalDescription', 'close']) {
+        for (const name of ['getConfiguration', 'setConfiguration', 'createDataChannel', 'close']) {
           check(realm, pc, realm.RTCPeerConnection.prototype[name]);
+        }
+        for (const name of ['createOffer', 'setLocalDescription']) {
+          check(realm, pc, realm.RTCPeerConnection.prototype[name], true);
         }
         assert(realm.RTCPeerConnection.prototype.createDataChannel.call(pc, 'borrowed').label === 'borrowed', 'foreign peer method');
         getters(realm, 'RTCDataChannel', channel, ['label', 'ordered', 'maxPacketLifeTime', 'maxRetransmits',
@@ -52,9 +55,16 @@ fn webrtc_declarations_validate_foreign_receivers_before_converting_arguments() 
     finish_receiver_checks(&mut vm);
 }
 
-#[test]
-fn navigator_declarations_preserve_receiver_checks_and_promise_identity_across_realms() {
-    let mut vm = receiver_test_vm();
+#[tokio::test]
+async fn navigator_declarations_preserve_receiver_checks_and_promise_identity_across_realms() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://declarative-receivers.test/",
+        &loader,
+    );
+    vm.eval("document.body.innerHTML = '<iframe></iframe>'")
+        .unwrap();
+    vm.eval(include_str!("declarative_receivers.js")).unwrap();
     vm.eval(r#"(async () => {
       const {child, assert, check, getters} = receiverChecks;
       for (const realm of [window, child]) {
@@ -97,6 +107,14 @@ fn navigator_declarations_preserve_receiver_checks_and_promise_identity_across_r
       }
       return 'ok';
     })().then(result => {globalThis.receiverSetup = result;}, error => {globalThis.receiverSetup = String(error);})"#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(typeof receiverSetup !== 'undefined')",
+        "true",
+        "receiver setup should settle through storage tasks",
+    )
+    .await;
     assert_eq!(vm.eval("receiverSetup").unwrap(), "ok");
     finish_receiver_checks(&mut vm);
 }

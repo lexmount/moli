@@ -119,7 +119,7 @@ fn allocate_in_current_realm<'s>(
         .bind(scope)
         .expect("NavigationHistoryEntry declaration should bind");
     native::bind_entry(scope, wrapper, record);
-    media_queries::install_simple_event_target_methods(scope, wrapper);
+    media_queries::initialize_simple_event_target(scope, wrapper);
     shared_event_targets::install_handlers(scope, wrapper, true);
     set_runtime_window_owner(scope, wrapper, owner);
     wrapper

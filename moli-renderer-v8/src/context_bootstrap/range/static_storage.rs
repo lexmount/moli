@@ -1,3 +1,4 @@
+use super::object::range_backing_object;
 use super::*;
 use crate::native_bridge::RangeBoundarySide;
 use crate::util::{get_private_value, set_private_value};
@@ -12,43 +13,18 @@ struct StaticRangeBoundaryStorageDeclaration {}
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "StaticRangeInit", snapshot)]
 pub(in crate::context_bootstrap) struct StaticRangeInitMembers<'s> {
-    #[webidl(required, name = "startContainer", with = static_range_node_member)]
+    #[webidl(required, name = "startContainer", interface = web_api_interfaces::Node)]
     #[webidl(snapshot_slot = STATIC_RANGE_START_CONTAINER_STORAGE_KEY)]
     pub(in crate::context_bootstrap) start_container: v8::Local<'s, v8::Object>,
     #[webidl(required, name = "startOffset")]
     #[webidl(snapshot_slot = STATIC_RANGE_START_OFFSET_STORAGE_KEY)]
     pub(in crate::context_bootstrap) start_offset: u32,
-    #[webidl(required, name = "endContainer", with = static_range_node_member)]
+    #[webidl(required, name = "endContainer", interface = web_api_interfaces::Node)]
     #[webidl(snapshot_slot = STATIC_RANGE_END_CONTAINER_STORAGE_KEY)]
     pub(in crate::context_bootstrap) end_container: v8::Local<'s, v8::Object>,
     #[webidl(required, name = "endOffset")]
     #[webidl(snapshot_slot = STATIC_RANGE_END_OFFSET_STORAGE_KEY)]
     pub(in crate::context_bootstrap) end_offset: u32,
-}
-
-fn static_range_node_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("StaticRangeInit", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)? else {
-        return Err(webidl::WebIdlError::missing_required(context));
-    };
-    if value.is_undefined() {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    let Ok(node) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "StaticRangeInit member is not a Node.",
-        ));
-    };
-    if object_number_property(scope, node, "nodeType").is_none() {
-        return Err(webidl::WebIdlError::custom_message(
-            "StaticRangeInit member is not a Node.",
-        ));
-    }
-    Ok(node)
 }
 
 pub(in crate::context_bootstrap) fn initialize_static_range_object<'s>(
@@ -79,6 +55,9 @@ pub(in crate::context_bootstrap) fn set_static_range_boundary<'s>(
     container: v8::Local<'s, v8::Object>,
     offset: u32,
 ) {
+    let Some(range) = range_backing_object(scope, range) else {
+        return;
+    };
     set_private_value(
         scope,
         range,
@@ -93,6 +72,7 @@ pub(in crate::context_bootstrap) fn static_range_boundary_container_object<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let range = range_backing_object(scope, range)?;
     get_private_value(
         scope,
         range,
@@ -106,6 +86,9 @@ pub(in crate::context_bootstrap) fn static_range_boundary_offset<'s>(
     range: v8::Local<'s, v8::Object>,
     side: RangeBoundarySide,
 ) -> f64 {
+    let Some(range) = range_backing_object(scope, range) else {
+        return 0.0;
+    };
     get_private_value(
         scope,
         range,

@@ -195,7 +195,7 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         SERVICE_WORKER_VERSION_ID_SLOT,
         version_id_value.into(),
     );
-    install_simple_event_target_methods(scope, worker);
+    initialize_simple_event_target(scope, worker);
     Ok(worker)
 }
 
@@ -218,16 +218,8 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
     let promise = resolver.get_promise(scope);
     rv.set(promise.into());
 
-    let Some(title) = webidl::required_argument::<webidl::DomString>(
-        scope,
-        &args,
-        0,
-        webidl::Context::argument("ServiceWorkerRegistration.showNotification", 1),
-        "Failed to execute 'showNotification' on 'ServiceWorkerRegistration': 1 argument required, but only 0 present.",
-    ) else {
-        return;
-    };
-    let Some(options) = crate::context_bootstrap::notification_options_payload(scope, args.get(1))
+    let Some((title, options)) =
+        crate::context_bootstrap::notification_options_payload(scope, &args)
     else {
         return;
     };
@@ -285,7 +277,7 @@ pub(super) fn service_worker_registration_show_notification_callback<'s>(
                 request_id,
                 registration_id,
                 version_id,
-                title: title.0,
+                title,
                 tag: options.tag,
                 metadata: options.metadata,
                 actions: options.actions,
@@ -1905,6 +1897,8 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(
         method = "showNotification",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_show_notification_callback,
         length = 1
     )]
@@ -1912,6 +1906,8 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(
         method = "getNotifications",
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
         callback = service_worker_registration_get_notifications_callback,
         length = 0
     )]

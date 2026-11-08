@@ -1,5 +1,121 @@
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+enum PendingSubresourceError {
+    #[error("unknown pending subresource fetch `{0}`")]
+    FetchNotFound(u64),
+    #[error("unknown pending subresource auth `{0}`")]
+    AuthNotFound(u64),
+    #[error("unknown pending subresource response `{0}`")]
+    ResponseNotFound(u64),
+}
+
+fn with_subresource_request_metadata(
+    request: moli_fetch::Request,
+    resource_type: SubresourceResourceType,
+) -> moli_fetch::Request {
+    use moli_fetch::BrowserRequestMetadata;
+
+    match resource_type {
+        SubresourceResourceType::Image => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Image)
+        }
+        SubresourceResourceType::Font => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Font)
+        }
+        SubresourceResourceType::Audio => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Audio)
+        }
+        SubresourceResourceType::Video => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::Video)
+        }
+        SubresourceResourceType::TextTrack => {
+            request.with_browser_request_metadata(BrowserRequestMetadata::TextTrack)
+        }
+        _ => request,
+    }
+}
+
+fn request_for_pending_subresource(
+    pending: &PendingSubresourceFetchState,
+    request_url: &Url,
+    request_method: &str,
+    request_headers: moli_fetch::RequestHeaders,
+    request_body_bytes: Option<bytes::Bytes>,
+) -> moli_fetch::Request {
+    if let Some(dispatch) = &pending.dispatch {
+        let mut request = dispatch.request.clone();
+        request.url = request_url.clone();
+        request.method = request_method.to_owned();
+        let method_context =
+            moli_cookie_jar::NetworkCookieRequestContext::subresource(request_method);
+        request.cookie_context.is_method_safe = method_context.is_method_safe;
+        request.cookie_context = request
+            .cookie_context
+            .with_http_method(method_context.site_context_metadata.context.http_method)
+            .recompute_site_context_for_request(request_url);
+        request.body = request_body_bytes;
+        request.request_headers = request_headers;
+        return request.with_redirect_headers(pending.redirect_headers.clone());
+    }
+
+    let request = moli_fetch::Request::new_browser(
+        request_method,
+        request_url.clone(),
+        request_body_bytes,
+        request_headers,
+        pending.request_origin.clone(),
+    )
+    .with_redirect_headers(pending.redirect_headers.clone())
+    .with_initiator_url(&pending.info.document_url)
+    .with_request_mode(pending.request_mode)
+    .with_use_cors_preflight(pending.continuation.use_cors_preflight())
+    .with_credentials_mode(pending.credentials_mode)
+    .with_network_partition_key(pending.network_partition_key.clone())
+    .with_subframe_context(pending.info.frame_id.is_some());
+    let request = match pending.info.resource_type {
+        SubresourceResourceType::Script
+        | SubresourceResourceType::Stylesheet
+        | SubresourceResourceType::Image
+        | SubresourceResourceType::Font
+        | SubresourceResourceType::Audio
+        | SubresourceResourceType::Video
+        | SubresourceResourceType::Media
+        | SubresourceResourceType::TextTrack
+        | SubresourceResourceType::Ping
+        | SubresourceResourceType::CspReport
+        | SubresourceResourceType::Dictionary => {
+            match crate::network::request_resource_type_for_subresource(pending.info.resource_type)
+            {
+                Some(resource_type) => request.with_resource_type(resource_type),
+                None => request,
+            }
+        }
+        SubresourceResourceType::Fetch => request
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
+            .with_cache_mode(
+                pending
+                    .continuation
+                    .window_fetch()
+                    .map_or(moli_fetch::RequestCacheMode::Default, |fetch| {
+                        fetch.cache_mode()
+                    }),
+            ),
+        SubresourceResourceType::Manifest => request
+            .with_resource_type(moli_fetch::RequestResourceType::Manifest)
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Manifest),
+        SubresourceResourceType::EventSource => request
+            .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::EventSource)
+            .with_cache_mode(moli_fetch::RequestCacheMode::NoStore)
+            .without_request_timeout(),
+        SubresourceResourceType::Xhr => {
+            request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
+        }
+        SubresourceResourceType::WebSocket | SubresourceResourceType::Document => request,
+    };
+    with_subresource_request_metadata(request, pending.info.resource_type)
+}
+
 impl ScriptVm {
     pub(crate) fn continue_pending_subresource_fetch_body(
         &mut self,
@@ -15,7 +131,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
         let headers = headers.map(|override_headers| match override_headers {
             moli_fetch::RequestHeaderOverride::CurrentRequest {
                 headers,
@@ -31,6 +147,7 @@ impl ScriptVm {
             }
         });
         let PendingSubresourceFetchState {
+            dispatch,
             redirect_headers,
             request_origin,
             mut info,
@@ -104,6 +221,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    dispatch,
                                     redirect_headers: redirect_headers.clone(),
                                     request_origin,
                                     info,
@@ -161,6 +279,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    dispatch,
                                     redirect_headers: redirect_headers.clone(),
                                     request_origin,
                                     info,
@@ -222,6 +341,7 @@ impl ScriptVm {
                 let request_body = info.request_body.clone();
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let pending = PendingSubresourceFetchState {
+                    dispatch,
                     redirect_headers: redirect_headers.clone(),
                     request_origin,
                     info,
@@ -270,6 +390,7 @@ impl ScriptVm {
                 );
             }
             continuation => PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: redirect_headers.clone(),
                 request_origin,
                 info,
@@ -308,7 +429,10 @@ impl ScriptVm {
         handle_auth_requests: bool,
     ) -> Result<AsyncSubresourceCommandExecution<PendingSubresourceContinueOutcome>> {
         let internal_id = pending.info.internal_id;
-        if pending.load.network_offline() {
+        // Captured resource requests choose SW before enforcing network
+        // availability, just like direct dispatch. An offline worker can still
+        // serve a synthetic/cached response; only network fallback must fail.
+        if pending.dispatch.is_none() && pending.load.network_offline() {
             let activity = self.resolve_pending_subresource_fetch_body(
                 pending,
                 request_url,
@@ -329,80 +453,88 @@ impl ScriptVm {
                 internal_id,
             }));
         }
+        if matches!(
+            &pending.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        ) {
+            self.spawn_running_child_document_fetch(
+                RunningSubresourceFetchState {
+                    pending,
+                    request_url,
+                    request_method,
+                    request_headers,
+                    request_body,
+                    intercept_response,
+                    handle_auth_requests,
+                    initial_auth_network_request_headers: None,
+                },
+                None,
+            );
+            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
+                PendingSubresourceContinueOutcome::Started,
+            ));
+        }
         // Request interception may resume after the initiating Document has
         // navigated. The lease retains the request-time frozen client; looking
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
-        let mut request = moli_fetch::Request::new_bytes(
+        let request = request_for_pending_subresource(
+            &pending,
+            &request_url,
             &request_method,
-            request_url.as_str(),
-            pending.info.request_body_bytes.clone(),
             request_headers.clone(),
-        )?
-        .with_redirect_headers(pending.redirect_headers.clone())
-        .with_initiator_url(&pending.info.document_url)
-        .with_request_origin(pending.request_origin.clone())
-        .with_request_mode(pending.request_mode)
-        .with_use_cors_preflight(pending.continuation.use_cors_preflight())
-        .with_credentials_mode(pending.credentials_mode)
-        .with_network_partition_key(pending.network_partition_key.clone())
-        .with_subframe_context(pending.info.frame_id.is_some());
-        request = match pending.info.resource_type {
-            SubresourceResourceType::Script
-            | SubresourceResourceType::Stylesheet
-            | SubresourceResourceType::Image
-            | SubresourceResourceType::Font
-            | SubresourceResourceType::Audio
-            | SubresourceResourceType::Video
-            | SubresourceResourceType::Media
-            | SubresourceResourceType::TextTrack
-            | SubresourceResourceType::Ping
-            | SubresourceResourceType::CspReport
-            | SubresourceResourceType::Dictionary => {
-                match crate::network::request_resource_type_for_subresource(
-                    pending.info.resource_type,
-                ) {
-                    Some(resource_type) => request.with_resource_type(resource_type),
-                    None => request,
-                }
-            }
-            SubresourceResourceType::Fetch => {
-                request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
-            }
-            SubresourceResourceType::Manifest => request
-                .with_resource_type(moli_fetch::RequestResourceType::Manifest)
-                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Manifest),
-            SubresourceResourceType::EventSource => request
-                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::EventSource)
-                .with_cache_mode(moli_fetch::RequestCacheMode::NoStore)
-                .without_request_timeout(),
-            SubresourceResourceType::Xhr => {
-                request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
-            }
-            SubresourceResourceType::WebSocket => request,
-        };
+            pending.info.request_body_bytes.clone(),
+        );
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         pending.load.attach_cancel_handle(cancel_handle.clone());
-        self.spawn_running_subresource_fetch(
-            loader,
-            request,
-            RunningSubresourceFetchState {
-                pending,
-                request_url,
-                request_method,
-                request_headers,
-                request_body,
-                intercept_response,
-                handle_auth_requests,
-                initial_auth_network_request_headers: None,
-            },
-            Some(cancel_handle),
-        );
+        let state = RunningSubresourceFetchState {
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            intercept_response,
+            handle_auth_requests,
+            initial_auth_network_request_headers: None,
+        };
+        if let Some(dispatch) = &state.pending.dispatch {
+            let dispatch = dispatch.with_request(request);
+            self.spawn_running_resource_request(dispatch, state, cancel_handle);
+        } else {
+            self.spawn_running_subresource_fetch(loader, request, state, Some(cancel_handle));
+        }
         Ok(AsyncSubresourceCommandExecution::without_window_realm(
             PendingSubresourceContinueOutcome::Started,
         ))
     }
+    fn spawn_running_child_document_fetch(
+        &mut self,
+        mut state: RunningSubresourceFetchState,
+        auth: Option<crate::SubresourceAuthCredentials>,
+    ) {
+        let PendingSubresourceContinuation::ChildDocument(fetch) = &mut state.pending.continuation
+        else {
+            unreachable!("child document transfer requires its navigation owner");
+        };
+        fetch.apply_request_override(
+            state.pending.redirect_headers.clone(),
+            state.request_url.clone(),
+            state.request_method.clone(),
+            state.request_headers.clone(),
+            state.pending.info.request_body_bytes.clone(),
+        );
+        let prepared = match auth {
+            Some(auth) => fetch.set_auth(auth),
+            None => Ok(()),
+        };
+        let response = fetch.response_future();
+        self.spawn_running_subresource_response(state, async move {
+            prepared?;
+            response.await
+        });
+    }
+
     pub(super) fn continue_csp_report_via_service_worker(
         &mut self,
         pending: PendingSubresourceFetchState,
@@ -521,7 +653,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
         if !pending.pending.load.try_restart_with_auth() {
             // Reuse the terminal auth path to settle Window and Worker consumers.
             self._context_host
@@ -556,7 +688,29 @@ impl ScriptVm {
             intercept_response,
             initial_network_request_headers,
             response,
+            ..
         } = pending;
+        if matches!(
+            &pending_fetch.continuation,
+            PendingSubresourceContinuation::ChildDocument(_)
+        ) {
+            self.spawn_running_child_document_fetch(
+                RunningSubresourceFetchState {
+                    pending: pending_fetch,
+                    request_url,
+                    request_method,
+                    request_headers: original_request_headers,
+                    request_body,
+                    intercept_response,
+                    handle_auth_requests: true,
+                    initial_auth_network_request_headers: initial_network_request_headers,
+                },
+                Some(auth),
+            );
+            return Ok(AsyncSubresourceCommandExecution::without_window_realm(
+                PendingSubresourceContinueOutcome::Started,
+            ));
+        }
         // A redirect may have discarded the upload before the auth challenge.
         if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending_fetch.continuation)
         {
@@ -636,24 +790,20 @@ impl ScriptVm {
             ));
         }
         let loader = pending_fetch.load.request_client();
-        let mut request = moli_fetch::Request::new(
+        let mut request = request_for_pending_subresource(
+            &pending_fetch,
+            &request_url,
             &request_method,
-            request_url.as_str(),
-            request_body.clone(),
             original_request_headers.clone(),
-        )?
-        .with_redirect_headers(pending_fetch.redirect_headers.clone())
-        .with_initiator_url(&pending_fetch.info.document_url)
-        .with_request_origin(pending_fetch.request_origin.clone())
-        .with_request_mode(pending_fetch.request_mode)
-        .with_use_cors_preflight(pending_fetch.continuation.use_cors_preflight())
-        .with_credentials_mode(pending_fetch.credentials_mode)
-        .with_auth(auth.into())
-        .with_subframe_context(pending_fetch.info.frame_id.is_some());
+            request_body
+                .as_ref()
+                .and_then(|_| pending_fetch.info.request_body_bytes.clone()),
+        );
         for redirect in &response.redirect_chain {
             request.apply_redirect_status(redirect.status);
         }
         request.url = response.final_url.clone();
+        request.set_auth(Some(auth.into()));
         request = request.with_redirect_chain(
             response
                 .redirect_chain
@@ -661,40 +811,6 @@ impl ScriptVm {
                 .map(Into::into)
                 .collect(),
         );
-        request = match pending_fetch.info.resource_type {
-            SubresourceResourceType::Script
-            | SubresourceResourceType::Stylesheet
-            | SubresourceResourceType::Image
-            | SubresourceResourceType::Font
-            | SubresourceResourceType::Audio
-            | SubresourceResourceType::Video
-            | SubresourceResourceType::Media
-            | SubresourceResourceType::TextTrack
-            | SubresourceResourceType::Ping
-            | SubresourceResourceType::CspReport
-            | SubresourceResourceType::Dictionary => {
-                match crate::network::request_resource_type_for_subresource(
-                    pending_fetch.info.resource_type,
-                ) {
-                    Some(resource_type) => request.with_resource_type(resource_type),
-                    None => request,
-                }
-            }
-            SubresourceResourceType::Fetch => {
-                request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Fetch)
-            }
-            SubresourceResourceType::Manifest => request
-                .with_resource_type(moli_fetch::RequestResourceType::Manifest)
-                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Manifest),
-            SubresourceResourceType::EventSource => request
-                .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::EventSource)
-                .with_cache_mode(moli_fetch::RequestCacheMode::NoStore)
-                .without_request_timeout(),
-            SubresourceResourceType::Xhr => {
-                request.with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
-            }
-            SubresourceResourceType::WebSocket => request,
-        };
         let request_headers = original_request_headers;
         if self._context_host.borrow().network_offline() {
             let activity = self.resolve_pending_subresource_fetch_body(
@@ -749,7 +865,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -839,7 +955,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_auth(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource auth `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::AuthNotFound(internal_id))?;
         let PendingSubresourceAuthState {
             pending,
             request_url,
@@ -849,6 +965,10 @@ impl ScriptVm {
             intercept_response,
             initial_network_request_headers,
             response,
+            encoded,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
         } = pending;
         let response = match initial_network_request_headers {
             Some(headers) => response.with_network_request_headers(Some(headers)),
@@ -868,8 +988,12 @@ impl ScriptVm {
                 .map(|headers| headers.to_vec()),
             response_status: response.status,
             response_headers: response.headers.clone(),
-            response_body: SubresourceResponseBody::from_navigation_response(&response),
+            response_body: encoded.as_ref().map_or_else(
+                || SubresourceResponseBody::from_navigation_response(&response),
+                |image| SubresourceResponseBody::from_parkable_image(image.clone()),
+            ),
             from_cache: response.from_cache,
+            cache_state: response.cache_state,
         };
         self._context_host
             .borrow_mut()
@@ -880,6 +1004,10 @@ impl ScriptVm {
                 request_headers,
                 request_body,
                 response,
+                encoded,
+                response_status_text,
+                skip_fetch_security_validation,
+                response_filter,
             });
         if intercept_response {
             self._context_host
@@ -900,8 +1028,9 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
         let PendingSubresourceFetchState {
+            dispatch,
             redirect_headers: _,
             request_origin,
             info,
@@ -915,6 +1044,11 @@ impl ScriptVm {
             deferred_request_started,
         } = pending;
         let pending = match continuation {
+            PendingSubresourceContinuation::ChildDocument(fetch) => {
+                let mut host = self._context_host.borrow_mut();
+                host.fail_child_document_fetch(internal_id, *fetch, error_text);
+                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
+            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 self._context_host
                     .borrow_mut()
@@ -1058,6 +1192,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1097,8 +1232,9 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::FetchNotFound(internal_id))?;
         let PendingSubresourceFetchState {
+            dispatch,
             redirect_headers: _,
             request_origin,
             info,
@@ -1123,9 +1259,21 @@ impl ScriptVm {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         };
         let pending = match continuation {
+            PendingSubresourceContinuation::ChildDocument(fetch) => {
+                self._context_host
+                    .borrow_mut()
+                    .fulfill_child_document_fetch(
+                        internal_id,
+                        *fetch,
+                        head,
+                        response_body.bytes().to_vec(),
+                    );
+                return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
+            }
             PendingSubresourceContinuation::WebSocket(connection) => {
                 if response_code != 101 {
                     self._context_host
@@ -1430,6 +1578,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1569,7 +1718,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -1698,17 +1847,22 @@ impl ScriptVm {
             response_code.unwrap_or(pending.response.status),
             response_headers.unwrap_or_else(|| pending.response.headers.clone()),
         );
-        let activity = self.resolve_pending_subresource_fetch_body(
+        let response_status_text = if response_code.is_none() {
+            pending.response_status_text
+        } else {
+            None
+        };
+        let activity = self.resolve_pending_subresource_fetch_completion(
             pending.pending,
             pending.request_url,
             pending.request_method,
             pending.request_headers,
             pending.request_body,
+            response_status_text,
+            pending.skip_fetch_security_validation,
+            pending.response_filter,
             None,
-            false,
-            None,
-            None,
-            Ok(response),
+            AsyncSubresourceFetchResult::from_image_parts(Ok(response), pending.encoded),
         )?;
         Ok(AsyncSubresourceCommandExecution::after_body((), activity))
     }
@@ -1733,7 +1887,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -1854,7 +2008,7 @@ impl ScriptVm {
             ._context_host
             .borrow_mut()
             .take_pending_subresource_response(internal_id)
-            .ok_or_else(|| anyhow!("unknown pending subresource response `{internal_id}`"))?;
+            .ok_or(PendingSubresourceError::ResponseNotFound(internal_id))?;
         if let Some(target) =
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
@@ -1868,6 +2022,7 @@ impl ScriptVm {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
+                cache_state: pending.response.cache_state,
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -1932,6 +2087,7 @@ impl ScriptVm {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
+                cache_state: pending.response.cache_state,
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -2005,6 +2161,7 @@ impl ScriptVm {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: pending.response.from_cache,
+                    cache_state: pending.response.cache_state,
                     negotiated_http_version: pending.response.negotiated_http_version,
                 }),
             ),

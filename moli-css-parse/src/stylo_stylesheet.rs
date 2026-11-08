@@ -41,6 +41,46 @@ pub fn parse_stylesheet_rule_texts_with_stylo(css_text: &str) -> Vec<CssParsedRu
     style::moli_rule_tree::parse_stylesheet_rule_texts(css_text)
 }
 
+/// Discover the import graph using the same grammar and supports conditions as
+/// the native stylesheet. Preserve the first URL for each network identity so
+/// parser blocking and CSSOM installation can share one load operation.
+pub fn stylesheet_import_urls_with_stylo(css_text: &str, base_url: &url::Url) -> Vec<url::Url> {
+    let stylesheet = style::moli_rule_tree::parse_stylesheet_rule_tree(css_text);
+    let guard = stylesheet.shared_lock.read();
+    let contents = stylesheet.contents.read_with(&guard);
+    let mut identities = std::collections::HashSet::new();
+    let mut urls = Vec::new();
+    for rule in &contents.rules.read_with(&guard).0 {
+        let style::stylesheets::CssRule::Import(rule) = rule else {
+            continue;
+        };
+        let rule = rule.read_with(&guard);
+        if rule
+            .supports
+            .as_ref()
+            .is_some_and(|supports| !supports.enabled)
+        {
+            continue;
+        }
+        // The detached tree uses about:blank. Resolve the original CSS URL
+        // against this owner's processing base, including CSS escape decoding.
+        let css_url = style_traits::ToCss::to_css_string(&rule.url);
+        let mut parser = Parser::new(&css_url);
+        let Ok(href) = parser.expect_url_or_string() else {
+            continue;
+        };
+        let Ok(url) = base_url.join(&href) else {
+            continue;
+        };
+        let mut identity = url.clone();
+        identity.set_fragment(None);
+        if identities.insert(identity) {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
 pub fn parse_stylesheet_rule_snapshots_with_stylo(css_text: &str) -> Vec<CssRuleSnapshot> {
     style::moli_rule_tree::parse_stylesheet_rule_views(css_text)
 }
@@ -234,7 +274,7 @@ fn declaration_block_css_text(block: &PropertyDeclarationBlock) -> String {
     css_text.trim_end().to_owned()
 }
 
-fn with_descriptor_declaration_context<R>(
+pub(crate) fn with_descriptor_declaration_context<R>(
     rule_type: CssRuleType,
     f: impl FnOnce(&ParserContext) -> Option<R>,
 ) -> Option<R> {

@@ -866,6 +866,89 @@ done();
             [case.case_path for case in window_cases if case.case_path.startswith("compression/")],
             [path for path in expected if "dedicatedworker" not in path],
         )
+    def test_default_and_all_profiles_include_indexeddb_script_cases(self) -> None:
+        from moli_benchmark.wpt_cross.__main__ import _select_cases
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            sources = {
+                "IndexedDB/cursor.any.js": (
+                    "// META: global=window,worker\n"
+                    "// META: variant=?direction=next\n"
+                    "// META: variant=?direction=prev\n"
+                ),
+                "IndexedDB/idlharness.https.any.js": "// META: global=window,dedicatedworker\n",
+                "IndexedDB/legacy.html": '<script src="/resources/testharness.js"></script>',
+                "IndexedDB/partitioned-basic.sub.html": '<script src="/resources/testharness.js"></script>',
+                "IndexedDB/partitioned-coverage.sub.html": '<script src="/resources/testharness.js"></script>',
+                "IndexedDB/partitioned-persistence.sub.html": '<script src="/resources/testharness.js"></script>',
+                "IndexedDB/serialize-sharedarraybuffer-throws.https.html": '<script src="/resources/testharness.js"></script>',
+                "IndexedDB/task.window.js": "// META: timeout=long\n",
+                "IndexedDB/window-only.any.js": "// META: global=window\n",
+                "IndexedDB/worker-only.any.js": "// META: global=dedicatedworker\n",
+                "IndexedDB/shared-only.any.js": "// META: global=sharedworker\n",
+                "IndexedDB/service-only.any.js": "// META: global=serviceworker\n",
+                "IndexedDB/feature.tentative.any.js": "",
+                "IndexedDB/testdriver.any.js": "// META: script=/resources/testdriver.js\n",
+                "IndexedDB/resources/helper.any.js": "",
+                "IndexedDB-other/excluded.any.js": "",
+                "IndexedDB-other/excluded.window.js": "",
+                "IndexedDB-other/excluded.https.sub.html": '<script src="/resources/testharness.js"></script>',
+            }
+            for name, source in sources.items():
+                path = wpt_root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source, encoding="utf-8")
+            (wpt_root / "MANIFEST.json").write_text(
+                json.dumps({"items": {"reftest": {}}}), encoding="utf-8"
+            )
+
+            cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root, dir_prefixes=("IndexedDB",), any_js_global="both"
+            )
+            window_cases = enumerate_cases(wpt_root, any_js_global="window")
+            args = _build_parser().parse_args(
+                [
+                    "--wpt-root", str(wpt_root),
+                    "--engine", "moli",
+                    "--output-dir", str(wpt_root / "output"),
+                    "--profile", "all",
+                ]
+            )
+            all_cases = _select_cases(args)
+
+        expected = [
+            "IndexedDB/cursor.any.js?direction=next&moli-wpt-any=dedicatedworker",
+            "IndexedDB/cursor.any.js?direction=next&moli-wpt-any=window",
+            "IndexedDB/cursor.any.js?direction=prev&moli-wpt-any=dedicatedworker",
+            "IndexedDB/cursor.any.js?direction=prev&moli-wpt-any=window",
+            "IndexedDB/idlharness.https.any.js?moli-wpt-any=dedicatedworker",
+            "IndexedDB/idlharness.https.any.js?moli-wpt-any=window",
+            "IndexedDB/legacy.html",
+            "IndexedDB/partitioned-basic.sub.html",
+            "IndexedDB/partitioned-coverage.sub.html",
+            "IndexedDB/partitioned-persistence.sub.html",
+            "IndexedDB/serialize-sharedarraybuffer-throws.https.html",
+            "IndexedDB/task.window.js?moli-wpt-script=window",
+            "IndexedDB/window-only.any.js?moli-wpt-any=window",
+            "IndexedDB/worker-only.any.js?moli-wpt-any=dedicatedworker",
+        ]
+        self.assertEqual([case.case_path for case in cases], expected)
+        self.assertEqual([case.case_path for case in focused_cases], expected)
+        self.assertEqual([case.case_path for case in all_cases], expected)
+        self.assertEqual(
+            [case.case_path for case in window_cases],
+            sorted(
+                [path for path in expected if "dedicatedworker" not in path]
+                + ["IndexedDB-other/excluded.any.js?moli-wpt-any=window"]
+            ),
+        )
+        self.assertEqual(
+            next(case.timeout_multiplier for case in cases if "task.window.js" in case.case_path),
+            LONG_TIMEOUT_MULTIPLIER,
+        )
+
     def test_dir_prefix_expands_any_js_variants_and_respects_globals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             wpt_root = Path(temp_dir)

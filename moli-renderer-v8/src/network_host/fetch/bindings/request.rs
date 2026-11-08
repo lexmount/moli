@@ -79,6 +79,10 @@ pub(super) struct PreparedWindowFetchRequest {
 }
 
 impl PreparedWindowFetchRequest {
+    pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
+        self.cache.parse().unwrap_or_default()
+    }
+
     pub(super) fn request_scope(&self) -> crate::native_bridge::OwnerDispatchScope {
         self.fetch_context.request_target().dispatch_scope()
     }
@@ -117,8 +121,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let csp_report_context =
         crate::network_host::capture_window_csp_report_request_context(scope, host, request_scope)
             .ok_or(FetchPrepareError::ReportContextUnavailable)?;
-    let document_referrer_policy =
-        effective_subresource_referrer_policy(scope, host, request_scope);
+    let document_referrer_policy = effective_subresource_referrer_policy(host, request_scope);
     let policy_context = effective_subresource_policy_context(scope, host, request_scope);
     let network_partition_key = active_subresource_network_partition_key(host, request_scope);
     let cors_preflight_request_headers = request_headers.clone();

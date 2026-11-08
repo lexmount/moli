@@ -10,22 +10,19 @@ async fn command(
     ctx: &mut TestContext,
     operation: DevToolsElementClickOperation,
 ) -> AutomationResult {
-    ctx.conn
-        .execute_automation_command(AutomationCommand::ElementClick(
-            DevToolsElementClickCommand {
-                context: AutomationContext {
-                    protocol: FrontendProtocol::WebDriverClassic,
-                    session_id: None,
-                    target_id: None,
-                    browser_context_id: None,
-                },
-                operation,
+    ctx.execute_automation_command_through_renderer_fence_for_test(AutomationCommand::ElementClick(
+        DevToolsElementClickCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverClassic,
+                session_id: None,
+                target_id: None,
+                browser_context_id: None,
             },
-        ))
-        .await
-        .into_parts()
-        .0
-        .expect("native element click command")
+            operation,
+        },
+    ))
+    .await
+    .expect("native element click command")
 }
 
 async fn prepare(ctx: &mut TestContext) -> RendererPreparedPointerClick {

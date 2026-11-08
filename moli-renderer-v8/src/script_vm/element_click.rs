@@ -192,6 +192,7 @@ impl ScriptVm {
                 0.0,
                 RendererPointerEventProperties::default(),
                 0,
+                false,
             );
             let next = match dispatched {
                 Ok(next) => next,

@@ -25,5 +25,36 @@ pub trait Dom {
     fn node_kind(&self, node: Self::NodeId) -> NodeKind<'_>;
     fn first_child(&self, node: Self::NodeId) -> Option<Self::NodeId>;
     fn next_sibling(&self, node: Self::NodeId) -> Option<Self::NodeId>;
+    /// Iterate children in conversion order. Projected DOMs can override this
+    /// to resolve slot assignment once per parent, without a sibling index.
+    fn children(&self, node: Self::NodeId) -> impl Iterator<Item = Self::NodeId> {
+        std::iter::successors(self.first_child(node), move |node| self.next_sibling(*node))
+    }
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str>;
+    /// Current input/textarea value supplied by an adapter. None uses the
+    /// source default; Some("") suppresses that default after a clear. Empty
+    /// text-entry controls do not emit their name as a field value.
+    fn control_value(&self, _node: Self::NodeId) -> Option<&str> {
+        None
+    }
+
+    /// A caller with computed CSS can retain block boundaries introduced by
+    /// stylesheets (for example, links rendered as separate action buttons).
+    /// Structural-only adapters can leave this at its default.
+    fn has_block_layout(&self, _node: Self::NodeId) -> bool {
+        false
+    }
+
+    /// A caller with computed CSS can retain boundaries between independent
+    /// inline boxes such as tabs, badges, and compact action controls.
+    /// Request a collapsible space on each side of an inline layout box.
+    fn has_text_boundary(&self, _node: Self::NodeId) -> bool {
+        false
+    }
+
+    /// Adapters that already inventory elements can skip fragment-link
+    /// collection when none exist. Table header references are still collected.
+    fn may_have_fragment_links(&self) -> bool {
+        true
+    }
 }

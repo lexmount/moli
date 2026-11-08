@@ -50,24 +50,45 @@ fn status_response_uses_webdriver_value_envelope() {
 }
 
 #[test]
-fn session_registry_allocates_unique_non_reused_ids() {
+fn session_registry_allocates_unique_v4_uuids_across_deletions() {
     let mut registry = ClassicSessionRegistry::new();
 
     let first = registry.create_session();
-    assert_eq!(first.session_id, "classic-session-1");
     assert_eq!(first.timeouts, ClassicTimeouts::default());
     assert_eq!(first.page_load_strategy, ClassicPageLoadStrategy::Normal);
     assert_eq!(
         first.unhandled_prompt_behavior.returned_capability(),
         json!("dismiss and notify")
     );
-    assert!(registry.has_session("classic-session-1"));
-    assert!(registry.release_session("classic-session-1"));
-
     let second = registry.create_session();
-    assert_eq!(second.session_id, "classic-session-2");
-    assert!(!registry.has_session("classic-session-1"));
-    assert!(registry.has_session("classic-session-2"));
+    assert_eq!(registry.session_count(), 2);
+    assert!(registry.has_session(&first.session_id));
+    assert!(registry.has_session(&second.session_id));
+    assert!(registry.release_session(&first.session_id));
+
+    let third = registry.create_session();
+    assert!(!registry.has_session(&first.session_id));
+    assert!(registry.has_session(&second.session_id));
+    assert!(registry.has_session(&third.session_id));
+    assert!(registry.release_session(&second.session_id));
+    assert!(registry.release_session(&third.session_id));
+    assert_eq!(registry.session_count(), 0);
+
+    let fourth = registry.create_session();
+    assert!(registry.has_session(&fourth.session_id));
+    assert_eq!(registry.session_count(), 1);
+
+    let mut ids = std::collections::BTreeSet::new();
+    for session in [first, second, third, fourth] {
+        let id = uuid::Uuid::parse_str(&session.session_id).expect("session ID must be a UUID");
+        assert_eq!(id.get_version_num(), 4);
+        assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
+        assert_eq!(id.to_string(), session.session_id);
+        assert!(
+            ids.insert(session.session_id),
+            "session IDs must not be reused"
+        );
+    }
 }
 
 #[test]
@@ -2284,7 +2305,7 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
                 "id": "mouse",
                 "actions": [{
                     "type": "pointerMove",
-                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli-node-7" },
+                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli:bidi-renderer-node:2000000007" },
                     "x": 0,
                     "y": 0
                 }]
@@ -2294,7 +2315,7 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
                 "id": "wheel",
                 "actions": [{
                     "type": "scroll",
-                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli-node-9" },
+                    "origin": { "element-6066-11e4-a52e-4f735466cecf": "moli:bidi-renderer-node:2000000009" },
                     "x": 0,
                     "y": 0,
                     "deltaX": 0,
@@ -2311,7 +2332,10 @@ fn collects_action_element_origins_for_pointer_and_wheel_sources() {
     .expect("element origins should collect");
     assert_eq!(
         origins,
-        vec!["moli-node-7".to_owned(), "moli-node-9".to_owned()]
+        vec![
+            "moli:bidi-renderer-node:2000000007".to_owned(),
+            "moli:bidi-renderer-node:2000000009".to_owned()
+        ]
     );
 
     let invalid = action_element_origin_ids(&json!({
@@ -3577,20 +3601,31 @@ fn maps_cookie_commands_to_shared_storage_commands() {
     let AutomationCommand::DeleteCookies(delete) = delete else {
         panic!("expected DeleteCookies command");
     };
-    assert_eq!(delete.name.as_deref(), Some("sid"));
-    assert_eq!(delete.url.as_deref(), Some(current_url));
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Scope { name, url, .. } =
+        delete.filter
+    else {
+        panic!("scope filter");
+    };
+    assert_eq!(name.as_deref(), Some("sid"));
+    assert_eq!(url.as_deref(), Some(current_url));
 
     let delete_all = delete_all_cookies_command(&context, current_url);
     let AutomationCommand::DeleteCookies(delete_all) = delete_all else {
         panic!("expected DeleteCookies command");
     };
-    assert!(delete_all.name.is_none());
-    assert_eq!(delete_all.url.as_deref(), Some(current_url));
+    let moli_protocol::automation::DevToolsCookieDeleteFilter::Scope { name, url, .. } =
+        delete_all.filter
+    else {
+        panic!("scope filter");
+    };
+    assert!(name.is_none());
+    assert_eq!(url.as_deref(), Some(current_url));
 }
 
 #[test]
 fn maps_devtools_cookies_to_classic_cookie_shape() {
     let result = DevToolsGetCookiesResult {
+        scope: Default::default(),
         cookies: vec![json!({
             "name": "sid",
             "value": "abc",
@@ -3620,6 +3655,7 @@ fn maps_devtools_cookies_to_classic_cookie_shape() {
     );
 
     let result = DevToolsGetCookiesResult {
+        scope: Default::default(),
         cookies: vec![json!({
             "name": "default",
             "value": "abc",

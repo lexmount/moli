@@ -140,12 +140,12 @@ async fn patchright_over_cdp_page_binding_round_trip_resolves_utility_world_prom
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(294, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -377,12 +377,12 @@ async fn patchright_over_cdp_page_binding_round_trip_rejects_utility_world_promi
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(304, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -614,12 +614,12 @@ async fn patchright_over_cdp_same_named_page_binding_in_main_and_utility_worlds_
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(333, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -926,12 +926,12 @@ async fn patchright_over_cdp_same_named_page_binding_in_main_and_utility_worlds_
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id should exist")
+    });
     ctx.expect_result(3453, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -1222,12 +1222,11 @@ async fn patchright_over_cdp_same_named_handle_binding_in_main_and_utility_world
         }
     }))
     .await;
-    let session_id = ctx
-        .conn
+    let session_id = ctx.with_fixture(|conn| conn
         .browser_context
         .as_ref()
         .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id should exist");
+        .expect("session id should exist"));
     ctx.expect_result(348, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",

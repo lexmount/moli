@@ -239,6 +239,9 @@ pub(crate) struct TargetJavaScriptDialog {
     source_frame_id: String,
     renderer_dialog: RendererPendingJavaScriptDialog,
     pending_prompt_text: Option<String>,
+    /// Connection-wide Page subscription generations that observed the opening.
+    /// Enabling Page after the dialog opens does not grant its pending callback.
+    opening_subscription_generations: Vec<u64>,
 }
 
 impl TargetJavaScriptDialog {
@@ -252,6 +255,7 @@ impl TargetJavaScriptDialog {
             source_frame_id,
             renderer_dialog,
             pending_prompt_text: None,
+            opening_subscription_generations: Vec::new(),
         }
     }
 
@@ -279,7 +283,15 @@ impl TargetJavaScriptDialog {
         self.renderer_dialog.finish(accepted, user_input)
     }
 
-    fn set_prompt_text(&mut self, prompt_text: String) {
+    pub(crate) fn set_opening_subscription_generations(&mut self, generations: Vec<u64>) {
+        self.opening_subscription_generations = generations;
+    }
+
+    pub(crate) fn was_opened_for_subscription(&self, generation: u64) -> bool {
+        self.opening_subscription_generations.contains(&generation)
+    }
+
+    pub(crate) fn set_prompt_text(&mut self, prompt_text: String) {
         self.pending_prompt_text = Some(prompt_text);
     }
 
@@ -289,15 +301,21 @@ impl TargetJavaScriptDialog {
     }
 }
 
-/// Installed modal-dialog state for one protocol attachment and Page lifetime.
+/// Installed modal-dialog state owned by one Page target, independently of its
+/// DevTools sessions.
 ///
 /// Clearing dismisses every installed renderer completion. In-flight prepared
 /// output is authorized separately by the stable Page scope in
-/// `TargetRuntimeSlot`; keeping that authority out of this state lets an
-/// otherwise-default session state disappear without losing Page identity.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// `TargetRuntimeSlot`. Dropping the target also settles its installed dialogs.
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct TargetJavaScriptDialogState {
     pending_dialogs: Vec<TargetJavaScriptDialog>,
+}
+
+impl Drop for TargetJavaScriptDialogState {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
 impl TargetJavaScriptDialogState {
@@ -319,12 +337,8 @@ impl TargetJavaScriptDialogState {
         self.pending_dialogs.first()
     }
 
-    pub(crate) fn set_next_prompt_text(&mut self, prompt_text: String) -> bool {
-        let Some(dialog) = self.pending_dialogs.first_mut() else {
-            return false;
-        };
-        dialog.set_prompt_text(prompt_text);
-        true
+    pub(crate) fn peek_next_mut(&mut self) -> Option<&mut TargetJavaScriptDialog> {
+        self.pending_dialogs.first_mut()
     }
 
     pub(crate) fn pop_next_with_prompt_text(
@@ -334,6 +348,15 @@ impl TargetJavaScriptDialogState {
             return None;
         }
         Some(self.pending_dialogs.remove(0).into_prompt_text())
+    }
+
+    pub(crate) fn take_matching(
+        &mut self,
+        mut matches: impl FnMut(&TargetJavaScriptDialog) -> bool,
+    ) -> Vec<TargetJavaScriptDialog> {
+        self.pending_dialogs
+            .extract_if(.., |dialog| matches(dialog))
+            .collect()
     }
 
     #[cfg(test)]
@@ -388,43 +411,63 @@ mod tests {
 
     #[test]
     fn dropping_uninstalled_prepared_dialog_dismisses_its_one_shot_completion() {
-        let page_id = PageId::new_for_testing(1);
-        let source_document = RendererDocumentLifecycleIdentity {
-            frame: RendererFrameToken { page_id },
-            document: RendererDocumentToken::new_for_testing(page_id, 1),
-            epoch: RendererLifecycleEpoch(1),
-        };
-        let completion = RendererJavaScriptDialogCompletion::pending();
-        let scope = TargetJavaScriptDialogScope::default();
-        let prepared = TargetPreparedJavaScriptDialog::capture(
-            TargetPageProtocolAttachmentIdentity::new(
-                TargetPageResidenceIdentity::new_for_test(
-                    "BID-dialog-drop".to_owned(),
-                    Some("TID-dialog-drop".to_owned()),
-                    1,
+        for missing_target in [false, true] {
+            let page_id = PageId::new_for_testing(1);
+            let source_document = RendererDocumentLifecycleIdentity {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 1),
+                epoch: RendererLifecycleEpoch(1),
+            };
+            let completion = RendererJavaScriptDialogCompletion::pending();
+            let scope = TargetJavaScriptDialogScope::default();
+            let prepared = TargetPreparedJavaScriptDialog::capture(
+                TargetPageProtocolAttachmentIdentity::new(
+                    TargetPageResidenceIdentity::new_for_test(
+                        "BID-dialog-drop".to_owned(),
+                        Some("TID-dialog-drop".to_owned()),
+                        1,
+                    ),
+                    Some("SID-dialog-drop".to_owned()),
                 ),
-                Some("SID-dialog-drop".to_owned()),
-            ),
-            scope.observe(),
-            "TID-dialog-drop",
-            RendererPendingJavaScriptDialog::new(
-                RendererJavaScriptDialogId::new(1),
-                source_document,
-                RendererJavaScriptDialogSource::LightweightPopup {
-                    popup_id: 3,
-                    popup_document_id: 4,
-                },
-                "about:blank".to_owned(),
-                "alert".to_owned(),
-                "dismiss on drop".to_owned(),
-                String::new(),
-                Some(completion.clone()),
-            ),
-        );
+                scope.observe(),
+                "TID-dialog-drop",
+                RendererPendingJavaScriptDialog::new(
+                    RendererJavaScriptDialogId::new(1),
+                    source_document,
+                    RendererJavaScriptDialogSource::LightweightPopup {
+                        popup_id: 3,
+                        popup_document_id: 4,
+                    },
+                    "about:blank".to_owned(),
+                    "alert".to_owned(),
+                    "dismiss on drop".to_owned(),
+                    String::new(),
+                    Some(completion.clone()),
+                ),
+            );
 
-        drop(prepared);
+            if missing_target {
+                let mut conn = crate::conn::CdpConnection::default();
+                let owner = crate::conn::CommandOwnerScope::for_page_attachment(
+                    prepared.source_attachment(),
+                );
+                let destination = prepared.source_attachment().page_owner().clone();
+                let installed =
+                    conn.with_target_javascript_dialog_state_for_owner_mut(&owner, move |state| {
+                        state.push(
+                            prepared.into_target_dialog(destination, "TID-dialog-drop".to_owned()),
+                        );
+                    });
+                assert!(
+                    installed.is_none(),
+                    "an absent target cannot install its prepared dialog"
+                );
+            } else {
+                drop(prepared);
+            }
 
-        assert!(!completion.finish(true, String::new()));
-        assert!(!completion.wait().accepted);
+            assert!(!completion.finish(true, String::new()));
+            assert!(!completion.wait().accepted);
+        }
     }
 }

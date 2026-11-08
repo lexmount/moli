@@ -126,13 +126,6 @@ impl PendingPhaseOneResidence {
         }
     }
 
-    pub(in crate::runtime) fn has_ready_streaming_input(&mut self) -> bool {
-        match self {
-            Self::OpenStreaming(continuation) => continuation.has_ready_input(),
-            Self::ParserBlockingSourceLoad { .. } | Self::ClosedInputPageWork { .. } => false,
-        }
-    }
-
     /// Retire the source parser after navigation crosses the committed
     /// typestate boundary. Keep the PageVm only for final context teardown.
     pub(in crate::runtime) fn retire_for_committed_navigation(self) -> PageVm {

@@ -1,5 +1,4 @@
 use super::devtools_session::DevToolsNetworkSessionState;
-use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
@@ -119,7 +118,7 @@ impl PageTargetHost {
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.devtools_sessions
             .set_locale_override(session_key, locale_override)
     }
@@ -128,7 +127,7 @@ impl PageTargetHost {
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.devtools_sessions
             .set_timezone_override(session_key, timezone_override)
     }
@@ -136,7 +135,7 @@ impl PageTargetHost {
     pub(crate) fn set_base_locale_override(
         &mut self,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner
             .set_locale(locale_override.as_deref())
     }
@@ -144,7 +143,7 @@ impl PageTargetHost {
     pub(crate) fn set_base_timezone_override(
         &mut self,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner
             .set_timezone(timezone_override.as_deref())
     }
@@ -165,16 +164,16 @@ impl PageTargetHost {
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.devtools_sessions.states().any(|session| {
-            !session
-                .page_session_state
-                .javascript_dialog_state
-                .is_empty()
-        })
+        !self.javascript_dialog_state.is_empty()
+    }
+
+    pub(crate) fn clear_loaded_document_context_state(&mut self) {
+        self.javascript_dialog_state.clear();
     }
 
     pub(crate) fn has_non_default_session_state(&self) -> bool {
         self.devtools_sessions.has_non_default_state()
+            || self.has_pending_javascript_dialog()
             || self.runtime_slot.primary_network_events_enabled()
             || self.network_policy != TargetNetworkPolicyState::default()
             || self.http_proxy_override.is_some()
@@ -182,8 +181,6 @@ impl PageTargetHost {
             || self.tls_verify_host_override.is_some()
             || self.environment_owner.has_override()
             || self.effective_emulation_state != super::EffectiveTargetEmulationState::default()
-            || self.input_intercept_drags_enabled
-            || self.input_drag_intercepted
             || self.css_enabled
             || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
@@ -198,8 +195,6 @@ impl PageTargetHost {
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
-        self.input_intercept_drags_enabled = false;
-        self.input_drag_intercepted = false;
         self.css_enabled = false;
     }
 }
@@ -430,6 +425,7 @@ impl PageScreencastSessionState {
 #[derive(Debug, Clone)]
 pub(crate) struct TargetPageSessionState {
     pub(crate) input_events_ignored: bool,
+    pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) page_domain_enabled: bool,
     pub(crate) page_domain_subscription_generation: u64,
     pub(crate) page_lifecycle_events: bool,
@@ -441,13 +437,13 @@ pub(crate) struct TargetPageSessionState {
     pub(crate) page_file_chooser_opened_event_enabled: bool,
     pub(crate) page_intercept_file_chooser_dialog_enabled: bool,
     pub(crate) page_screencast: PageScreencastSessionState,
-    pub(crate) javascript_dialog_state: TargetJavaScriptDialogState,
 }
 
 impl Default for TargetPageSessionState {
     fn default() -> Self {
         Self {
             input_events_ignored: false,
+            input_intercept_drags_enabled: false,
             page_domain_enabled: false,
             page_domain_subscription_generation: 0,
             page_lifecycle_events: false,
@@ -459,7 +455,6 @@ impl Default for TargetPageSessionState {
             page_file_chooser_opened_event_enabled: false,
             page_intercept_file_chooser_dialog_enabled: false,
             page_screencast: PageScreencastSessionState::default(),
-            javascript_dialog_state: TargetJavaScriptDialogState::default(),
         }
     }
 }
@@ -484,15 +479,12 @@ impl TargetPageSessionState {
     pub(crate) fn page_domain_subscription_is_current(&self, generation: u64) -> bool {
         self.page_domain_enabled && self.page_domain_subscription_generation == generation
     }
-
-    pub(crate) fn clear_loaded_document_context_state(&mut self) {
-        self.javascript_dialog_state.clear();
-    }
 }
 
 impl PartialEq for TargetPageSessionState {
     fn eq(&self, other: &Self) -> bool {
         self.input_events_ignored == other.input_events_ignored
+            && self.input_intercept_drags_enabled == other.input_intercept_drags_enabled
             && self.page_domain_enabled == other.page_domain_enabled
             && self.page_lifecycle_events == other.page_lifecycle_events
             && self.audits == other.audits
@@ -505,7 +497,6 @@ impl PartialEq for TargetPageSessionState {
             && self.page_intercept_file_chooser_dialog_enabled
                 == other.page_intercept_file_chooser_dialog_enabled
             && self.page_screencast == other.page_screencast
-            && self.javascript_dialog_state == other.javascript_dialog_state
     }
 }
 

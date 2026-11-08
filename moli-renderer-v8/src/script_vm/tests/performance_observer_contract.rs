@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn performance_observer_drop_reporting_preserves_flags_and_callback_realms() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://observer-drops.test/");
+    vm.eval("document.body.innerHTML = '<iframe id=child></iframe>'")
+        .unwrap();
+    let source = format!(
+        r#"(async () => {{
+            const probe = {};
+            const realms = [globalThis, document.getElementById('child').contentWindow];
+            const checks = [];
+            for (let owner=0;owner<2;owner++) for (let callee=0;callee<2;callee++) for (let callback=0;callback<2;callback++)
+              checks.push(...await probe(realms[owner],realms[callee],realms[callback],`${{owner}}-${{callee}}-${{callback}}`));
+            return {{total:checks.length,failures:checks.filter(row=>!row.passed)}};
+        }})()"#,
+        include_str!("performance_observer_dropped_entries.js"),
+    );
+    vm.eval(&format!(
+        "({source}).then(result=>globalThis.__dropContract=result,error=>globalThis.__dropContract={{error:String(error)}});"
+    ))
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("JSON.stringify(__dropContract)")
+            .unwrap(),
+        r#"{"total":368,"failures":[]}"#
+    );
+}
+
+#[test]
 fn performance_observer_delivery_follows_registration_order_after_reobserve() {
     let mut vm = new_storage_test_vm("https://performance-observer-registration-order.test/");
     let source = format!(

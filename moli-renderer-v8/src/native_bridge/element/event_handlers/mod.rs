@@ -3,6 +3,7 @@ mod body_window;
 mod generic;
 mod shared;
 
+pub(crate) use body_onload::compile_window_body_event_attribute;
 pub(crate) use body_onload::initialize_parser_inserted_body_window_event_handlers;
 pub(super) use body_onload::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
@@ -13,11 +14,40 @@ pub(super) use body_window::{
     body_onmessageerror_getter_function, body_onmessageerror_setter_function,
 };
 pub(crate) use generic::{
-    GlobalEventHandlerOwner, event_handler_content_attribute_name,
-    install_global_event_handler_template_bindings, node_event_handler_getter_function,
-    node_event_handler_setter_function,
+    GlobalEventHandlerOwner, compile_node_content_attribute_for_dispatch,
+    event_handler_content_attribute_name, install_global_event_handler_template_bindings,
+    is_global_event_handler_attribute, node_event_handler_getter_function,
+    node_event_handler_setter_function, node_event_handler_value_from_wrapper,
 };
 pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
+
+pub(crate) fn is_body_window_event_handler_attribute(name: &str) -> bool {
+    matches!(
+        name,
+        "onafterprint"
+            | "onbeforeprint"
+            | "onbeforeunload"
+            | "onblur"
+            | "onerror"
+            | "onfocus"
+            | "onhashchange"
+            | "onlanguagechange"
+            | "onload"
+            | "onmessage"
+            | "onmessageerror"
+            | "onoffline"
+            | "ononline"
+            | "onpagehide"
+            | "onpageshow"
+            | "onpopstate"
+            | "onrejectionhandled"
+            | "onresize"
+            | "onscroll"
+            | "onstorage"
+            | "onunhandledrejection"
+            | "onunload"
+    )
+}
 
 fn is_body_or_frameset_element(
     runtime: &super::super::JsContextHost,
@@ -35,6 +65,6 @@ pub(crate) fn invalidate_event_handler_content_attribute(
     name: &str,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
-    generic::invalidate_node_event_attribute_handler(runtime, handle, name);
+    generic::invalidate_event_attribute_handler(scope, runtime, handle, name);
     body_onload::invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
 }

@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::fmt;
 use std::ops::Deref;
+use time::OffsetDateTime;
 use url::Url;
 
 pub use cookie::CookiePriority;
@@ -108,6 +109,12 @@ pub enum Error {
     DomainMismatch,
     /// `SameSite=None` cookies must also be marked Secure
     SameSiteNoneRequiresSecure,
+    /// A cross-site write attempted to create a `SameSite=Strict` cookie.
+    SameSiteStrict,
+    /// A cross-site write attempted to create a `SameSite=Lax` cookie.
+    SameSiteLax,
+    /// A cross-site write attempted to create a default-Lax cookie.
+    SameSiteUnspecifiedTreatedAsLax,
     /// Cookie violated one of the browser prefix rules
     PrefixViolation,
     /// An insecure write attempted to overlap an existing secure cookie
@@ -155,6 +162,10 @@ impl fmt::Display for Error {
                 Error::DomainMismatch => "request-uri does not domain-match the cookie",
                 Error::SameSiteNoneRequiresSecure =>
                     "SameSite=None cookies must also specify Secure",
+                Error::SameSiteStrict => "SameSite=Strict cookie cannot be set in this context",
+                Error::SameSiteLax => "SameSite=Lax cookie cannot be set in this context",
+                Error::SameSiteUnspecifiedTreatedAsLax =>
+                    "default-Lax cookie cannot be set in this context",
                 Error::PrefixViolation => "cookie violates a protected prefix rule",
                 Error::SecureOverlay => "insecure cookie cannot overlay an existing secure cookie",
                 Error::NameValueTooLarge => "cookie name and value exceed the supported size limit",
@@ -203,6 +214,15 @@ pub struct CanonicalCookieInput {
     pub priority: Option<CookiePriority>,
     pub source_scheme: CookieSourceScheme,
     pub source_port: i32,
+    /// Creation time restored from browser storage, or `None` when the age is unknown.
+    pub creation_time: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CreationTime {
+    Pending,
+    Unknown,
+    Known(OffsetDateTime),
 }
 
 /// A cookie conforming more closely to [IETF RFC6265](https://datatracker.ietf.org/doc/html/rfc6265)
@@ -231,6 +251,9 @@ pub struct Cookie<'a> {
     /// path length, and it must survive updates to an existing cookie so
     /// higher layers do not need their own parallel ordering state.
     pub(crate) creation_index: u64,
+    /// Wall-clock creation time used by the Lax-allow-unsafe age limit.
+    /// Unstored parsed cookies have no creation time yet.
+    creation_time: CreationTime,
     /// Monotonic last-access order for the canonical cookie entry.
     ///
     /// Browser-style eviction uses this as the primary recency signal, so
@@ -280,6 +303,13 @@ impl<'a> Cookie<'a> {
         self.creation_index
     }
 
+    pub fn creation_time(&self) -> Option<OffsetDateTime> {
+        match self.creation_time {
+            CreationTime::Known(created) => Some(created),
+            CreationTime::Pending | CreationTime::Unknown => None,
+        }
+    }
+
     pub fn last_access_index(&self) -> u64 {
         self.last_access_index
     }
@@ -305,8 +335,34 @@ impl<'a> Cookie<'a> {
         self.partition_key.as_ref()
     }
 
+    /// Trusted persistence restore only; ordinary insertion owns its counters.
+    pub fn with_persistent_ordering(mut self, creation: u64, access: u64) -> Self {
+        self.creation_index = creation;
+        self.last_access_index = access;
+        self
+    }
+
     pub(crate) fn set_creation_index(&mut self, creation_index: u64) {
         self.creation_index = creation_index;
+    }
+
+    pub(crate) fn set_creation_time(&mut self, creation_time: Option<OffsetDateTime>) {
+        self.creation_time = match creation_time.and_then(crate::cookie_creation_time::normalize) {
+            Some(created) => CreationTime::Known(created),
+            None => CreationTime::Unknown,
+        };
+    }
+
+    pub(crate) fn initialize_creation_time(&mut self) {
+        if self.creation_time == CreationTime::Pending {
+            self.set_creation_time(Some(OffsetDateTime::now_utc()));
+        }
+    }
+
+    pub(crate) fn restore_creation_time(&mut self) {
+        if self.creation_time == CreationTime::Pending {
+            self.creation_time = CreationTime::Unknown;
+        }
     }
 
     pub(crate) fn touch_with_access_index(&mut self, access_index: u64) {
@@ -384,6 +440,7 @@ impl<'a> Cookie<'a> {
         cookie.priority = input.priority;
         cookie.partition_key = input.partition_key;
         cookie.set_source_metadata(input.source_scheme, input.source_port);
+        cookie.set_creation_time(input.creation_time);
         Ok(cookie)
     }
 
@@ -443,6 +500,7 @@ impl<'a> Cookie<'a> {
             expires,
             domain,
             creation_index: 0,
+            creation_time: CreationTime::Pending,
             last_access_index: 0,
             priority,
             source_scheme: CookieSourceScheme::from_url(request_url),
@@ -458,6 +516,7 @@ impl<'a> Cookie<'a> {
             domain: self.domain,
             expires: self.expires,
             creation_index: self.creation_index,
+            creation_time: self.creation_time,
             last_access_index: self.last_access_index,
             priority: self.priority,
             source_scheme: self.source_scheme,

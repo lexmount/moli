@@ -600,6 +600,7 @@ nobr {
 }
 
 a:any-link {
+  color: LinkText;
   text-decoration: underline;
   cursor: pointer;
 }

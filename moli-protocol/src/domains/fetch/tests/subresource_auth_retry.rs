@@ -215,15 +215,16 @@ async fn verify_request_budgets(kind: RequestKind) {
             expected
         );
     }
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .fetch_owner
-            .has_pending_fetch_state_for_test()
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .fetch_owner
+                .has_pending_fetch_state_for_test()
+        })
+    });
     server.abort();
 }
 

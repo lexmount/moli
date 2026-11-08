@@ -16,6 +16,7 @@ wpt-extensions = []
 
 [dependencies]
 anyhow = "1.0.100"
+thiserror = "2.0.17"
 app_units = "0.7.8"
 base64 = "0.22"
 brotlic = "0.8.2"
@@ -30,6 +31,7 @@ euclid = "0.22"
 kurbo = "0.13.1"
 futures-util = "0.3.31"
 precomputed-hash = "0.1"
+read-fonts = "0.41.0"
 percent-encoding = "2.3"
 selectors = "0.41"
 stylo = "0.22"
@@ -37,6 +39,7 @@ stylo_static_prefs = "0.22"
 moli-action-window = { path = "../moli-action-window" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }
 moli-browser-profile = { path = "../moli-browser-profile" }
+moli-content-type = { path = "../moli-content-type" }
 moli-crypto = { path = "../moli-crypto" }
 moli-csp = { path = "../moli-csp" }
 moli-css-parse = { path = "../moli-css-parse" }
@@ -74,6 +77,8 @@ moli-site = { path = "../moli-site" }
 moli-session-history = { path = "../moli-session-history" }
 moli-history = { path = "../moli-history" }
 moli-stylesheet-blocking = { path = "../moli-stylesheet-blocking" }
+moli-sqlite = { path = "../moli-sqlite" }
+moli-web-storage = { path = "../moli-web-storage" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-streams = { path = "../moli-streams" }
 moli-structured-clone = { path = "../moli-structured-clone" }
@@ -98,7 +103,6 @@ moli-xpath = { path = "../moli-xpath" }
 curl = { version = "0.4.51", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
 http = "1"
 httpdate = "1.0.3"
-html-escape = "0.2.13"
 html5ever = "0.40"
 hashlink = "0.12.2"
 indexmap = "2.14.2"
@@ -117,7 +121,9 @@ strum = { version = "0.28.0", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
+idna = "1.0"
 uuid = { version = "1.23.1", default-features = false }
+v_xmlescape = { git = "https://github.com/lexmount/v_escape", rev = "d30e780f4d498ffae80e836bc046501f6dfde47a", default-features = false, features = ["std", "string"] }
 widestring = "1.2.1"
 style_traits = { package = "stylo_traits", version = "0.22" }
 xmlparser = "0.13.6"
@@ -135,6 +141,7 @@ v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 v8 = "152.2.0"
 
 [dev-dependencies]
+tempfile = "3.23.0"
 lopdf = { version = "0.45.0", default-features = false }
 fastrand = "2.3.0"
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }

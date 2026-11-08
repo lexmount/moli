@@ -10,21 +10,20 @@ mod schema;
 use crate::webidl;
 use webidl::{SnapshotPrototype, WebIdlDictionarySerialize};
 
-use super::value::Dictionary;
 use schema::{CreationJson, RequestJson};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.parseCreationOptionsFromJSON")]
 struct CreationArgs {
-    #[webidl(required, converter = "raw")]
-    options: Dictionary<CreationJson>,
+    #[webidl(required, dictionary)]
+    options: CreationJson,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "PublicKeyCredential.parseRequestOptionsFromJSON")]
 struct RequestArgs {
-    #[webidl(required, converter = "raw")]
-    options: Dictionary<RequestJson>,
+    #[webidl(required, dictionary)]
+    options: RequestJson,
 }
 
 pub(super) fn parse_creation<'s>(
@@ -37,7 +36,6 @@ pub(super) fn parse_creation<'s>(
     };
     if let Some(result) = parsed
         .options
-        .0
         .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
     {
         rv.set(result.into());
@@ -54,7 +52,6 @@ pub(super) fn parse_request<'s>(
     };
     if let Some(result) = parsed
         .options
-        .0
         .to_js_snapshot(scope, SnapshotPrototype::Ordinary)
     {
         rv.set(result.into());

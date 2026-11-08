@@ -22,13 +22,17 @@ moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-curl = { path = "../moli-curl" }
 moli-dns-resolver = { path = "../moli-dns-resolver" }
 moli-http-cache = { path = "../moli-http-cache" }
+moli-site = { path = "../moli-site" }
 moli-trace = { path = "../moli-trace" }
 moli-url = { path = "../moli-url" }
 moli-url-policy = { path = "../moli-url-policy" }
 moli-web-bot-auth = { path = "../moli-web-bot-auth" }
 moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
+percent-encoding = "2"
+serde = { version = "1.0.228", features = ["derive"] }
 strum = { version = "0.28.0", features = ["derive"] }
+thiserror = "2.0.17"
 tokio = { version = "1.51.0", features = ["rt", "sync"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.41"

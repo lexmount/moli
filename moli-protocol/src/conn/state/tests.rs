@@ -41,6 +41,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         request_id: Some(format!("NETWORK-{fetch_request_id}")),
         loader_id: "LID-0000000001".to_owned(),
         request_announced: false,
+        announced_redirects: 0,
         requested_url: Url::parse("https://example.test/").unwrap(),
         request_method: "GET".to_owned(),
         request_body: None,
@@ -114,16 +115,25 @@ fn page_domain_subscription_generation_tracks_distinct_enable_lifetimes() {
 
 #[test]
 fn input_event_ignore_state_survives_document_context_replacement() {
-    let mut state = TargetPageSessionState {
-        input_events_ignored: true,
-        ..Default::default()
-    };
+    let mut target = PageTargetHost::empty("TID-input".to_owned());
+    target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state =
+        TargetPageSessionState {
+            input_events_ignored: true,
+            input_intercept_drags_enabled: true,
+            ..Default::default()
+        };
 
-    state.clear_loaded_document_context_state();
+    target.clear_loaded_document_context_state();
+    let state =
+        &target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state;
 
     assert!(
         state.input_events_ignored,
         "Chromium retains each Inspector session's input ignore handle across renderer navigation"
+    );
+    assert!(
+        state.input_intercept_drags_enabled,
+        "drag interception belongs to the DevTools session, not the replaced Document"
     );
 }
 
@@ -807,6 +817,10 @@ fn target_fetch_owner_reports_matching_auth_required_network_intercepts() {
 fn pending_navigation_rejects_generic_request_action_without_consuming_id() {
     let mut state = TargetFetchState::default();
     state.register_pending_fetch_navigation_request(PendingFetchNavigation {
+        reserved_service_worker_client: None,
+        interception: None,
+        remaining_request_stages: Vec::new(),
+        redirected_request_id: None,
         auth_retry_budget: Default::default(),
         fetch_request_id: "FETCH-NAV".to_owned(),
         interception_session_id: Some("SID-fetch".to_owned()),
@@ -1286,7 +1300,14 @@ fn committed_document_navigation_state_clears_document_local_runtime_state() {
             bidi_channel_handoffs: Vec::new(),
         },
     ));
-    owner_state.insert_attached_child_frame_id("FRAME-child".to_owned());
+    owner_state
+        .frame_index
+        .insert(crate::frame_index::FrameRecord::new(
+            "FRAME-child",
+            Some("TID-1".into()),
+            "TID-1",
+            Some("BID-1".into()),
+        ));
     owner_state
         .runtime_observable_state
         .mark_emitted_exception_entries(3);
@@ -1392,6 +1413,7 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
         source_scheme: moli_cookie_jar::StoredCookieSourceScheme::NonSecure,
         source_port: -1,
         creation_index: 0,
+        creation_time: None,
         last_access_index: 0,
     }
 }
@@ -1410,7 +1432,7 @@ fn seed_initial_cookies_keeps_store_available_after_lock_holder_panic() {
         vec![stored_cookie("sid", "seeded")],
     );
 
-    let cookies = cookie_store.lock().cookies();
+    let cookies = cookie_store.lock().unwrap().cookies();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sid");
 }
@@ -1440,9 +1462,9 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
             b"sibling=1; Path=/; Secure".to_vec(),
         )],
     );
-    assert_eq!(context.snapshot_cookies().len(), 2);
+    assert_eq!(context.snapshot_cookies().unwrap().len(), 2);
     {
-        let mut store = context.web_storage_store_for_test().lock();
+        let store = context.web_storage_store_for_test();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
@@ -1460,10 +1482,10 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
         )
         .expect("site data clear should succeed");
 
-    let cookies = context.snapshot_cookies();
+    let cookies = context.snapshot_cookies().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sibling");
-    let mut store = context.web_storage_store_for_test().lock();
+    let store = context.web_storage_store_for_test();
     assert_eq!(store.get_item(&storage_key, "local"), None);
     assert_eq!(
         store.get_item(&sibling_storage_key, "local"),
@@ -1616,7 +1638,8 @@ fn materialized_active_initial_empty_document_requires_loaded_page() {
             .assert_target_materialized_initial_empty_document_has_page(
                 "TID-initial-active-invariant"
             )
-            .expect_err("materialized active initial document must have a Page"),
+            .expect_err("materialized active initial document must have a Page")
+            .to_string(),
         "TargetInitialEmptyDocumentMissingPage: target TID-initial-active-invariant has materialized current initial empty document without loaded Page"
     );
 }
@@ -1717,7 +1740,8 @@ fn materialized_background_initial_empty_document_requires_loaded_page() {
     assert_eq!(
         context
             .assert_target_materialized_initial_empty_document_has_page("TID-initial-bg-invariant")
-            .expect_err("materialized background initial document must have a Page"),
+            .expect_err("materialized background initial document must have a Page")
+            .to_string(),
         "TargetInitialEmptyDocumentMissingPage: target TID-initial-bg-invariant has materialized current initial empty document without loaded Page"
     );
 }

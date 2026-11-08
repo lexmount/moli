@@ -87,7 +87,7 @@ impl TreeInsertionPlanOptions {
 
 impl DocumentRuntime {
     pub(super) fn tree_insertion_plan<'a>(
-        &self,
+        &mut self,
         parent: DomHandle,
         insertion_roots: &'a [DomHandle],
         host_ptr: *mut JsContextHost,

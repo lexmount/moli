@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+
 import asyncio
 import base64
 import json
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from typing import Any
 
+from ..diagnostics import new_cdp_session, write_artifact
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector
@@ -25,7 +29,7 @@ async def run_tracing_group(state: SmokeState) -> None:
 
 async def _verify_report_events_and_global_owner(state: SmokeState) -> None:
     owner = state.cdp
-    peer = await state.context.new_cdp_session(state.page)
+    peer = await new_cdp_session(state.context, state.page)
     events = attach_cdp_event_collector(
         owner,
         ["Tracing.dataCollected", "Tracing.tracingComplete"],
@@ -74,6 +78,7 @@ async def _verify_report_events_and_global_owner(state: SmokeState) -> None:
             if event["method"] == "Tracing.dataCollected"
             for trace_event in event["params"].get("value", [])
         ]
+        write_artifact("tracing-report-events.json", {"traceEvents": trace_events})
         _assert_trace_event_array(trace_events, "ReportEvents")
         marker = next(
             (
@@ -95,6 +100,7 @@ async def _verify_report_events_and_global_owner(state: SmokeState) -> None:
             {"traceEventCount": len(trace_events), "categoryCount": len(categories["categories"])},
         )
     finally:
+        events.close()
         await peer.detach()
 
 
@@ -258,229 +264,237 @@ async def _verify_agent_browser_profiler_configuration(state: SmokeState) -> Non
         "moliCpuTraceSharedWorkerHotFunction",
         "moliCpuTraceClosedPageHotFunction",
     }
-    events = attach_cdp_event_collector(
+    with attach_cdp_event_collector(
         state.cdp,
         ["Tracing.dataCollected", "Tracing.tracingComplete"],
-    )
-    await state.cdp.send(
-        "Tracing.start",
-        {
-            "traceConfig": {
-                "includedCategories": [
-                    "devtools.timeline",
-                    "disabled-by-default-devtools.timeline",
-                    "disabled-by-default-v8.cpu_profiler",
-                    "v8.execute",
-                ],
-                "enableSampling": True,
+    ) as events:
+        await state.cdp.send(
+            "Tracing.start",
+            {
+                "traceConfig": {
+                    "includedCategories": [
+                        "devtools.timeline",
+                        "disabled-by-default-devtools.timeline",
+                        "disabled-by-default-v8.cpu_profiler",
+                        "v8.execute",
+                    ],
+                    "enableSampling": True,
+                },
+                "transferMode": "ReportEvents",
             },
-            "transferMode": "ReportEvents",
-        },
-    )
-    await state.cdp.send(
-        "Runtime.evaluate",
-        {
-            "expression": _hot_function_expression("moliCpuTraceBeforeNavigation"),
-            "returnByValue": True,
-        },
-    )
-    await state.page.goto(
-        f"{state.fixture}/plain?trace=after-navigation",
-        wait_until="load",
-        timeout=10_000,
-    )
-    await state.page.evaluate(_hot_function_expression("moliCpuTraceAfterNavigation"))
-    await state.page.evaluate(
-        """
-        async () => {
-          const source = `
-            self.onmessage = () => {
-              function moliCpuTraceWorkerHotFunction() {
-                const deadline = performance.now() + 120;
-                let value = 1;
-                while (performance.now() < deadline) {
-                  value = Math.imul(value + 3, 1103515245) | 0;
-                }
-                return value;
-              }
-              self.postMessage(moliCpuTraceWorkerHotFunction());
-            };
-          `;
-          const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
-          const worker = new Worker(url);
-          try {
-            await new Promise((resolve, reject) => {
-              const timer = setTimeout(
-                () => reject(new Error('dedicated worker CPU trace timed out')),
-                5_000
-              );
-              worker.onmessage = event => {
-                clearTimeout(timer);
-                resolve(event);
-              };
-              worker.onerror = error => {
-                clearTimeout(timer);
-                reject(error);
-              };
-              worker.postMessage('run');
-            });
-          } finally {
-            worker.terminate();
-            URL.revokeObjectURL(url);
-          }
-        }
-        """
-    )
-    await state.page.evaluate(
-        """
-        async () => {
-          const worker = new SharedWorker(
-            '/shared-worker.js?cpu-trace',
-            'moli-cpu-trace-shared-worker'
-          );
-          try {
-            await new Promise((resolve, reject) => {
-              const timer = setTimeout(
-                () => reject(new Error('shared worker CPU trace timed out')),
-                5_000
-              );
-              worker.port.onmessage = event => {
-                if (event.data && event.data.kind === 'cpu-trace-result') {
-                  clearTimeout(timer);
-                  resolve();
-                }
-              };
-              worker.port.onmessageerror = error => {
-                clearTimeout(timer);
-                reject(error);
-              };
-              worker.port.start();
-              worker.port.postMessage({kind: 'cpu-trace'});
-            });
-          } finally {
-            worker.port.close();
-          }
-        }
-        """
-    )
-    closed_page = await state.context.new_page()
-    try:
-        await closed_page.goto(
-            f"{state.fixture}/plain?trace=closed-page",
-            wait_until="load",
-            timeout=10_000,
         )
-        await closed_page.evaluate(
-            _hot_function_expression("moliCpuTraceClosedPageHotFunction")
+        try:
+            await state.cdp.send(
+                "Runtime.evaluate",
+                {
+                    "expression": _hot_function_expression("moliCpuTraceBeforeNavigation"),
+                    "returnByValue": True,
+                },
+            )
+            await state.page.goto(
+                f"{state.fixture}/plain?trace=after-navigation",
+                wait_until="load",
+                timeout=10_000,
+            )
+            await state.page.evaluate(_hot_function_expression("moliCpuTraceAfterNavigation"))
+            await state.page.evaluate(
+                """
+                async () => {
+                  const source = `
+                    self.onmessage = () => {
+                      function moliCpuTraceWorkerHotFunction() {
+                        const deadline = performance.now() + 120;
+                        let value = 1;
+                        while (performance.now() < deadline) {
+                          value = Math.imul(value + 3, 1103515245) | 0;
+                        }
+                        return value;
+                      }
+                      self.postMessage(moliCpuTraceWorkerHotFunction());
+                    };
+                  `;
+                  const url = URL.createObjectURL(new Blob([source], {type: 'text/javascript'}));
+                  const worker = new Worker(url);
+                  try {
+                    await new Promise((resolve, reject) => {
+                      const timer = setTimeout(
+                        () => reject(new Error('dedicated worker CPU trace timed out')),
+                        5_000
+                      );
+                      worker.onmessage = event => {
+                        clearTimeout(timer);
+                        resolve(event);
+                      };
+                      worker.onerror = error => {
+                        clearTimeout(timer);
+                        reject(error);
+                      };
+                      worker.postMessage('run');
+                    });
+                  } finally {
+                    worker.terminate();
+                    URL.revokeObjectURL(url);
+                  }
+                }
+                """
+            )
+            await state.page.evaluate(
+                """
+                async () => {
+                  const worker = new SharedWorker(
+                    '/shared-worker.js?cpu-trace',
+                    'moli-cpu-trace-shared-worker'
+                  );
+                  try {
+                    await new Promise((resolve, reject) => {
+                      const timer = setTimeout(
+                        () => reject(new Error('shared worker CPU trace timed out')),
+                        5_000
+                      );
+                      worker.port.onmessage = event => {
+                        if (event.data && event.data.kind === 'cpu-trace-result') {
+                          clearTimeout(timer);
+                          resolve();
+                        }
+                      };
+                      worker.port.onmessageerror = error => {
+                        clearTimeout(timer);
+                        reject(error);
+                      };
+                      worker.port.start();
+                      worker.port.postMessage({kind: 'cpu-trace'});
+                    });
+                  } finally {
+                    worker.port.close();
+                  }
+                }
+                """
+            )
+            closed_page = await state.context.new_page()
+            try:
+                await closed_page.goto(
+                    f"{state.fixture}/plain?trace=closed-page",
+                    wait_until="load",
+                    timeout=10_000,
+                )
+                await closed_page.evaluate(
+                    _hot_function_expression("moliCpuTraceClosedPageHotFunction")
+                )
+            finally:
+                await closed_page.close()
+        finally:
+            try:
+                await state.cdp.send("Tracing.end")
+                await wait_until(
+                    lambda: any(event["method"] == "Tracing.tracingComplete" for event in events),
+                    "Tracing.tracingComplete for agent-browser profiler configuration",
+                )
+            finally:
+                trace_events = [
+                    trace_event
+                    for event in events
+                    if event["method"] == "Tracing.dataCollected"
+                    for trace_event in event["params"].get("value", [])
+                ]
+                complete = next((
+                    event["params"]
+                    for event in reversed(events)
+                    if event["method"] == "Tracing.tracingComplete"
+                ), None)
+                artifact = write_artifact("tracing-cpu.json", {
+                    "traceEvents": trace_events, "expectedFunctions": sorted(expected_functions),
+                    "tracingComplete": complete,
+                })
+        _assert_trace_event_array(trace_events, "agent-browser profiler configuration")
+        profile = _assert_cpu_profile_events(trace_events, expected_functions)
+        assert_equal(complete.get("dataLossOccurred"), False, "CPU profile data loss")
+        state.record(
+            "tracing_agent_browser_profiler_configuration",
+            {
+                "traceEventCount": len(trace_events),
+                "profileCount": profile.profile_count,
+                "sampleCount": profile.sample_count,
+                "functionSamples": profile.function_samples,
+                "traceArtifact": artifact,
+            },
         )
-    finally:
-        await closed_page.close()
-    await state.cdp.send("Tracing.end")
-    await wait_until(
-        lambda: any(event["method"] == "Tracing.tracingComplete" for event in events),
-        "Tracing.tracingComplete for agent-browser profiler configuration",
-    )
-    trace_events = [
-        trace_event
-        for event in events
-        if event["method"] == "Tracing.dataCollected"
-        for trace_event in event["params"].get("value", [])
-    ]
-    _assert_trace_event_array(trace_events, "agent-browser profiler configuration")
-    profile_count, sample_count = _assert_cpu_profile_events(
-        trace_events,
-        expected_functions,
-    )
-    complete = next(
-        event["params"]
-        for event in reversed(events)
-        if event["method"] == "Tracing.tracingComplete"
-    )
-    assert_equal(complete.get("dataLossOccurred"), False, "CPU profile data loss")
-    state.record(
-        "tracing_agent_browser_profiler_configuration",
-        {
-            "traceEventCount": len(trace_events),
-            "profileCount": profile_count,
-            "sampleCount": sample_count,
-        },
-    )
 
 
 async def _verify_return_as_stream(state: SmokeState) -> None:
-    complete_events: list[dict[str, Any]] = []
-    state.cdp.on("Tracing.tracingComplete", lambda params: complete_events.append(params))
-    start_index = len(complete_events)
-    await state.cdp.send(
-        "Tracing.start",
-        {
-            "transferMode": "ReturnAsStream",
-            "streamFormat": "json",
-            "streamCompression": "none",
-            "traceConfig": {
-                "recordMode": "recordContinuously",
-                "excludedCategories": ["*"],
-                "includedCategories": [
-                    "devtools.timeline",
-                    "v8.execute",
-                    "disabled-by-default-devtools.timeline",
-                    "disabled-by-default-devtools.timeline.frame",
-                    "disabled-by-default-devtools.timeline.stack",
-                    "disabled-by-default-v8.cpu_profiler",
-                    "blink.user_timing",
-                ],
+    with attach_cdp_event_collector(state.cdp, ["Tracing.tracingComplete"]) as complete_events:
+        start_index = len(complete_events)
+        await state.cdp.send(
+            "Tracing.start",
+            {
+                "transferMode": "ReturnAsStream",
+                "streamFormat": "json",
+                "streamCompression": "none",
+                "traceConfig": {
+                    "recordMode": "recordContinuously",
+                    "excludedCategories": ["*"],
+                    "includedCategories": [
+                        "devtools.timeline",
+                        "v8.execute",
+                        "disabled-by-default-devtools.timeline",
+                        "disabled-by-default-devtools.timeline.frame",
+                        "disabled-by-default-devtools.timeline.stack",
+                        "disabled-by-default-v8.cpu_profiler",
+                        "blink.user_timing",
+                    ],
+                },
             },
-        },
-    )
-    await state.cdp.send(
-        "Runtime.evaluate",
-        {
-            "expression": "globalThis.__moliTracingSmoke = (globalThis.__moliTracingSmoke || 0) + 1",
-            "returnByValue": True,
-        },
-    )
-    await state.cdp.send("Tracing.end")
-    await wait_until(
-        lambda: len(complete_events) > start_index,
-        "Tracing.tracingComplete in ReturnAsStream mode",
-    )
-    complete = complete_events[-1]
-    handle = complete.get("stream")
-    if not isinstance(handle, str) or not handle:
-        raise SmokeError(f"ReturnAsStream tracingComplete has no stream: {complete!r}")
-    assert_equal(complete.get("dataLossOccurred"), False, "stream trace data loss")
-    assert_equal(complete.get("traceFormat"), "json", "stream trace format")
-    assert_equal(complete.get("streamCompression"), "none", "stream trace compression")
+        )
+        await state.cdp.send(
+            "Runtime.evaluate",
+            {
+                "expression": "globalThis.__moliTracingSmoke = (globalThis.__moliTracingSmoke || 0) + 1",
+                "returnByValue": True,
+            },
+        )
+        await state.cdp.send("Tracing.end")
+        await wait_until(
+            lambda: len(complete_events) > start_index,
+            "Tracing.tracingComplete in ReturnAsStream mode",
+        )
+        complete = complete_events[-1]["params"]
+        handle = complete.get("stream")
+        if not isinstance(handle, str) or not handle:
+            raise SmokeError(f"ReturnAsStream tracingComplete has no stream: {complete!r}")
+        assert_equal(complete.get("dataLossOccurred"), False, "stream trace data loss")
+        assert_equal(complete.get("traceFormat"), "json", "stream trace format")
+        assert_equal(complete.get("streamCompression"), "none", "stream trace compression")
 
-    encoded = bytearray()
-    while True:
-        part = await state.cdp.send("IO.read", {"handle": handle, "size": 64 * 1024})
-        data = part.get("data", "")
-        if part.get("base64Encoded"):
-            encoded.extend(base64.b64decode(data))
-        else:
-            encoded.extend(data.encode("utf-8"))
-        if part.get("eof"):
-            break
-    await state.cdp.send("IO.close", {"handle": handle})
-    try:
-        trace = json.loads(encoded)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SmokeError(f"Tracing stream is not valid UTF-8 JSON: {error}") from error
-    trace_events = trace.get("traceEvents")
-    if not isinstance(trace_events, list):
-        raise SmokeError(f"Tracing stream has no traceEvents array: {trace!r}")
-    _assert_trace_event_array(trace_events, "ReturnAsStream")
-    if not isinstance(trace.get("metadata"), dict):
-        raise SmokeError("Tracing JSON stream must include its metadata object")
-    state.record(
-        "tracing_return_as_stream",
-        {"traceEventCount": len(trace_events), "streamBytes": len(encoded)},
-    )
+        encoded = bytearray()
+        while True:
+            part = await state.cdp.send("IO.read", {"handle": handle, "size": 64 * 1024})
+            data = part.get("data", "")
+            if part.get("base64Encoded"):
+                encoded.extend(base64.b64decode(data))
+            else:
+                encoded.extend(data.encode("utf-8"))
+            if part.get("eof"):
+                break
+        await state.cdp.send("IO.close", {"handle": handle})
+        write_artifact("tracing-stream-raw.json", {"base64": base64.b64encode(encoded).decode("ascii")})
+        try:
+            trace = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SmokeError(f"Tracing stream is not valid UTF-8 JSON: {error}") from error
+        write_artifact("tracing-stream.json", trace)
+        trace_events = trace.get("traceEvents")
+        if not isinstance(trace_events, list):
+            raise SmokeError(f"Tracing stream has no traceEvents array: {trace!r}")
+        _assert_trace_event_array(trace_events, "ReturnAsStream")
+        if not isinstance(trace.get("metadata"), dict):
+            raise SmokeError("Tracing JSON stream must include its metadata object")
+        state.record(
+            "tracing_return_as_stream",
+            {"traceEventCount": len(trace_events), "streamBytes": len(encoded)},
+        )
 
 
 async def _verify_owner_detach_cleanup(state: SmokeState) -> None:
-    owner = await state.context.new_cdp_session(state.page)
+    owner = await new_cdp_session(state.context, state.page)
     await owner.send(
         "Tracing.start",
         {
@@ -495,7 +509,7 @@ async def _verify_owner_detach_cleanup(state: SmokeState) -> None:
     await state.page.evaluate(_hot_function_expression("moliCpuTraceDetachedOwner"))
     await owner.detach()
 
-    replacement = await state.context.new_cdp_session(state.page)
+    replacement = await new_cdp_session(state.context, state.page)
     complete: list[dict[str, Any]] = []
     replacement.on("Tracing.tracingComplete", lambda params: complete.append(params))
     try:
@@ -562,9 +576,16 @@ def _hot_function_expression(function_name: str) -> str:
     """
 
 
+@dataclass(frozen=True)
+class CpuTraceSummary:
+    profile_count: int
+    sample_count: int
+    function_samples: dict[str, int]
+
+
 def _assert_cpu_profile_events(
     events: list[dict[str, Any]], function_names: set[str]
-) -> tuple[int, int]:
+) -> CpuTraceSummary:
     profiles = [event for event in events if event.get("name") == "Profile"]
     chunks = [event for event in events if event.get("name") == "ProfileChunk"]
     if not profiles or not chunks:
@@ -573,8 +594,11 @@ def _assert_cpu_profile_events(
             f"profiles={len(profiles)}, chunks={len(chunks)}"
         )
 
-    profile_ids = {event.get("id") for event in profiles}
-    if None in profile_ids or any(event.get("id") not in profile_ids for event in chunks):
+    # V8 profile IDs are process-local. Different renderer processes routinely
+    # use the same ID, and ProfileChunk can originate on another thread.
+    profile_ids = {(event.get("pid"), event.get("id")) for event in profiles}
+    if (any(identity[1] is None for identity in profile_ids)
+            or any((event.get("pid"), event.get("id")) not in profile_ids for event in chunks)):
         raise SmokeError("CPU ProfileChunk ids must identify a preceding Profile event")
     for profile in profiles:
         data = profile.get("args", {}).get("data", {})
@@ -583,6 +607,8 @@ def _assert_cpu_profile_events(
 
     sample_count = 0
     observed_function_names: set[str] = set()
+    nodes_by_profile: dict[Any, dict[int, Any]] = defaultdict(dict)
+    samples_by_profile: dict[Any, list[int]] = defaultdict(list)
     for chunk in chunks:
         data = chunk.get("args", {}).get("data", {})
         if data.get("source") != "Internal":
@@ -599,6 +625,9 @@ def _assert_cpu_profile_events(
                     "CPU ProfileChunk samples and timeDeltas must have equal lengths"
                 )
             sample_count += len(samples)
+        identity = chunk.get("pid"), chunk.get("id")
+        nodes_by_profile[identity].update((node.get("id"), node) for node in nodes if isinstance(node, dict))
+        samples_by_profile[identity].extend(samples)
         observed_function_names.update(
             node.get("callFrame", {}).get("functionName")
             for node in nodes
@@ -612,4 +641,28 @@ def _assert_cpu_profile_events(
         raise SmokeError(
             f"CPU tracing did not report named hot functions {sorted(missing_functions)!r}"
         )
-    return len(profiles), sample_count
+
+    function_samples = dict.fromkeys(sorted(function_names), 0)
+    for identity, samples in samples_by_profile.items():
+        nodes = nodes_by_profile[identity]
+        parents = {node_id: node.get("parent") for node_id, node in nodes.items()}
+        for node_id, node in nodes.items():
+            for child in node.get("children", []):
+                parents[child] = node_id
+        for node_id, count in Counter(samples).items():
+            visited: set[int] = set()
+            sampled_functions: set[str] = set()
+            while node_id is not None:
+                if node_id in visited or node_id not in nodes:
+                    raise SmokeError(f"CPU tracing has an invalid sample stack profile={identity} node={node_id}")
+                visited.add(node_id)
+                name = nodes[node_id].get("callFrame", {}).get("functionName")
+                if name in function_samples:
+                    sampled_functions.add(name)
+                node_id = parents.get(node_id)
+            for name in sampled_functions:
+                function_samples[name] += count
+    missing_samples = [name for name, count in function_samples.items() if count == 0]
+    if missing_samples:
+        raise SmokeError(f"CPU tracing did not sample named hot functions {missing_samples!r}")
+    return CpuTraceSummary(len(profiles), sample_count, function_samples)

@@ -1,4 +1,5 @@
 use super::*;
+mod navigation_disable;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,
     DevToolsContinueInterceptedRequestCommand, DevToolsContinueInterceptedResponseCommand,
@@ -7,9 +8,8 @@ use crate::automation::{
     DevToolsResultOwnership, DevToolsSessionId, DevToolsTargetId, FrontendProtocol,
 };
 use crate::testing::{
-    drain_scheduler_events_like_scheduler,
-    drain_scheduler_events_like_scheduler_preserving_internal_fields,
-    protocol_events_into_internal_messages, wait_until_scheduler_message,
+    collect_ready_scheduler_output, protocol_events_into_internal_messages,
+    wait_until_scheduler_message,
 };
 
 async fn wait_for_request_paused(ctx: &mut TestContext, url: &str, description: &str) -> Value {
@@ -169,9 +169,14 @@ async fn wait_for_background_request_paused(
     })
 }
 
+#[path = "runtime_fetch/child_documents.rs"]
+mod child_documents;
 #[path = "runtime_fetch/runtime_subresources.rs"]
 mod runtime_subresources;
 #[path = "runtime_fetch/session_interception.rs"]
 mod session_interception;
 #[path = "runtime_fetch/worker_requests.rs"]
 mod worker_requests;
+
+#[path = "runtime_fetch/unified_navigation.rs"]
+mod unified_navigation;

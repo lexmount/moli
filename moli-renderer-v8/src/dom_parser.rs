@@ -18,6 +18,7 @@ use super::{
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
+const DOM_PARSER_CONSTRUCTION_REALM_SLOT: &str = "__moliDomParserConstructionRealm";
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
@@ -118,6 +119,16 @@ pub(super) fn dom_parser_constructor_callback(
         throw_type_error(scope, "DOMParser constructor must be called with new");
         return;
     }
+    // The constructor's Window is independent of newTarget.prototype. Keep
+    // a V8-traced creation-Realm witness, not a native persistent Context root
+    // or a WindowProxy that can be rebound to another Window on navigation.
+    let realm = crate::util::new_null_prototype_object(scope);
+    crate::util::set_private_value(
+        scope,
+        args.this(),
+        DOM_PARSER_CONSTRUCTION_REALM_SLOT,
+        realm.into(),
+    );
     rv.set(args.this().into());
 }
 
@@ -150,11 +161,30 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
             source
         }
     };
+    // Borrowing parseFromString from another Realm does not change the
+    // parser's associated Window or the returned Document's wrapper Realm.
+    let Some(context) = get_private_object(scope, args.this(), DOM_PARSER_CONSTRUCTION_REALM_SLOT)
+        .and_then(|realm| realm.get_creation_context(scope))
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let execution_context = unsafe { &*host_ptr }.current_realm_window_for_inert_document(scope);
     let Some(obj) = parse_detached_document_from_string(scope, &source, parsed.mime.as_mime())
     else {
         rv.set(v8::null(scope).into());
         return;
     };
+    if let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, obj)
+    {
+        unsafe { &mut *runtime_ptr }
+            .set_inert_document_execution_context(handle, execution_context);
+    }
     rv.set(obj.into());
 }
 

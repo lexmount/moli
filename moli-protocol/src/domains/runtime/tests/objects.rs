@@ -8,13 +8,15 @@ async fn child_default_context_activity_stays_silent_before_runtime_enable() {
         "<html><body><iframe srcdoc='<body>child-before-enable</body>'></iframe></body></html>",
     )
     .await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -73,23 +75,25 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
         .as_str()
         .unwrap_or_else(|| panic!("Runtime.evaluate should return an object handle: {response:?}"))
         .to_owned();
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.evaluate should not activate the target"
-    );
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.evaluate should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&object_id),
             )
             .is_err(),
-        "active owner should see the background handle as belonging to another target"
-    );
+            "active owner should see the background handle as belonging to another target"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 527,
@@ -118,23 +122,25 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
     .await;
     let response = take_response_by_id(&mut ctx, 528);
     assert_eq!(response["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.releaseObject should not activate the target"
-    );
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.releaseObject should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&object_id),
             )
             .is_ok(),
-        "successful owner release should remove the handle from the owner registry"
-    );
+            "successful owner release should remove the handle from the owner registry"
+        )
+    });
 }
 #[tokio::test]
 async fn release_object_group_drops_owner_registry_on_success() {
@@ -174,15 +180,16 @@ async fn release_object_group_drops_owner_registry_on_success() {
         .as_str()
         .unwrap_or_else(|| panic!("Runtime.evaluate should return an object handle: {response:?}"))
         .to_owned();
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&object_id),
             )
             .is_err(),
-        "active owner should see the grouped background handle as belonging to another target"
-    );
+            "active owner should see the grouped background handle as belonging to another target"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 527,
@@ -195,23 +202,24 @@ async fn release_object_group_drops_owner_registry_on_success() {
     .await;
     let response = take_response_by_id(&mut ctx, 527);
     assert_eq!(response["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.releaseObjectGroup should not activate the target"
-    );
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.releaseObjectGroup should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&object_id),
             )
             .is_ok(),
         "successful owner releaseObjectGroup should remove grouped handles from the owner registry"
-    );
+    ) });
 }
 #[tokio::test]
 async fn release_object_group_drops_await_promise_inherited_result_handle() {
@@ -268,15 +276,15 @@ async fn release_object_group_drops_await_promise_inherited_result_handle() {
             panic!("Runtime.awaitPromise should return an object handle: {response:?}")
         })
         .to_owned();
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&resolved_object_id),
             )
             .is_err(),
         "active owner should see the inherited-group await result as belonging to the background target"
-    );
+    ) });
 
     ctx.process_async(json!({
         "id": 536,
@@ -289,15 +297,15 @@ async fn release_object_group_drops_await_promise_inherited_result_handle() {
     .await;
     let response = take_response_by_id(&mut ctx, 536);
     assert_eq!(response["result"], json!({}));
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&resolved_object_id),
             )
             .is_ok(),
         "releaseObjectGroup should remove awaitPromise result handles whose group was inherited from the promise"
-    );
+    ) });
 }
 #[tokio::test]
 async fn await_promise_routes_to_loaded_background_owner_without_activation() {
@@ -353,23 +361,24 @@ async fn await_promise_routes_to_loaded_background_owner_without_activation() {
             panic!("Runtime.awaitPromise should return an object handle: {response:?}")
         })
         .to_owned();
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.awaitPromise should not activate the target"
-    );
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.awaitPromise should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 std::slice::from_ref(&resolved_object_id),
             )
             .is_err(),
         "active owner should see the Runtime.awaitPromise result handle as belonging to the background target"
-    );
+    ) });
 }
 #[tokio::test]
 async fn await_promise_rejects_promise_object_id_known_to_different_target_owner() {
@@ -457,23 +466,25 @@ async fn loaded_background_runtime_binding_routes_to_owner_without_activation() 
     .await;
     let response = take_response_by_id(&mut ctx, 530);
     assert_eq!(response["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.addBinding should not activate the target"
-    );
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_session(Some("SID-background"))
-            .expect("background DevTools session state should be readable")
-            .runtime_bindings
-            .iter()
-            .any(|binding| binding.name == "backgroundBinding"),
-        "background addBinding should persist on the background owner"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.addBinding should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_session(Some("SID-background"))
+                .expect("background DevTools session state should be readable")
+                .runtime_bindings
+                .iter()
+                .any(|binding| binding.name == "backgroundBinding"),
+            "background addBinding should persist on the background owner"
+        )
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -511,23 +522,25 @@ async fn loaded_background_runtime_binding_routes_to_owner_without_activation() 
     .await;
     let response = take_response_by_id(&mut ctx, 532);
     assert_eq!(response["result"], json!({}));
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.removeBinding should not activate the target"
-    );
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_session(Some("SID-background"))
-            .is_none_or(|state| state
-                .runtime_bindings
-                .iter()
-                .all(|binding| binding.name != "backgroundBinding")),
-        "background removeBinding should clear persisted session state"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.removeBinding should not activate the target"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.target_devtools_session_state_for_session(Some("SID-background"))
+                .is_none_or(|state| state
+                    .runtime_bindings
+                    .iter()
+                    .all(|binding| binding.name != "backgroundBinding")),
+            "background removeBinding should clear persisted session state"
+        )
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -564,23 +577,25 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_act
     .await;
 
     let queue_console_entries = {
-        let runtime_slot = ctx
-            .conn
-            .runtime_session_owner_slot_mut(Some("SID-background"))
-            .expect("background runtime slot should exist");
-        runtime_slot.ingest_owner_page_observable_output_updates();
-        runtime_slot
-            .observable_output_queue_snapshot()
-            .expect("background observable queue should exist")
-            .observable_output_items
-            .iter()
-            .filter(|item| {
-                matches!(
-                    item,
-                    moli_core::page::ScriptObservableOutputItem::ConsoleMessage(_)
-                )
-            })
-            .count()
+        ctx.with_fixture(|conn| {
+            let runtime_slot = {
+                conn.runtime_session_owner_slot_mut(Some("SID-background"))
+                    .expect("background runtime slot should exist")
+            };
+            runtime_slot.ingest_owner_page_observable_output_updates();
+            runtime_slot
+                .observable_output_queue_snapshot()
+                .expect("background observable queue should exist")
+                .observable_output_items
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item,
+                        moli_core::page::ScriptObservableOutputItem::ConsoleMessage(_)
+                    )
+                })
+                .count()
+        })
     };
     assert_eq!(
         queue_console_entries, 1,
@@ -595,26 +610,28 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_act
     .await;
     let response = take_response_by_id(&mut ctx, 529);
     assert_eq!(response["result"], json!({}));
-    let browser_context = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist");
-    assert_eq!(
-        browser_context.active_target_id(),
-        Some("TID-active"),
-        "background Runtime.disable should not activate the target"
-    );
-    assert_eq!(
-        browser_context
-            .background_target("TID-background")
-            .expect("background target must exist")
-            .owner_state
-            .runtime_observable_state
-            .emitted_console_entries(),
-        queue_console_entries,
-        "background Runtime.disable should advance the background owner observable cursor"
-    );
+    ctx.with_fixture(|conn| {
+        let browser_context = {
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+        };
+        assert_eq!(
+            browser_context.active_target_id(),
+            Some("TID-active"),
+            "background Runtime.disable should not activate the target"
+        );
+        assert_eq!(
+            browser_context
+                .background_target("TID-background")
+                .expect("background target must exist")
+                .owner_state
+                .runtime_observable_state
+                .emitted_console_entries(),
+            queue_console_entries,
+            "background Runtime.disable should advance the background owner observable cursor"
+        );
+    });
 }
 #[tokio::test]
 async fn runtime_disable_clears_background_child_default_context_emission_cursor_without_activation()
@@ -630,8 +647,7 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context.insert_page_target_host(background_target);
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.install_navigation_fixture_for_session_owner(
         &format!("data:text/html,{html}"),
         Some("SID-background"),
@@ -720,13 +736,14 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
         .and_then(|message| message["params"]["context"]["id"].as_i64())
         .expect("Runtime.enable should replay background child default context after disable");
     assert_eq!(replayed_context_id, first_context_id);
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some("TID-active"),
-        "background Runtime.disable/enable must not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some("TID-active"),
+            "background Runtime.disable/enable must not activate the target"
+        )
+    });
 }

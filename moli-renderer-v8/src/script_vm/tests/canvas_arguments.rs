@@ -175,3 +175,48 @@ fn canvas_hex_alpha_is_accepted_and_preserved_for_fill_and_stroke() {
         );
     }
 }
+
+#[test]
+fn clear_rect_generated_bindings_validate_native_receivers_before_all_conversions() {
+    let mut vm = new_storage_html_test_vm("https://clear-rect-webidl.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML='<iframe></iframe>';
+        const other=document.querySelector('iframe').contentWindow;
+        const contexts=[document.createElement('canvas').getContext('2d'),new OffscreenCanvas(2,2).getContext('2d')];
+        const assert=(ok,label)=>{if(!ok)throw Error(label)};
+        for(const context of contexts) {
+            context.canvas.width=2;context.canvas.height=2;
+            context.fillStyle='#ff0000';context.fillRect(0,0,2,2);
+            const pixels=()=>Array.from(context.getImageData(0,0,2,2).data).join();
+            const before=pixels();
+            for(const realm of [window,other]) {
+                const P=context instanceof OffscreenCanvasRenderingContext2D?realm.OffscreenCanvasRenderingContext2D.prototype:realm.CanvasRenderingContext2D.prototype;
+                const clear=P.clearRect;
+                const revoked=Proxy.revocable(context,{});revoked.revoke();
+                let traps=0,conversions=0;
+                const proxy=new Proxy(context,{get(){traps++;throw Error('trap')},getPrototypeOf(){traps++;throw Error('trap')}});
+                const number={valueOf(){conversions++;return 0}};
+                for(const receiver of [{},Object.create(context),proxy,revoked.proxy]) {
+                    let error;try{clear.call(receiver,number,number,number,number)}catch(caught){error=caught}
+                    assert(error instanceof realm.TypeError&&traps===0&&conversions===0,'brand before conversion in callee realm');
+                }
+                for(const args of [[],[0],[0,0],[0,0,1],[Symbol(),0,1,1]]) {
+                    let error;try{Reflect.apply(clear,context,args)}catch(caught){error=caught}
+                    assert(error instanceof realm.TypeError,'required arguments and number conversion');
+                }
+                const order=[],marker={};
+                let error;try{clear.call(context,{valueOf(){order.push('x');return NaN}},
+                    {valueOf(){order.push('y');return 0}},
+                    {valueOf(){order.push('width');throw marker}},
+                    {valueOf(){order.push('height');return 1}})}catch(caught){error=caught}
+                assert(error===marker&&order.join()==='x,y,width','convert all arguments before finite-coordinate checks');
+                clear.call(context,NaN,0,1,1);clear.call(context,0,Infinity,1,1);
+                assert(pixels()===before,'rejection and nonfinite arguments leave pixels unchanged');
+            }
+            context.clearRect(0,0,1,1);
+            assert(Array.from(context.getImageData(0,0,1,1).data).every(value=>value===0),'valid clear');
+            assert(context.getImageData(1,1,1,1).data[3]===255,'unaffected pixels');
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}

@@ -915,3 +915,149 @@ fn permission_status_supports_inherited_event_target_listeners() {
         .expect("permission queries should settle");
     assert_eq!(result, "true,true,true,true,true,true,true,true,true,true");
 }
+
+#[test]
+fn dom_point_readonly_constructor_uses_readonly_instances_and_shared_methods() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const point = new DOMPointReadOnly(1, 2, 3, 4);
+  let converted = false;
+  try {
+    Object.getOwnPropertyDescriptor(DOMPoint.prototype, "x").set.call(point, {
+      valueOf() { converted = true; return 9; }
+    });
+    throw new Error("DOMPoint setter accepted a readonly receiver");
+  } catch (error) {
+    if (!(error instanceof TypeError) || converted) throw error;
+  }
+  point.x = 9;
+  return [
+    point instanceof DOMPointReadOnly,
+    point instanceof DOMPoint,
+    [point.x, point.y, point.z, point.w].join(","),
+    JSON.stringify(point.toJSON()),
+    Object.hasOwn(DOMPointReadOnly.prototype, "x"),
+    Object.getOwnPropertyDescriptor(DOMPointReadOnly.prototype, "x").set === undefined,
+    Object.hasOwn(DOMPointReadOnly.prototype, "toJSON"),
+    Object.hasOwn(DOMPoint.prototype, "toJSON"),
+    new DOMPoint() instanceof DOMPointReadOnly
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly constructor should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|1,2,3,4|{\"x\":1,\"y\":2,\"z\":3,\"w\":4}|true|true|true|false|true"
+    );
+}
+
+#[test]
+fn dom_point_readonly_from_point_uses_dictionary_conversion_and_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-from-point.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-from-point-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPointReadOnly factory child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPointReadOnly factory child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-from-point-realm").contentWindow;
+  const point = other.DOMPointReadOnly.fromPoint({x: "1", z: 3, w: 4});
+  const empty = other.DOMPointReadOnly.fromPoint(null);
+  return [
+    other.DOMPointReadOnly.fromPoint.length,
+    point instanceof other.DOMPointReadOnly,
+    point instanceof other.DOMPoint,
+    point instanceof DOMPointReadOnly,
+    [point.x, point.y, point.z, point.w].join(","),
+    [empty.x, empty.y, empty.z, empty.w].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly.fromPoint should evaluate");
+
+    assert_eq!(result, "0|true|false|false|1,0,3,4|0,0,0,1");
+}
+
+#[test]
+fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-matrix-transform.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-matrix-transform-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPoint matrixTransform child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPoint matrixTransform child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-matrix-transform-realm").contentWindow;
+  const source = new DOMPointReadOnly(5, 4, 3, 2);
+  const transformed = other.DOMPointReadOnly.prototype.matrixTransform.call(source, {
+    a: 2, m11: 2, d: 3, e: 10, f: 20, m33: 4, m44: 5
+  });
+  const outcome = init => {
+    try {
+      source.matrixTransform(init);
+      return "no throw";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  return [
+    other.DOMPointReadOnly.prototype.matrixTransform.length,
+    transformed instanceof other.DOMPoint,
+    transformed instanceof DOMPoint,
+    [transformed.x, transformed.y, transformed.z, transformed.w].join(","),
+    outcome({a: 1, m11: 2}),
+    outcome({is2D: true, m33: 1.0000001}),
+    outcome({a: NaN, m11: NaN}),
+    outcome({a: 0, m11: -0})
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPoint matrixTransform should evaluate");
+
+    assert_eq!(
+        result,
+        "0|true|false|30,52,12,10|TypeError|TypeError|no throw|no throw"
+    );
+}

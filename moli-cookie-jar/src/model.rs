@@ -39,15 +39,16 @@ pub use site_data::{
     CookieStorageClearPreviewReport,
 };
 pub use stored_cookie::{
-    StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite, StoredCookieSourceScheme,
+    StoredCookie, StoredCookieDomainMatch, StoredCookiePartitionFilter, StoredCookiePartitionKey,
+    StoredCookieSameSite, StoredCookieSourceScheme,
 };
 
 #[cfg(any(test, feature = "test-support"))]
 pub use network_context::{NetworkSameSiteContextDowngradeType, NetworkSiteContext};
 
 pub(crate) use core_conversion::{
-    core_partition_key_from_stored, stored_cookie_from_core, stored_query_report_from_core,
-    stored_set_report_from_core,
+    core_partition_key_from_stored, stored_cookie_from_core, stored_partition_key_from_core,
+    stored_query_report_from_core, stored_set_report_from_core,
 };
 pub(crate) use network_context::core_cookie_partition_key_for_url;
 pub(super) use stored_cookie::{core_source_scheme_from_stored, has_invalid_cookie_octets};

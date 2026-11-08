@@ -3,6 +3,7 @@ use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext};
 use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
+mod drop_events;
 mod element_click;
 mod keyboard_events;
 mod mouse_snapshot;
@@ -14,7 +15,7 @@ const INPUT_HIT_Y: u32 = 20;
 async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     let data_url = format!("data:text/html,{html}");
     // Input commands can execute JS and therefore publish concrete renderer
     // output. Install the fixture through the same Page-owner transaction as
@@ -25,8 +26,7 @@ async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
 }
 
 async fn evaluate_string(ctx: &mut TestContext, expression: &str) -> String {
-    ctx.conn
-        .evaluate_runtime_expression_with_await_async(expression, false)
+    ctx.evaluate_fixture_expression(expression, false)
         .await
         .expect("expression must succeed")["value"]
         .as_str()
@@ -35,8 +35,7 @@ async fn evaluate_string(ctx: &mut TestContext, expression: &str) -> String {
 }
 
 async fn evaluate_bool(ctx: &mut TestContext, expression: &str) -> bool {
-    ctx.conn
-        .evaluate_runtime_expression_with_await_async(expression, false)
+    ctx.evaluate_fixture_expression(expression, false)
         .await
         .expect("expression must succeed")["value"]
         .as_bool()
@@ -279,26 +278,26 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     ctx.capture_fixture_layout(None).await;
     assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
-    let original_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the original Page should have a residence identity");
-    let pending = ctx
-        .conn
-        .loaded_page_mut_for_protocol_access(None)
-        .expect("the original Page should be loaded")
-        .start_dispatch_mouse_event_at_point_with_outcome(
-            INPUT_HIT_X.into(),
-            INPUT_HIT_Y.into(),
-            "mousemove",
-            -1,
-            None,
-            0.0,
-            0.0,
-        )
-        .expect("the original Page should admit the mouse event");
+    let original_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the original Page should have a residence identity")
+    });
+    let pending = ctx.with_fixture(|conn| {
+        conn.loaded_page_mut_for_protocol_access(None)
+            .expect("the original Page should be loaded")
+            .start_dispatch_mouse_event_at_point_with_outcome(
+                INPUT_HIT_X.into(),
+                INPUT_HIT_Y.into(),
+                "mousemove",
+                -1,
+                None,
+                0.0,
+                0.0,
+            )
+            .expect("the original Page should admit the mouse event")
+    });
     let completed = PendingInputCommandDispatch {
-        command_id: Some(104),
+        host: None,
         session_id: None,
         owner: original_owner.clone(),
         page_residence_token: None,
@@ -311,28 +310,31 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     let replacement_url = "data:text/html,<body>replacement</body>";
     ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
         .await;
-    let replacement_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the replacement Page should have a residence identity");
+    let replacement_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the replacement Page should have a residence identity")
+    });
     assert_ne!(original_owner, replacement_owner);
 
-    let completed = complete_pending_input_command(
-        &mut ctx.conn,
-        completed,
-        &mut CommandDispatchContext::default(),
-    )
-    .await;
-    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
-    assert!(completed.protocol_events.is_empty());
-    assert!(
-        ctx.conn
+    let completed = ctx
+        .run_fixture_workflow(
+            (completed).into_workflow(ctx.handle()),
+            &mut CommandDispatchContext::default(),
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .browser_context
             .as_ref()
             .and_then(|context| context.active_page_target().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
-    );
+    ) });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -340,15 +342,15 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
-    let original_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("the original Page should have a residence identity");
-    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
-        .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
-        .expect("the original Page should expose its attachment lifetime");
+    let original_owner = ctx.with_fixture(|conn| {
+        conn.target_page_residence_identity_for_session(None)
+            .expect("the original Page should have a residence identity")
+    });
+    let command_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let page_residence_token = ctx.with_fixture(|conn| {
+        conn.capture_target_page_residence_token_for_owner(&command_owner)
+            .expect("the original Page should expose its attachment lifetime")
+    });
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
     ctx.install_navigation_fixture_for_session_owner(replacement_url, None)
@@ -366,20 +368,24 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         RendererInputWaitOutcome::PageResidence(TargetPageResidenceObservation::Superseded)
     ));
 
-    let completed = complete_pending_input_command(
-        &mut ctx.conn,
-        CompletedInputCommandDispatch {
-            command_id: Some(105),
-            session_id: None,
-            owner: original_owner,
-            kind: PendingInputCommandKind::DispatchMouseEvent,
-            completed: CompletedInputOperation::PageResidenceSuperseded,
-        },
-        &mut CommandDispatchContext::default(),
-    )
-    .await;
-    assert!(matches!(completed.result, Ok(AutomationResult::Empty)));
-    assert!(completed.protocol_events.is_empty());
+    let completed = ctx
+        .run_fixture_workflow(
+            (CompletedInputCommandDispatch {
+                host: None,
+                session_id: None,
+                owner: original_owner,
+                kind: PendingInputCommandKind::DispatchMouseEvent,
+                completed: CompletedInputOperation::PageResidenceSuperseded,
+            })
+            .into_workflow(ctx.handle()),
+            &mut CommandDispatchContext::default(),
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -387,11 +393,11 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
-    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
-        .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
-        .expect("the original Page should expose its attachment lifetime");
+    let command_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let page_residence_token = ctx.with_fixture(|conn| {
+        conn.capture_target_page_residence_token_for_owner(&command_owner)
+            .expect("the original Page should expose its attachment lifetime")
+    });
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",
         None,
@@ -433,7 +439,7 @@ async fn coordinate_mouse_event_without_document_still_reports_no_document_loade
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 103,
@@ -450,6 +456,37 @@ async fn coordinate_mouse_event_without_document_still_reports_no_document_loade
     .await;
 
     ctx.expect_error(103, -32000, "NoDocumentLoaded");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_dragging_without_a_loaded_page_preserves_idle_success() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-idle-drag".into());
+    bc.set_active_target_id("TID-idle-drag");
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    assert!(ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot(None)
+            .expect("target slot")
+            .loaded_page()
+            .is_none()
+    }));
+    ctx.process_async(json!({ "id": 106, "method": "Input.cancelDragging" }))
+        .await;
+    ctx.expect_result(106, json!({}), None);
+    assert!(
+        ctx.with_fixture(|conn| conn
+            .runtime_session_owner_slot(None)
+            .expect("target slot")
+            .loaded_page()
+            .is_none()),
+        "idle cancellation must not instantiate a Page just to clear a nonexistent drag"
+    );
+
+    let mut without_context = TestContext::new();
+    without_context
+        .process_async(json!({ "id": 107, "method": "Input.cancelDragging" }))
+        .await;
+    without_context.expect_error(107, -32000, "NoBrowserContext");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -624,7 +661,7 @@ async fn coordinate_input_invalid_params_keep_session_id() {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     for (id, method) in [
         (9001, "Input.dispatchMouseEvent"),
@@ -775,7 +812,7 @@ async fn mock_layout_policy_rejects_coordinate_input_without_dispatching() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_intercept_drags_fails_explicitly_without_drag_interception_events() {
+async fn set_intercept_drags_toggles_only_session_state() {
     let mut ctx = TestContext::new();
     with_loaded_document(
         &mut ctx,
@@ -783,49 +820,464 @@ async fn set_intercept_drags_fails_explicitly_without_drag_interception_events()
     )
     .await;
 
+    for (id, enabled) in [(12, true), (13, false)] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.setInterceptDrags",
+            "params": { "enabled": enabled }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        assert_eq!(
+            ctx.with_fixture(|conn| conn
+                .target_page_session_state_for_session(None)
+                .expect("Page session")
+                .input_intercept_drags_enabled),
+            enabled,
+        );
+    }
+
     ctx.process_async(json!({
-        "id": 12,
+        "id": 14,
+        "method": "Input.setInterceptDrags",
+        "params": { "enabled": "yes" }
+    }))
+    .await;
+    ctx.expect_error(14, -32602, "InvalidParams");
+}
+
+#[test]
+fn drag_interception_reads_the_explicit_target_owner_instead_of_the_active_target() {
+    let ctx = TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-drag-owner".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.stage_background_target(
+        "TID-explicit".to_owned(),
+        None,
+        "about:blank".to_owned(),
+        None,
+        None,
+    );
+    ctx.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(browser_context);
+        let active = CommandOwnerScope::capture(conn, None);
+        let explicit = CommandOwnerScope::for_route(
+            conn.target_session_route_for_target_id("TID-explicit")
+                .expect("explicit Page route"),
+        );
+        assert_eq!(active.session_id(), None);
+        assert_eq!(explicit.session_id(), None);
+        for (active_enabled, explicit_enabled) in [(true, false), (false, true)] {
+            let browser_context = conn.browser_context.as_mut().expect("browser context");
+            browser_context.active_page_target_mut().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .input_intercept_drags_enabled = active_enabled;
+            browser_context
+                .background_target_mut("TID-explicit")
+                .expect("background Page")
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .input_intercept_drags_enabled = explicit_enabled;
+            assert_eq!(drag::intercept_drags_enabled(conn, &active), active_enabled);
+            assert_eq!(
+                drag::intercept_drags_enabled(conn, &explicit),
+                explicit_enabled,
+                "route owners without a sessionId must retain their explicit target authority"
+            );
+        }
+    });
+}
+
+const DRAG_PAGE: &str = r#"<html><body>
+    <div id='source' draggable='true' style='position:absolute;left:0;top:0;width:100px;height:40px'></div>
+    <div id='target' style='position:absolute;left:0;top:100px;width:200px;height:100px'></div>
+    <script>
+      window.__drag = [];
+      const source = document.getElementById('source');
+      const target = document.getElementById('target');
+      source.addEventListener('dragstart', event => {
+        event.dataTransfer.setData('text/plain', 'payload');
+        event.dataTransfer.setData('application/x-moli', 'custom');
+        event.dataTransfer.effectAllowed = 'move';
+        window.__drag.push('dragstart');
+      });
+      source.addEventListener('dragend', () => window.__drag.push('dragend'));
+      target.addEventListener('dragenter', event => {
+        window.__drag.push('dragenter:' + event.dataTransfer.getData('text/plain')
+          + ':' + Array.from(event.dataTransfer.types).join(','));
+      });
+      target.addEventListener('dragover', event => {
+        event.preventDefault();
+        window.__drag.push('dragover');
+      });
+      target.addEventListener('drop', event => {
+        event.preventDefault();
+        window.__drag.push('drop:' + event.dataTransfer.getData('application/x-moli'));
+      });
+    </script>
+</body></html>"#;
+
+async fn dispatch_drag_mouse(
+    ctx: &mut TestContext,
+    id: u64,
+    event_type: &str,
+    y: u32,
+    buttons: u32,
+) {
+    dispatch_drag_mouse_for_session(ctx, id, event_type, y, buttons, None).await;
+}
+
+async fn dispatch_drag_mouse_for_session(
+    ctx: &mut TestContext,
+    id: u64,
+    event_type: &str,
+    y: u32,
+    buttons: u32,
+    session_id: Option<&str>,
+) {
+    let mut command = json!({
+        "id": id,
+        "method": "Input.dispatchMouseEvent",
+        "params": {
+            "type": event_type,
+            "x": INPUT_HIT_X,
+            "y": y,
+            "button": "left",
+            "buttons": buttons
+        }
+    });
+    if let Some(session_id) = session_id {
+        command["sessionId"] = json!(session_id);
+    }
+    ctx.process_async(command).await;
+    ctx.expect_result(id, json!({}), session_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mouse_drag_with_interception_reports_drag_intercepted_and_replays_through_drag_events() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+
+    ctx.process_async(json!({
+        "id": 1,
         "method": "Input.setInterceptDrags",
         "params": { "enabled": true }
     }))
     .await;
+    ctx.expect_result(1, json!({}), None);
 
-    ctx.expect_error(12, -32000, SET_INTERCEPT_DRAGS_UNSUPPORTED_MESSAGE);
+    dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
+    dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
+
+    let intercepted = json!({
+        "data": {
+            "items": [
+                { "mimeType": "text/plain", "data": "payload" },
+                { "mimeType": "application/x-moli", "data": "custom" }
+            ],
+            "dragOperationsMask": 16
+        }
+    });
+    ctx.expect_event("Input.dragIntercepted", Some(&intercepted));
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart"
+    );
+
+    for (id, drag_type) in [(4, "dragEnter"), (5, "dragOver"), (6, "drop")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Input.dispatchDragEvent",
+            "params": {
+                "type": drag_type,
+                "x": INPUT_HIT_X,
+                "y": 120,
+                "data": intercepted["data"]
+            }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        if drag_type == "dragEnter" {
+            assert_eq!(
+                evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+                "dragstart|dragenter::text/plain,application/x-moli"
+            );
+        } else if drag_type == "dragOver" {
+            assert_eq!(
+                evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+                "dragstart|dragenter::text/plain,application/x-moli|dragover"
+            );
+        }
+    }
+
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragenter::text/plain,application/x-moli|dragover|dragover|drop:custom|dragend"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mouse_drag_without_interception_emits_no_drag_intercepted_event() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+
+    dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
+    dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragenter::text/plain,application/x-moli"
+    );
+    dispatch_drag_mouse(&mut ctx, 4, "mouseReleased", 120, 0).await;
+
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Input.dragIntercepted")
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragenter::text/plain,application/x-moli|dragover|drop:custom|dragend"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_drag_interception_uses_the_admitted_command_configuration() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+    ctx.process_async(json!({
+        "id": 70, "method": "Input.setInterceptDrags", "params": { "enabled": true }
+    }))
+    .await;
+    ctx.expect_result(70, json!({}), None);
+    dispatch_drag_mouse(&mut ctx, 71, "mousePressed", 20, 1).await;
+    let raw = json!({
+        "id": 72, "method": "Input.dispatchMouseEvent",
+        "params": { "type": "mouseMoved", "x": INPUT_HIT_X, "y": 120,
+            "button": "left", "buttons": 1 }
+    })
+    .to_string();
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
+        CdpCommandTaskStep::Pending(pending) => pending,
+        CdpCommandTaskStep::Complete(_) => {
+            panic!("mouse movement must wait for its renderer outcome")
+        }
+    };
+    // The enqueued command already owns interception, even if the frontend
+    // disables it before protocol consumes that command's renderer reply.
+    ctx.process_async(json!({
+        "id": 73, "method": "Input.setInterceptDrags", "params": { "enabled": false }
+    }))
+    .await;
+    ctx.expect_result(73, json!({}), None);
+    let completed = ctx.drive_owned_wait(pending.wait()).await;
+    let outcome = ctx
+        .state
+        .with_state(|state| {
+            state.complete_command_dispatch_with_context(
+                completed,
+                &mut crate::conn::CommandDispatchContext::default(),
+            )
+        })
+        .expect("live test owner");
+    let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
+    assert!(scheduler_events.is_empty());
+    assert!(messages.contains(&json!({ "id": 72, "result": {} })));
+    let intercepted = messages
+        .iter()
+        .filter(|message| message["method"] == "Input.dragIntercepted")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        intercepted.len(),
+        1,
+        "the renderer has already intercepted this drag and must notify its issuing frontend"
+    );
+    assert_eq!(
+        intercepted[0]["params"]["data"]["items"][0]["data"],
+        "payload"
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart"
+    );
+    ctx.process_async(json!({ "id": 74, "method": "Input.cancelDragging" }))
+        .await;
+    ctx.expect_result(74, json!({}), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
-    let mut ctx = TestContext::new();
-    with_loaded_document(&mut ctx, "<html><body>drag state</body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .input_drag_intercepted = true;
+    for intercept in [false, true] {
+        let mut ctx = TestContext::new();
+        with_loaded_document(&mut ctx, DRAG_PAGE).await;
+        ctx.capture_fixture_layout(None).await;
+        ctx.process_async(json!({
+            "id": 1, "method": "Input.setInterceptDrags", "params": { "enabled": intercept }
+        }))
+        .await;
+        ctx.expect_result(1, json!({}), None);
+        dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
+        dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
+        assert!(
+            evaluate_string(&mut ctx, "window.__drag.join('|')")
+                .await
+                .starts_with("dragstart")
+        );
+        ctx.process_async(json!({ "id": 13, "method": "Input.cancelDragging" }))
+            .await;
+        ctx.expect_result(13, json!({}), None);
+        let terminal = "JSON.stringify({ends:window.__drag.filter(e=>e==='dragend').length,drops:window.__drag.filter(e=>e.startsWith('drop:')).length})";
+        assert_eq!(
+            evaluate_string(&mut ctx, terminal).await,
+            r#"{"ends":1,"drops":0}"#
+        );
+        dispatch_drag_mouse(&mut ctx, 14, "mouseReleased", 120, 0).await;
+        ctx.process_async(json!({ "id": 15, "method": "Input.cancelDragging", "params": {} }))
+            .await;
+        ctx.expect_result(15, json!({}), None);
+        assert_eq!(
+            evaluate_string(&mut ctx, terminal).await,
+            r#"{"ends":1,"drops":0}"#,
+            "mouse release and repeated cancellation must not reuse the completed drag"
+        );
+    }
+}
 
+#[tokio::test(flavor = "multi_thread")]
+async fn drag_interception_is_scoped_to_the_issuing_session_and_released_on_detach() {
+    let mut ctx = TestContext::new();
+    with_loaded_document(&mut ctx, DRAG_PAGE).await;
+    ctx.capture_fixture_layout(None).await;
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.attach_active_session("SID-primary");
+        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-drag".to_owned()));
+    });
     ctx.process_async(json!({
-        "id": 13,
-        "method": "Input.cancelDragging"
+        "id": 40, "method": "Input.setInterceptDrags", "sessionId": "SID-drag",
+        "params": { "enabled": true }
     }))
     .await;
-    ctx.expect_result(13, json!({}), None);
+    ctx.expect_result(40, json!({}), Some("SID-drag"));
+    assert!(ctx.with_fixture(|conn| {
+        conn.target_page_session_state_for_session(Some("SID-drag"))
+            .is_some_and(|state| state.input_intercept_drags_enabled)
+    }));
+    assert!(!ctx.with_fixture(|conn| {
+        conn.target_page_session_state_for_session(Some("SID-primary"))
+            .is_some_and(|state| state.input_intercept_drags_enabled)
+    }));
+
+    // Another attached frontend must still drive ordinary native dragging.
+    for (id, event_type, y, buttons) in [
+        (41, "mousePressed", 20, 1),
+        (42, "mouseMoved", 120, 1),
+        (43, "mouseReleased", 120, 0),
+    ] {
+        dispatch_drag_mouse_for_session(&mut ctx, id, event_type, y, buttons, Some("SID-primary"))
+            .await;
+    }
     assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .input_drag_intercepted
+        evaluate_string(&mut ctx, "window.__drag.join('|')")
+            .await
+            .contains("drop:custom")
+    );
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Input.dragIntercepted")
+    );
+    evaluate_string(&mut ctx, "window.__drag = []; 'reset'").await;
+
+    dispatch_drag_mouse_for_session(&mut ctx, 44, "mousePressed", 20, 1, Some("SID-drag")).await;
+    dispatch_drag_mouse_for_session(&mut ctx, 45, "mouseMoved", 120, 1, Some("SID-drag")).await;
+    let intercepted = ctx
+        .take_all()
+        .into_iter()
+        .filter(|message| message["method"] == "Input.dragIntercepted")
+        .collect::<Vec<_>>();
+    assert_eq!(intercepted.len(), 1);
+    assert_eq!(
+        intercepted[0]["sessionId"], "SID-drag",
+        "the triggering frontend alone receives the intercepted data"
+    );
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart"
+    );
+    // Switching to a frontend without interception must release the old drag,
+    // without exposing its payload or starting another drag from the held press.
+    dispatch_drag_mouse_for_session(&mut ctx, 46, "mouseMoved", 120, 1, Some("SID-primary")).await;
+    assert_eq!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
+        "dragstart|dragend"
+    );
+    dispatch_drag_mouse_for_session(&mut ctx, 47, "mouseReleased", 120, 0, Some("SID-primary"))
+        .await;
+
+    ctx.process_async(json!({
+        "id": 48, "method": "Input.setInterceptDrags", "sessionId": "SID-drag",
+        "params": { "enabled": false }
+    }))
+    .await;
+    ctx.expect_result(48, json!({}), Some("SID-drag"));
+    evaluate_string(&mut ctx, "window.__drag = []; 'reset'").await;
+    for (id, event_type, y, buttons) in [
+        (49, "mousePressed", 20, 1),
+        (50, "mouseMoved", 120, 1),
+        (51, "mouseReleased", 120, 0),
+    ] {
+        dispatch_drag_mouse_for_session(&mut ctx, id, event_type, y, buttons, Some("SID-drag"))
+            .await;
+    }
+    assert!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')")
+            .await
+            .contains("drop:custom")
+    );
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Input.dragIntercepted")
     );
 
     ctx.process_async(json!({
-        "id": 14,
-        "method": "Input.cancelDragging",
-        "params": {}
+        "id": 52, "method": "Input.setInterceptDrags", "sessionId": "SID-drag",
+        "params": { "enabled": true }
     }))
     .await;
-    ctx.expect_result(14, json!({}), None);
+    ctx.expect_result(52, json!({}), Some("SID-drag"));
+    ctx.process_async(json!({
+        "id": 53, "method": "Target.detachFromTarget", "params": { "sessionId": "SID-drag" }
+    }))
+    .await;
+    ctx.expect_result(53, json!({}), None);
+    assert!(ctx.with_fixture(|conn| {
+        conn.target_page_session_state_for_session(Some("SID-drag"))
+            .is_none()
+    }));
+    evaluate_string(&mut ctx, "window.__drag = []; 'reset'").await;
+    for (id, event_type, y, buttons) in [
+        (54, "mousePressed", 20, 1),
+        (55, "mouseMoved", 120, 1),
+        (56, "mouseReleased", 120, 0),
+    ] {
+        dispatch_drag_mouse_for_session(&mut ctx, id, event_type, y, buttons, Some("SID-primary"))
+            .await;
+    }
+    assert!(
+        evaluate_string(&mut ctx, "window.__drag.join('|')")
+            .await
+            .contains("drop:custom")
+    );
+    assert!(
+        ctx.take_all()
+            .iter()
+            .all(|message| message["method"] != "Input.dragIntercepted")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -868,9 +1320,13 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
                </body></html>"#,
     )
     .await;
-    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-    browser_context.attach_active_session("SID-primary");
-    assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    ctx.with_fixture(|conn| {
+        let browser_context = conn.browser_context.as_mut().expect("browser context");
+        browser_context.attach_active_session("SID-primary");
+        assert!(
+            browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        );
+    });
 
     ctx.process_async(json!({
         "id": 30,
@@ -880,16 +1336,18 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     }))
     .await;
     ctx.expect_result(30, json!({}), Some("SID-attached"));
-    assert!(
-        ctx.conn
-            .target_page_session_state_for_session(Some("SID-attached"))
-            .is_some_and(|state| state.input_events_ignored)
-    );
-    assert!(
-        !ctx.conn
-            .target_page_session_state_for_session(Some("SID-primary"))
-            .is_some_and(|state| state.input_events_ignored)
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.target_page_session_state_for_session(Some("SID-attached"))
+                .is_some_and(|state| state.input_events_ignored)
+        })
+    });
+    ctx.with_fixture(|conn| {
+        assert!(!{
+            conn.target_page_session_state_for_session(Some("SID-primary"))
+                .is_some_and(|state| state.input_events_ignored)
+        })
+    });
 
     ctx.process_async(json!({
         "id": 31,
@@ -987,17 +1445,18 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     }))
     .await;
     ctx.expect_result(38, json!({}), Some("SID-attached"));
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .remove_page_session_binding(
-                "TID-1",
-                "SID-attached",
-                &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
-            )
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .remove_page_session_binding(
+                    "TID-1",
+                    "SID-attached",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+                )
+        })
+    });
     ctx.process_async(json!({
         "id": 39,
         "method": "Input.dispatchKeyEvent",
@@ -1522,16 +1981,23 @@ async fn coordinate_mouse_event_completes_through_pending_renderer_dispatch() {
             }
         })
         .to_string();
-        let pending = match ctx.conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => {
                 panic!("coordinate mouse dispatch should wait for the renderer")
             }
         };
-        let outcome = ctx
-            .conn
-            .complete_pending_command_dispatch(pending.wait().await)
-            .await;
+        let outcome = {
+            let completed = ctx.drive_owned_wait(pending.wait()).await;
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
         assert!(
@@ -1570,14 +2036,21 @@ async fn dispatch_key_event_can_complete_through_pending_command_dispatch() {
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Input.dispatchKeyEvent should start as a pending command");
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Input.dispatchKeyEvent should start as a pending command")
+    });
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
     assert!(
@@ -1659,12 +2132,13 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
                </body></html>"#,
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYUP".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .start_document_navigation_for_active_target("PENDING-KEYUP".to_owned())
+            .expect("active navigation should start")
+    });
 
     ctx.process_async(json!({
         "id": 4105,
@@ -1678,13 +2152,11 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
     .await;
     ctx.expect_result(4105, json!({}), None);
 
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP");
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(None)
-    );
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    ctx.with_fixture(|conn| {
+        conn.clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP")
+    });
+    ctx.with_fixture(|conn| assert!(!conn.has_pending_document_navigation_for_session_owner(None)));
     assert_eq!(
         evaluate_string(&mut ctx, "String(window.__keyupCount)").await,
         "1"
@@ -1695,12 +2167,13 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
 async fn dispatch_keydown_still_rejects_while_navigation_is_pending() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<html><body><input autofocus></body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYDOWN".to_owned())
-        .expect("active navigation should start");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .start_document_navigation_for_active_target("PENDING-KEYDOWN".to_owned())
+            .expect("active navigation should start")
+    });
 
     ctx.process_async(json!({
         "id": 4106,
@@ -1720,8 +2193,7 @@ async fn dispatch_keyup_without_document_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-I".into());
     browser_context.set_active_target_id("TID-1");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
     ctx.process_async(json!({
         "id": 4107,
@@ -1758,14 +2230,21 @@ async fn insert_text_can_complete_through_pending_command_dispatch() {
         "params": { "text": "Z" }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("Input.insertText should start as a pending command");
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("Input.insertText should start as a pending command")
+    });
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
     assert!(
@@ -1815,16 +2294,23 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
             }
         })
         .to_string();
-        let pending = match ctx.conn.start_command_dispatch(&raw) {
+        let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => {
                 panic!("coordinate touch dispatch should wait for renderer layout")
             }
         };
-        let outcome = ctx
-            .conn
-            .complete_pending_command_dispatch(pending.wait().await)
-            .await;
+        let outcome = {
+            let completed = ctx.drive_owned_wait(pending.wait()).await;
+            ctx.state
+                .with_state(|state| {
+                    state.complete_command_dispatch_with_context(
+                        completed,
+                        &mut crate::conn::CommandDispatchContext::default(),
+                    )
+                })
+                .expect("live test owner")
+        };
         let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
 
         assert!(
@@ -1849,13 +2335,17 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         ctx.expect_result(id, json!({}), None);
     }
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("loaded browser context")
-        .active_page_target_mut()
-        .effective_emulation_state
-        .emit_touch_events_for_mouse = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("loaded browser context")
+                .active_page_target_mut()
+                .effective_emulation_state
+                .emit_touch_events_for_mouse = fixture_value;
+        });
+    }
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({
             "id": id,
@@ -1888,10 +2378,12 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
                 <script>
                   window.__dragPending = [];
                   document.getElementById('target').addEventListener('dragenter', event => {
+                    window.__dragPendingView = event.dataTransfer;
                     window.__dragPending.push([
                       event.type,
                       event instanceof DragEvent,
-                      event.dataTransfer.getData('text/plain')
+                      event.dataTransfer.getData('text/plain'),
+                      Array.from(event.dataTransfer.types).join(',')
                     ].join('|'));
                   });
                 </script>
@@ -1915,16 +2407,23 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
         }
     })
     .to_string();
-    let pending = match ctx.conn.start_command_dispatch(&raw) {
+    let pending = match ctx.with_fixture(|conn| conn.start_command_dispatch(&raw)) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
             panic!("coordinate drag dispatch should wait for renderer layout")
         }
     };
-    let outcome = ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
-        .await;
+    let outcome = {
+        let completed = ctx.drive_owned_wait(pending.wait()).await;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = ctx.complete_command_task_step_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
@@ -1933,7 +2432,15 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
     assert_eq!(messages, vec![json!({ "id": 4107, "result": {} })]);
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__dragPending)").await,
-        r#"["dragenter|true|drag-pending"]"#
+        r#"["dragenter|true||text/plain"]"#
+    );
+    assert!(
+        evaluate_bool(
+            &mut ctx,
+            "window.__dragPendingView.getData('text/plain') === '' && window.__dragPendingView.types.length === 0 && window.__dragPendingView.items.length === 0",
+        )
+        .await,
+        "the completed protected event view cannot expose its payload or metadata"
     );
 }
 
@@ -3508,5 +4015,166 @@ async fn dispatch_key_event_arrowup_wraps_radio_group_backward() {
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__radioWrapEvents)").await,
         r#"["keydown:three","input:two","change:two"]"#
+    );
+}
+
+#[tokio::test]
+async fn input_ready_receipt_keeps_fence_without_adopting_recreated_host_state() {
+    let mut context = TestContext::new();
+    with_loaded_document(&mut context, "<body>origin</body>").await;
+    let command = AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+        context: AutomationContext {
+            protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+            session_id: None,
+            target_id: Some("TID-1".into()),
+            browser_context_id: None,
+        },
+        event_type: DevToolsKeyEventType::KeyPress,
+        key: "a".into(),
+        code: "KeyA".into(),
+        text: "a".into(),
+        modifiers: 0,
+        auto_repeat: false,
+        should_insert_text: true,
+    });
+    let pending = context
+        .with_fixture(|conn| prepare_automation_input_command(conn, command))
+        .unwrap()
+        .unwrap();
+    let original = pending.owner.clone();
+    let completed = pending.wait().await;
+    // Freeze this new Native stream to its destination transport before
+    // creating the Page. Moving an already-bound fixture between two
+    // protocol owners would violate the renderer transport contract.
+    let mut producer = crate::conn::CdpConnection::new();
+    producer.set_renderer_publication_sender(context.renderer_publication_tx.clone());
+    let load = producer.prepare_page_fixture_load("data:text/html,<body>replacement</body>");
+    let (navigation, _) = load
+        .run_at_boundary(None, moli_core::runtime::RendererReplyBoundary::Stage)
+        .await;
+    let crate::conn::NavigationLoadOutcome::ResponseCommitReady(navigation) = navigation.unwrap()
+    else {
+        panic!("replacement fixture requires a Document response");
+    };
+    let configuration = producer
+        .prepared_document_commit_configuration_for_owner(
+            &crate::conn::CommandOwnerScope::capture(&producer, None),
+            navigation.final_url(),
+        )
+        .unwrap();
+    let permit = navigation.issue_commit_permit();
+    let replacement = navigation.commit(permit, configuration).await.unwrap();
+    let mut browser = BrowserContext::new("BID-I".into());
+    browser.set_active_target_id("TID-1");
+    let runtime = &mut browser.active_page_target_mut().runtime_slot;
+    runtime.set_loaded_page_for_test(replacement.page);
+    runtime.set_page_attachment_id_for_test(original.page_attachment_id().get());
+    context.with_fixture(|conn| {
+        conn.install_browser_context_fixture_for_test(browser);
+        assert_eq!(
+            original,
+            conn.target_page_residence_identity_for_session(None)
+                .unwrap(),
+            "the fixture must reuse the old literal target and attachment ids"
+        )
+    });
+    let mut output = CommandDispatchContext::default();
+    let completed = context
+        .run_fixture_workflow(
+            (completed).into_workflow(context.handle()),
+            &mut output,
+            None,
+            None,
+        )
+        .await;
+    let (status, events) = completed.into_command_status_and_background_events();
+    assert!(status.expect("input terminal").is_ok());
+    assert!(events.is_empty());
+    assert!(output.take_renderer_output_predecessor().is_some());
+    context.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .loaded_page()
+                .unwrap()
+                .final_url()
+                .as_str(),
+            "data:text/html,<body>replacement</body>"
+        )
+    });
+    assert_eq!(
+        evaluate_string(&mut context, "document.body.textContent").await,
+        "replacement"
+    );
+}
+
+#[test]
+fn drag_file_start_error_preserves_io_error_through_context() {
+    let root = std::env::temp_dir().join(format!("moli-missing-drag-file-{}", std::process::id()));
+    let path = root.join("not-created");
+    assert!(!path.exists());
+    let error = renderer_drag_data(DevToolsDragData {
+        items: Vec::new(),
+        files: vec![path.to_string_lossy().into_owned()],
+        drag_operations_mask: 1,
+    })
+    .err()
+    .unwrap();
+    assert_eq!(
+        error
+            .source
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[tokio::test]
+async fn input_admission_rejects_closing_owner_with_canonical_document_error() {
+    let mut context = TestContext::new();
+    with_loaded_document(&mut context, "<input autofocus>").await;
+    {
+        let fixture_value = true;
+        context.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .closing = fixture_value;
+        });
+    }
+    let owner = context.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let error = context
+        .with_fixture(|conn| {
+            start_devtools_input_command_for_owner(
+                conn,
+                None,
+                &owner,
+                AutomationCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+                    context: AutomationContext {
+                        protocol: crate::automation::FrontendProtocol::WebDriverBidi,
+                        session_id: None,
+                        target_id: Some("TID-1".into()),
+                        browser_context_id: None,
+                    },
+                    event_type: DevToolsKeyEventType::KeyPress,
+                    key: "a".into(),
+                    code: "KeyA".into(),
+                    text: "a".into(),
+                    modifiers: 0,
+                    auto_repeat: false,
+                    should_insert_text: true,
+                }),
+            )
+        })
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .source
+            .downcast_ref::<crate::conn::NoDocumentLoaded>()
+            .is_some()
     );
 }

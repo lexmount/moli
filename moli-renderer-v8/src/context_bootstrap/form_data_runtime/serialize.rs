@@ -368,7 +368,7 @@ fn form_data_entry_value_as_name_value_string<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<String> {
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && blob::blob_bytes_from_object(scope, object).is_some()
+        && blob::blob_data_from_object(scope, object).is_some()
     {
         return Some(
             file_api::file_name_from_object(scope, object).unwrap_or_else(|| "blob".into()),

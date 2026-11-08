@@ -11,11 +11,12 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194920,
@@ -56,22 +57,27 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
     ctx.expect_result(104194922, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .effective_emulation_state
-                .script_execution_disabled
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(staged.effective_emulation_state.script_execution_disabled);
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active
+                        .active_page_target()
+                        .effective_emulation_state
+                        .script_execution_disabled
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(staged.effective_emulation_state.script_execution_disabled);
+        });
     }
 
     ctx.process_async(json!({
@@ -137,17 +143,19 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
     ctx.take_all();
 
     {
-        let activated = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert!(
-            activated
-                .active_page_target()
-                .effective_emulation_state
-                .script_execution_disabled
-        );
+        ctx.with_fixture(|conn| {
+            let activated = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert!(
+                activated
+                    .active_page_target()
+                    .effective_emulation_state
+                    .script_execution_disabled
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -179,11 +187,12 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949270,
@@ -233,30 +242,34 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
     ctx.expect_result(1041949273, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active
-                .active_page_target()
-                .effective_emulation_state
-                .script_execution_disabled
-        );
-        // A completed renderer call may retain its monotonic correlation
-        // allocator in the background session; only the effective setting must
-        // collapse back to the default.
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none_or(|state| { !state.effective_emulation_state.script_execution_disabled }),
-            "script execution re-enable should clear the staged background setting: {:#?}",
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                !active
+                    .active_page_target()
+                    .effective_emulation_state
+                    .script_execution_disabled
+            );
+            // A completed renderer call may retain its monotonic correlation
+            // allocator in the background session; only the effective setting must
+            // collapse back to the default.
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none_or(|state| {
+                        !state.effective_emulation_state.script_execution_disabled
+                    }),
+                "script execution re-enable should clear the staged background setting: {:#?}",
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -322,17 +335,19 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
     ctx.take_all();
 
     {
-        let activated = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("activated browser context");
-        assert!(
-            !activated
-                .active_page_target()
-                .effective_emulation_state
-                .script_execution_disabled
-        );
+        ctx.with_fixture(|conn| {
+            let activated = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("activated browser context")
+            };
+            assert!(
+                !activated
+                    .active_page_target()
+                    .effective_emulation_state
+                    .script_execution_disabled
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -364,11 +379,12 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194930,
@@ -417,26 +433,31 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
     ctx.expect_result(104194933, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_lifecycle_events
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_lifecycle_events
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active.active_page_target().devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .page_session_state
+                        .page_lifecycle_events
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_lifecycle_events
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -541,11 +562,12 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949320,
@@ -595,24 +617,26 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
     ctx.expect_result(1041949323, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_lifecycle_events
-        );
-        assert!(
-            active
-                .background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_none(),
-            "lifecycle disable should collapse staged background state back to default"
-        );
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            assert!(
+                !active.active_page_target().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_lifecycle_events
+            );
+            assert!(
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_none(),
+                "lifecycle disable should collapse staged background state back to default"
+            );
+        });
     }
 
     ctx.process_async(json!({

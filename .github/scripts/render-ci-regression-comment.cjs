@@ -9,7 +9,6 @@ const MAX_COMMENT_BYTES = 32 * 1024;
 const MAX_RESULT_ROWS = 2_000;
 const MAX_DETAIL_ROWS = 10;
 const MAX_MATRIX_ROWS = 5_000;
-const MAX_CDP_GROUPS = 100;
 const WEBMAINBENCH_CASES = 545;
 const WEBMAINBENCH_STATUSES = ['success', 'expected_failure', 'failure', 'panic', 'crash', 'timeout', 'empty_output'];
 const MIB = 1024 * 1024;
@@ -584,7 +583,8 @@ function renderRuntime(section) {
 
 function loadCdp(root) {
   const summary = readJson(root, 'summary.json');
-  if (!isObject(summary) || !Array.isArray(summary.groups) || summary.groups.length > MAX_CDP_GROUPS) {
+  // Each repeated group execution occupies one result row.
+  if (!isObject(summary) || !Array.isArray(summary.groups) || summary.groups.length > MAX_RESULT_ROWS) {
     throw new Error('invalid CDP smoke artifact');
   }
   return summary;

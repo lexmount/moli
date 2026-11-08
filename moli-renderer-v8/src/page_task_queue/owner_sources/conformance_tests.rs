@@ -493,14 +493,7 @@ impl InternalLoadingLane {
         sender
             .schedule_at(
                 PageOwnedInternalLoadingTask::MetaRefreshNavigation(
-                    MainDocumentMetaRefreshNavigationTask::new(
-                        task_owner(sequence + 100),
-                        0,
-                        Url::parse(&format!(
-                            "https://page-source-conformance.test/refresh-{sequence}"
-                        ))
-                        .expect("internal-loading conformance URL"),
-                    ),
+                    MainDocumentMetaRefreshNavigationTask::new(task_owner(sequence + 100), 0),
                 ),
                 Instant::now(),
             )
@@ -1274,10 +1267,7 @@ impl FileReadingLane {
     fn enqueue_with(sender: &RendererPageFileReadingSender, sequence: u64) -> bool {
         sender
             .send(
-                WindowDocumentTaskTarget::new(
-                    WindowDocumentOwner::Frame(task_owner(sequence + 1_725)),
-                    OwnerDispatchScope::Top,
-                ),
+                window_execution_context(sequence + 1_725),
                 RendererPageFileReadingTaskId::from_raw(sequence),
                 match sequence % 4 {
                     0 => RendererPageFileReadingTaskKind::DirectoryBatch,
@@ -1663,7 +1653,6 @@ fn modulepreload_task(sequence: u64) -> FrameDocumentModulepreloadFetchTask {
             DomHandle::new(sequence as usize + 200),
         ),
         NativeModuleSingleFetchRequest::new(
-            source_url.clone(),
             source_url.clone(),
             source_url.clone(),
             ModuleMapKey::java_script(source_url),
@@ -2457,12 +2446,7 @@ fn unified_ready_descriptors_expose_one_fifo_head_per_typed_source() {
         .internal_loading_sender(document_token(1))
         .schedule_at(
             PageOwnedInternalLoadingTask::MetaRefreshNavigation(
-                MainDocumentMetaRefreshNavigationTask::new(
-                    task_owner(90),
-                    0,
-                    Url::parse("https://page-source-conformance.test/refresh")
-                        .expect("internal-loading descriptor URL"),
-                ),
+                MainDocumentMetaRefreshNavigationTask::new(task_owner(90), 0),
             ),
             Instant::now(),
         )

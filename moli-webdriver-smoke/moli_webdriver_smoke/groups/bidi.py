@@ -55,6 +55,7 @@ async def run_bidi_group(
 
 def _bidi_scenarios() -> tuple[tuple[str, BidiScenario], ...]:
     return (
+        ("bidi_user_prompts", _run_bidi_user_prompt_smoke),
         ("bidi_input_actions", _run_bidi_input_smoke),
         ("bidi_network_get_data", _run_bidi_network_get_data_smoke),
         ("bidi_network_set_cache_behavior", _run_bidi_network_cache_behavior_smoke),
@@ -134,7 +135,7 @@ async def _bootstrap_bidi_context(
     navigate = messages[-1]
     assert_equal(navigate["type"], "success", "BiDi browsingContext.navigate type")
     assert_equal(navigate["result"]["url"], page_url, "BiDi navigate URL")
-    lifecycle = await _collect_lifecycle_events(websocket, messages)
+    lifecycle = await _collect_lifecycle_events(websocket, messages, context)
     assert_equal(
         [event["method"] for event in lifecycle],
         ["browsingContext.domContentLoaded"],
@@ -154,6 +155,79 @@ async def _end_bidi_session(websocket: Any, results: list[dict[str, Any]]) -> No
 
 async def _send(websocket: Any, id_: int, method: str, params: dict[str, Any]) -> None:
     await websocket.send(json.dumps({"id": id_, "method": method, "params": params}, separators=(",", ":")))
+
+
+async def _run_bidi_user_prompt_smoke(
+    websocket: Any,
+    context: str,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    del fixture
+    await _send(websocket, 200, "session.subscribe", {
+        "events": ["browsingContext.userPromptOpened", "browsingContext.userPromptClosed"],
+        "contexts": [context],
+    })
+    subscribed = await _recv_success(websocket, 200, "BiDi prompt subscribe")
+    subscription = subscribed["result"]["subscription"]
+
+    for index, prompt_type in enumerate(["alert", "confirm", "prompt"]):
+        evaluate_id, handle_id, repeated_id, barrier_id = [201 + index * 4 + offset for offset in range(4)]
+        text = f"BiDi smoke {prompt_type}"
+        arguments = json.dumps(text) + (", 'initial value'" if prompt_type == "prompt" else "")
+        await _send(websocket, evaluate_id, "script.evaluate", {
+            "expression": f"window.{prompt_type}({arguments})",
+            "target": {"context": context}, "awaitPromise": False,
+        })
+        seen: list[dict[str, Any]] = []
+
+        def response(command_id: int) -> dict[str, Any] | None:
+            return next((item for item in seen if item.get("id") == command_id), None)
+
+        def prompt_events(method: str) -> list[dict[str, Any]]:
+            return [item for item in seen if (
+                item.get("type") == "event" and item.get("method") == method
+                and item.get("params", {}).get("context") == context
+                and item.get("params", {}).get("type") == prompt_type
+            )]
+
+        try:
+            async with asyncio.timeout(5):
+                while not prompt_events("browsingContext.userPromptOpened"):
+                    seen.append(await _recv(websocket))
+                params: dict[str, Any] = {"context": context, "accept": True}
+                if prompt_type == "prompt":
+                    params["userText"] = "typed BiDi reply"
+                await _send(websocket, handle_id, "browsingContext.handleUserPrompt", params)
+                while (response(evaluate_id) is None or response(handle_id) is None
+                       or not prompt_events("browsingContext.userPromptClosed")):
+                    seen.append(await _recv(websocket))
+        except TimeoutError as error:
+            raise RuntimeError(f"BiDi {prompt_type} did not complete: {seen!r}") from error
+
+        assert_equal(response(evaluate_id)["type"], "success", f"BiDi {prompt_type} script response")
+        assert_equal(response(evaluate_id)["result"]["type"], "success", f"BiDi {prompt_type} completion")
+        assert_equal(response(handle_id)["type"], "success", f"BiDi {prompt_type} handle response")
+        await _send(websocket, repeated_id, "browsingContext.handleUserPrompt", {"context": context})
+        seen.extend(await _recv_until_id(websocket, repeated_id))
+        assert_equal(response(repeated_id)["error"], "no such alert", "BiDi prompt is consumed once")
+        await _send(websocket, barrier_id, "session.status", {})
+        seen.extend(await _recv_until_id(websocket, barrier_id))
+        assert_equal(response(barrier_id)["type"], "success", "BiDi connection remains live")
+        opened = prompt_events("browsingContext.userPromptOpened")
+        closed = prompt_events("browsingContext.userPromptClosed")
+        assert_equal(len(opened), 1, f"one BiDi {prompt_type} opening notification")
+        assert_equal(len(closed), 1, f"one BiDi {prompt_type} closing notification")
+        assert_equal(opened[0]["params"]["message"], text, f"BiDi {prompt_type} opening message")
+        assert_equal(opened[0]["params"]["handler"], "dismiss", f"BiDi {prompt_type} handler policy")
+        assert_equal(closed[0]["params"]["accepted"], True, f"BiDi {prompt_type} accepted")
+        if prompt_type == "prompt":
+            assert_equal(opened[0]["params"]["defaultValue"], "initial value", "BiDi prompt default")
+            assert_equal(closed[0]["params"]["userText"], "typed BiDi reply", "BiDi prompt reply")
+
+    await _send(websocket, 219, "session.unsubscribe", {"subscriptions": [subscription]})
+    await _recv_success(websocket, 219, "BiDi prompt unsubscribe")
+    record(results, "bidi_user_prompts", {"types": ["alert", "confirm", "prompt"], "opened": 3, "closed": 3})
 
 
 async def _run_bidi_input_smoke(
@@ -1332,12 +1406,16 @@ async def _recv_until_bidi_event(
             return message
 
 
-async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any]], context: str) -> list[dict[str, Any]]:
+    # A parent-context subscription includes its descendants in Chrome. The
+    # basic fixture has an iframe; check the requested document's lifecycle
+    # independently of that child's DOMContentLoaded event.
     lifecycle = [
         message
         for message in messages
         if message.get("type") == "event"
         and message.get("method") == "browsingContext.domContentLoaded"
+        and message.get("params", {}).get("context") == context
     ]
     deadline = asyncio.get_running_loop().time() + 5
     while [event["method"] for event in lifecycle] != ["browsingContext.domContentLoaded"]:
@@ -1348,6 +1426,10 @@ async def _collect_lifecycle_events(websocket: Any, messages: list[dict[str, Any
             message = await asyncio.wait_for(_recv(websocket), timeout=remaining)
         except TimeoutError:
             return lifecycle
-        if message.get("type") == "event" and message.get("method") == "browsingContext.domContentLoaded":
+        if (
+            message.get("type") == "event"
+            and message.get("method") == "browsingContext.domContentLoaded"
+            and message.get("params", {}).get("context") == context
+        ):
             lifecycle.append(message)
     return lifecycle

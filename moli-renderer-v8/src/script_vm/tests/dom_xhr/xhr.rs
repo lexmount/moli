@@ -158,6 +158,7 @@ fn pending_fetch_continuation<'s>(
         crate::types::PendingWindowFetchContinuation::new(
             v8::Global::new(scope, resolver),
             false,
+            moli_fetch::RequestCacheMode::Default,
             crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
                 &crate::document_runtime::DocumentPolicyContainer::default(),
             ),
@@ -568,17 +569,14 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
   fake.__lmXhrTimeout = 888;
   fake.__lmXhrWithCredentials = true;
 
-  let fakeResponseType;
-  try { fakeResponseType = fake.responseType; }
-  catch (error) { fakeResponseType = error.name; }
-  const fakeValues = [
-    fake.readyState,
-    fake.status,
-    fakeResponseType,
-    fake.timeout,
-    fake.withCredentials,
-    fake.upload === undefined ? 'undefined' : typeof fake.upload
-  ].join('|');
+  const fakeValues = [];
+  for (const name of ['readyState', 'status', 'responseType', 'timeout', 'withCredentials', 'upload']) {
+    try { fakeValues.push(String(fake[name])); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      fakeValues.push(error.name);
+    }
+  }
 
   xhr.open('GET', '/state');
   return JSON.stringify({
@@ -593,7 +591,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
       typeof upload.onload,
       listenerHits
     ].join('|'),
-    fakeValues
+    fakeValues: fakeValues.join('|')
   });
 })()
 "#,
@@ -602,7 +600,7 @@ fn xml_http_request_declared_state_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"0|0|TypeError|0|false|undefined"}"#
+        r#"{"ownNamesBefore":{"xhr":[],"upload":[],"xhrPrototype":[],"eventTargetPrototype":[]},"realValues":"1|0|json|250|true|function|function|1","fakeValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
     );
 }
 
@@ -706,7 +704,7 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
   xhr.abort();
   return [
     ...afterOpen,
-    xhr.readyState === 0,
+    xhr.readyState === 1,
     xhr.status === 0,
     xhr.statusText === '',
     xhr.responseURL === '',
@@ -728,9 +726,87 @@ fn xml_http_request_open_and_abort_keep_accessor_backed_state_without_own_props(
 
     assert_eq!(
         result,
-        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true|true|false|true|true|true"
+        "true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|false|false|true|false|false|false|true|true"
     );
 }
+
+#[test]
+fn xml_http_request_abort_uses_internal_state_and_resets_completed_response() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-internal-state.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const state = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype, "readyState").get;
+  const states = [];
+  let aborts = 0;
+  xhr.onreadystatechange = () => states.push(state.call(xhr));
+  xhr.onabort = () => ++aborts;
+  Object.defineProperty(xhr, "readyState", { get() { throw new Error("public readyState read"); } });
+  xhr.abort();
+  const unsent = state.call(xhr);
+  xhr.open("POST", "data:text/plain,complete", false);
+  xhr.abort();
+  const opened = state.call(xhr);
+  xhr.send({ toString() { xhr.abort(); return "payload"; } });
+  const completed = [state.call(xhr), xhr.status, xhr.responseText];
+  xhr.abort();
+  return JSON.stringify({ unsent, opened, completed,
+    reset: [state.call(xhr), xhr.status, xhr.statusText, xhr.responseText,
+      xhr.responseURL, xhr.getAllResponseHeaders()], states, aborts });
+})()
+"#,
+        )
+        .expect("abort should use private state and clear a completed response without events");
+    assert_eq!(
+        result,
+        r#"{"unsent":0,"opened":1,"completed":[4,200,"complete"],"reset":[0,0,"","","",""],"states":[1,4],"aborts":0}"#
+    );
+}
+
+#[test]
+fn xml_http_request_abort_preserves_request_started_by_readystatechange() {
+    let mut vm = new_storage_test_vm("https://xhr-abort-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrAbortReopenEvents = [];
+  let restarted = false;
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState === 4 && !restarted) {
+      restarted = true;
+      events.push(`abort-ready:${xhr.readyState}:${xhr.status}`);
+      xhr.open("GET", "data:text/plain,second");
+      xhr.send();
+      events.push(`reopened:${xhr.readyState}`);
+    }
+  };
+  xhr.onloadstart = () => {
+    if (!restarted) {
+      xhr.abort();
+      events.push(`after-abort:${xhr.readyState}`);
+    }
+  };
+  xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("GET", "data:text/plain,first");
+  xhr.send();
+})()
+"#,
+    )
+    .expect("abort readystatechange should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("follow-up checkpoint should deliver the replacement request");
+    assert_eq!(
+        vm.eval("__xhrAbortReopenEvents.join('|')")
+            .expect("replacement request events"),
+        "abort-ready:4:0|reopened:1|abort:1|loadend:1|after-abort:1|load:second|loadend:4"
+    );
+}
+
 #[test]
 fn xml_http_request_methods_apply_webidl_argument_conversion() {
     let mut vm = new_storage_test_vm("https://xhr-webidl-args.test/");
@@ -918,7 +994,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
         let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
 
         let context_ptr: *const v8::Global<v8::Context> =
-            &vm.page_default_runtime.context as *const _;
+            &vm.current_main_world().unwrap().context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -946,6 +1022,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
@@ -1018,7 +1095,8 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
     )
     .expect("xhr responseXML setup should run");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1046,6 +1124,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 moli_fetch::ResponseBody::materialized_bytes(
@@ -1073,6 +1152,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 moli_fetch::ResponseBody::materialized_bytes(b"plain text".to_vec()),
@@ -1105,7 +1185,8 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 #[test]
 fn xml_http_request_send_body_applies_webidl_conversion() {
     let vm = new_storage_test_vm("https://xhr-send-body-webidl.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -1445,6 +1526,84 @@ fn xml_http_request_data_url_loads_materialized_body() {
         .expect("XHR data URL event list should be readable");
 
     assert_eq!(result, "200:BB-8:data:text/plain;base64,QkItOA==");
+}
+
+#[test]
+fn xml_http_request_queued_deliveries_keep_their_own_request_and_payload() {
+    let mut vm = new_storage_test_vm("https://xhr-pending-owner.test/");
+    vm.eval(
+        r#"
+(() => {
+  const events = globalThis.__xhrPendingOwners = [];
+  const cases = [
+    ["text", "", "data:,old", "data:text/plain,new", xhr => xhr.responseText],
+    ["binary", "arraybuffer", "data:,old", "data:application/octet-stream;base64,AP+A",
+      xhr => Array.from(new Uint8Array(xhr.response))],
+    ["json", "json", "data:,old", 'data:application/json,%7B%22new%22%3Atrue%7D',
+      xhr => xhr.response],
+    ["failure", "", "http://xhr-pending-owner.test:1/blocked", "data:text/plain,recovered",
+      xhr => xhr.responseText]
+  ];
+  for (const [name, responseType, oldURL, newURL, read] of cases) {
+    const xhr = new XMLHttpRequest();
+    xhr.onload = () => events.push([name, "load", xhr.status, read(xhr)]);
+    xhr.onerror = () => events.push([name, "error"]);
+    xhr.open("GET", oldURL);
+    xhr.responseType = responseType;
+    xhr.send();
+    queueMicrotask(() => events.push([name, "marker"]));
+    xhr.open("GET", newURL);
+    xhr.send();
+  }
+})()
+"#,
+    )
+    .expect("XHR replacements should enqueue independent outcomes");
+    vm.eval("0")
+        .expect("queued XHR deliveries should reach their checkpoint");
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrPendingOwners)")
+            .expect("XHR delivery order and response data"),
+        r#"[["text","marker"],["text","load",200,"new"],["binary","marker"],["binary","load",200,[0,255,128]],["json","marker"],["json","load",200,{"new":true}],["failure","marker"],["failure","load",200,"recovered"]]"#
+    );
+}
+
+#[test]
+fn xml_http_request_queued_delivery_cannot_complete_an_aborted_or_reopened_request() {
+    let mut vm = new_storage_test_vm("https://xhr-pending-retirement.test/");
+    vm.eval(
+        r#"
+(() => {
+  const events = globalThis.__xhrPendingRetirement = [];
+  const aborted = globalThis.__xhrPendingAborted = new XMLHttpRequest();
+  aborted.onload = () => events.push("unexpected aborted load");
+  aborted.onabort = () => events.push(`abort:${aborted.readyState}`);
+  aborted.onloadend = () => events.push(`loadend:${aborted.readyState}`);
+  aborted.open("GET", "data:,aborted");
+  aborted.send();
+  aborted.abort();
+
+  const reopened = globalThis.__xhrPendingReopened = new XMLHttpRequest();
+  reopened.onload = () => events.push("unexpected reopened load");
+  reopened.open("GET", "data:,obsolete");
+  reopened.send();
+  reopened.open("GET", "data:,not-sent");
+  queueMicrotask(() => events.push("checkpoint"));
+})()
+"#,
+    )
+    .expect("pending XHRs should be cancellable or reusable before delivery");
+    vm.eval("0")
+        .expect("obsolete XHR deliveries should be discarded at the checkpoint");
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify([__xhrPendingRetirement, \
+             [__xhrPendingAborted.readyState, __xhrPendingAborted.status, __xhrPendingAborted.responseText], \
+             [__xhrPendingReopened.readyState, __xhrPendingReopened.status, __xhrPendingReopened.responseText]])"
+        )
+        .expect("retired XHR deliveries must not change current state"),
+        r#"[["abort:4","loadend:4","checkpoint"],[0,0,""],[1,0,""]]"#
+    );
 }
 
 #[test]
@@ -1855,7 +2014,8 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
     let mut vm = new_storage_test_vm("https://pending-stream-small-chunks.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1889,7 +2049,8 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
         .expect("pending stream read should be registered");
     assert_eq!(initial, "[]");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1919,7 +2080,8 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     let mut vm = new_storage_test_vm("https://pending-stream-backpressure.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1950,7 +2112,8 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     )
     .expect("first pending stream read should be registered");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let buffered_len = vm
         .renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2058,6 +2221,7 @@ __streamingXhr.send();
         redirected: false,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     };
 
@@ -2122,6 +2286,103 @@ __streamingXhr.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn streaming_xhr_progress_gate_can_expire_without_pending_data_and_cancel_on_reopen() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm("https://xhr-progress-gate.test/");
+    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.eval(
+        r#"
+globalThis.__xhrGate = new XMLHttpRequest();
+globalThis.__xhrGateEvents = [];
+__xhrGate.onprogress = event => __xhrGateEvents.push(["progress", event.loaded, __xhrGate.responseText]);
+__xhrGate.onabort = () => __xhrGateEvents.push(["abort"]);
+__xhrGate.onload = () => __xhrGateEvents.push(["load", __xhrGate.responseText]);
+__xhrGate.open("GET", "/stream");
+__xhrGate.send();
+"#,
+    )
+    .expect("streaming XHR should be intercepted");
+    let pending = vm.take_pending_subresource_fetch_infos();
+    assert_eq!(pending.len(), 1);
+    let request = &pending[0];
+    let internal_id = request.internal_id;
+    let body_source_id = crate::network_host::new_network_body_source_id();
+    vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
+        skip_fetch_security_validation: false,
+        response_filter: None,
+        internal_id,
+        request_url: request.url.clone(),
+        request_method: "GET".to_owned(),
+        request_headers: Vec::new().into(),
+        request_body: None,
+        body_source_id,
+        head: moli_fetch::ResponseHead {
+            final_url: request.url.clone(),
+            status: 200,
+            status_text: None,
+            headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        },
+        network_request_headers: None,
+    })
+    .expect("streaming response head");
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"a".to_vec());
+    assert!(
+        vm.ms_to_next_timeout().is_some(),
+        "first progress starts the gate even without a deferred update"
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("a gate without pending data should expire quietly");
+    assert!(vm.ms_to_next_timeout().is_none());
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("first progress"),
+        r#"[["progress",1,"a"]]"#
+    );
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"b".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"c".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"d".to_vec());
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("coalesced progress"),
+        r#"[["progress",1,"a"],["progress",2,"ab"]]"#
+    );
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the next gate should publish only the latest snapshot");
+    assert_eq!(
+        vm.eval("JSON.stringify(__xhrGateEvents)")
+            .expect("deferred progress"),
+        r#"[["progress",1,"a"],["progress",2,"ab"],["progress",4,"abcd"]]"#
+    );
+    assert!(vm.ms_to_next_timeout().is_none());
+
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"e".to_vec());
+    vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"f".to_vec());
+    vm.eval("__xhrGate.abort(); __xhrGate.open('GET', 'data:,new'); __xhrGate.send();")
+        .expect("abort and replace a request with deferred progress");
+    vm.eval("0").expect("replacement completion checkpoint");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("an obsolete progress timer must not affect the replacement");
+    assert_eq!(
+        vm.eval("JSON.stringify([__xhrGate.readyState, __xhrGate.responseText, __xhrGateEvents.slice(-4)])")
+            .expect("replacement response and remaining progress events"),
+        r#"[4,"new",[["progress",5,"abcde"],["abort"],["progress",3,"new"],["load","new"]]]"#
+    );
+    assert!(vm.ms_to_next_timeout().is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn streaming_subresource_finish_preserves_response_head_cache_state() {
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
@@ -2139,7 +2400,8 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
     let mut body_writer = crate::types::SubresourceResponseBodyWriter::default();
     body_writer.append(b"cached-body");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2165,6 +2427,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(&document_url),
                             info: crate::types::PendingSubresourceFetchInfo {
@@ -2193,6 +2456,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             continuation: super::PendingSubresourceContinuation::Xhr {
                                 xhr: v8::Global::new(scope, xhr),
                                 use_cors_preflight: false,
+                                initiator_url: String::new(),
                             },
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
@@ -2232,6 +2496,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 negotiated_http_version: None,
                             }],
                             from_cache: true,
+                            cache_state: moli_fetch::ResponseCacheState::Local,
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2296,7 +2561,8 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
         Url::parse("https://sw-non-stream-failure.test/data").expect("request URL should parse");
     let rejection_message = "FetchEvent.respondWith rejected an error Response";
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2320,6 +2586,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
 
                 context_host.borrow_mut().restore_pending_subresource_fetch(
                     super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
@@ -2434,7 +2701,8 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     let final_url = Url::parse("https://streaming-fetch-body-error.test/final")
         .expect("final URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2456,6 +2724,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-error.test/")
@@ -2509,6 +2778,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                             redirected: false,
                             redirect_chain: Vec::new(),
                             from_cache: false,
+                            cache_state: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2580,7 +2850,8 @@ fn install_streaming_fetch_response_fixture(
     global_name: &'static str,
     load_client: crate::network::ResourceRequestClient,
 ) {
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2609,6 +2880,7 @@ fn install_streaming_fetch_response_fixture(
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     body_source_id,
@@ -2622,6 +2894,7 @@ fn install_streaming_fetch_response_fixture(
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
@@ -2669,6 +2942,7 @@ fn install_streaming_fetch_response_fixture(
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
@@ -2694,7 +2968,8 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
     let request_url = Url::parse("https://streaming-fetch-body-cancel.test/data")
         .expect("request URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     let cancel_handle_for_state = cancel_handle.clone();
     vm.renderer_document_isolate
@@ -2726,6 +3001,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            dispatch: None,
                             redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-cancel.test/")
@@ -2779,6 +3055,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                             redirected: false,
                             redirect_chain: Vec::new(),
                             from_cache: false,
+                            cache_state: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -2965,7 +3242,10 @@ async fn streaming_fetch_body_clone_branches_both_receive_complete_body() {
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch clone test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 105;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3009,10 +3289,14 @@ async fn streaming_fetch_body_clone_branches_both_receive_complete_body() {
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"UX".to_vec());
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming fetch finish should close both clone branches");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch tee promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchTeeProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_clone_branches_both_receive_complete_body",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),
@@ -3038,7 +3322,10 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch() {
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch live-clone test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 102;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3092,10 +3379,14 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch() {
     vm.append_streaming_async_subresource_fetch_chunk(body_source_id, b"clone".to_vec());
     vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
         .expect("streaming fetch finish should close the live clone branch");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch clone cancel promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchCloneCancelProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_cancel_does_not_abort_live_clone_branch",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),
@@ -3121,7 +3412,10 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
     let load_owner =
         crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("streaming fetch clone-error test loader");
-    let mut vm = new_storage_test_vm("https://streaming-fetch-body-cancel.test/");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://streaming-fetch-body-cancel.test/",
+        &load_owner,
+    );
     let internal_id = 106;
     let body_source_id = crate::network_host::new_network_body_source_id();
     let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -3170,10 +3464,14 @@ async fn streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_
         Err("stream broke".to_owned()),
     )
     .expect("streaming fetch source error should error the live clone branch");
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("streaming fetch clone error promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &load_owner,
+        "String(__streamingFetchCloneErrorProbe.length === 2)",
+        "true",
+        "streaming_fetch_body_cancel_does_not_abort_live_clone_branch_on_source_error",
+    )
+    .await;
 
     assert!(
         !cancel_handle.is_cancelled(),
@@ -3339,7 +3637,8 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
         .truncate_file_for_test(0)
         .expect("test should truncate the pooled body file");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -3358,6 +3657,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        dispatch: None,
                         redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(
                             &(Url::parse("https://xhr-streaming-materialize-error.test/")
@@ -3392,6 +3692,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         continuation: super::PendingSubresourceContinuation::Xhr {
                             xhr: v8::Global::new(scope, xhr),
                             use_cors_preflight: false,
+                            initiator_url: String::new(),
                         },
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,
@@ -3414,6 +3715,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
@@ -3672,6 +3974,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 if streaming {
@@ -3943,6 +4246,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 if streaming {
@@ -3980,7 +4284,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     .expect("finish document response");
                 } else {
                     let context_ptr: *const v8::Global<v8::Context> =
-                        &vm.page_default_runtime.context;
+                        &vm.current_main_world().unwrap().context;
                     vm.renderer_document_isolate
                         .with_entered_renderer_document_isolate(move |isolate| {
                             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -4070,4 +4374,333 @@ fn xml_http_request_queued_document_response_uses_parsed_overrides_and_xml_error
         }
     }
     assert_eq!(result, serde_json::to_string(&expected).unwrap());
+}
+
+#[test]
+fn xhr_open_inactive_document_errors_use_the_invoked_method_realm() {
+    for callee_is_child in [false, true] {
+        for retire_during_conversion in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://xhr-open-exception-realm.test/",
+                "<!doctype html><body><iframe id='xhr-owner'></iframe></body>",
+            );
+            materialize_single_child_default_realm_for_test(&mut vm, "XHR exception realm");
+            let result = vm
+                .eval(&format!(
+                    r#"
+(() => {{
+  const frame = document.getElementById('xhr-owner');
+  const owner = frame.contentWindow;
+  const xhr = new owner.XMLHttpRequest();
+  const callee = {callee_is_child} ? owner : window;
+  const open = callee.XMLHttpRequest.prototype.open;
+  const expectedPrototype = callee.DOMException.prototype;
+  let conversions = 0;
+  const url = {{toString() {{
+    conversions++;
+    if ({retire_during_conversion}) frame.remove();
+    return '/resource';
+  }}}};
+  if (!{retire_during_conversion}) frame.remove();
+  let caught;
+  try {{ open.call(xhr, 'GET', url); }} catch (error) {{ caught = error; }}
+  return JSON.stringify([
+    caught && caught.name, caught && caught.code,
+    !!caught && Object.getPrototypeOf(caught) === expectedPrototype,
+    conversions, xhr.readyState
+  ]);
+}})()
+"#
+                ))
+                .expect("retired XHR owner probe should run");
+            assert_eq!(
+                result, r#"["InvalidStateError",11,true,1,0]"#,
+                "callee_is_child={callee_is_child}, retire_during_conversion={retire_during_conversion}",
+            );
+        }
+    }
+}
+
+#[test]
+fn xhr_open_live_document_errors_use_the_invoked_method_realm() {
+    let mut vm = new_parsed_test_vm(
+        "https://xhr-open-live-exception-realm.test/",
+        "<!doctype html><body><iframe id='xhr-owner'></iframe></body>",
+    );
+    materialize_single_child_default_realm_for_test(&mut vm, "live XHR exception realm");
+    let result = vm.eval(r#"
+(() => {
+  const child = document.getElementById('xhr-owner').contentWindow;
+  for (const callee of [window, child]) {
+    for (const owner of [window, child]) {
+      const xhr = new owner.XMLHttpRequest();
+      xhr.timeout = 1;
+      let caught;
+      try {
+        callee.XMLHttpRequest.prototype.open.call(xhr, 'GET', 'https://example.test/resource', false);
+      } catch (error) { caught = error; }
+      if (!caught || caught.name !== 'InvalidAccessError' || caught.code !== 15 ||
+          Object.getPrototypeOf(caught) !== callee.DOMException.prototype || xhr.readyState !== 0) {
+        throw new Error('synchronous open errors must retain the method realm and unopened state');
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).expect("live XHR exception realm probe should run");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn xml_http_request_rewrites_only_utf8_text_body_charsets() {
+    let mut vm = new_storage_test_vm("https://xhr-body-preparation.test/");
+    vm.eval(r#"globalThis.__xhrBodyFixtures = (() => {
+                    const ordinaryElement = document.createElement('div');
+                    ordinaryElement.toString = () => 'element text';
+                    const spoof = {nodeType: 9, toString() { return 'ordinary text'; }};
+                    const form = new FormData();
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/');
+                    xhr.setRequestHeader('Content-Type', 'Text/Plain; Charset=ASCII;keep="alpha;beta"');
+                    return [xhr, [
+                        [ordinaryElement, 'element text', 'text/plain;charset=UTF-8', true],
+                        [spoof, 'ordinary text', 'text/plain;charset=UTF-8', true],
+                        ['caf\u00e9\ud800', 'caf\u00e9\ufffd', 'text/plain;charset=UTF-8', true],
+                        ['', '', 'text/plain;charset=UTF-8', true],
+                        [new URLSearchParams({q: 'caf\u00e9'}), 'q=caf%C3%A9', 'application/x-www-form-urlencoded;charset=UTF-8', true],
+                        [new Blob(['bytes'], {type: 'text/plain;charset=ascii'}), 'bytes', 'text/plain;charset=ascii', false],
+                        [new Uint8Array([65, 66]), 'AB', null, false],
+                        [null, null, null, false],
+                        [form, undefined, undefined, false],
+                    ]];
+                })()"#).unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let fixtures = global
+            .get(scope, crate::util::v8str(scope, "__xhrBodyFixtures").into())
+            .unwrap();
+        let fixtures = v8::Local::<v8::Array>::try_from(fixtures).expect("body fixture array");
+        let xhr_value = fixtures.get_index(scope, 0).expect("xhr fixture");
+        let xhr = v8::Local::<v8::Object>::try_from(xhr_value).expect("xhr object");
+        let cases_value = fixtures.get_index(scope, 1).expect("body cases");
+        let cases = v8::Local::<v8::Array>::try_from(cases_value).expect("body cases array");
+        for index in 0..cases.length() {
+            let case = cases.get_index(scope, index).expect("body case");
+            let case = v8::Local::<v8::Array>::try_from(case).expect("body case array");
+            let body = case.get_index(scope, 0).expect("body value");
+            let prepared = crate::network_host::prepare_xhr_send_body(scope, body)
+                .expect("prepare body without observing Document properties");
+            let expected_bytes = case.get_index(scope, 1).expect("expected bytes");
+            let expected_type = case.get_index(scope, 2).expect("expected type");
+            let rewrite = case.get_index(scope, 3).expect("charset policy").is_true();
+            if expected_bytes.is_null() {
+                assert!(prepared.body.is_none());
+            } else if !expected_bytes.is_undefined() {
+                let expected = expected_bytes
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.body.as_deref(),
+                    Some(expected.as_bytes()),
+                    "case {index}"
+                );
+            }
+            if expected_type.is_null() {
+                assert!(prepared.default_content_type.is_none());
+            } else if !expected_type.is_undefined() {
+                let expected = expected_type
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.default_content_type.as_deref(),
+                    Some(expected.as_str()),
+                    "case {index}"
+                );
+            }
+            let headers = crate::network_host::xhr_author_request_headers(scope, xhr, &prepared);
+            assert_eq!(
+                headers,
+                [(
+                    "Content-Type".to_owned(),
+                    if rewrite {
+                        "text/plain;charset=UTF-8;keep=\"alpha;beta\"".to_owned()
+                    } else {
+                        "Text/Plain; Charset=ASCII;keep=\"alpha;beta\"".to_owned()
+                    }
+                )],
+                "case {index}"
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn xml_http_request_serializes_native_document_bodies_without_public_properties() {
+    let mut vm = new_storage_test_vm("https://xhr-body-preparation.test/");
+    vm.eval(r#"globalThis.__xhrBodyFixtures = (() => {
+                    const xml = document.implementation.createDocument('urn:test', 'root');
+                    xml.documentElement.textContent = 'caf\u00e9\ud800';
+                    const html = document.implementation.createHTMLDocument();
+                    html.body.innerHTML = '<p>caf\u00e9 &amp;<br></p><template><b>x</b></template>';
+                    const empty = document.implementation.createDocument(null, null);
+                    const bogus = document.implementation.createDocument(null, null);
+                    const element = bogus.createElement('test:test');
+                    element.setAttribute('x', '\ud800');
+                    bogus.appendChild(element);
+                    const xhtml = new DOMParser().parseFromString('<html xmlns="http://www.w3.org/1999/xhtml"><br/></html>', 'application/xhtml+xml');
+                    for (const doc of [xml, html, empty, bogus, xhtml]) {
+                        Object.defineProperties(doc, {
+                            toString: {value() { throw new Error('Document toString'); }},
+                            contentType: {get() { throw new Error('Document contentType'); }},
+                            nodeType: {get() { throw new Error('Document nodeType'); }},
+                        });
+                    }
+                    const ordinaryElement = document.createElement('div');
+                    ordinaryElement.toString = () => 'element text';
+                    const spoof = {nodeType: 9, toString() { return 'ordinary text'; }};
+                    const form = new FormData();
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/');
+                    xhr.setRequestHeader('Content-Type', 'Text/Plain; Charset=ASCII;keep="alpha;beta"');
+                    return [xhr, [
+                        [xml, '<root xmlns="urn:test">caf\u00e9\ufffd</root>', 'application/xml;charset=UTF-8', true],
+                        [html, '<!DOCTYPE html><html><head></head><body><p>caf\u00e9 &amp;<br></p><template><b>x</b></template></body></html>', 'text/html;charset=UTF-8', true],
+                        [empty, '', 'application/xml;charset=UTF-8', true],
+                        [bogus, '<test:test x="\ufffd"/>', 'application/xml;charset=UTF-8', true],
+                        [xhtml, '<html xmlns="http://www.w3.org/1999/xhtml"><br /></html>', 'application/xml;charset=UTF-8', true],
+                        [ordinaryElement, 'element text', 'text/plain;charset=UTF-8', true],
+                        [spoof, 'ordinary text', 'text/plain;charset=UTF-8', true],
+                        ['caf\u00e9\ud800', 'caf\u00e9\ufffd', 'text/plain;charset=UTF-8', true],
+                        ['', '', 'text/plain;charset=UTF-8', true],
+                        [new URLSearchParams({q: 'caf\u00e9'}), 'q=caf%C3%A9', 'application/x-www-form-urlencoded;charset=UTF-8', true],
+                        [new Blob(['bytes'], {type: 'text/plain;charset=ascii'}), 'bytes', 'text/plain;charset=ascii', false],
+                        [new Uint8Array([65, 66]), 'AB', null, false],
+                        [null, null, null, false],
+                        [form, undefined, undefined, false],
+                    ]];
+                })(); 'ready'"#).unwrap();
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let fixtures = global
+            .get(scope, crate::util::v8str(scope, "__xhrBodyFixtures").into())
+            .unwrap();
+        let fixtures = v8::Local::<v8::Array>::try_from(fixtures).expect("body fixture array");
+        let xhr_value = fixtures.get_index(scope, 0).expect("xhr fixture");
+        let xhr = v8::Local::<v8::Object>::try_from(xhr_value).expect("xhr object");
+        let cases_value = fixtures.get_index(scope, 1).expect("body cases");
+        let cases = v8::Local::<v8::Array>::try_from(cases_value).expect("body cases array");
+        for index in 0..cases.length() {
+            let case = cases.get_index(scope, index).expect("body case");
+            let case = v8::Local::<v8::Array>::try_from(case).expect("body case array");
+            let body = case.get_index(scope, 0).expect("body value");
+            let prepared = crate::network_host::prepare_xhr_send_body(scope, body)
+                .expect("prepare body without observing Document properties");
+            let expected_bytes = case.get_index(scope, 1).expect("expected bytes");
+            let expected_type = case.get_index(scope, 2).expect("expected type");
+            let rewrite = case.get_index(scope, 3).expect("charset policy").is_true();
+            if expected_bytes.is_null() {
+                assert!(prepared.body.is_none());
+            } else if !expected_bytes.is_undefined() {
+                let expected = expected_bytes
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.body.as_deref(),
+                    Some(expected.as_bytes()),
+                    "case {index}"
+                );
+            }
+            if expected_type.is_null() {
+                assert!(prepared.default_content_type.is_none());
+            } else if !expected_type.is_undefined() {
+                let expected = expected_type
+                    .to_string(scope)
+                    .unwrap()
+                    .to_rust_string_lossy(scope);
+                assert_eq!(
+                    prepared.default_content_type.as_deref(),
+                    Some(expected.as_str()),
+                    "case {index}"
+                );
+            }
+            let headers = crate::network_host::xhr_author_request_headers(scope, xhr, &prepared);
+            assert_eq!(
+                headers,
+                [(
+                    "Content-Type".to_owned(),
+                    if rewrite {
+                        "text/plain;charset=UTF-8;keep=\"alpha;beta\"".to_owned()
+                    } else {
+                        "Text/Plain; Charset=ASCII;keep=\"alpha;beta\"".to_owned()
+                    }
+                )],
+                "case {index}"
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn xhr_bodyless_upload_abort_has_no_upload_events_in_window() {
+    let mut vm = new_storage_test_vm("https://xhr-bodyless-upload.test/");
+    let result = vm
+        .eval(concat!(
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/xhr-bodyless-upload.js"
+            )),
+            "\nprobeBodylessXhrUpload();"
+        ))
+        .expect("a missing body must be upload-complete before XHR loadstart callbacks");
+    assert_eq!(result, "ok");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn xhr_bodyless_upload_reentrant_get_replaces_aborted_post_upload() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_test_vm("https://xhr-bodyless-reentry.test/");
+    vm.eval(
+        r#"
+const xhr = new XMLHttpRequest();
+const events = globalThis.__bodylessReentry = [];
+let restarted = false;
+xhr.onreadystatechange = () => {
+  if (xhr.readyState === 4 && !restarted) {
+    restarted = true;
+    events.push(`abort-ready:${xhr.readyState}`);
+    xhr.open('GET', 'data:text/plain,replacement');
+    events.push(`reopened:${xhr.readyState}`);
+    xhr.send(null);
+  }
+};
+xhr.onloadstart = () => {
+  events.push(`loadstart:${xhr.readyState}`);
+  if (!restarted) {
+    xhr.abort();
+    events.push(`after-abort:${xhr.readyState}`);
+  }
+};
+xhr.upload.onabort = () => events.push(`upload-abort:${xhr.readyState}`);
+xhr.upload.onloadend = () => events.push(`upload-loadend:${xhr.readyState}`);
+xhr.onabort = () => events.push(`abort:${xhr.readyState}`);
+xhr.onload = () => events.push(`load:${xhr.readyState}:${xhr.responseText}`);
+xhr.open('POST', '/unused');
+xhr.send('payload');
+"#,
+    )
+    .expect("abort readystatechange should admit the replacement GET");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("the replacement response should finish through Networking tasks");
+    assert_eq!(
+        vm.eval("__bodylessReentry.join('|')").unwrap(),
+        "loadstart:1|abort-ready:4|reopened:1|loadstart:1|abort:1|after-abort:1|load:4:replacement"
+    );
 }

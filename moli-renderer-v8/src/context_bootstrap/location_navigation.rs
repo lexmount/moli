@@ -1,6 +1,6 @@
 use super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, resolve_location_navigation_target,
-    sync_location_object,
+    sync_location_object, urls_equal_ignoring_fragment,
 };
 use super::navigation_activation::install_navigation_transition;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
@@ -142,11 +142,7 @@ pub(crate) fn meta_refresh_navigation_kind(
     target_url: &url::Url,
     delay_ms: u32,
 ) -> LocationNavigationKind {
-    let mut current_without_fragment = current_url.clone();
-    current_without_fragment.set_fragment(None);
-    let mut target_without_fragment = target_url.clone();
-    target_without_fragment.set_fragment(None);
-    if current_without_fragment == target_without_fragment {
+    if urls_equal_ignoring_fragment(current_url, target_url) {
         if target_url.fragment().is_some() {
             LocationNavigationKind::Assign
         } else {
@@ -193,6 +189,34 @@ pub(crate) fn navigate_top_level_meta_refresh(
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
         || (same_document_fragment
             && location_href_slot(scope, location).as_deref() == Some(target.as_str()))
+}
+
+/// Classify a delayed child refresh against the URL at execution time, including
+/// exact fragment targets that must keep the current Document.
+pub(crate) fn navigate_child_meta_refresh<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    target: &url::Url,
+    delay_ms: u32,
+) {
+    let Some(current_href) = location_href_slot(scope, location) else {
+        return;
+    };
+    let Ok(current_url) = url::Url::parse(&current_href) else {
+        return;
+    };
+    let kind = meta_refresh_navigation_kind(&current_url, target, delay_ms);
+    let same_document_fragment = kind == LocationNavigationKind::Assign
+        && is_same_document_fragment_navigation(Some(&current_url), target);
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        Some(target.to_string()),
+        None,
+        true,
+        same_document_fragment,
+    );
 }
 
 pub(crate) fn navigate_location_object_with_source_element<'s>(

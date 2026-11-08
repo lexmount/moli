@@ -1,0 +1,302 @@
+use super::*;
+
+#[test]
+fn xml_serialization_keeps_sibling_namespace_scopes_and_generated_prefix_order() {
+    let mut vm = new_storage_html_test_vm("https://xml-sibling-scopes.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const fragment = document.createDocumentFragment();
+        for (const [elementNS, attributeNS] of [['urn:first','urn:a'], ['urn:second','urn:b']]) {
+            const element = document.createElementNS(elementNS, 'p:item');
+            element.setAttributeNS(attributeNS, 'value', '<&"\n');
+            element.append(document.createTextNode('<&>'), document.createComment('comment'));
+            fragment.append(element);
+        }
+        const xml = new XMLSerializer().serializeToString(fragment);
+        if (!xml.includes('xmlns:ns1="urn:a"') || !xml.includes('xmlns:ns2="urn:b"'))
+            throw Error('generated prefix order: '+xml);
+        const parsed = new DOMParser().parseFromString('<root>'+xml+'</root>', 'application/xml');
+        if (parsed.getElementsByTagName('parsererror').length) throw Error(xml);
+        const children = parsed.documentElement.children;
+        for (let i=0; i<2; i++) {
+            const ns = i ? 'urn:second' : 'urn:first', attributeNS = i ? 'urn:b' : 'urn:a';
+            if (children[i].namespaceURI !== ns || children[i].getAttributeNS(attributeNS,'value') !== '<&"\n' ||
+                children[i].textContent !== '<&>' || children[i].lastChild.nodeType !== 8)
+                throw Error('scope or character data');
+        }
+        return new XMLSerializer().serializeToString(fragment) === xml;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+#[ignore = "manual XML serialization scaling benchmark"]
+fn xml_runtime_scaling_microbenchmark() {
+    let mut vm = new_storage_html_test_vm("https://xml-scaling-bench.test/");
+    for depth in [16, 64, 256] {
+        vm.eval(&format!(r#"(() => {{
+            const doc = document.implementation.createDocument('urn:bench', 'n');
+            let node = doc.documentElement;
+            for (let i=1; i<{depth}; i++) {{ const child=doc.createElementNS('urn:bench','n');node.append(child);node=child; }}
+            node.append(doc.createTextNode('x'.repeat(64*1024)));
+            globalThis.benchXmlRoot=doc.documentElement;
+            globalThis.benchXmlSerializer=new XMLSerializer();
+            return true;
+        }})()"#)).unwrap();
+        let expression = "benchXmlSerializer.serializeToString(benchXmlRoot).length";
+        let length = vm.eval(expression).unwrap();
+        let mut samples = Vec::new();
+        for _ in 0..7 {
+            let started = std::time::Instant::now();
+            for _ in 0..8 {
+                assert_eq!(vm.eval(expression).unwrap(), length);
+            }
+            samples.push(started.elapsed().as_nanos() / 8);
+        }
+        println!("{{\"benchmark\":\"xml_chain_64k\",\"size\":{depth},\"samples_ns\":{samples:?}}}");
+    }
+}
+
+#[test]
+fn xml_serialization_resolves_namespace_declaration_conflicts() {
+    let mut vm = new_storage_html_test_vm("https://xml-namespace-conflicts.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const serializer = new XMLSerializer();
+        const parser = new DOMParser();
+        const signature = element => [element.namespaceURI, element.localName,
+            Array.from(element.attributes).filter(attr => attr.namespaceURI !== xmlns &&
+                attr.name !== 'xmlns' && !attr.name.startsWith('xmlns:'))
+                .map(attr => [attr.namespaceURI, attr.localName, attr.value]).sort(),
+            Array.from(element.children).map(signature)];
+        const roots = [];
+        const defaultConflict = document.createElementNS('urn:a', 'root');
+        defaultConflict.setAttributeNS(xmlns, 'xmlns', 'urn:b');
+        defaultConflict.append(document.createElementNS('urn:b', 'child'), document.createElementNS(null, 'empty'));
+        roots.push(defaultConflict);
+        const prefixConflict = document.createElementNS('urn:a', 'p:root');
+        prefixConflict.setAttributeNS(xmlns, 'xmlns:p', 'urn:b');
+        prefixConflict.setAttributeNS('urn:b', 'p:value', 'b');
+        roots.push(prefixConflict);
+        const attributeConflict = document.createElementNS('urn:a', 'p:root');
+        attributeConflict.setAttributeNS('urn:b', 'p:first', 'b');
+        attributeConflict.setAttributeNS('urn:c', 'p:second', 'c');
+        attributeConflict.setAttributeNS(xmlns, 'xmlns:reserved', 'urn:reserved');
+        attributeConflict.setAttributeNS('urn:d', 'fourth', 'd');
+        roots.push(attributeConflict);
+        for (const root of roots) {
+            const before = JSON.stringify(signature(root));
+            const serialized = serializer.serializeToString(root);
+            const parsed = parser.parseFromString(serialized, 'application/xml');
+            if (parsed.getElementsByTagName('parsererror').length ||
+                JSON.stringify(signature(parsed.documentElement)) !== before)
+                throw Error('namespace round trip: ' + serialized);
+            if (JSON.stringify(signature(root)) !== before) throw Error('serializer mutated source');
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn xml_serialization_tracks_effective_prefix_bindings() {
+    let mut vm = new_storage_html_test_vm("https://xml-effective-prefixes.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const serializer = new XMLSerializer();
+        const signature = element => [element.namespaceURI, element.localName,
+            Array.from(element.attributes).filter(attr => attr.namespaceURI !== xmlns)
+                .map(attr => [attr.namespaceURI, attr.localName, attr.value]).sort(),
+            Array.from(element.children).map(signature)];
+        for (const doc of [document, document.implementation.createDocument(null, 'doc')]) {
+            const root = doc.createElementNS(null, 'root');
+            root.setAttributeNS(xmlns, 'xmlns:p', 'urn:one');
+            root.setAttributeNS(xmlns, 'xmlns:q', 'urn:one');
+            const child = doc.createElementNS(null, 'child');
+            child.setAttributeNS(xmlns, 'xmlns:p', 'urn:two');
+            child.setAttributeNS('urn:one', 'p:id', 'child');
+            child.setAttributeNS('urn:two', 'p:other', 'two');
+            const grandchild = doc.createElementNS(null, 'grandchild');
+            grandchild.setAttributeNS(xmlns, 'xmlns:p', 'urn:one');
+            grandchild.setAttributeNS('urn:two', 'p:id', 'grandchild');
+            child.appendChild(grandchild);
+            const sibling = doc.createElementNS(null, 'sibling');
+            sibling.setAttributeNS('urn:one', 'p:id', 'sibling');
+            const prefixed = doc.createElementNS('urn:one', 'p:element');
+            prefixed.setAttributeNS(xmlns, 'xmlns:p', 'urn:two');
+            root.append(child, sibling, prefixed);
+            const before = JSON.stringify(signature(root));
+            const xml = serializer.serializeToString(root);
+            const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+            if (parsed.getElementsByTagName('parsererror').length ||
+                JSON.stringify(signature(parsed.documentElement)) !== before)
+                throw Error('shadowed namespace round trip: ' + xml);
+            if (parsed.documentElement.children[0].getAttributeNodeNS('urn:one', 'id').prefix !== 'q' ||
+                parsed.documentElement.children[1].getAttributeNodeNS('urn:one', 'id').prefix !== 'p')
+                throw Error('effective candidate ordering or sibling scope: ' + xml);
+            if (JSON.stringify(signature(root)) !== before || serializer.serializeToString(root) !== xml)
+                throw Error('serializer changed source or prefix order');
+            root.removeAttributeNS(xmlns, 'q');
+            const withoutAlternative = serializer.serializeToString(root);
+            const reparsed = new DOMParser().parseFromString(withoutAlternative, 'application/xml');
+            if (reparsed.getElementsByTagName('parsererror').length ||
+                JSON.stringify(signature(reparsed.documentElement)) !== before)
+                throw Error('generated fallback round trip: ' + withoutAlternative);
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn xml_serialization_uses_one_attribute_prefix_allocator() {
+    let mut vm = new_storage_html_test_vm("https://xml-attribute-prefixes.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const serializer = new XMLSerializer();
+        for (const namespace of ['urn:value', 'http://www.w3.org/1999/xlink']) {
+            const free = document.createElementNS(null, 'root');
+            free.setAttributeNS(namespace, 'p:name', 'test');
+            const expected = '<root xmlns:p="' + namespace + '" p:name="test"/>';
+            if (serializer.serializeToString(free) !== expected)
+                throw Error('preserve explicit prefix: ' + serializer.serializeToString(free));
+            for (const declarationFirst of [false, true]) {
+                const root = document.createElementNS(null, 'root');
+                if (declarationFirst) root.setAttributeNS(xmlns, 'xmlns:p', 'urn:reserved');
+                root.setAttributeNS(namespace, 'p:name', 'test');
+                if (!declarationFirst) root.setAttributeNS(xmlns, 'xmlns:p', 'urn:reserved');
+                root.setAttributeNS('urn:second', 'p:second', 'two');
+                const xml = serializer.serializeToString(root);
+                const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+                if (parsed.getElementsByTagName('parsererror').length ||
+                    parsed.documentElement.getAttributeNS(namespace, 'name') !== 'test' ||
+                    parsed.documentElement.getAttributeNS('urn:second', 'second') !== 'two' ||
+                    parsed.documentElement.lookupNamespaceURI('p') !== 'urn:reserved')
+                    throw Error('local prefix conflict: ' + xml);
+                if (root.getAttributeNodeNS(namespace, 'name').prefix !== 'p')
+                    throw Error('serializer changed original attribute');
+            }
+            const root = document.createElementNS('urn:element', 'p:root');
+            root.setAttributeNS(namespace, 'p:name', 'test');
+            const xml = serializer.serializeToString(root);
+            const parsed = new DOMParser().parseFromString(xml, 'application/xml');
+            if (parsed.getElementsByTagName('parsererror').length ||
+                parsed.documentElement.namespaceURI !== 'urn:element' ||
+                parsed.documentElement.getAttributeNS(namespace, 'name') !== 'test')
+                throw Error('element prefix reservation: ' + xml);
+        }
+        return true;
+    })()"#
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_collisions() {
+    let mut vm = new_storage_html_test_vm("https://xml-namespace-collisions.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+        const xmlns = 'http://www.w3.org/2000/xmlns/';
+        const plain = document.createElementNS('urn:a', 'p:root');
+        plain.setAttribute('xmlns:p', 'urn:b');
+        const generated = document.createElementNS(null, 'root');
+        generated.setAttributeNS(xmlns, 'xmlns:ns1', 'urn:reserved');
+        generated.setAttributeNS('urn:b', 'value', 'b');
+        const roots = [plain, generated];
+        const snapshot = root => JSON.stringify(Array.from(root.attributes,
+            attr => [attr.namespaceURI, attr.prefix, attr.localName, attr.value]));
+        const before = roots.map(snapshot);
+        const serializer = new XMLSerializer();
+        const serialized = roots.map(root => serializer.serializeToString(root));
+        for (let i = 0; i < roots.length; ++i) {
+            if (snapshot(roots[i]) !== before[i]) throw Error('serializer mutated source');
+            const parsed = new DOMParser().parseFromString(serialized[i], 'application/xml');
+            if (!parsed.getElementsByTagName('parsererror').length)
+                throw Error('this serialization is not required to be well-formed');
+        }
+        return JSON.stringify(serialized);
+    })()"#,
+        )
+        .unwrap();
+    // XMLSerializer uses require-well-formed=false. Namespace recording excludes
+    // ordinary xmlns:p spelling, and the specified nsN index can collide with a
+    // declaration already present on this element (DOM Parsing issue #44).
+    assert_eq!(
+        result,
+        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
+    );
+}
+
+#[test]
+fn xml_serializer_native_receivers_reject_forgery_and_author_proxies_in_the_callee_realm() {
+    let mut vm = new_storage_html_test_vm("https://xml-serializer-receivers.test/");
+    let result = vm.eval(r#"
+        document.body.innerHTML = '<iframe></iframe>';
+        const other = document.querySelector('iframe').contentWindow;
+        const serializer = new XMLSerializer();
+        const node = document.createElement('div');
+        let traps = 0;
+        const author = new Proxy(serializer, {
+            get() { traps++; throw new Error('unexpected get trap'); },
+            getPrototypeOf() { traps++; throw new Error('unexpected prototype trap'); }
+        });
+        const revoked = Proxy.revocable(serializer, {}); revoked.revoke();
+        for (const realm of [window, other]) {
+            const serialize = realm.XMLSerializer.prototype.serializeToString;
+            if (serialize.call(serializer, node) !== serialize.call(new realm.XMLSerializer(), node))
+                throw new Error('genuine cross-realm serializer');
+            for (const receiver of [null, undefined, {}, Object.create(serializer),
+                                    Object.create(XMLSerializer.prototype), author, revoked.proxy]) {
+                let error;
+                try { serialize.call(receiver, node); } catch (caught) { error = caught; }
+                if (!error || Object.getPrototypeOf(error) !== realm.TypeError.prototype)
+                    throw new Error('invalid receiver must throw the callee TypeError');
+            }
+        }
+        if (traps !== 0) throw new Error('receiver validation invoked an author Proxy trap');
+        'ok';
+    "#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn xml_serializer_derived_node_arguments_reject_invalid_roots_without_author_access() {
+    let mut vm = new_storage_html_test_vm("https://xml-serializer-node-arguments.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML = '<iframe></iframe>';
+        const other = document.querySelector('iframe').contentWindow;
+        const root = document.createElement('p');
+        root.textContent = 'hello & goodbye';
+        const foreign = other.document.createElement('p');
+        foreign.textContent = root.textContent;
+        let traps = 0;
+        const author = new Proxy(root, {
+            get() { traps++; throw Error('get trap'); },
+            getPrototypeOf() { traps++; throw Error('prototype trap'); }
+        });
+        const revoked = Proxy.revocable(root, {}); revoked.revoke();
+        const shaped = {get nodeType() {traps++; throw Error('nodeType getter');}};
+        for (const realm of [window, other]) {
+            const serializer = new realm.XMLSerializer();
+            const serialize = realm.XMLSerializer.prototype.serializeToString;
+            const expected = '<p xmlns="http://www.w3.org/1999/xhtml">hello &amp; goodbye</p>';
+            for (const node of [root, foreign]) {
+                if (serialize.call(serializer, node) !== expected) throw Error('genuine Node serialization');
+            }
+            const fragment = document.createDocumentFragment();
+            fragment.appendChild(document.createTextNode('a < b'));
+            if (serialize.call(serializer, fragment) !== 'a &lt; b') throw Error('fragment');
+            for (const args of [[], [undefined], [null], [1], ['text'], [shaped],
+                                [Object.create(root)], [Object.create(Node.prototype)],
+                                [author], [revoked.proxy]]) {
+                let error;
+                try { Reflect.apply(serialize, serializer, args); } catch (caught) { error = caught; }
+                if (!error || Object.getPrototypeOf(error) !== realm.TypeError.prototype)
+                    throw Error('invalid Node must throw callee TypeError');
+            }
+        }
+        if (traps !== 0) throw Error('argument conversion invoked author access');
+        return true;
+    })()"#).unwrap(), "true");
+}

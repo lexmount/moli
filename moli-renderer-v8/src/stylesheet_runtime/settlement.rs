@@ -5,8 +5,20 @@
 //! genuinely asynchronous dependent resources cross a Page task boundary.
 
 use super::*;
+use crate::css_resource_urls::{
+    StylesheetLoadBlockingResource, StylesheetLoadBlockingResourceKind,
+    StylesheetSubresourceRequest, StylesheetSubresourceTarget,
+};
 
 impl DocumentRuntime {
+    pub(crate) fn current_stylesheet_resources(
+        host: &JsContextHost,
+        root: DomHandle,
+    ) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
+        let mut reads = crate::native_bridge::element::StyleObservation::new(host);
+        reads.read(root).stylesheet_resource_snapshot()
+    }
+
     pub(crate) fn reconcile_document_web_fonts_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
@@ -15,7 +27,7 @@ impl DocumentRuntime {
         host.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
         // The shared resource mask is checked before allocating a document
         // list. Default resource-free pages keep their existing cheap path.
-        if !host
+        if host
             .current_main_document_resource_loader()
             .is_some_and(|loader| {
                 loader
@@ -23,11 +35,11 @@ impl DocumentRuntime {
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Font)
             })
         {
-            return;
+            for document in host.active_layout_document_handles() {
+                Self::reconcile_web_fonts_for_document_in_current_scope(scope, host_ptr, document);
+            }
         }
-        for document in host.active_layout_document_handles() {
-            Self::reconcile_web_fonts_for_document_in_current_scope(scope, host_ptr, document);
-        }
+        crate::context_bootstrap::discover_font_requests(scope);
     }
 
     pub(crate) fn reconcile_web_fonts_for_document_in_current_scope(
@@ -63,7 +75,7 @@ impl DocumentRuntime {
             return;
         }
         let Some(resources) =
-            crate::layout_renderer::current_native_stylesheet_resources(host, root)
+            crate::document_runtime::DocumentRuntime::current_stylesheet_resources(host, root)
         else {
             return;
         };
@@ -160,9 +172,9 @@ impl DocumentRuntime {
                 continue;
             }
             let terminal = client.terminal();
-            // Blink creates the owner's CSSStyleSheet even when the resource
-            // failed or was cancelled. An unusable terminal therefore installs
-            // an empty source; its existing link task still reports the error.
+            // Ordinary resource failures create an empty owner sheet. Integrity
+            // rejection stops before CSSStyleSheet creation; its link error and
+            // load-delay settlement still follow the normal terminal path.
             let ready_response = terminal.ready_response();
             let stylesheet_text = ready_response
                 .map(|response| response.body_text().to_owned())
@@ -176,13 +188,17 @@ impl DocumentRuntime {
                 }
             };
             let request_url = load.request_url().clone();
-            let prepared = host.prepare_linked_stylesheet_resource(
-                load.owner(),
-                &stylesheet_text,
-                stylesheet_base_url.clone(),
-                request_url.clone(),
-                terminal.origin_clean().unwrap_or(false),
-            );
+            let prepared = if terminal.failed_integrity() {
+                None
+            } else {
+                host.prepare_linked_stylesheet_resource(
+                    load.owner(),
+                    &stylesheet_text,
+                    stylesheet_base_url.clone(),
+                    request_url.clone(),
+                    terminal.origin_clean().unwrap_or(false),
+                )
+            };
             if let Some(prepared) = prepared.as_ref() {
                 host.install_linked_stylesheet(InstallLinkedStylesheet::from_prepared(
                     load.owner(),
@@ -235,7 +251,7 @@ impl DocumentRuntime {
                 let Some(binding) = host.accept_current_main_stylesheet_subresource_load_delay()
                 else {
                     tracing::debug!(
-                        url = %resource.request_url(),
+                        url = ?resource.request_url(),
                         kind = ?resource.kind(),
                         "skipping stylesheet subresource for stale main document owner"
                     );
@@ -299,81 +315,38 @@ impl DocumentRuntime {
         let retain_css_images = host.layout_policy().uses_real_layout();
         let mut admitted = Vec::with_capacity(resources.len());
         for (binding, resource) in resources {
-            match resource.kind() {
-                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font => {
+            match resource {
+                resource @ StylesheetLoadBlockingResource::Font { .. } => {
                     let Some(document) = host.stylesheet_web_font_document(binding) else {
                         continue;
                     };
                     match host.admit_document_web_font(document, resource) {
-                        Some(resource) => admitted.push((binding, resource, None)),
+                        Some(request) => admitted.push((binding, request)),
                         None => {
                             host.settle_stylesheet_subresource_load_delay(binding);
                         }
                     }
                 }
-                crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Image
-                    if retain_css_images =>
-                {
-                    let resolved_url = resource.request_url().as_str().to_owned();
-                    match host.admit_stylesheet_css_image(binding, resolved_url) {
-                        crate::native_bridge::CssImageResourceAdmission::Fetch(identity) => {
-                            admitted.push((binding, resource, Some(identity)));
+                StylesheetLoadBlockingResource::Image(url) => {
+                    let identity = if retain_css_images {
+                        match host.admit_stylesheet_css_image(binding, url.as_str().to_owned()) {
+                            crate::native_bridge::CssImageResourceAdmission::Fetch(identity) => {
+                                Some(identity)
+                            }
+                            crate::native_bridge::CssImageResourceAdmission::Reused => {
+                                host.settle_stylesheet_subresource_load_delay(binding);
+                                continue;
+                            }
+                            crate::native_bridge::CssImageResourceAdmission::Untracked => None,
                         }
-                        crate::native_bridge::CssImageResourceAdmission::Reused => {
-                            host.settle_stylesheet_subresource_load_delay(binding);
-                        }
-                        crate::native_bridge::CssImageResourceAdmission::Untracked => {
-                            admitted.push((binding, resource, None));
-                        }
-                    }
-                }
-                _ => admitted.push((binding, resource, None)),
-            }
-        }
-        for (binding, resource, css_image) in admitted {
-            let request_url = resource.request_url().clone();
-            let kind = resource.kind();
-            let failed_css_image = css_image.clone();
-            let failed_web_font = (kind
-                == crate::css_resource_urls::StylesheetLoadBlockingResourceKind::Font)
-                .then(|| {
-                    resource
-                        .web_font()
-                        .cloned()
-                        .map(crate::css_resource_urls::CompletedStylesheetWebFont::failure)
-                })
-                .flatten();
-            match crate::network_host::start_stylesheet_subresource_fetch(
-                scope, host, binding, resource, css_image,
-            ) {
-                Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
-                    web_font,
-                )) => {
-                    Self::complete_document_web_font(host, binding, web_font);
-                }
-                Ok(
-                    crate::network_host::StylesheetSubresourceFetchStart::Pending
-                    | crate::network_host::StylesheetSubresourceFetchStart::Settled,
-                ) => {}
-                Err(error) => {
-                    if let Some(identity) = failed_css_image.as_ref() {
-                        let _ = host.fail_stylesheet_css_image(identity);
-                    }
-                    let settlement = host.settle_stylesheet_subresource_load_delay(binding);
-                    if let Some(web_font) = failed_web_font {
-                        Self::complete_document_web_font(host, binding, web_font);
-                    }
-                    tracing::warn!(
-                        url = %request_url,
-                        ?kind,
-                        owner = ?binding.owner(),
-                        settled = settlement.settled(),
-                        %error,
-                        "stylesheet subresource failed before network scheduling"
-                    );
+                    } else {
+                        None
+                    };
+                    admitted.push((binding, StylesheetSubresourceRequest::image(url, identity)));
                 }
             }
         }
+        Self::start_stylesheet_subresource_requests_in_current_scope(scope, host_ptr, admitted);
         tracing::debug!(
             resource_count,
             elapsed_ms = started.elapsed().as_millis(),
@@ -381,14 +354,79 @@ impl DocumentRuntime {
         );
     }
 
-    fn complete_document_web_font(
-        host: &JsContextHost,
-        binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-        terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
+    pub(crate) fn start_stylesheet_subresource_requests_in_current_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        requests: Vec<(
+            crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
+            StylesheetSubresourceRequest,
+        )>,
     ) {
-        let Some(document) = host.stylesheet_web_font_document(binding) else {
-            return;
-        };
+        debug_assert!(!host_ptr.is_null());
+        let host = unsafe { &mut *host_ptr };
+        let mut admitted = std::collections::VecDeque::from(requests);
+        while let Some((binding, request)) = admitted.pop_front() {
+            let request_url = request.url().clone();
+            let failed_target = request.target().clone();
+            let kind = match &failed_target {
+                StylesheetSubresourceTarget::Image(_) => StylesheetLoadBlockingResourceKind::Image,
+                StylesheetSubresourceTarget::Font(_) => StylesheetLoadBlockingResourceKind::Font,
+            };
+            match crate::network_host::start_stylesheet_subresource_fetch(
+                scope, host, binding, request,
+            ) {
+                Ok(crate::network_host::StylesheetSubresourceFetchStart::WebFontSettled(
+                    web_font,
+                )) => {
+                    if let Some(document) = host.stylesheet_web_font_document(binding)
+                        && let Some(resource) =
+                            Self::complete_document_web_font(host, document, web_font)
+                        && let Some(binding) = host
+                            .accept_current_stylesheet_subresource_load_delay_for_document(document)
+                    {
+                        admitted.push_back((binding, resource));
+                    }
+                }
+                Ok(
+                    crate::network_host::StylesheetSubresourceFetchStart::Pending
+                    | crate::network_host::StylesheetSubresourceFetchStart::Settled,
+                ) => {}
+                Err(error) => {
+                    if let StylesheetSubresourceTarget::Image(Some(identity)) = &failed_target {
+                        let _ = host.fail_stylesheet_css_image(identity);
+                    }
+                    let settlement = host.settle_stylesheet_subresource_load_delay(binding);
+                    if let StylesheetSubresourceTarget::Font(font) = failed_target
+                        && let Some(document) = host.stylesheet_web_font_document(binding)
+                        && let Some(resource) = Self::complete_document_web_font(
+                            host,
+                            document,
+                            crate::css_resource_urls::CompletedStylesheetWebFont::failure(font),
+                        )
+                        && let Some(binding) = host
+                            .accept_current_stylesheet_subresource_load_delay_for_document(document)
+                    {
+                        admitted.push_back((binding, resource));
+                    }
+                    tracing::warn!(
+                        url = ?request_url,
+                        ?kind,
+                        owner = ?binding.owner(),
+                        settled = settlement.settled(),
+                        error = %format_args!("{error:#}"),
+                        "stylesheet subresource failed before network scheduling"
+                    );
+                }
+            }
+        }
+        crate::context_bootstrap::publish_font_face_load_changes(scope);
+    }
+
+    pub(crate) fn complete_document_web_font(
+        host: &JsContextHost,
+        document: DomHandle,
+        terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
+    ) -> Option<StylesheetSubresourceRequest> {
         match host.complete_document_web_font(document, terminal) {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Registered(outcome) => {
                 tracing::debug!(
@@ -408,6 +446,10 @@ impl DocumentRuntime {
             crate::script_vm::web_fonts::DocumentWebFontCompletion::Stale => {
                 tracing::debug!("discarded superseded document web font response")
             }
+            crate::script_vm::web_fonts::DocumentWebFontCompletion::Retry(resource) => {
+                return Some(*resource);
+            }
         }
+        None
     }
 }

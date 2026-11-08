@@ -1,4 +1,5 @@
-use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo};
+use super::stores::collection::CollectionRequest;
+use super::{CursorDirection, IdbKeyRangeQuery, IndexInfo, PreparedObjectStoreWrite};
 use crate::native_bridge::OwnerDispatchScope;
 
 pub(super) enum IndexedDbCursorSource {
@@ -42,30 +43,47 @@ impl IndexedDbCursorOpenOperation {
     }
 }
 
+type SqlOperationStart =
+    Box<dyn for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool>;
+
+pub(super) enum IndexedDbCursorIteration {
+    Continue(Option<super::Key>),
+    Advance(u32),
+    PrimaryKey {
+        key: super::Key,
+        primary_key: super::Key,
+    },
+}
+
 pub(super) enum IndexedDbTransactionOperation {
+    /// A schema preparation failure keeps its position in the operation queue
+    /// and fails on a later owner task.
+    InternalError(super::IndexedDbError),
+    /// Prepared by the common dispatcher before entering the operation queue.
+    /// `true` keeps this logical operation in flight until its completion.
+    Sql {
+        start: SqlOperationStart,
+    },
     ObjectStoreGet {
         query: IdbKeyRangeQuery,
     },
-    ObjectStoreGetAll {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
+    ObjectStoreGetAll(CollectionRequest),
     ObjectStoreGetKey {
         query: IdbKeyRangeQuery,
-    },
-    ObjectStoreGetAllKeys {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
     },
     ObjectStoreCount {
         query: Option<IdbKeyRangeQuery>,
     },
     OpenCursor(IndexedDbCursorOpenOperation),
+    CursorIterate {
+        cursor: v8::Global<v8::Object>,
+        movement: IndexedDbCursorIteration,
+    },
+    CursorDelete {
+        key: super::Key,
+    },
     ObjectStoreWrite {
-        value: v8::Global<v8::Value>,
-        key: v8::Global<v8::Value>,
+        prepared: PreparedObjectStoreWrite,
         add_only: bool,
     },
     ObjectStoreDelete {
@@ -78,35 +96,34 @@ pub(super) enum IndexedDbTransactionOperation {
     IndexGetKey {
         query: IdbKeyRangeQuery,
     },
-    IndexGetAll {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
-    IndexGetAllKeys {
-        query: Option<IdbKeyRangeQuery>,
-        count: Option<usize>,
-        direction: CursorDirection,
-    },
+    IndexGetAll(CollectionRequest),
     IndexCount {
         query: Option<IdbKeyRangeQuery>,
     },
 }
 
+impl IndexedDbTransactionOperation {
+    pub(super) fn sql<F>(start: F) -> Self
+    where
+        F: for<'s, 'i> FnOnce(&mut v8::PinScope<'s, 'i>, v8::Local<'s, v8::Object>) -> bool
+            + 'static,
+    {
+        Self::Sql {
+            start: Box::new(start),
+        }
+    }
+}
+
 // Query arguments are converted at the API boundary and retained as native snapshots.
-// Write requests retain their existing deferred value/key conversion behavior.
+// Write values and keys are also prepared synchronously, before request admission.
 pub(super) struct IndexedDbPendingTransactionOperation {
     owner: OwnerDispatchScope,
-    source: v8::Global<v8::Object>,
     request: v8::Global<v8::Object>,
-    store_name: String,
     kind: IndexedDbTransactionOperation,
 }
 
 pub(super) struct IndexedDbTransactionOperationLocals<'s> {
-    pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) request: v8::Local<'s, v8::Object>,
-    pub(super) store_name: String,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 
@@ -114,16 +131,12 @@ impl IndexedDbPendingTransactionOperation {
     pub(super) fn new<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         owner: OwnerDispatchScope,
-        source: v8::Local<'s, v8::Object>,
         request: v8::Local<'s, v8::Object>,
-        store_name: impl Into<String>,
         kind: IndexedDbTransactionOperation,
     ) -> Self {
         Self {
             owner,
-            source: v8::Global::new(scope, source),
             request: v8::Global::new(scope, request),
-            store_name: store_name.into(),
             kind,
         }
     }
@@ -135,8 +148,12 @@ impl IndexedDbPendingTransactionOperation {
     pub(super) fn request<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-    ) -> v8::Local<'s, v8::Object> {
-        v8::Local::new(scope, &self.request)
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let target = v8::Local::new(scope, &self.request);
+        // Internal schema work uses its transaction as the completion target;
+        // it has no Web request or request error event to dispatch on abort.
+        super::indexed_db_typed_wrapper_is(scope, target, super::IndexedDbWrapperKind::Request)
+            .then_some(target)
     }
 
     pub(super) fn into_locals<'s>(
@@ -144,9 +161,7 @@ impl IndexedDbPendingTransactionOperation {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> IndexedDbTransactionOperationLocals<'s> {
         IndexedDbTransactionOperationLocals {
-            source: v8::Local::new(scope, &self.source),
             request: v8::Local::new(scope, &self.request),
-            store_name: self.store_name,
             kind: self.kind,
         }
     }

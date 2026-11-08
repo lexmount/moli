@@ -2,22 +2,22 @@ use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocume
 use crate::document_runtime::DomHandle;
 use crate::runtime::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
 
-/// One PageVm-local payload keyed by immutable exact-Document identity.
+/// One PageVm-local payload keyed by a captured Window task target.
 ///
 /// The stable Page queue carries `task_id`, target, and kind; V8/DOM-bearing
 /// payload remains in the Host that created it. This record is intentionally
 /// shared by task-source families so each migrated API does not rebuild its
 /// own current/take/discard ledger.
 #[derive(Debug)]
-pub(super) struct PendingExactWindowDocumentTask<I, K, P> {
+pub(super) struct PendingWindowTask<I, K, P, T> {
     task_id: I,
-    target: WindowDocumentTaskTarget,
+    target: T,
     kind: K,
     payload: P,
 }
 
-impl<I: Copy, K: Copy, P> PendingExactWindowDocumentTask<I, K, P> {
-    pub(super) fn new(task_id: I, target: WindowDocumentTaskTarget, kind: K, payload: P) -> Self {
+impl<I: Copy, K: Copy, P, T: Copy> PendingWindowTask<I, K, P, T> {
+    pub(super) fn new(task_id: I, target: T, kind: K, payload: P) -> Self {
         Self {
             task_id,
             target,
@@ -30,7 +30,7 @@ impl<I: Copy, K: Copy, P> PendingExactWindowDocumentTask<I, K, P> {
         self.task_id
     }
 
-    pub(super) const fn target(&self) -> WindowDocumentTaskTarget {
+    pub(super) const fn target(&self) -> T {
         self.target
     }
 
@@ -47,18 +47,18 @@ impl<I: Copy, K: Copy, P> PendingExactWindowDocumentTask<I, K, P> {
     }
 }
 
-/// Reusable PageVm-local ledger for exact Window/Document tasks.
+/// Reusable PageVm-local ledger for captured Window task targets.
 ///
 /// Id allocation, immutable target capture, exact removal, and stale discard
 /// live here. Queue coalescing remains family policy expressed by the caller's
 /// `find_slot_index` predicate.
 #[derive(Debug)]
-pub(super) struct ExactWindowDocumentTaskLedger<I, K, P> {
-    pending: Vec<PendingExactWindowDocumentTask<I, K, P>>,
+pub(super) struct WindowTaskLedger<I, K, P, T> {
+    pending: Vec<PendingWindowTask<I, K, P, T>>,
     next_task_id: u64,
 }
 
-impl<I, K, P> Default for ExactWindowDocumentTaskLedger<I, K, P> {
+impl<I, K, P, T> Default for WindowTaskLedger<I, K, P, T> {
     fn default() -> Self {
         Self {
             pending: Vec::new(),
@@ -67,16 +67,14 @@ impl<I, K, P> Default for ExactWindowDocumentTaskLedger<I, K, P> {
     }
 }
 
-impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
+impl<I: Copy + Eq, K: Copy + Eq, P, T: Copy + Eq> WindowTaskLedger<I, K, P, T> {
     pub(super) fn allocate_task_id(&mut self, from_raw: impl FnOnce(u64) -> I) -> I {
         let raw = self.next_task_id;
-        self.next_task_id = raw
-            .checked_add(1)
-            .expect("exact Window/Document task id overflow");
+        self.next_task_id = raw.checked_add(1).expect("Window task id overflow");
         from_raw(raw)
     }
 
-    pub(super) fn pending(&self, task_id: I) -> Option<&PendingExactWindowDocumentTask<I, K, P>> {
+    pub(super) fn pending(&self, task_id: I) -> Option<&PendingWindowTask<I, K, P, T>> {
         self.pending
             .iter()
             .find(|pending| pending.task_id() == task_id)
@@ -84,7 +82,7 @@ impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
 
     pub(super) fn find_slot_index(
         &self,
-        target: WindowDocumentTaskTarget,
+        target: T,
         kind: K,
         payload_matches: impl Fn(&P) -> bool,
     ) -> Option<usize> {
@@ -95,27 +93,27 @@ impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
         })
     }
 
-    pub(super) fn push(&mut self, pending: PendingExactWindowDocumentTask<I, K, P>) {
+    pub(super) fn push(&mut self, pending: PendingWindowTask<I, K, P, T>) {
         self.pending.push(pending);
     }
 
-    pub(super) fn at(&self, index: usize) -> &PendingExactWindowDocumentTask<I, K, P> {
+    pub(super) fn at(&self, index: usize) -> &PendingWindowTask<I, K, P, T> {
         &self.pending[index]
     }
 
-    pub(super) fn remove_at(&mut self, index: usize) -> PendingExactWindowDocumentTask<I, K, P> {
+    pub(super) fn remove_at(&mut self, index: usize) -> PendingWindowTask<I, K, P, T> {
         self.pending.remove(index)
     }
 
     pub(super) fn replace(
         &mut self,
         index: usize,
-        pending: PendingExactWindowDocumentTask<I, K, P>,
-    ) -> PendingExactWindowDocumentTask<I, K, P> {
+        pending: PendingWindowTask<I, K, P, T>,
+    ) -> PendingWindowTask<I, K, P, T> {
         std::mem::replace(&mut self.pending[index], pending)
     }
 
-    pub(super) fn remove(&mut self, task_id: I) -> Option<PendingExactWindowDocumentTask<I, K, P>> {
+    pub(super) fn remove(&mut self, task_id: I) -> Option<PendingWindowTask<I, K, P, T>> {
         let index = self
             .pending
             .iter()
@@ -126,9 +124,9 @@ impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
     pub(super) fn remove_exact(
         &mut self,
         task_id: I,
-        target: WindowDocumentTaskTarget,
+        target: T,
         kind: K,
-    ) -> Option<PendingExactWindowDocumentTask<I, K, P>> {
+    ) -> Option<PendingWindowTask<I, K, P, T>> {
         let pending = self.pending(task_id)?;
         if pending.target() != target || pending.kind() != kind {
             return None;
@@ -136,6 +134,11 @@ impl<I: Copy + Eq, K: Copy + Eq, P> ExactWindowDocumentTaskLedger<I, K, P> {
         self.remove(task_id)
     }
 }
+
+pub(super) type PendingExactWindowDocumentTask<I, K, P> =
+    PendingWindowTask<I, K, P, WindowDocumentTaskTarget>;
+pub(super) type ExactWindowDocumentTaskLedger<I, K, P> =
+    WindowTaskLedger<I, K, P, WindowDocumentTaskTarget>;
 
 /// Realm and Document handle resolved for an already-authorized Window task.
 ///

@@ -1,15 +1,40 @@
 use super::*;
 
-// This final thin slice keeps the runtime-core methods that are about owning `DocumentRuntime`
-// itself rather than any specific subsystem.
-//
-// The methods here are intentionally tiny:
-// - constructing the aggregate runtime state
-// - tracking whether we are currently inside a custom-element reaction
-//
-// Splitting them out is mostly about finishing the file-level separation so `document_runtime.rs`
-// stops carrying even a small "misc core methods" tail while the actual behavior remains unchanged.
+// Document ownership and the native media environment shared with Window bindings.
 impl DocumentRuntime {
+    pub(crate) fn emulated_media(&self) -> &crate::protocol_types::EmulatedMediaOverrides {
+        &self.dom_host.emulated_media
+    }
+
+    pub(crate) fn set_emulated_media(
+        &mut self,
+        media: &crate::protocol_types::EmulatedMediaOverrides,
+    ) {
+        self.dom_host.emulated_media = media.clone();
+    }
+
+    pub(crate) fn viewport_surface(&self) -> Option<crate::protocol_types::ViewportSurface> {
+        self.dom_host.viewport_surface
+    }
+
+    pub(crate) fn set_viewport_surface(
+        &mut self,
+        surface: Option<crate::protocol_types::ViewportSurface>,
+    ) {
+        self.dom_host.viewport_surface = surface;
+    }
+
+    pub(crate) fn style_viewport(&self) -> crate::style_engine::StyleViewport {
+        self.dom_host.style_viewport()
+    }
+
+    pub(crate) fn stylesheet_media_matches(&self, media: &str) -> bool {
+        crate::stylesheet_blocking::StylesheetBlockingReadView::media_query_matches(
+            &self.dom_host,
+            media,
+        )
+    }
+
     /// Constructs the runtime for an already-admitted main Document.
     ///
     /// The owner is part of the runtime's initial identity; production callers
@@ -73,6 +98,7 @@ impl DocumentRuntime {
             selector_engine: QueryEngine,
             selector_debug: SelectorDebugCounters::default(),
             document,
+            timing: Default::default(),
             script_execution_control: Default::default(),
             author_styles_disabled: false,
             bypass_content_security_policy: false,
@@ -111,7 +137,7 @@ impl DocumentRuntime {
             timeouts: HostTimeoutScheduler::default(),
             events: HostEventTargetRegistry::default(),
             mutations: MutationCoordinator,
-            meta_refresh_scheduler: super::meta_refresh::MetaRefreshScheduler::default(),
+            meta_refresh_scheduler: crate::meta_refresh_scheduler::MetaRefreshScheduler::default(),
             custom_element_reaction_depth: 0,
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,
@@ -200,6 +226,7 @@ impl DocumentRuntime {
             selector_engine: _,
             selector_debug: _,
             document: _,
+            timing: _,
             script_execution_control: _,
             author_styles_disabled: _,
             bypass_content_security_policy: _,

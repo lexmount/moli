@@ -173,15 +173,15 @@ async fn browser_context_document_cookie_browser_context_overrides_update_live_p
         .evaluate_runtime_expression_with_await_async("navigator.cookieEnabled", false)
         .await
         .expect("expression should evaluate");
-    assert_eq!(after_apply["value"], json!(false));
-    let blocked_snapshot = conn
+    assert_eq!(after_apply["value"], json!(true));
+    let context_snapshot = conn
         .browser_context
         .as_mut()
         .unwrap()
         .document_cookie_facade_snapshot_async()
         .await;
     assert_eq!(
-        blocked_snapshot
+        context_snapshot
             .capability_surface
             .manager_surface
             .policy
@@ -191,12 +191,12 @@ async fn browser_context_document_cookie_browser_context_overrides_update_live_p
             .with_top_frame_origin_url(&cross_site)
     );
     assert_eq!(
-        blocked_snapshot.freshness.cookie_get_freshness_status,
-        BrowserContextCookieGetFreshnessStatus::PolicyBlocked
+        context_snapshot.freshness.cookie_get_freshness_status,
+        BrowserContextCookieGetFreshnessStatus::NoEntry
     );
     assert_eq!(
-        blocked_snapshot.freshness.cookie_set_readiness_status,
-        BrowserContextCookieSetReadinessStatus::PolicyBlocked
+        context_snapshot.freshness.cookie_set_readiness_status,
+        BrowserContextCookieSetReadinessStatus::ReadyWillInvalidateCache
     );
 
     conn.browser_context

@@ -3,9 +3,11 @@ use super::*;
 #[tokio::test]
 async fn websocket_cdp_file_navigation_returns_stable_error_without_events_or_replacement() {
     let (cdp_addr, cdp_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect browser CDP websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
@@ -111,9 +113,11 @@ async fn websocket_cdp_localstorage_profile_persists_across_server_restart() {
     let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to profiled cdp websocket");
     let page_url = format!("http://{fixture_addr}/page");
@@ -130,17 +134,35 @@ async fn websocket_cdp_localstorage_profile_persists_across_server_restart() {
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    let persisted = std::fs::read_to_string(&paths.local_storage_path)
-        .expect("profiled localStorage json should be written");
+    assert!(paths.local_storage_path.is_file());
     assert!(
-        persisted.contains("\"persisted\"") && persisted.contains("\"yes\""),
-        "profile file should contain persisted localStorage entry: {persisted}"
+        !paths.partition_root.join("localstorage.json").exists(),
+        "active localStorage never writes JSON"
     );
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        assert_eq!(
+            partition
+                .shared_storage_handles()
+                .web_storage_store()
+                .get_item(
+                    &moli_core::network::web_storage_partitioned_area_key(
+                        &format!("http://{fixture_addr}"),
+                        &format!("http://{}", fixture_addr.ip()),
+                    ),
+                    "persisted",
+                )
+                .as_deref(),
+            Some("yes")
+        );
+    }
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("reconnect to profiled cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -169,14 +191,16 @@ async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_r
     imported.domain = fixture_addr.ip().to_string();
     imported.host_only = true;
 
-    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server_with_cookie_profile(
+    let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server_with_initial_cookies(
         profile.path.clone(),
         vec![imported],
     )
     .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to profiled cdp websocket with imported cookies");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -187,14 +211,12 @@ async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_r
         "default context should see imported cookie: {read_imported}"
     );
     let _ = socket.close(None).await;
-    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies
-            .iter()
-            .any(|cookie| cookie.name == "session" && cookie.value == "fixture")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         persisted
             .iter()
@@ -203,9 +225,11 @@ async fn websocket_cdp_imported_cookies_with_profile_dir_persist_across_server_r
     );
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("reconnect to profiled cdp websocket without imported cookies");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -230,9 +254,11 @@ async fn websocket_cdp_indexeddb_profile_persists_across_server_restart() {
     let page_url = format!("http://{fixture_addr}/page");
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to profiled cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -292,9 +318,11 @@ async fn websocket_cdp_indexeddb_profile_persists_across_server_restart() {
     );
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("reconnect to profiled cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -351,9 +379,11 @@ async fn websocket_cdp_clear_data_for_origin_indexeddb_persists_across_server_re
     let page_url = format!("{page_origin}/page");
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to profiled cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -423,9 +453,11 @@ async fn websocket_cdp_clear_data_for_origin_indexeddb_persists_across_server_re
     wait_for_profile_lock_release(&paths).await;
 
     let (cdp_addr, cdp_server) = spawn_profiled_test_protocol_server(profile.path.clone()).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("reconnect to profiled cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -491,15 +523,22 @@ async fn websocket_cdp_cookie_profile_delete_commands_persist_across_server_rest
 async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_profile() {
     let profile = TempDir::new("ephemeral-cookie-profile");
     let paths = BrowserProfilePaths::new(&profile.path);
-    cookie_cache::save_cookie_cache(&paths.cookies_path, vec![stored_cookie("sid", "profile")])
-        .expect("seed cookie profile");
+    {
+        let partition = StoragePartitionState::open(Some(&profile.path)).unwrap();
+        partition
+            .import_cookies([stored_cookie("sid", "profile")])
+            .unwrap();
+        partition.flush().unwrap();
+    }
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to profiled cdp websocket");
 
@@ -524,8 +563,11 @@ async fn websocket_cdp_ephemeral_context_cookie_changes_do_not_clear_cookie_prof
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
 
-    let persisted = cookie_cache::load_cookie_cache(&paths.cookies_path)
-        .expect("profile cookie cache should survive ephemeral-only connection");
+    assert!(!paths.partition_root.join("cookies.json").exists());
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("profile SQLite should survive ephemeral-only connection")
+        .cookies()
+        .unwrap();
     assert_eq!(persisted.len(), 1);
     assert_eq!(persisted[0].name, "sid");
     assert_eq!(persisted[0].value, "profile");
@@ -536,9 +578,11 @@ async fn websocket_cdp_browser_contexts_isolate_localstorage() {
     let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
     let page_url = format!("http://{fixture_addr}/page");
     let (cdp_addr, cdp_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -585,9 +629,11 @@ async fn websocket_cdp_same_context_targets_share_localstorage_and_isolate_sessi
     let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
     let page_url = format!("http://{fixture_addr}/page");
     let (cdp_addr, cdp_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -625,9 +671,11 @@ async fn websocket_cdp_browser_contexts_isolate_cookies_sessionstorage_and_index
     let (fixture_addr, fixture_server) = spawn_local_storage_fixture_server().await;
     let page_url = format!("http://{fixture_addr}/page");
     let (cdp_addr, cdp_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -857,9 +905,11 @@ async fn websocket_cdp_clear_browser_cache_clears_configured_http_cache_dir() {
     let page_url = format!("http://{fixture_addr}/page");
     let (cdp_addr, protocol_server) =
         spawn_test_protocol_server_with_fetch_config(fetch_config).await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let session_id = cdp_create_session_and_navigate(&mut socket, &page_url).await;
@@ -901,9 +951,11 @@ async fn websocket_cdp_create_isolated_world_resolves_during_about_blank_prewarm
     // return an empty reply set immediately and the deferred task must
     // produce a valid executionContextId once the prewarm resolves.
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1011,9 +1063,11 @@ async fn websocket_cdp_create_isolated_world_during_prewarm_then_close_target_do
     // completion must be silently dropped (target no longer current)
     // and the socket must remain healthy enough to reply to the close.
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1117,9 +1171,11 @@ async fn websocket_cdp_create_isolated_world_during_prewarm_then_close_target_do
 #[tokio::test]
 async fn websocket_cdp_debugger_pause_interrupts_in_flight_runtime_evaluate() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(
@@ -1213,9 +1269,11 @@ async fn websocket_cdp_debugger_pause_interrupts_in_flight_runtime_evaluate() {
 #[tokio::test]
 async fn websocket_cdp_io_terminate_interrupts_busy_main_thread_and_skips_main_follower() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let session_id = cdp_create_default_session_and_navigate(
@@ -1410,9 +1468,11 @@ async fn websocket_cdp_active_js_interrupt_preserves_main_and_io_lanes_across_se
         spawn_dedicated_fixture_server(fixture_app, "active-js-interrupt");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
@@ -1683,9 +1743,11 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1820,9 +1882,11 @@ async fn websocket_cdp_offline_emulation_navigation_fails_like_network_error() {
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 

@@ -14,7 +14,7 @@ use crate::native_bridge::{
 };
 use crate::{
     document_runtime::DomHandle, native_bridge::node_runtime_and_handle_from_object,
-    referrer_policy::normalize_referrer_policy, util::context_host_ptr_from_window_object,
+    util::context_host_ptr_from_window_object,
 };
 
 fn capture_navigation_entry_seed_for_holder<'s>(
@@ -264,11 +264,16 @@ pub(crate) fn current_document_referrer_policy<'s>(
         .or_else(|| current_entry_referrer_policy(scope, owner))
 }
 
-pub(super) fn document_referrer_policy_for_native_document(
+pub(crate) fn document_referrer_policy_for_native_document(
     runtime: &crate::native_bridge::JsContextHost,
     document_handle: DomHandle,
 ) -> Option<String> {
-    document_referrer_policy_in_subtree(runtime, document_handle)
+    runtime
+        .dom_host()
+        .node(document_handle)
+        .and_then(moli_dom::native::Node::as_document)
+        .and_then(|document| document.meta_referrer_policy())
+        .map(ToOwned::to_owned)
         .or_else(|| {
             (document_handle == runtime.document_handle())
                 .then(|| runtime.response_referrer_policy().map(ToOwned::to_owned))
@@ -319,54 +324,4 @@ fn current_entry_referrer_policy<'s>(
 ) -> Option<String> {
     navigation_current_entry(scope, owner)
         .and_then(|entry| navigation_entry_referrer_policy_value(scope, entry))
-}
-
-fn document_referrer_policy_in_subtree(
-    runtime: &crate::native_bridge::JsContextHost,
-    handle: DomHandle,
-) -> Option<String> {
-    if let Some(element) = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        && element.local_name().eq_ignore_ascii_case("meta")
-        && element
-            .attribute("name")
-            .is_some_and(|name| name.eq_ignore_ascii_case("referrer"))
-        && let Some(policy) = element
-            .attribute("content")
-            .and_then(normalize_meta_referrer_policy)
-    {
-        return Some(policy);
-    }
-
-    let mut child = runtime.dom_host().first_child(handle);
-    while let Some(child_handle) = child {
-        if let Some(policy) = document_referrer_policy_in_subtree(runtime, child_handle) {
-            return Some(policy);
-        }
-        child = runtime.dom_host().next_sibling(child_handle);
-    }
-    None
-}
-
-fn normalize_meta_referrer_policy(raw: &str) -> Option<String> {
-    normalize_referrer_policy(raw)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn meta_referrer_policy_uses_last_valid_token() {
-        assert_eq!(
-            normalize_meta_referrer_policy("not-yet-standardized, no-referrer"),
-            Some("no-referrer".to_owned())
-        );
-        assert_eq!(
-            normalize_meta_referrer_policy("same-origin, not-yet-standardized"),
-            Some("same-origin".to_owned())
-        );
-    }
 }

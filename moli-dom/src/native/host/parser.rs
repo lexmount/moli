@@ -75,12 +75,7 @@ impl DomHost {
         else {
             return false;
         };
-        if element.namespace() != "http://www.w3.org/1999/xhtml"
-            || !matches!(
-                element.local_name(),
-                "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-            )
-        {
+        if !is_parser_form_association_candidate(element) {
             return false;
         }
         element.set_parser_associated_form_owner(Some(form))
@@ -193,6 +188,7 @@ impl DomHost {
         let mut changed = false;
         let mut named_index_changed = false;
         let mut base_state_changed = false;
+        let mut referrer_attribute_changed = false;
         for attribute in attrs {
             let already_exists = element.attributes().iter().any(|existing| {
                 existing.namespace() == attribute.namespace()
@@ -213,6 +209,9 @@ impl DomHost {
                     && is_base_element
                     && attribute.namespace().is_empty()
                     && matches!(attribute.local_name(), "href" | "target");
+                referrer_attribute_changed |= attribute_changed
+                    && attribute.namespace().is_empty()
+                    && matches!(attribute.local_name(), "name" | "content");
                 changed |= attribute_changed;
             }
         }
@@ -227,6 +226,9 @@ impl DomHost {
             }
             if base_state_changed {
                 self.dom.process_base_element_for_node(node_id);
+            }
+            if referrer_attribute_changed {
+                self.dom.process_meta_referrer(node_id);
             }
             self.record_mutation(MutationScope::QueryState);
         }

@@ -12,40 +12,47 @@
 
 pub(crate) mod abort;
 mod data_url;
+mod file_reading_tasks;
 mod global_scope;
 mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod networking_tasks;
 mod script_loading;
 mod script_mime;
 mod thread;
 mod timer_callback;
+pub(crate) use file_reading_tasks::{
+    queue_worker_file_reading_task, take_worker_file_reading_task,
+};
+pub(crate) use networking_tasks::queue_worker_networking_task;
+pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
-    NestedWorkerContext, WORKER_STATE_SLOT, WorkerGlobalState, WorkerOpfsCompletion,
-    WorkerWebCryptoCompletion, cancel_worker_opfs_task, check_worker_websocket_csp,
-    close_worker_websocket, dispatch_worker_trusted_types_sink_violation_event,
+    NestedWorkerContext, WorkerGlobalState, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
+    cancel_worker_opfs_task, check_worker_websocket_csp, close_worker_websocket,
+    dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
-    forget_worker_message_port_wrapper, get_worker_state,
+    forget_worker_message_port_wrapper, get_worker_state, register_worker_blob_read_task,
     register_worker_broadcast_channel_wrapper, register_worker_message_port_wrapper,
     register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
     register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
-    send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
-    try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
-    try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
-    worker_allows_trusted_type_policy_name, worker_allows_trusted_types_eval,
-    worker_broadcast_channel_registry, worker_broadcast_channel_storage_key,
-    worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
-    worker_current_script_url, worker_global_is_closed, worker_global_origin,
-    worker_message_port_registry, worker_message_port_wake_sender, worker_message_port_wrapper,
-    worker_notification_permission_state, worker_opfs_directory_iterator_registry,
-    worker_opfs_handle_registry, worker_realm_secure_context_available,
-    worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
-    worker_termination_requested, worker_trusted_types_for_script_requirements,
-    worker_uses_shared_worker_agent_cluster,
+    send_worker_websocket_binary, send_worker_websocket_blob, send_worker_websocket_text,
+    service_worker_runtime_identity, try_worker_xhr_abort_callback,
+    try_worker_xhr_reschedule_timeout_after_timeout_change, try_worker_xhr_send_callback,
+    worker_allows_eval_code_generation_by_csp, worker_allows_trusted_type_policy_name,
+    worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
+    worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
+    worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
+    worker_global_origin, worker_message_port_registry, worker_message_port_wake_sender,
+    worker_message_port_wrapper, worker_notification_permission_state,
+    worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
+    worker_realm_secure_context_available, worker_service_worker_control_state, worker_storage_key,
+    worker_storage_partition_identity, worker_termination_requested,
+    worker_trusted_types_for_script_requirements,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
@@ -58,8 +65,7 @@ pub(crate) use handle::{
 };
 pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{
-    ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_text_module_mime,
-    ensure_worker_wasm_module_mime,
+    ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_wasm_module_mime,
 };
 pub(crate) use module_runtime::worker_wasm_instance_for_namespace;
 pub(crate) use script_loading::ensure_worker_script_redirect_chain_same_origin;

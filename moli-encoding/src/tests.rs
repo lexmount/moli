@@ -667,6 +667,30 @@ fn form_submission_falls_back_to_document_character_set() {
 }
 
 #[test]
+fn form_submission_preserves_x_user_defined_output() {
+    let encoding = form_submission_encoding(Some("unknown X-USER-DEFINED windows-1252"), "UTF-8");
+    assert_eq!(encoding.name(), "x-user-defined");
+
+    let private_use: String = (0xF780..=0xF7FF)
+        .map(|value| char::from_u32(value).unwrap())
+        .collect();
+    let expected: Vec<u8> = (0x80..=0xFF).collect();
+    assert_eq!(
+        encode_text_for_legacy_web(&private_use, encoding).as_ref(),
+        expected
+    );
+    let ascii: String = (0..=0x7F).map(char::from).collect();
+    assert_eq!(
+        encode_text_for_legacy_web(&ascii, encoding).as_ref(),
+        ascii.as_bytes()
+    );
+    assert_eq!(
+        encode_text_for_legacy_web("€😂", encoding).as_ref(),
+        b"&#8364;&#128514;"
+    );
+}
+
+#[test]
 fn charset_sentinel_name_matches_ascii_case_insensitively() {
     assert!(is_charset_sentinel_name("_charset_"));
     assert!(is_charset_sentinel_name("_CHARSET_"));
@@ -686,6 +710,15 @@ fn form_urlencoded_serializer_uses_numeric_references_for_unmappable_text() {
     let encoded = form_urlencoded_serialize_pairs([("emoji", "💩")], encoding_rs::WINDOWS_1252);
 
     assert_eq!(encoded, "emoji=%26%23128169%3B");
+}
+
+#[test]
+fn form_urlencoded_serializer_preserves_x_user_defined_bytes() {
+    let encoded = form_urlencoded_serialize_pairs(
+        [("\u{F780}", " \u{F7FF}€😂\r\n")],
+        encoding_rs::X_USER_DEFINED,
+    );
+    assert_eq!(encoded, "%80=+%FF%26%238364%3B%26%23128514%3B%0D%0A");
 }
 
 #[test]
@@ -874,6 +907,21 @@ fn url_query_encoder_uses_selected_legacy_encoding() {
         encode_url_query_for_legacy_web("/search?q=家居&safe=a+b%20c#frag", encoding_rs::GBK);
 
     assert_eq!(encoded, "/search?q=%BC%D2%BE%D3&safe=a+b%20c#frag");
+}
+
+#[test]
+fn url_query_encoders_preserve_x_user_defined_bytes_and_escape_numeric_references() {
+    let query = "q=A\u{F780}\u{F7FF}€😂Z&safe=a+b%20c";
+    let expected = "q=A%80%FF%26%238364%3B%26%23128514%3BZ&safe=a+b%20c";
+    let input = format!("/search?{query}#frag");
+    assert_eq!(
+        encode_url_query_for_legacy_web(&input, encoding_rs::X_USER_DEFINED),
+        format!("/search?{expected}#frag")
+    );
+    assert_eq!(
+        encode_url_query_for_url_parser(query, encoding_rs::X_USER_DEFINED).as_ref(),
+        expected.as_bytes()
+    );
 }
 
 #[test]

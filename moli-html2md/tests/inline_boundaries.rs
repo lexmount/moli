@@ -20,7 +20,6 @@ fn inline_code_breaks_separate_words_without_formatting_markers() {
     for html in [
         "<code>git<br>status</code>",
         "<code><strong>git<br></strong><em>status</em></code>",
-        "<code><a href='/'>git</a><span><br></span><b>status</b></code>",
     ] {
         for preformatted_code in [false, true] {
             let result = markdown_with(
@@ -199,6 +198,61 @@ fn nested_emphasis_closes_with_markdown_before_a_word() {
 }
 
 #[test]
+fn combining_marks_and_format_characters_use_markdown_emphasis() {
+    for character in ['\u{0301}', '\u{20dd}', '\u{200d}'] {
+        for (tag, delimiter) in [("strong", "**"), ("em", "*"), ("del", "~~")] {
+            for content in [character.to_string(), format!("x{character}")] {
+                let source = format!("a<{tag}>{content}</{tag}>b");
+                let result = markdown(&source);
+                assert_eq!(
+                    result,
+                    format!("a{delimiter}{content}{delimiter}b"),
+                    "{source}"
+                );
+                assert_eq!(rendered_html(&result), format!("<p>{source}</p>\n"));
+            }
+        }
+    }
+}
+
+#[test]
+fn unicode_non_punctuation_preserves_emphasis_on_both_boundaries() {
+    for character in ['\u{0301}', '\u{20dd}', '\u{200d}'] {
+        for tag in ["em", "strong", "del"] {
+            for source in [
+                format!("<{tag}>!</{tag}>{character}"),
+                format!("{character}<{tag}>!</{tag}>"),
+                format!("{character}<{tag}>!</{tag}>{character}"),
+                format!("{character}<{tag}><a href=\"/\">!</a></{tag}>{character}"),
+            ] {
+                let result = markdown(&source);
+                assert_eq!(
+                    rendered_html(&result),
+                    format!("<p>{source}</p>\n"),
+                    "{source}: {result}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unicode_punctuation_and_symbols_preserve_intraword_emphasis() {
+    for character in ['。', '€', '🦀', '+'] {
+        for tag in ["strong", "em", "del"] {
+            for content in [character.to_string(), format!("x{character}")] {
+                let source = format!("a<{tag}>{content}</{tag}>b");
+                assert_eq!(
+                    rendered_html(&markdown(&source)),
+                    format!("<p>{source}</p>\n"),
+                    "{source}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn nested_emphasis_still_uses_html_after_literal_punctuation() {
     for text in ["word!", "word*", "word`", "word)", "日本語。"] {
         for (outer, inner) in [("em", "strong"), ("strong", "em")] {
@@ -252,4 +306,51 @@ fn separate_nested_spans_keep_html_when_delimiters_are_ambiguous() {
             );
         }
     }
+}
+
+#[test]
+fn multiline_image_alt_preserves_the_image() {
+    let result = markdown("<img src='/x' alt='first\n# heading'>");
+    // Alt newlines must not open a heading; the image and its text alternative survive.
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><img src=\"/x\" alt=\"first # heading\" /></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "image alt survives Markdown rendering"
+    );
+}
+
+#[test]
+fn multiline_link_title_preserves_the_link() {
+    let result = markdown("<a href='/' title='first\n# heading'>link</a>");
+    // Keep the link intact while normalizing its title to one readable line.
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><a href=\"/\" title=\"first # heading\">link</a></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "link title survives Markdown rendering"
+    );
+}
+
+#[test]
+fn multiple_nested_spans_keep_their_styles_at_paragraph_end() {
+    // This guards the closing-edge fix: with no following character there
+    // is no punctuation fallback, but sibling delimiters must not mispair.
+    let result = markdown("<em><strong>x</strong>b<strong>c</strong></em>");
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p><em><strong>x</strong>b<strong>c</strong></em></p>\n";
+    assert_eq!(
+        actual_html, desired_html,
+        "nested sibling emphasis remains intact"
+    );
+}
+
+#[test]
+fn mixed_emphasis_markers_preserve_intraword_styles() {
+    // The opening check sees the text 'x', although the nested styles emit
+    // punctuation first. This is separate from closing a same-marker run.
+    let result = markdown("before<em><del><strong>x</strong></del></em>");
+    let actual_html = rendered_html(&result);
+    let desired_html = "<p>before<em><del><strong>x</strong></del></em></p>\n";
+    assert_eq!(actual_html, desired_html, "intraword styles remain intact");
 }

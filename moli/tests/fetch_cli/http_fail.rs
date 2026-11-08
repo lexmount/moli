@@ -47,6 +47,24 @@ impl HttpFailureFixture {
                 }),
             )
             .route(
+                "/cookie-error/{kind}",
+                get(|Path(kind): Path<String>| async move {
+                    let (content_type, body) = if kind == "raw" {
+                        ("application/octet-stream", RAW_BODY)
+                    } else {
+                        ("text/html", HTML.as_bytes())
+                    };
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [
+                            ("content-type", content_type),
+                            ("set-cookie", "session=fixture; Path=/; HttpOnly"),
+                        ],
+                        body,
+                    )
+                }),
+            )
+            .route(
                 "/raw",
                 get(|| async {
                     (
@@ -187,6 +205,25 @@ impl Drop for HttpFailureFixture {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cookie_jar_is_saved_when_http_status_causes_fetch_failure() -> Result<()> {
+    let server = HttpFailureFixture::spawn().await?;
+    for kind in ["html", "raw"] {
+        for fail_flag in ["--fail", "--fail-with-body"] {
+            {
+                let output_flag = "--cookie-jar";
+                let jar = super::unique_temp_file_path("http-failure-cookie-jar", "cookies.txt")?;
+                let path = format!("/cookie-error/{kind}");
+                let output =
+                    server.run(&path, &[fail_flag, output_flag, &jar.to_string_lossy()])?;
+                server.assert_http_failure(&output, 503, &path);
+                assert!(std::fs::read_to_string(jar)?.contains("\tsession\tfixture\n"));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct FailingOutput {

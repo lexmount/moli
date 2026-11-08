@@ -585,12 +585,9 @@ impl ScriptVm {
             return Ok(None);
         };
         let fetch_key = preload.module_key().clone();
+        self.dispatch_module_fetch_csp_violations(preload.csp_context());
         let source = match result {
-            Ok(fetched_source) => self.module_graph_fetched_source_or_csp_error(
-                load_id,
-                fetched_source,
-                preload.fetch_metadata(),
-            ),
+            Ok(fetched_source) => Ok(fetched_source),
             Err(error) => Err(ModuleLoadError::new(ModuleLoadStage::Fetch, error)),
         };
         let application = match source {

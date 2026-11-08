@@ -43,6 +43,7 @@ struct ScheduledTimerSource {
     use_target_context: bool,
     source: String,
     provenance: CompiledStringProvenance,
+    resource_initiator: crate::resource_initiator::CallbackInitiator,
     // A snapshot of the initiating script, not the eventual timer caller/realm.
     script_nonce: Option<String>,
 }
@@ -60,6 +61,7 @@ struct ScheduledTimerFunction {
 enum ScheduledTimerCallback {
     Function(ScheduledTimerFunction),
     InternalFunction(ScheduledTimerFunction),
+    Networking(ScheduledTimerFunction),
     WindowWebIdl(ScheduledWindowWebIdlCallback),
     Source(ScheduledTimerSource),
     ResourceTimingBufferFull {
@@ -72,9 +74,9 @@ enum ScheduledTimerCallback {
 impl ScheduledTimerCallback {
     fn context<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Context> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) => {
-                v8::Local::new(scope, &function.relevant_context)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => v8::Local::new(scope, &function.relevant_context),
             Self::WindowWebIdl(callback) => callback
                 .relevant_context(scope)
                 .expect("a scheduled Window Web IDL callback must retain its relevant context"),
@@ -85,9 +87,9 @@ impl ScheduledTimerCallback {
 
     fn realm_token(&self) -> Option<RuntimeObservableContextToken> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) => {
-                Some(function.realm_token)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => Some(function.realm_token),
             Self::WindowWebIdl(callback) => callback.realm_token(),
             Self::Source(source) => source.realm_token,
             Self::ResourceTimingBufferFull { .. } => None,
@@ -96,9 +98,9 @@ impl ScheduledTimerCallback {
 
     fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) => {
-                function.relevant_identity
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => function.relevant_identity,
             Self::WindowWebIdl(callback) => callback.relevant_identity(),
             Self::Source(_) | Self::ResourceTimingBufferFull { .. } => None,
         }
@@ -122,9 +124,9 @@ impl ScheduledTimerCallback {
         target_binding: Option<&WindowExecutionContextBinding>,
     ) -> Option<OwnerDispatchScope> {
         match self {
-            Self::Function(function) | Self::InternalFunction(function) => {
-                Some(function.relevant_dispatch_scope)
-            }
+            Self::Function(function)
+            | Self::InternalFunction(function)
+            | Self::Networking(function) => Some(function.relevant_dispatch_scope),
             Self::WindowWebIdl(_) => {
                 target_binding.map(WindowExecutionContextBinding::dispatch_scope)
             }
@@ -146,7 +148,9 @@ impl ScheduledTimerCallback {
                 .map(|binding| binding.context(scope))
                 .unwrap_or_else(|| self.context(scope)),
             Self::Source(_) => self.context(scope),
-            Self::Function(_) | Self::InternalFunction(_) => self.context(scope),
+            Self::Function(_) | Self::InternalFunction(_) | Self::Networking(_) => {
+                self.context(scope)
+            }
             Self::ResourceTimingBufferFull { .. } => self.context(scope),
         }
     }
@@ -273,14 +277,15 @@ impl fmt::Debug for HostTimeoutScheduler {
 impl HostTimeoutScheduler {
     /// Browser tasks share the Window task scheduler and its retirement checks,
     /// but are not JS timer handles that clearTimeout can cancel.
+    /// Returns whether the task was admitted by the owner and Realm checks.
     pub(crate) fn queue_internal_task<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-    ) {
+    ) -> bool {
         let receiver = scope.get_current_context().global(scope);
         let Some(callback) = scheduled_timer_function(scope, callback, receiver) else {
-            return;
+            return false;
         };
         let Some(owner) = scheduled_timer_owner_for_target(
             scope,
@@ -288,7 +293,7 @@ impl HostTimeoutScheduler {
             Some(receiver),
             scope.get_current_context(),
         ) else {
-            return;
+            return false;
         };
         self.scheduler.schedule_after(
             ScheduledTimerTask {
@@ -300,6 +305,7 @@ impl HostTimeoutScheduler {
             0,
             Instant::now(),
         );
+        true
     }
 
     pub(crate) fn queue_once<'s>(
@@ -541,6 +547,9 @@ impl HostTimeoutScheduler {
                         source,
                         provenance,
                         script_nonce,
+                        resource_initiator: crate::resource_initiator::CallbackInitiator::capture(
+                            scope,
+                        ),
                     }),
                     owner,
                     is_interval: false,
@@ -593,12 +602,55 @@ impl HostTimeoutScheduler {
                         source,
                         provenance,
                         script_nonce,
+                        resource_initiator: crate::resource_initiator::CallbackInitiator::capture(
+                            scope,
+                        ),
                     }),
                     owner,
                     is_interval: true,
                     extra_args,
                 },
                 u64::from(delay_ms),
+                Instant::now(),
+            )
+            .get()
+    }
+
+    pub(crate) fn queue_networking_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+    ) -> u32 {
+        let context = scope.get_current_context();
+        let receiver = context.global(scope);
+        let Some(mut callback) = scheduled_timer_function(scope, callback, receiver) else {
+            return 0;
+        };
+        let Some(host) = context_host_ptr_from_global_bridge(scope) else {
+            return 0;
+        };
+        let Some(binding) =
+            (unsafe { &*host }).current_runtime_window_execution_context_binding(scope)
+        else {
+            return 0;
+        };
+        // Browser completion targets a concrete Window, including lightweight
+        // popups whose global object is shared with their opener.
+        callback.incumbent_context = callback.relevant_context.clone();
+        let owner = ScheduledTimerOwner::Window(ScheduledWindowTimerTarget::new(
+            binding.owner(),
+            binding.dispatch_scope(),
+            Some(binding),
+        ));
+        self.scheduler
+            .schedule_after(
+                ScheduledTimerTask {
+                    callback: ScheduledTimerCallback::Networking(callback),
+                    owner,
+                    is_interval: false,
+                    extra_args: Vec::new(),
+                },
+                0,
                 Instant::now(),
             )
             .get()
@@ -834,7 +886,7 @@ impl HostTimeoutScheduler {
             id: timer_id,
             internal: matches!(
                 timer.payload.callback,
-                ScheduledTimerCallback::InternalFunction(_)
+                ScheduledTimerCallback::InternalFunction(_) | ScheduledTimerCallback::Networking(_)
             ),
             window_owner: target_binding.map(WindowExecutionContextBinding::owner),
             target_realm_token: target_binding.map(WindowExecutionContextBinding::realm_token),
@@ -856,7 +908,19 @@ impl HostTimeoutScheduler {
             if let (Some(dispatch_scope), Some(previous_dispatch_scope)) =
                 (execution_dispatch_scope, previous_dispatch_scope)
             {
-                dispatch_scope.restore(scope, previous_dispatch_scope);
+                if matches!(
+                    &timer.payload.callback,
+                    ScheduledTimerCallback::Networking(_)
+                ) && matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_))
+                {
+                    // Popups share their opener's V8 realm and need their
+                    // alias during promise reactions. Child realms have
+                    // distinct globals; restore their marker here rather
+                    // than applying it to the Page checkpoint's global.
+                    dispatch_scope.defer_restore(scope, previous_dispatch_scope);
+                } else {
+                    dispatch_scope.restore(scope, previous_dispatch_scope);
+                }
             }
             (
                 match callback_result {
@@ -882,11 +946,13 @@ impl HostTimeoutScheduler {
 
     fn cancel_window_timer(&mut self, id: TimerId, owner: WindowExecutionContextOwner) -> bool {
         let pending_matches = self.scheduler.active_payload(id).is_some_and(|task| {
-            !matches!(task.callback, ScheduledTimerCallback::InternalFunction(_))
-                && task
-                    .owner
-                    .window_target()
-                    .is_some_and(|target| target.owner == owner)
+            !matches!(
+                task.callback,
+                ScheduledTimerCallback::InternalFunction(_) | ScheduledTimerCallback::Networking(_)
+            ) && task
+                .owner
+                .window_target()
+                .is_some_and(|target| target.owner == owner)
         });
         let running_matches = self.running_timer.is_some_and(|running| {
             !running.internal && running.id == id && running.window_owner == Some(owner)
@@ -1105,7 +1171,8 @@ fn run_window_timer_callback(
 ) -> std::result::Result<HostTimeoutRunResult, HostTimeoutRunResult> {
     match callback {
         ScheduledTimerCallback::Function(function)
-        | ScheduledTimerCallback::InternalFunction(function) => {
+        | ScheduledTimerCallback::InternalFunction(function)
+        | ScheduledTimerCallback::Networking(function) => {
             let callback = v8::Local::new(scope, &function.callback);
             let receiver = v8::Local::new(scope, &function.receiver);
             let relevant_context = v8::Local::new(scope, &function.relevant_context);
@@ -1280,7 +1347,12 @@ fn run_window_timer_source(
             stack_trace,
         )));
     };
-    if crate::script_execution::execute_compiled_script(&mut scope, script).is_some() {
+    let initiator =
+        crate::resource_initiator::callback_anchor(&mut scope, Some(&source.resource_initiator));
+    let result = crate::resource_initiator::with_callback_anchor(&mut scope, initiator, |scope| {
+        crate::script_execution::execute_compiled_script(scope, script)
+    });
+    if result.is_some() {
         Ok(())
     } else {
         let exception = scope.exception();

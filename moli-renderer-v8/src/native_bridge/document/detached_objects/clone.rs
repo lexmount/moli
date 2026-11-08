@@ -554,16 +554,6 @@ fn native_template_content_object<'s>(
     detached_native_object_for_handle(scope, runtime_ptr, contents_handle)
 }
 
-fn template_content_object_for_clone<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    template: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if let Some(content) = native_template_content_object(scope, template) {
-        return Some(content);
-    }
-    object_property_as_object(scope, template, "content")
-}
-
 fn clone_explicit_custom_element_registry_association<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -663,16 +653,14 @@ fn clone_template_content_if_present<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
-    source_local_name: &str,
     cloned: v8::Local<'s, v8::Object>,
     document_kind: Option<&str>,
     fallback_registry: Option<v8::Local<'s, v8::Value>>,
 ) -> Option<bool> {
-    if !source_local_name.eq_ignore_ascii_case("template") {
+    let Some(source_content) = native_template_content_object(scope, source) else {
         return Some(false);
-    }
-    let source_content = template_content_object_for_clone(scope, source)?;
-    let cloned_content = template_content_object_for_clone(scope, cloned)?;
+    };
+    let cloned_content = native_template_content_object(scope, cloned)?;
     for child in clone_source_child_nodes(scope, source_content) {
         let cloned_child = clone_js_node_like_into_document_object_with_registry(
             scope,
@@ -877,7 +865,6 @@ pub(in crate::native_bridge::document) fn clone_js_node_like_into_document_objec
                     scope,
                     document,
                     node,
-                    &local_name,
                     cloned,
                     document_kind.as_deref(),
                     fallback_registry,

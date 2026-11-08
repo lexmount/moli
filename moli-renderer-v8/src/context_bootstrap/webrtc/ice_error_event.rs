@@ -10,7 +10,7 @@ use crate::{
     web_api_interfaces, webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
-use webidl::{WebIdlDictionary, WebIdlDictionarySerialize};
+use webidl::WebIdlDictionarySerialize;
 
 const ADDRESS_SLOT: &str = "__moliRtcIceErrorAddress";
 const PORT_SLOT: &str = "__moliRtcIceErrorPort";
@@ -53,26 +53,8 @@ struct Init {
 struct Args {
     #[webidl(required, converter = "raw")]
     event_type: webidl::DomString16,
-    #[webidl(required, with = parse_init_arg)]
+    #[webidl(required, dictionary)]
     init: Init,
-}
-
-fn parse_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<Init, webidl::WebIdlError> {
-    let object = webidl::dictionary_value(
-        args.get(index),
-        webidl::Context::argument("RTCPeerConnectionIceErrorEvent", (index + 1) as usize),
-    )?
-    .ok_or_else(|| {
-        webidl::WebIdlError::missing_required(webidl::Context::member(
-            "RTCPeerConnectionIceErrorEventInit",
-            "errorCode",
-        ))
-    })?;
-    Init::parse_dictionary(scope, object)
 }
 
 #[derive(WebApiFunctionTemplate)]

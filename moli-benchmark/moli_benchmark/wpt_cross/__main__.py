@@ -22,12 +22,14 @@ The runner:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 from .case_set import (
     ANY_JS_GLOBAL_CHOICES,
@@ -57,6 +59,22 @@ from ..config import clear_current_proxy_env
 REPO_CASE_LIST_DIR = Path(__file__).resolve().parents[2] / "wpt-cross-current"
 WPT_CROSS_CASE_TIMEOUT_SECONDS = 120.0
 WPT_CROSS_PARALLELISM = 50
+
+
+def _case_references_testdriver(wpt_root: Path, case: WptCase) -> bool:
+    path = urlsplit(case.case_path).path.lstrip("/")
+    for suffix, source_suffix in ((".any.html", ".any.js"), (".window.html", ".window.js")):
+        if path.endswith(suffix):
+            path = path.removesuffix(suffix) + source_suffix
+            break
+    source = (wpt_root / path).resolve()
+    try:
+        source.relative_to(wpt_root.resolve())
+        return b"/resources/testdriver" in source.read_bytes()
+    except (OSError, ValueError):
+        return False
+
+
 WPT_CROSS_PROFILES = (
     "default",
     "layout-testharness",
@@ -78,6 +96,10 @@ NON_TRUSTWORTHY_ORIGIN_CASES = frozenset(
     {
         "audio-output/secure-context.html",
         "credential-management/require_securecontext.html",
+        (
+            "html/webappapis/system-state-and-capabilities/"
+            "the-navigator-object/secure_context.html"
+        ),
         "pointerevents/pointerevent_constructor.html",
     }
 )
@@ -189,7 +211,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Include .any.js cases during --dir-prefix enumeration for the "
             "selected global: window, dedicatedworker, both, or none "
             "(default). The broad baseline includes both supported globals "
-            "for Streams and Compression automatically. Explicit --case path.any.js still "
+            "for IndexedDB, Streams and Compression automatically. Explicit --case path.any.js still "
             "runs the window variant by default."
         ),
     )
@@ -489,14 +511,14 @@ def _case_timeout(base_seconds: float, case: WptCase) -> float:
 
 
 def _harness_timeout_multiplier(case: WptCase) -> float:
-    """Preserve WPT's own normal/long timeout semantics.
+    """Keep authored timer delays independent of normal/long metadata.
 
-    The benchmark's outer case deadline is transport and cleanup headroom. It
-    must not stretch testharness.js timers, or a test that should report a WPT
-    timeout can keep an engine busy until the outer deadline instead.
+    testharness.js already selects its native harness deadline from the META
+    timeout value. Reusing that value as timeout_multiplier also rescales
+    step_timeout() delays and multiplies the long harness deadline a second time.
     """
 
-    return max(1.0, case.timeout_multiplier)
+    return 1.0
 
 
 def _is_layout_profile(profile: str) -> bool:
@@ -595,11 +617,9 @@ def _cdp_case_run(
         references=tuple(
             ReftestReferenceRun(
                 reference_path=reference.reference_path,
-                url=_url_for_case_origin(
-                    server,
-                    reference.reference_path,
-                    external=external,
-                ),
+                # A relative match/mismatch resource inherits the test's
+                # transport and port, including for .https reftests.
+                url=urljoin(url, "/" + reference.reference_path.lstrip("/")),
                 relation=reference.relation,
                 fuzzy=reference.fuzzy,
             )
@@ -664,7 +684,13 @@ def main(argv: list[str] | None = None) -> int:
     if has_crashtests and args.mode == "cli":
         print("error: crashtests require CDP mode to observe readiness and crashes", file=sys.stderr)
         return 4
-    requires_cdp = fixed_layout_viewport or has_crashtests
+    native_input_required = args.mode != "cdp" and any(
+        _case_references_testdriver(args.wpt_root, case) for case in cases
+    )
+    if native_input_required and args.mode == "cli":
+        print("error: testdriver cases require CDP mode for native input", file=sys.stderr)
+        return 4
+    requires_cdp = fixed_layout_viewport or has_crashtests or native_input_required
     if fixed_layout_viewport and args.mode == "cli":
         print(
             "error: layout profiles and reftests require CDP mode for fixed viewport screenshots",
@@ -699,6 +725,11 @@ def main(argv: list[str] | None = None) -> int:
                     "wpt_root": str(server.wpt_root),
                     "loopback_base_url": server.base_url,
                     "loopback_alternate_base_url": server.alternate_base_url,
+                    "loopback_https_base_url": getattr(server, "https_base_url", None),
+                    "loopback_alternate_https_base_url": getattr(server, "alternate_https_base_url", None),
+                    "external_https_base_url": getattr(server, "external_https_base_url", None),
+                    "fixture_ca_sha256": hashlib.sha256(server.tls.ca_certificate.read_bytes()).hexdigest() if getattr(server, "tls", None) is not None else None,
+                    "fixture_server_spki_sha256": server.tls.server_spki_sha256 if getattr(server, "tls", None) is not None else None,
                     "external_base_url": server.external_base_url,
                     "external_alternate_base_url": server.external_alternate_base_url,
                     "external_remote_base_url": server.external_remote_base_url,
@@ -712,6 +743,12 @@ def main(argv: list[str] | None = None) -> int:
 
         for engine in args.engine:
             driver = build_driver(engine)
+            if getattr(server, "tls", None) is not None:
+                try:
+                    driver = driver.with_fixture_tls(server.tls)
+                except RuntimeError as error:
+                    print(f"error: {error}", file=sys.stderr)
+                    return 3
             external = engine == "obscura"
             mode_for_check = "cdp" if requires_cdp else args.mode
             if mode_for_check == "auto":

@@ -1,6 +1,223 @@
 use super::*;
 
 #[test]
+fn core_frame_index_supplies_nested_subscription_ownership_and_retires_children() {
+    use moli_protocol::frame_index::{FrameIndex, FrameRecord};
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let mut snapshot = FrameIndex::default();
+    for record in [
+        FrameRecord::new("PAGE-a", None, "PAGE-a", Some("user-a".into())),
+        FrameRecord::new(
+            "FRAME-outer",
+            Some("PAGE-a".into()),
+            "PAGE-a",
+            Some("user-a".into()),
+        ),
+        FrameRecord::new(
+            "FRAME-inner",
+            Some("FRAME-outer".into()),
+            "PAGE-a",
+            Some("user-a".into()),
+        ),
+        FrameRecord::new("PAGE-b", None, "PAGE-b", Some("user-b".into())),
+    ] {
+        snapshot.insert(record);
+    }
+    state.record_frame_index_snapshot(snapshot.clone());
+    let subscribe = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.navigationStarted"], "contexts": ["FRAME-inner"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(subscribe.response["type"], "success");
+    let events = ["FRAME-inner", "PAGE-b"].into_iter().flat_map(|frame| {
+        state.subscribed_bidi_events_from_protocol_messages([&json!({
+            "method": "Page.frameStartedNavigating", "params": {
+                "frameId": frame, "loaderId": format!("loader-{frame}"), "url": "https://example.test/"
+            }
+        })])
+    }).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["context"], "FRAME-inner");
+    snapshot.remove_subtree("FRAME-outer");
+    state.record_frame_index_snapshot(snapshot);
+    let invalid = state.handle_message_with_session_registry(
+        json!({"id": 3, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.load"], "contexts": ["FRAME-inner"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(invalid.response["error"], "no such frame");
+    let other = state.handle_message_with_session_registry(
+        json!({"id": 4, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.load"], "contexts": ["PAGE-b"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(other.response["type"], "success");
+}
+
+#[test]
+fn unscoped_cdp_lifecycle_uses_captured_owner_and_rejects_ambiguous_delivery() {
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let subscribe = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {
+            "events": ["browsingContext.domContentLoaded", "browsingContext.load"]
+        }}),
+        &mut registry,
+    );
+    assert_eq!(subscribe.response["type"], "success");
+    for (frame, loader) in [("FRAME-1", "LOADER-1"), ("FRAME-2", "LOADER-2")] {
+        state.subscribed_bidi_events_from_protocol_messages([&json!({
+            "method": "Page.frameNavigated",
+            "params": {"frame": {"id": frame, "loaderId": loader, "url": format!("https://example.test/{frame}")}}
+        })]);
+    }
+    let dom_content_loaded =
+        json!({"method": "Page.domContentEventFired", "params": {"timestamp": 1.0}});
+    let events = state.subscribed_bidi_events_from_protocol_messages_with_context(
+        [&dom_content_loaded],
+        Some("FRAME-1"),
+    );
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["context"], "FRAME-1");
+    assert!(
+        state
+            .subscribed_bidi_events_from_protocol_messages([&dom_content_loaded])
+            .is_empty()
+    );
+    let load = json!({"method": "Page.loadEventFired", "params": {"timestamp": 2.0}});
+    let events =
+        state.subscribed_bidi_events_from_protocol_messages_with_context([&load], Some("FRAME-2"));
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["context"], "FRAME-2");
+}
+
+#[test]
+fn canonical_lifecycle_rejects_retired_loader_and_deduplicates_wire_projection() {
+    let (mut state, mut registry) = bidi_connection_with_session();
+    let subscribe = state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {"events": ["browsingContext.load"]}}),
+        &mut registry,
+    );
+    assert_eq!(subscribe.response["type"], "success");
+    for loader in ["LOADER-retired", "LOADER-current"] {
+        state.subscribed_bidi_events_from_protocol_messages([&json!({
+            "method": "Page.frameNavigated", "params": {"frame": {
+                "id": "FRAME-1", "loaderId": loader, "url": "https://example.test/"
+            }}
+        })]);
+    }
+    let lifecycle = |loader: &str| {
+        AutomationEvent::DocumentLifecycle(
+            NavigationLifecycleEvent {
+                target_id: DevToolsTargetId::from("FRAME-1"),
+                frame_id: DevToolsFrameId::from("FRAME-1"),
+                navigation_id: None,
+                loader_id: Some(DevToolsLoaderId::from(loader)),
+                url: "https://example.test/".to_owned(),
+                timestamp: 1.0,
+            }
+            .at_phase(moli_protocol::automation::DocumentLifecyclePhase::Load),
+        )
+    };
+    assert!(
+        state
+            .subscribed_bidi_events_from_automation_events([&lifecycle("LOADER-retired")])
+            .is_empty()
+    );
+    let events =
+        state.subscribed_bidi_events_from_automation_events([&lifecycle("LOADER-current")]);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["params"]["context"], "FRAME-1");
+    assert!(
+        state
+            .subscribed_bidi_events_from_protocol_messages_with_context(
+                [&json!({"method": "Page.loadEventFired", "params": {"timestamp": 1.0}})],
+                Some("FRAME-1"),
+            )
+            .is_empty()
+    );
+}
+
+#[test]
+fn document_open_restarts_child_lifecycle_without_replacing_navigation_identity() {
+    use moli_protocol::automation::DocumentLifecyclePhase;
+    use moli_protocol::frame_index::FrameRecord;
+    let (mut state, mut registry) = bidi_connection_with_session();
+    state.handle_message_with_session_registry(
+        json!({"id": 2, "method": "session.subscribe", "params": {"events": [
+            "browsingContext.navigationStarted", "browsingContext.domContentLoaded", "browsingContext.load"
+        ]}}),
+        &mut registry,
+    );
+    let attached = AutomationEvent::FrameAttached(FrameRecord::new(
+        "child",
+        Some("FRAME-1".into()),
+        "FRAME-1",
+        None,
+    ));
+    let navigation = NavigationLifecycleEvent {
+        target_id: DevToolsTargetId::from("FRAME-1"),
+        frame_id: DevToolsFrameId::from("child"),
+        navigation_id: Some(DevToolsNavigationId::from("NAV-explicit")),
+        loader_id: Some(DevToolsLoaderId::from("LOADER-child")),
+        url: "https://example.test/child".into(),
+        timestamp: 1.0,
+    };
+    let started = AutomationEvent::NavigationStarted(navigation.clone());
+    assert_eq!(
+        state
+            .subscribed_bidi_events_from_automation_events([&attached, &started])
+            .len(),
+        1
+    );
+    for _ in 0..3 {
+        let facts = [
+            DocumentLifecyclePhase::Init,
+            DocumentLifecyclePhase::DomContentLoaded,
+            DocumentLifecyclePhase::Load,
+            DocumentLifecyclePhase::DomContentLoaded,
+            DocumentLifecyclePhase::Load,
+        ]
+        .map(|phase| AutomationEvent::DocumentLifecycle(navigation.clone().at_phase(phase)));
+        let events = state.subscribed_bidi_events_from_automation_events(facts.iter());
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event["method"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["browsingContext.domContentLoaded", "browsingContext.load"]
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event["params"]["navigation"] == "NAV-explicit"
+                    && event["params"]["context"] == "child")
+        );
+        let wire_load = json!({"method": "Page.lifecycleEvent", "params": {
+            "frameId": "child", "loaderId": "LOADER-child", "name": "load", "timestamp": 1.0
+        }});
+        assert!(
+            state
+                .subscribed_bidi_events_from_protocol_messages([&wire_load])
+                .is_empty()
+        );
+    }
+    let mut retired = navigation.clone();
+    retired.loader_id = Some(DevToolsLoaderId::from("LOADER-retired"));
+    let stale = AutomationEvent::DocumentLifecycle(retired.at_phase(DocumentLifecyclePhase::Init));
+    let duplicate =
+        AutomationEvent::DocumentLifecycle(navigation.at_phase(DocumentLifecyclePhase::Load));
+    assert!(
+        state
+            .subscribed_bidi_events_from_automation_events([&stale, &duplicate])
+            .is_empty()
+    );
+}
+
+#[test]
 fn serializes_window_realm_created_from_runtime_context_event() {
     let event = RuntimeExecutionContextEvent {
         target_id: None,
@@ -302,17 +519,19 @@ fn dispatcher_maps_runtime_and_browsing_context_events() {
 
     assert_eq!(bidi_event["method"], json!("script.realmCreated"));
 
-    let lifecycle_event = super::super::bidi_event_from_automation_event(
-        &AutomationEvent::DomContentLoaded(NavigationLifecycleEvent {
-            target_id: DevToolsTargetId::from("FRAME-1"),
-            frame_id: DevToolsFrameId::from("FRAME-1"),
-            navigation_id: Some(DevToolsNavigationId::from("NAV-1")),
-            loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
-            url: "https://example.test/".to_owned(),
-            timestamp: 1.25,
-        }),
-    )
-    .expect("DomContentLoaded should map to browsingContext.domContentLoaded");
+    let lifecycle_event =
+        super::super::bidi_event_from_automation_event(&AutomationEvent::DocumentLifecycle(
+            NavigationLifecycleEvent {
+                target_id: DevToolsTargetId::from("FRAME-1"),
+                frame_id: DevToolsFrameId::from("FRAME-1"),
+                navigation_id: Some(DevToolsNavigationId::from("NAV-1")),
+                loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
+                url: "https://example.test/".to_owned(),
+                timestamp: 1.25,
+            }
+            .at_phase(moli_protocol::automation::DocumentLifecyclePhase::DomContentLoaded),
+        ))
+        .expect("DomContentLoaded should map to browsingContext.domContentLoaded");
 
     assert_eq!(
         lifecycle_event["method"],
@@ -1161,13 +1380,16 @@ fn session_subscribe_filters_protocol_browsing_context_lifecycle_events() {
         }
     });
 
-    let events = state.subscribed_bidi_events_from_protocol_messages([
-        &other_frame_started,
-        &frame_started,
-        &frame_navigated,
-        &dom_content_loaded,
-        &load,
-    ]);
+    let events = state.subscribed_bidi_events_from_protocol_messages_with_context(
+        [
+            &other_frame_started,
+            &frame_started,
+            &frame_navigated,
+            &dom_content_loaded,
+            &load,
+        ],
+        Some("FRAME-1"),
+    );
 
     assert_eq!(events.len(), 3);
     assert_eq!(
@@ -1452,22 +1674,47 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         security_origin: Some("https://example.test".to_owned()),
         secure_context_type: Some("Secure".to_owned()),
     });
-    let dom_content_loaded = AutomationEvent::DomContentLoaded(NavigationLifecycleEvent {
-        target_id: DevToolsTargetId::from("FRAME-1"),
-        frame_id: DevToolsFrameId::from("FRAME-1"),
-        navigation_id: None,
-        loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
-        url: String::new(),
-        timestamp: 1.25,
+    let dom_content_loaded = AutomationEvent::DocumentLifecycle(
+        NavigationLifecycleEvent {
+            target_id: DevToolsTargetId::from("FRAME-1"),
+            frame_id: DevToolsFrameId::from("FRAME-1"),
+            navigation_id: None,
+            loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
+            url: String::new(),
+            timestamp: 1.25,
+        }
+        .at_phase(moli_protocol::automation::DocumentLifecyclePhase::DomContentLoaded),
+    );
+    let load = AutomationEvent::DocumentLifecycle(
+        NavigationLifecycleEvent {
+            target_id: DevToolsTargetId::from("FRAME-1"),
+            frame_id: DevToolsFrameId::from("FRAME-1"),
+            navigation_id: None,
+            loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
+            url: String::new(),
+            timestamp: 1.5,
+        }
+        .at_phase(moli_protocol::automation::DocumentLifecyclePhase::Load),
+    );
+
+    let mut marker_state = state.clone();
+    let markers = ["init", "DOMContentLoaded", "load", "load"].map(|name| {
+        AutomationEvent::DocumentLifecycle(
+            moli_protocol::automation::PageLifecycleEvent {
+                target_id: DevToolsTargetId::from("FRAME-1"),
+                frame_id: DevToolsFrameId::from("FRAME-1"),
+                loader_id: DevToolsLoaderId::from("LOADER-1"),
+                name: name.to_owned(),
+                timestamp: 1.5,
+            }
+            .into(),
+        )
     });
-    let load = AutomationEvent::Load(NavigationLifecycleEvent {
-        target_id: DevToolsTargetId::from("FRAME-1"),
-        frame_id: DevToolsFrameId::from("FRAME-1"),
-        navigation_id: None,
-        loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
-        url: String::new(),
-        timestamp: 1.5,
-    });
+    let marker_events = marker_state.subscribed_bidi_events_from_automation_events(
+        [&other_frame_started, &frame_started, &frame_navigated]
+            .into_iter()
+            .chain(markers.iter()),
+    );
 
     let events = state.subscribed_bidi_events_from_automation_events([
         &other_frame_started,
@@ -1478,6 +1725,17 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         &load,
     ]);
 
+    assert_eq!(
+        marker_events
+            .iter()
+            .map(|event| &event["method"])
+            .collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| &event["method"])
+            .collect::<Vec<_>>(),
+        "typed child lifecycle markers must publish the same lifecycle, including deduplication",
+    );
     assert_eq!(events.len(), 3);
     assert_eq!(
         events[0]["method"],
@@ -1488,7 +1746,7 @@ fn session_subscribe_filters_automation_browsing_context_lifecycle_events() {
         json!("browsingContext.domContentLoaded")
     );
     assert_eq!(events[2]["method"], json!("browsingContext.load"));
-    for event in &events {
+    for event in events.iter().chain(&marker_events) {
         assert_eq!(event["type"], json!("event"));
         assert_eq!(event["params"]["context"], json!("FRAME-1"));
         assert_eq!(event["params"]["navigation"], json!("navigation-LOADER-1"));

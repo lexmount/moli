@@ -47,7 +47,7 @@ async function withTimeout(label, promise, timeoutMs = 10000) {
   }
 }
 
-async function discoverWebSocket(endpoint) {
+async function discoverBrowser(endpoint) {
   const response = await fetch(`${endpoint.replace(/\/$/, '')}/json/version`);
   if (!response.ok) {
     throw new Error(`CDP discovery failed with HTTP ${response.status}`);
@@ -56,7 +56,7 @@ async function discoverWebSocket(endpoint) {
   if (typeof payload.webSocketDebuggerUrl !== 'string' || !payload.webSocketDebuggerUrl) {
     throw new Error(`CDP discovery response did not include webSocketDebuggerUrl: ${JSON.stringify(payload)}`);
   }
-  return payload.webSocketDebuggerUrl;
+  return payload;
 }
 
 async function listPageTargets(endpoint) {
@@ -131,7 +131,7 @@ async function runPuppeteerReconnectSmoke(puppeteer, endpoint, browserWSEndpoint
   try {
     firstBrowser = await withTimeout(
       'first Puppeteer reconnect probe connect',
-      puppeteer.connect({ browserWSEndpoint, protocolTimeout: 10000 }),
+      puppeteer.connect({ browserURL: endpoint, protocolTimeout: 10000 }),
     );
     const originalPage = await pageByTargetId(
       firstBrowser,
@@ -174,6 +174,7 @@ async function runPuppeteerReconnectSmoke(puppeteer, endpoint, browserWSEndpoint
     }
     completed = true;
     return {
+      discoveredThroughBrowserURL: true,
       existingTargetReused: true,
       firstEvaluation: firstResult,
       replacementEvaluation: replacementResult.answer,
@@ -223,8 +224,9 @@ async function main() {
   }
   const puppeteer = loadPuppeteer();
   trace('loaded puppeteer-core');
-  const browserWSEndpoint = await discoverWebSocket(endpoint);
-  const isMoliEndpoint = browserWSEndpoint.endsWith('/devtools/browser/moli-browser');
+  const discovery = await discoverBrowser(endpoint);
+  const browserWSEndpoint = discovery.webSocketDebuggerUrl;
+  const isMoliEndpoint = typeof discovery['Moli-Version'] === 'string';
   trace(`discovered ${browserWSEndpoint}`);
   const results = [];
   const record = (name, data = {}) => results.push({ name, ok: true, ...data });

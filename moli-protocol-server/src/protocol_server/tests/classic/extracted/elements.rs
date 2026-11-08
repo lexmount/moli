@@ -217,9 +217,8 @@ async fn webdriver_classic_execute_script_resolves_webelement_arguments() {
     assert_eq!(stale["value"]["error"], json!("stale element reference"));
 
     let node_id = element_id
-        .strip_prefix("moli-node-")
-        .and_then(|value| value.split_once("-element-").map(|(node_id, _)| node_id))
-        .expect("owner-shaped element id contains node id");
+        .strip_prefix("moli:bidi-renderer-node:")
+        .expect("shared element reference contains a backend node identity");
     let forged_legacy_ref = json!({
         CLASSIC_ELEMENT_REFERENCE_KEY: format!("moli-node-{node_id}"),
     });

@@ -7,7 +7,7 @@ fn assert_dispatch_rows(value: &serde_json::Value) {
     let rows = value.as_array().expect("MessagePort dispatch rows");
     assert_eq!(rows.len(), 46);
     for row in &rows[..32] {
-        let mut labels = vec!["capture", "bubble"];
+        let mut labels = vec!["bubble", "capture"];
         if matches!(row["type"].as_str(), Some("message" | "messageerror")) {
             labels.push("handler");
         }
@@ -36,9 +36,9 @@ fn assert_dispatch_rows(value: &serde_json::Value) {
             ],
             "reactivate-handler" => &["first", "later", "first", "later"],
             "capture-add" => &[
-                "first", "handler", "later", "added", "first", "handler", "later", "added", "added",
+                "first", "handler", "later", "first", "handler", "later", "added",
             ],
-            "stop" | "stopImmediate" => &["first", "first"],
+            "stopImmediate" => &["first", "first"],
             "recursive" => &[
                 "first",
                 "InvalidStateError",
@@ -48,7 +48,7 @@ fn assert_dispatch_rows(value: &serde_json::Value) {
                 "handler",
                 "later",
             ],
-            "prevent" | "passive" | "return-false" | "close" | "transfer" => {
+            "stop" | "prevent" | "passive" | "return-false" | "close" | "transfer" => {
                 &["first", "handler", "later", "first", "handler", "later"]
             }
             _ => panic!("unexpected action: {row}"),

@@ -25,13 +25,23 @@ pub(crate) fn dispatch_beforeinput(
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct NodePublicEventDispatchOutcome {
-    pub default_prevented: bool,
-    pub had_exception: bool,
+    // An Event can remain unprevented when its target rejects dispatch.
+    // Preserve the shared result's default-action decision, not only the
+    // listener-visible cancellation flag.
+    default_action_blocked: bool,
+    had_exception: bool,
 }
 
 impl NodePublicEventDispatchOutcome {
     pub(crate) fn allows_default(self) -> bool {
-        !self.default_prevented
+        !self.default_action_blocked
+    }
+
+    pub(crate) fn canceled_before_dispatch() -> Self {
+        Self {
+            default_action_blocked: true,
+            ..Self::default()
+        }
     }
 
     pub(crate) fn had_exception(self) -> bool {
@@ -47,11 +57,11 @@ pub(crate) fn dispatch_public_event<'s>(
 ) -> NodePublicEventDispatchOutcome {
     match dispatch_public_event_result(scope, runtime_ptr, target, event) {
         Ok(result) => NodePublicEventDispatchOutcome {
-            default_prevented: result.default_prevented,
+            default_action_blocked: !result.allows_default(),
             had_exception: false,
         },
         Err(_) => NodePublicEventDispatchOutcome {
-            default_prevented: event_default_prevented(scope, event),
+            default_action_blocked: event_default_prevented(scope, event),
             had_exception: true,
         },
     }

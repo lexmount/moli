@@ -47,7 +47,7 @@ fn message_port_transfer_respects_registered_native_proxy_identity() {
     let mut vm = new_storage_page_task_executor_test_vm("https://port-transfer.test/");
     vm.eval("globalThis.channel=new MessageChannel();globalThis.original=channel.port1")
         .unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "original");

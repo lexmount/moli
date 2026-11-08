@@ -86,9 +86,10 @@ globalThis.__childClassicWaitValue = 91;
                     .eval("__childClassicWaitEvents.join('|')")?;
 
                 let page_resource_queue = page_vm.page_resource_completion_queue();
-                if !page_resource_queue.has_ready_completion() {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
+                let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while !page_resource_queue.has_ready_completion() {
+                    tokio::time::timeout_at(
+                        completion_deadline,
                         page_vm.page_task_queue.wait_for_page_runtime_wake(),
                     )
                     .await
@@ -311,6 +312,309 @@ globalThis.__childClassicWaitValue = 91;
 }
 #[tokio::test]
 async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() {
+    child_parser_stylesheet_media("", false, true).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_blocking_classic_waits_for_screen_print_stylesheet() {
+    child_parser_stylesheet_media(r#"media="screen,print""#, false, true).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_stylesheets_use_the_child_media_environment() {
+    for media in [
+        r#"media="only screen""#,
+        r#"media="not print""#,
+        r#"media="screen and (color) and (width: 320px)""#,
+    ] {
+        child_parser_stylesheet_media(media, false, true).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_loads_nonmatching_stylesheets_without_blocking_scripts() {
+    for media in [r#"media="print""#, r#"media="(min-width: 768px)""#] {
+        child_parser_stylesheet_media(media, false, false).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_style_imports_share_media_matching_and_loading() {
+    child_parser_stylesheet_media(r#"media="only screen and (max-width: 500px)""#, true, true)
+        .await;
+    child_parser_stylesheet_media(r#"media="print""#, true, false).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_late_stylesheet_owners_refetch_no_store_responses() {
+    for imports in [false, true] {
+        child_parser_late_stylesheet_owner(imports, "no-store", false).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_late_stylesheet_owners_retry_failed_responses() {
+    for imports in [false, true] {
+        child_parser_late_stylesheet_owner(imports, "no-store", true).await;
+    }
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_late_stylesheet_owners_reuse_fresh_responses_through_fetch() {
+    for imports in [false, true] {
+        child_parser_late_stylesheet_owner(imports, "max-age=3600", false).await;
+    }
+}
+
+async fn take_child_stylesheet_test_completion(
+    page_vm: &mut PageVm,
+) -> RendererPageResourceCompletion {
+    let queue = page_vm.page_resource_completion_queue();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some((_, completion)) = queue.pop_front() {
+            return completion;
+        }
+        tokio::time::timeout_at(
+            deadline,
+            page_vm.page_task_queue.wait_for_page_runtime_wake(),
+        )
+        .await
+        .expect("child stylesheet fixture must publish its completion");
+    }
+}
+
+async fn child_stylesheet_cache_test_server(
+    cache_control: &'static str,
+    fail_first: bool,
+) -> (String, JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let request_count = if cache_control == "max-age=3600" {
+        2
+    } else {
+        3
+    };
+    let server = tokio::spawn(async move {
+        let mut paths = Vec::new();
+        let mut css_count = 0;
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_head(&mut stream).await.unwrap();
+            let path = request
+                .lines()
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(1)
+                .unwrap();
+            paths.push(path.to_owned());
+            let (content_type, body) = match path {
+                "/shared.css" => {
+                    css_count += 1;
+                    if fail_first && css_count == 1 {
+                        // Close without an HTTP response to produce a network failure.
+                        continue;
+                    }
+                    (
+                        "text/css",
+                        format!(
+                            ":root {{ --shared-ready: {}; }}",
+                            if css_count == 1 { "first" } else { "second" }
+                        ),
+                    )
+                }
+                "/hold.js" => (
+                    "text/javascript",
+                    "parent.__sharedStylesheetEvents.push('hold');".to_owned(),
+                ),
+                _ => panic!("unexpected stylesheet cache test request: {path}"),
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nCache-Control: {cache_control}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        paths
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn child_parser_late_stylesheet_owner(
+    imports: bool,
+    cache_control: &'static str,
+    fail_first: bool,
+) {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = child_stylesheet_cache_test_server(cache_control, fail_first).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page")).unwrap();
+        let mut page_vm =
+            test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            let sheet = |media| if imports {
+                format!("<style media='{media}'>@import '{base_url}/shared.css';</style>")
+            } else {
+                format!("<link rel=stylesheet media='{media}' href='{base_url}/shared.css'>")
+            };
+            let child = format!(
+                "{}<script src='{base_url}/hold.js'></script>{}<script>\
+                 parent.__sharedStylesheetEvents.push(getComputedStyle(document.documentElement)\
+                 .getPropertyValue('--shared-ready').trim());</script>",
+                sheet("print"), sheet("screen"),
+            );
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__sharedStylesheetEvents = [];
+                const root = document.documentElement || document.appendChild(document.createElement('html'));
+                const body = document.body || root.appendChild(document.createElement('body'));
+                const frame = document.createElement('iframe');
+                frame.srcdoc = {};
+                body.appendChild(frame);
+            "#, serde_json::to_string(&child)?))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "shared CSS navigation",
+            ).await;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::ClassicScriptSourceLoad, "shared CSS external script source",
+            ).await;
+            run_expected_child_realm_materialization_for_wait(&mut page_vm, "shared CSS realm").await;
+
+            let mut css = None;
+            let mut script = None;
+            for _ in 0..2 {
+                let completion = take_child_stylesheet_test_completion(&mut page_vm).await;
+                match completion.terminal() {
+                    RendererPageResourceTerminal::ChildBlockingStylesheet { .. } => css = Some(completion),
+                    RendererPageResourceTerminal::ChildClassicScript { .. } => script = Some(completion),
+                    other => panic!("unexpected shared stylesheet completion: {other:?}"),
+                }
+            }
+            // Apply the CSS terminal while the parser is still stopped at hold.js.
+            // The matching owner therefore cannot have joined before completion.
+            page_vm.apply_selected_page_resource_completion_turn(css.expect("CSS completion"))?;
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "");
+            page_vm.apply_selected_page_resource_completion_turn(script.expect("script completion"))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "release hold.js",
+            ).await;
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, "hold");
+            // Even a cache hit must enter Fetch and deliver its own completion
+            // before the new matching owner can release the following script.
+            let later_css = take_child_stylesheet_test_completion(&mut page_vm).await;
+            assert!(matches!(later_css.terminal(), RendererPageResourceTerminal::ChildBlockingStylesheet { .. }));
+            page_vm.apply_selected_page_resource_completion_turn(later_css)?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "later stylesheet owner script",
+            ).await;
+            let expected = if cache_control == "max-age=3600" { "hold|first" } else { "hold|second" };
+            assert_eq!(page_vm.vm_mut().eval("__sharedStylesheetEvents.join('|')")?, expected,
+                "a late owner must use Fetch cache policy; imports={imports}, cache_control={cache_control}, fail_first={fail_first}");
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("late stylesheet owner fixture");
+        let paths = server.await.expect("shared CSS server");
+        let expected_css_count = if cache_control == "max-age=3600" { 1 } else { 2 };
+        assert_eq!(paths.iter().filter(|path| path.as_str() == "/shared.css").count(), expected_css_count);
+    }).await;
+}
+
+#[tokio::test]
+async fn page_vm_child_parser_link_completion_requires_a_current_owner() {
+    for mutation in ["href", "same-url", "remove", "media"] {
+        child_parser_link_completion_after_mutation(mutation).await;
+    }
+}
+
+async fn child_parser_link_completion_after_mutation(mutation: &'static str) {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/old.css",
+            "HTTP/1.1 200 OK",
+            ":root { --old-sheet: stale; }".to_owned(),
+            Duration::ZERO,
+        )]).await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page")).unwrap();
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            // The browser has completed this scan before a child script can
+            // replace a parser-created, nonmatching link. The standalone VM
+            // fixture must establish the same admission boundary explicitly.
+            page_vm.vm_mut().document_runtime.queue_initial_connected_style_loads();
+            let child = format!("<link id=theme rel=stylesheet media=print href='{base_url}/old.css'><script>parent.__staleLinkScriptRan=true;</script>");
+            page_vm.vm_mut().eval(&format!(r#"
+                const root = document.documentElement || document.appendChild(document.createElement('html'));
+                const body = document.body || root.appendChild(document.createElement('body'));
+                globalThis.__staleFrame = document.createElement('iframe');
+                __staleFrame.srcdoc = {};
+                body.appendChild(__staleFrame);
+            "#, serde_json::to_string(&child)?))?;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::NavigationCommit, "stale CSS navigation",
+            ).await;
+            run_expected_child_realm_materialization_for_wait(&mut page_vm, "stale CSS realm").await;
+            run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                &mut page_vm, ChildFrameSemanticTurnKind::DocumentScriptReady, "nonblocking link permits script",
+            ).await;
+            assert_eq!(page_vm.vm_mut().eval("String(__staleLinkScriptRan)")?, "true");
+
+            // Keep the old terminal out of the selected dispatcher until after
+            // the element has changed. No wall-clock delay establishes order.
+            let queue = page_vm.page_resource_completion_queue();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            let old = loop {
+                if let Some((_, completion)) = queue.pop_front() {
+                    break completion;
+                }
+                tokio::time::timeout_at(deadline, wake_rx.recv()).await
+                    .expect("old stylesheet terminal must arrive")
+                    .expect("stylesheet owner wake route must stay open");
+            };
+            assert!(matches!(old.terminal(), RendererPageResourceTerminal::ChildBlockingStylesheet { .. }));
+            let action = match mutation {
+                "href" => "theme.href = 'data:text/css,:root%7B--new-sheet:current;%7D';",
+                "same-url" => "const original = theme.href; theme.href = 'data:text/css,:root%7B--new-sheet:current;%7D'; theme.href = original;",
+                "remove" => "theme.remove();",
+                "media" => "",
+                _ => unreachable!(),
+            };
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__staleTheme = __staleFrame.contentDocument.getElementById('theme');
+                {{ const theme = __staleTheme; {action} theme.media = 'screen'; }}
+            "#))?;
+            if mutation == "href" {
+                page_vm.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")? != "current" {
+                    if !page_vm.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::StylesheetCompletion, &loader,
+                    ).await? {
+                        tokio::time::timeout_at(deadline, wake_rx.recv()).await
+                            .expect("replacement stylesheet terminal must arrive")
+                            .expect("stylesheet owner wake route must stay open");
+                    }
+                }
+                assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")?, "current");
+            }
+            page_vm.apply_selected_page_resource_completion_turn(old)?;
+            assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--old-sheet').trim()")?,
+                if mutation == "media" { "stale" } else { "" },
+                "only the element's current stylesheet processing can install a terminal: {mutation}");
+            if mutation == "href" {
+                assert_eq!(page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")?, "current",
+                    "the old response must not replace an already installed newer stylesheet");
+            }
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("stale child stylesheet fixture");
+        server.await.expect("old stylesheet server");
+    }).await;
+}
+
+async fn child_parser_stylesheet_media(media: &'static str, imports: bool, blocks_scripts: bool) {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_concurrent_path_response_http_server(vec![(
             "/parser-blocking.css",
@@ -333,6 +637,11 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
         ) = local_executor
             .run(async move {
                 let mut page_vm = page_vm;
+                let stylesheet = if imports {
+                    format!(r#"<style id="child-style" {media}>@import url('{base_url}/parser-blocking.css');</style>"#)
+                } else {
+                    format!(r#"<link id="child-style" rel="stylesheet" href="{base_url}/parser-blocking.css" {media}>"#)
+                };
                 page_vm.vm_mut().eval(&format!(
                     r#"
 (() => {{
@@ -340,10 +649,13 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
   const root = document.documentElement || document.appendChild(document.createElement("html"));
   const body = document.body || root.appendChild(document.createElement("body"));
   const frame = document.createElement("iframe");
+  frame.width = "320";
+  frame.height = "200";
   frame.onload = () => globalThis.__childParserStylesheetEvents.push("load");
   frame.srcdoc = `
-    <link rel="stylesheet" href="{base_url}/parser-blocking.css">
+    {stylesheet}
     <script>
+      parent.__childParserStylesheetMediaMatches = matchMedia(document.getElementById('child-style').media).matches;
       parent.__childParserStylesheetEvents.push(
         "script:" + getComputedStyle(document.documentElement)
           .getPropertyValue("--child-parser-style-gate").trim() + ":" + document.readyState
@@ -370,12 +682,19 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     crate::page_task_queue::PageChildRealmMaterializationTargetEffect::MaterializedCurrentOwnerWithoutDocumentStartScript
                 );
 
+                if !blocks_scripts {
+                    for kind in [ChildFrameSemanticTurnKind::DocumentScriptReady,
+                                 ChildFrameSemanticTurnKind::DocumentLifecycle,
+                                 ChildFrameSemanticTurnKind::DocumentLifecycle] {
+                        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                            &mut page_vm, kind, "nonmatching stylesheet must allow script and DCL",
+                        ).await;
+                    }
+                }
                 assert_eq!(
-                    page_vm
-                        .vm_mut()
-                        .eval("__childParserStylesheetEvents.join('|')")?,
-                    "",
-                    "parser-blocking classic must remain pending while its preparation-time stylesheet snapshot is unresolved"
+                    page_vm.vm_mut().eval("__childParserStylesheetEvents.join('|')")?,
+                    if blocks_scripts { "" } else { "script::complete" },
+                    "only matching stylesheets may block the parser-created classic script: {media}"
                 );
                 assert!(
                     !page_vm
@@ -388,9 +707,10 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                 );
 
                 let page_resource_queue = page_vm.page_resource_completion_queue();
-                if !page_resource_queue.has_ready_completion() {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
+                let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                while !page_resource_queue.has_ready_completion() {
+                    tokio::time::timeout_at(
+                        completion_deadline,
                         page_vm.page_task_queue.wait_for_page_runtime_wake(),
                     )
                     .await
@@ -420,6 +740,7 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     .eval("__childParserStylesheetEvents.join('|')")?;
 
                 let mut followup_sources = Vec::new();
+                if blocks_scripts {
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -451,6 +772,9 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     )
                     .await,
                 );
+                }
+                assert_eq!(page_vm.vm_mut().eval("String(__childParserStylesheetMediaMatches)")?,
+                           if blocks_scripts { "true" } else { "false" });
                 followup_sources.push(
                     run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                         &mut page_vm,
@@ -467,9 +791,12 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
                     )
                     .await,
                 );
-                let final_events = page_vm
-                    .vm_mut()
-                    .eval("__childParserStylesheetEvents.join('|')")?;
+                let final_events = page_vm.vm_mut().eval("__childParserStylesheetEvents.join('|')")?;
+                assert_eq!(page_vm.vm_mut().eval(r#"(() => {
+                    const d = document.querySelector('iframe').contentDocument;
+                    d.getElementById('child-style').media = 'all';
+                    return getComputedStyle(d.documentElement).getPropertyValue('--child-parser-style-gate').trim();
+                })()"#)?, "stylesheet-ready", "loaded CSS must remain available when media changes");
                 assert_eq!(page_vm.run_next_child_frame_task_source_for_semantic_test().await, None);
 
                 Ok::<_, anyhow::Error>((
@@ -497,20 +824,20 @@ async fn page_vm_child_parser_blocking_classic_waits_for_preceding_stylesheet() 
             PageResourceCompletionOutputEffect::CaptureRequired
         );
         assert_eq!(
-            events_after_completion, "",
+            events_after_completion, if blocks_scripts { "" } else { "script::complete" },
             "stylesheet resource completion must not inline-run child script"
         );
         assert_eq!(
             followup_sources,
-            vec![
+            if blocks_scripts { vec![
                 ChildFrameSemanticTurnKind::DocumentScriptReady,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::DocumentLifecycle,
                 ChildFrameSemanticTurnKind::HostLoad,
-            ]
+            ] } else { vec![ChildFrameSemanticTurnKind::DocumentLifecycle, ChildFrameSemanticTurnKind::HostLoad] }
         );
-        assert_eq!(final_events, "script:stylesheet-ready:complete|load");
+        assert_eq!(final_events, if blocks_scripts { "script:stylesheet-ready:complete|load" } else { "script::complete|load" });
         server.await.expect("child parser stylesheet server should finish");
     })
     .await;

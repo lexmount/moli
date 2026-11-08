@@ -1,7 +1,5 @@
-use super::shared::WINDOW_NAVIGATOR_SLOT;
 use crate::util::{
-    callback_data_index_value, context_host_ptr_from_context_slot,
-    context_host_ptr_from_window_object, get_private_value, throw_type_error,
+    callback_data_index_value, context_host_ptr_from_context_slot, throw_type_error,
 };
 
 /// Recognizes a native Window receiver for WebIDL brand checks.
@@ -34,18 +32,15 @@ fn is_live_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if context_host_ptr_from_window_object(scope, receiver).is_some() {
-        return true;
-    }
-    // The shared helper maps an `undefined` rollback marker to `None`.
-    if get_private_value(scope, receiver, WINDOW_NAVIGATOR_SLOT).is_some() {
-        return true;
-    }
-    let Some(context) = receiver.get_creation_context(scope) else {
-        return false;
-    };
-    receiver.strict_equals(context.global(scope).into())
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
         && context_host_ptr_from_context_slot(context).is_some()
+    {
+        return true;
+    }
+    // Native Window wrappers carry the shared WebIDL brand. Workers also use
+    // the navigator cache, so that cache cannot establish Window identity.
+    crate::web_api_interfaces::Window::is_instance(scope, receiver)
 }
 
 pub(in crate::context_bootstrap) fn bound_callback_data<'s>(

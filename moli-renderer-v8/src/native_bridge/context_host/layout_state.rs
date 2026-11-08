@@ -6,7 +6,9 @@ use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
-    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    script_vm::web_fonts::{
+        DocumentWebFontCompletion, DocumentWebFontState, PreparedStylesheetResourceLoad,
+    },
     style_engine::{StyleViewport, StylesheetResourceGeneration, StyloStyleEnvironment},
 };
 
@@ -210,14 +212,9 @@ impl DocumentLayoutState {
     pub(super) fn publish_latest_layout(
         &mut self,
         document: DomHandle,
-        dom_version: u64,
         tree: FrozenLayoutTree<DomHandle>,
     ) {
-        self.latest_layout.publish(document, dom_version, tree);
-    }
-
-    pub(super) fn latest_layout_is_current(&self, document: DomHandle, dom_version: u64) -> bool {
-        self.latest_layout.is_current(document, dom_version)
+        self.latest_layout.publish(document, tree);
     }
 
     pub(super) fn clear_latest_layout(&mut self) {
@@ -313,11 +310,17 @@ impl DocumentLayoutState {
         document: DomHandle,
         main_document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
-    ) {
+    ) -> bool {
         if document == main_document {
             return self
                 .web_fonts
                 .retain_active_slots(resources, &mut self.services);
+        }
+        let mut resources = resources.into_iter().peekable();
+        if resources.peek().is_some() {
+            return self.with_web_fonts_for_document(document, main_document, |fonts, services| {
+                fonts.retain_active_slots(resources, services)
+            });
         }
         if let Some(fonts) = self
             .embedded_web_fonts
@@ -325,8 +328,9 @@ impl DocumentLayoutState {
             .and_then(|fonts| fonts.get_mut(&document))
             && let Some(services) = self.embedded_document_services.get_mut(&document)
         {
-            fonts.retain_active_slots(resources, services);
+            return fonts.retain_active_slots(resources, services);
         }
+        false
     }
 
     pub(super) fn admit(
@@ -334,10 +338,28 @@ impl DocumentLayoutState {
         document: DomHandle,
         main_document: DomHandle,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
+    ) -> PreparedStylesheetResourceLoad {
+        // Ready faces are revisited by read-only font projections.
         self.with_web_fonts_for_document(document, main_document, |fonts, services| {
             fonts.admit(resource, services)
         })
+    }
+
+    pub(super) fn observe_font(
+        &mut self,
+        document: DomHandle,
+        main_document: DomHandle,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        let fonts = if document == main_document {
+            &mut self.web_fonts
+        } else {
+            self.embedded_web_fonts
+                .get_or_insert_with(Default::default)
+                .entry(document)
+                .or_default()
+        };
+        fonts.observe(font)
     }
 
     pub(super) fn complete(

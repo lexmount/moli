@@ -1,13 +1,52 @@
-use super::ice_candidate_parser::parse_ice_candidate;
+use super::{dictionary_string::DictionaryDomString, ice_candidate_parser::parse_ice_candidate};
 use crate::web_api_interfaces;
 use crate::{
     util::{
         apply_webidl_constructor_prototype_fallback, callback_data_index_value, get_private_value,
         throw_type_error, v8str,
     },
-    webidl::{self, WebIdlConverter},
+    webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCIceCandidateInit")]
+struct CandidateInit<'s> {
+    #[webidl(converter = "raw", default = DictionaryDomString::default())]
+    candidate: DictionaryDomString<'s>,
+    #[webidl(nullable)]
+    sdp_m_line_index: Option<u16>,
+    #[webidl(nullable, converter = "raw")]
+    sdp_mid: Option<DictionaryDomString<'s>>,
+    #[webidl(nullable, converter = "raw")]
+    username_fragment: Option<DictionaryDomString<'s>>,
+}
+
+#[derive(Clone, Copy, webidl::WebIdlEnum)]
+#[webidl(name = "RTCIceServerTransportProtocol", rename_all = "kebab-case")]
+enum IceServerTransportProtocol {
+    Udp,
+    Tcp,
+    Tls,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RTCLocalIceCandidateInit")]
+struct LocalCandidateInit<'s> {
+    #[webidl(inherit)]
+    base: CandidateInit<'s>,
+    #[webidl(nullable, converter = "enum")]
+    relay_protocol: Option<IceServerTransportProtocol>,
+    #[webidl(nullable, converter = "usv_string")]
+    url: Option<String>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "RTCIceCandidate")]
+struct CandidateArgs<'s> {
+    #[webidl(dictionary)]
+    init: LocalCandidateInit<'s>,
+}
 
 const CANDIDATE_VALUES_SLOT: &str = "__moliRtcIceCandidateValues";
 
@@ -85,19 +124,27 @@ pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
         throw_type_error(scope, "RTCIceCandidate constructor requires 'new'.");
         return;
     }
-    let dictionary = match webidl::dictionary_value(
-        args.get(0),
-        webidl::Context::argument("RTCIceCandidate", 1),
-    ) {
-        Ok(dictionary) => dictionary,
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
-    };
-    let Some(mut values) = parse_candidate_init(scope, dictionary) else {
+    let Some(parsed_args) = webidl::parse_args::<CandidateArgs>(scope, &args) else {
         return;
     };
+    let init = parsed_args.init;
+    let mut values: [v8::Local<'s, v8::Value>; 16] = [v8::null(scope).into(); 16];
+    values[0] = init.base.candidate.into_value(scope).into();
+    if let Some(mid) = init.base.sdp_mid {
+        values[1] = mid.into_value(scope).into();
+    }
+    if let Some(line) = init.base.sdp_m_line_index {
+        values[2] = v8::Integer::new_from_unsigned(scope, line.into()).into();
+    }
+    if let Some(fragment) = init.base.username_fragment {
+        values[13] = fragment.into_value(scope).into();
+    }
+    if let Some(protocol) = init.relay_protocol {
+        values[14] = v8str(scope, webidl::WebIdlEnumSnapshot::snapshot_token(&protocol)).into();
+    }
+    if let Some(url) = init.url {
+        values[15] = v8::String::new(scope, &url).expect("ICE URL").into();
+    }
     if values[1].is_null() && values[2].is_null() {
         throw_type_error(scope, "RTCIceCandidate requires sdpMid or sdpMLineIndex.");
         return;
@@ -137,69 +184,6 @@ pub(in crate::context_bootstrap) fn rtc_ice_candidate_constructor_callback<'s>(
         "RTCIceCandidate",
     );
     rv.set(args.this().into());
-}
-
-fn parse_candidate_init<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    dictionary: Option<v8::Local<'s, v8::Object>>,
-) -> Option<[v8::Local<'s, v8::Value>; 16]> {
-    let mut values = [v8::null(scope).into(); 16];
-    values[0] = v8str(scope, "").into();
-    let Some(dictionary) = dictionary else {
-        return Some(values);
-    };
-    // Convert base dictionary members in lexical order before derived members.
-    // Keep DOMStrings in V8, preserving lone UTF-16 surrogates; only `url` is a USVString.
-    for (name, index) in [
-        ("candidate", 0),
-        ("sdpMLineIndex", 2),
-        ("sdpMid", 1),
-        ("usernameFragment", 13),
-        ("relayProtocol", 14),
-        ("url", 15),
-    ] {
-        let raw = dictionary.get(scope, v8str(scope, name).into())?;
-        if raw.is_undefined() || (index != 0 && raw.is_null()) {
-            continue;
-        }
-        let context = webidl::Context::member("RTCLocalIceCandidateInit", name);
-        if index == 2 {
-            let value = match webidl::UnsignedShort::convert(scope, raw, context, &()) {
-                Ok(value) => value.0,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            };
-            values[index] = v8::Integer::new_from_unsigned(scope, value.into()).into();
-        } else if index == 15 {
-            let value = match webidl::UsvString::convert(scope, raw, context, &Default::default()) {
-                Ok(value) => value.0,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return None;
-                }
-            };
-            values[index] = v8::String::new(scope, &value)?.into();
-        } else {
-            if raw.is_symbol() {
-                throw_type_error(scope, "Cannot convert a Symbol to a DOMString.");
-                return None;
-            }
-            let value = raw.to_string(scope)?;
-            if index == 14
-                && !matches!(
-                    value.to_rust_string_lossy(scope).as_str(),
-                    "udp" | "tcp" | "tls"
-                )
-            {
-                throw_type_error(scope, "Invalid RTCIceServerTransportProtocol.");
-                return None;
-            }
-            values[index] = value.into();
-        }
-    }
-    Some(values)
 }
 
 fn candidate_values<'s>(

@@ -90,6 +90,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         body_rx,
@@ -194,92 +195,105 @@ async fn resolve_runtime_object_for_backend_node_id(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_creation_diagnostics_include_default_runtime_context_event() -> Result<()> {
+async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: Url = server.url("/runtime-context-diagnostics").parse()?;
-    let html = "<!doctype html><html><body>ok</body></html>".to_owned();
-    let create_page_request = renderer_owner.build_create_html_page_request(
-        page_url.clone(),
-        None,
-        false,
-        0,
-        200,
-        vec![],
-        &browser.resource_request_client(),
-        moli_renderer_v8::RendererWebStorageHandles::new(
-            browser.partition.web_storage_store(),
-            browser.partition.session_storage_store(),
+    for (html, has_script) in [
+        ("<!doctype html><html><body>ok</body></html>", false),
+        (
+            "<!doctype html><html><body>ok<script>globalThis.hasScript = true</script></body></html>",
+            true,
         ),
-        page_url.clone(),
-        html,
-        vec![],
-        vec![],
-        vec![],
-        Default::default(),
-        false,
-        Vec::new(),
-        false,
-        None,
-        super::PageVmInitStage::Load,
-    );
-
-    let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
-        .await?;
-    let (handle, page_state, diagnostics, artifacts, pending_download) =
-        renderer_owner.materialize_page_created_reply_parts(reply)?;
-    assert!(pending_download.is_none());
-    let _page = Page::from_attached_handle(handle, page_state);
-
-    let default_context = diagnostics
-        .initial_runtime_realms
-        .iter()
-        .find(|realm| realm.is_default && realm.context_type == "default")
-        .context("page creation should report the default runtime context")?;
-    assert!(default_context.context_id > 0);
-    assert_eq!(default_context.name, page_url.as_str());
-    assert!(
-        default_context
-            .realm_id
-            .as_deref()
-            .is_some_and(|id| !id.is_empty()),
-        "page creation should expose the native V8 realm id"
-    );
-    assert_eq!(
-        artifacts.active_document.page_id,
-        artifacts.lifecycle_snapshot.frame.page_id
-    );
-    assert_eq!(artifacts.active_epoch, artifacts.lifecycle_snapshot.epoch);
-    assert_eq!(
-        artifacts
-            .initial_lifecycle_events
-            .iter()
-            .map(|event| event.kind)
-            .collect::<Vec<_>>(),
-        vec![
-            crate::page::RendererDocumentLifecycleEventKind::Started {
-                reason: crate::page::RendererLifecycleStartReason::InitialDocument,
-            },
-            crate::page::RendererDocumentLifecycleEventKind::Milestone(
-                crate::page::RendererDocumentLifecycleMilestone::DomContentLoaded,
+    ] {
+        let create_page_request = renderer_owner.build_create_html_page_request(
+            page_url.clone(),
+            None,
+            false,
+            0,
+            200,
+            vec![],
+            &browser.resource_request_client(),
+            moli_renderer_v8::RendererWebStorageHandles::new(
+                browser.partition.web_storage_store(),
+                browser.partition.session_storage_store(),
             ),
-            crate::page::RendererDocumentLifecycleEventKind::Milestone(
-                crate::page::RendererDocumentLifecycleMilestone::Load,
-            ),
-        ]
-    );
-    assert!(artifacts.lifecycle_snapshot.dom_content_loaded.is_some());
-    assert!(artifacts.lifecycle_snapshot.load.is_some());
-    assert!(
-        artifacts
-            .initial_lifecycle_events
-            .windows(2)
-            .all(|events| events[0].sequence < events[1].sequence
-                && events[0].timestamp_micros <= events[1].timestamp_micros)
-    );
+            page_url.clone(),
+            html.to_owned(),
+            vec![],
+            vec![],
+            vec![],
+            Default::default(),
+            false,
+            Vec::new(),
+            false,
+            None,
+            super::PageVmInitStage::Load,
+        );
 
+        let reply = renderer_owner
+            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+            .await?;
+        let (handle, page_state, diagnostics, artifacts, pending_download) =
+            renderer_owner.materialize_page_created_reply_parts(reply)?;
+        assert!(pending_download.is_none());
+        let _page = Page::from_attached_handle(handle, page_state);
+
+        if has_script {
+            let default_context = diagnostics
+                .initial_runtime_realms
+                .iter()
+                .find(|realm| realm.is_default && realm.context_type == "default")
+                .context("page creation should report the default runtime context")?;
+            assert!(default_context.context_id > 0);
+            assert_eq!(default_context.name, page_url.as_str());
+            assert!(
+                default_context
+                    .realm_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+                "page creation should expose the native V8 realm id"
+            );
+        } else {
+            assert!(
+                diagnostics.initial_runtime_realms.is_empty(),
+                "native-only creation must not publish an execution context"
+            );
+        }
+        assert_eq!(
+            artifacts.active_document.page_id,
+            artifacts.lifecycle_snapshot.frame.page_id
+        );
+        assert_eq!(artifacts.active_epoch, artifacts.lifecycle_snapshot.epoch);
+        assert_eq!(
+            artifacts
+                .initial_lifecycle_events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                crate::page::RendererDocumentLifecycleEventKind::Started {
+                    reason: crate::page::RendererLifecycleStartReason::InitialDocument,
+                },
+                crate::page::RendererDocumentLifecycleEventKind::Milestone(
+                    crate::page::RendererDocumentLifecycleMilestone::DomContentLoaded,
+                ),
+                crate::page::RendererDocumentLifecycleEventKind::Milestone(
+                    crate::page::RendererDocumentLifecycleMilestone::Load,
+                ),
+            ]
+        );
+        assert!(artifacts.lifecycle_snapshot.dom_content_loaded.is_some());
+        assert!(artifacts.lifecycle_snapshot.load.is_some());
+        assert!(
+            artifacts
+                .initial_lifecycle_events
+                .windows(2)
+                .all(|events| events[0].sequence < events[1].sequence
+                    && events[0].timestamp_micros <= events[1].timestamp_micros)
+        );
+    }
     server.shutdown().await;
     Ok(())
 }
@@ -378,45 +392,107 @@ impl Drop for TempProfileDir {
     }
 }
 
-fn indexed_db_origin_file(root: &std::path::Path, origin: &str) -> PathBuf {
-    let mut encoded = String::with_capacity(origin.len() * 2);
-    for byte in origin.as_bytes() {
-        use std::fmt::Write;
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    root.join(format!("{encoded}.json"))
-}
-
-fn indexed_db_origin_exists(root: &std::path::Path, origin: &str) -> bool {
-    if indexed_db_origin_file(root, origin).exists() {
-        return true;
-    }
-    let Ok(entries) = fs::read_dir(root) else {
-        return false;
-    };
-    entries.filter_map(|entry| entry.ok()).any(|entry| {
-        let path = entry.path();
-        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            return false;
-        }
-        let Ok(bytes) = fs::read(path) else {
-            return false;
-        };
-        serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("origin")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .as_deref()
-            == Some(origin)
-    })
+fn indexed_db_origin_exists(profile: &std::path::Path, origin: &str) -> bool {
+    // Reopen only after the browser owner dropped; inspect persisted SQLite
+    // through the production partition rather than assuming a JSON filename.
+    let partition = super::storage_partition::StoragePartitionState::open(Some(profile)).unwrap();
+    let service = partition.indexed_db_manager().lock().sqlite_service();
+    !service.databases(origin.as_bytes()).unwrap().is_empty()
 }
 
 fn first_party_storage_key_for_url(url: &Url) -> String {
     moli_storage_key::MoliStorageKey::first_party_from_url(url, None).serialized_storage_key()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_version_five_profile_starts_sql_and_reopens_new_data_without_reading_legacy_idb()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let profile = TempProfileDir::new("v5-sql-default");
+    let paths = BrowserProfilePaths::new(&profile.path);
+    fs::create_dir_all(&paths.partition_root)?;
+    let mut previous = moli_browser_profile::BrowserProfileManifest::default_for_paths(&paths);
+    previous.version = 5;
+    previous.partitions[0].cookies = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/cookies.json".into()),
+    };
+    previous.partitions[0].local_storage = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Json,
+        path: Some("partitions/default/localstorage.json".into()),
+    };
+    previous.partitions[0].indexed_db = moli_browser_profile::ProfileBackendManifest {
+        backend: moli_browser_profile::ProfileBackendKind::Disk,
+        path: Some("partitions/default/indexeddb".into()),
+    };
+    fs::write(&paths.manifest_path, serde_json::to_vec(&previous)?)?;
+    let legacy = paths.partition_root.join("indexeddb");
+    fs::write(&legacy, b"this is deliberately not readable IDB JSON")?;
+    let mut config = AppConfig::default();
+    config.set_profile_dir(Some(profile.path.clone()));
+    for reopened in [false, true] {
+        let browser = Browser::new(config.clone())?;
+        assert!(
+            !browser
+                .partition
+                .indexed_db_manager()
+                .lock()
+                .sqlite_service()
+                .is_closed()
+        );
+        let mut page = browser.fetch(&server.url("/static")).await?;
+        let result = page
+            .evaluate_runtime_expression_with_await_async(
+                r#"
+            new Promise((resolve,reject) => {
+                let upgraded = false;
+                const request = indexedDB.open('sql-default',1);
+                request.onerror = () => reject(request.error);
+                request.onupgradeneeded = () => {
+                    upgraded = true;
+                    request.result.createObjectStore('records').put('kept',1);
+                };
+                request.onsuccess = () => {
+                    const db = request.result;
+                    const tx = db.transaction('records');
+                    let value;
+                    const get = tx.objectStore('records').get(1);
+                    get.onsuccess = () => value = get.result;
+                    tx.onabort = () => reject(tx.error);
+                    tx.oncomplete = () => { db.close(); resolve({value,upgraded}); };
+                };
+            }).then(value => JSON.stringify(value))
+        "#,
+                true,
+            )
+            .await?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                result["value"]
+                    .as_str()
+                    .context("expected JSON from SQL profile probe")?
+            )?,
+            serde_json::json!({"value":"kept","upgraded":!reopened})
+        );
+        drop(page);
+        drop(browser);
+    }
+    assert!(paths.indexeddb_root.join("format.json").is_file());
+    assert_eq!(
+        fs::read(&legacy)?,
+        b"this is deliberately not readable IDB JSON"
+    );
+    let current = load_profile_manifest(&paths)?;
+    assert_eq!(
+        current.version,
+        moli_browser_profile::PROFILE_MANIFEST_VERSION
+    );
+    assert_eq!(
+        current.partitions[0].indexed_db.backend,
+        moli_browser_profile::ProfileBackendKind::Sqlite
+    );
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1041,11 +1117,12 @@ async fn browser_profile_dir_persists_local_storage_but_not_session_storage() ->
     }
 
     let profile_paths = BrowserProfilePaths::new(&profile.path);
-    let profile_json = fs::read_to_string(&profile_paths.local_storage_path)
-        .context("expected localStorage profile json to be written")?;
+    assert!(fs::read(&profile_paths.local_storage_path)?.starts_with(b"SQLite format 3\0"));
     assert!(
-        profile_json.contains("\"persisted\"") && profile_json.contains("\"yes\""),
-        "profile localStorage file should contain persisted key: {profile_json}"
+        !profile_paths
+            .partition_root
+            .join("localstorage.json")
+            .exists()
     );
 
     let browser = Browser::new(config)?;
@@ -1186,11 +1263,11 @@ async fn browser_profile_dir_persists_storage_bucket_indexeddb_separately() -> R
     let bucket_storage_key =
         crate::storage::storage_bucket_indexed_db_storage_key(&storage_key, bucket_id);
     assert!(
-        indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "bucket IndexedDB should write under its bucket storage key"
     );
     assert!(
-        !indexed_db_origin_exists(&profile_paths.indexeddb_root, &origin),
+        !indexed_db_origin_exists(&profile.path, &origin),
         "bucket IndexedDB should not write under the origin-wide IndexedDB key"
     );
 
@@ -1297,7 +1374,7 @@ async fn browser_profile_dir_prunes_expired_storage_bucket_indexeddb_on_open() -
     let bucket_storage_key =
         crate::storage::storage_bucket_indexed_db_storage_key(&storage_key, bucket_id);
     assert!(
-        indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "bucket IndexedDB should exist before profile-open pruning"
     );
 
@@ -1313,7 +1390,7 @@ async fn browser_profile_dir_prunes_expired_storage_bucket_indexeddb_on_open() -
     }
 
     assert!(
-        !indexed_db_origin_exists(&profile_paths.indexeddb_root, &bucket_storage_key),
+        !indexed_db_origin_exists(&profile.path, &bucket_storage_key),
         "profile-open pruning should remove expired bucket IndexedDB backing"
     );
     let pruned_json: serde_json::Value =
@@ -1430,11 +1507,11 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     assert_eq!(partition.root, "partitions/default");
     assert_eq!(
         partition.cookies.path.as_deref(),
-        Some("partitions/default/cookies.json")
+        Some("partitions/default/cookies.sqlite")
     );
     assert_eq!(
         partition.local_storage.path.as_deref(),
-        Some("partitions/default/localstorage.json")
+        Some("partitions/default/localstorage.sqlite")
     );
     assert_eq!(partition.session_storage.path, None);
     assert_eq!(
@@ -1451,7 +1528,7 @@ async fn browser_profile_dir_initializes_profile_manifest() -> Result<()> {
     );
     assert_eq!(
         partition.indexed_db.path.as_deref(),
-        Some("partitions/default/indexeddb")
+        Some("partitions/default/idb-lite")
     );
     assert_eq!(
         partition.http_cache.path.as_deref(),
@@ -1750,6 +1827,137 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn navigation_engine_cookie_scope_is_bound_before_service_worker_interception() -> Result<()>
+{
+    let (base_url, requests, server) = spawn_main_resource_service_worker_server().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut registration_page = browser
+        .fetch_allow_http_error_with_wait_until(
+            &format!("{base_url}/app/register.html"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_secs(5),
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "String(globalThis.__mainResourceSwReady).startsWith('ready:')",
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    // This fixture enables navigation preload by default. Disable it so the
+    // first scoped navigation never reaches the HTTP runtime, even speculatively.
+    registration_page
+        .evaluate_runtime_expression_async(
+            "navigator.serviceWorker.ready.then(registration => registration.navigationPreload.disable()).then(() => { globalThis.__scopePreloadDisabled = true; })",
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "globalThis.__scopePreloadDisabled === true",
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    let mut config = FetchConfig::default();
+    config.set_additional_cookies(Some("session=literal".to_owned()));
+    config.set_http_no_proxy(Some("*".to_owned()));
+    let mut engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
+        config,
+        browser._lifetime_owner.browser_context_owner.owner_access(),
+        OptionalResourceFetchMask::NONE,
+        true,
+    )?;
+    let storage = || {
+        NavigationResourceStorageHandles::new(
+            browser.partition.cookie_store(),
+            browser.partition.web_storage_store(),
+            browser.partition.session_storage_store(),
+        )
+    };
+    let navigation = engine
+        .fetch_navigation_streaming_raw_response_with_storage_async(
+            storage(),
+            None,
+            BrowserNavigationRequestKind::Navigate,
+            false,
+            None,
+            None,
+            "GET",
+            &format!("{base_url}/app/controlled.html"),
+            None,
+            Vec::new().into(),
+            None,
+        )
+        .await?;
+    assert!(navigation.fetch_result.request_observation().is_none());
+    let response = navigation
+        .fetch_result
+        .into_response()
+        .into_lossy_materialized_text_response()
+        .await?;
+    assert_eq!(
+        response.body_text(),
+        "<!doctype html><body>sw-main:document:navigate</body>"
+    );
+
+    engine.set_bypass_service_worker(true);
+    for (host, path) in [
+        ("localhost", "/foreign-after-service-worker"),
+        ("127.0.0.1", "/home-after-service-worker"),
+    ] {
+        let mut url = Url::parse(&base_url)?;
+        url.set_host(Some(host))?;
+        url.set_path(path);
+        engine
+            .fetch_navigation_streaming_raw_response_with_storage_async(
+                storage(),
+                None,
+                BrowserNavigationRequestKind::Navigate,
+                false,
+                None,
+                None,
+                "GET",
+                url.as_str(),
+                None,
+                Vec::new().into(),
+                None,
+            )
+            .await?
+            .fetch_result
+            .into_response()
+            .into_lossy_materialized_text_response()
+            .await?;
+    }
+
+    server.abort();
+    let requests = requests.lock().await.clone();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| { request_path(request).as_deref() == Some("/app/controlled.html") }),
+        "the first navigation must be served without an HTTP request: {requests:?}"
+    );
+    for (path, expected_cookie) in [
+        ("/foreign-after-service-worker", false),
+        ("/home-after-service-worker", true),
+    ] {
+        let request = requests
+            .iter()
+            .find(|request| request_path(request).as_deref() == Some(path))
+            .context("missing post-Service Worker network request")?;
+        assert_eq!(
+            request_has_header_value(request, "Cookie", "session=literal"),
+            expected_cookie,
+            "Cookie scope must follow the initial navigation, including when intercepted: {request}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn browser_profile_indexeddb_root_is_page_local_when_default_changes() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let profile_a = TempProfileDir::new("indexeddb-a");
@@ -1793,15 +2001,16 @@ globalThis.__indexedDbRootResult = "ok";
         )
         .await?;
 
-    let profile_paths_a = BrowserProfilePaths::new(&profile_a.path);
-    let profile_paths_b = BrowserProfilePaths::new(&profile_b.path);
+    drop(page);
+    drop(browser_a);
+    drop(_browser_b);
     let storage_key = first_party_storage_key_for_url(&Url::parse(&format!("{origin}/"))?);
     assert!(
-        indexed_db_origin_exists(&profile_paths_a.indexeddb_root, &storage_key),
+        indexed_db_origin_exists(&profile_a.path, &storage_key),
         "browser A page should write IndexedDB under browser A profile"
     );
     assert!(
-        !indexed_db_origin_exists(&profile_paths_b.indexeddb_root, &storage_key),
+        !indexed_db_origin_exists(&profile_b.path, &storage_key),
         "browser B default root should not receive browser A page writes"
     );
 

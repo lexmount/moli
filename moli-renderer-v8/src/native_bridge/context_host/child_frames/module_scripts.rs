@@ -439,9 +439,32 @@ impl JsContextHost {
         link_handle: DomHandle,
         request: NativeModuleSingleFetchRequest,
     ) -> bool {
+        let context = self.module_fetch_csp_context_for_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
+            request.module_key().url(),
+            request.module_key().kind(),
+            request.fetch_metadata(),
+        );
+        self.queue_child_modulepreload_with_csp_context(handle, link_handle, request, context)
+    }
+
+    /// Admit a preload after policy capture. Even when capture fails, a live
+    /// link still needs its owner-scoped error event rather than a silent drop.
+    pub(crate) fn queue_child_modulepreload_with_csp_context(
+        &mut self,
+        handle: DomHandle,
+        link_handle: DomHandle,
+        mut request: NativeModuleSingleFetchRequest,
+        context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
+        let Some(context) = context else {
+            return self
+                .queue_child_modulepreload_link_error_for_current_document(handle, link_handle);
+        };
+        request.set_csp_context(context);
         let Some(owner) = self
             .frame_owner_store
             .current_child_document_task_owner(handle)
@@ -853,7 +876,14 @@ impl JsContextHost {
                 ),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        let start_result = if request.csp_context().is_some() {
+            request.fetch_source_for_document(loader, send_completion)
+        } else {
+            Err(anyhow::anyhow!(
+                "Child module CSP context unavailable for its Document and realm"
+            ))
+        };
+        if let Err(error) = start_result {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
@@ -882,6 +912,14 @@ impl JsContextHost {
             return;
         }
         let request = child_parser_module_root_fetch_request(&fetch_start.script);
+        let csp_context = self.module_fetch_csp_context_for_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(target.child_handle()),
+            request.source_url(),
+            request.kind(),
+            request.fetch_metadata(),
+        );
+        let request = request.with_csp_context(csp_context.clone());
+        let completion_csp_context = csp_context.clone();
         let completion_tx = self.resource_completion_tx.clone();
         debug_assert_eq!(target.child_handle(), fetch_start.child_handle);
         let script_handle = fetch_start.script_handle;
@@ -911,21 +949,32 @@ impl JsContextHost {
                     result,
                     network_result,
                     completion_network_attribution,
-                ),
+                )
+                .with_csp_context(completion_csp_context),
             );
         };
-        if let Err(error) = request.fetch_source_for_document(loader, send_completion) {
+        let start_result = if request.csp_context().is_some() {
+            request.fetch_source_for_document(loader, send_completion)
+        } else {
+            Err(anyhow::anyhow!(
+                "Child module CSP context unavailable for its Document and realm"
+            ))
+        };
+        if let Err(error) = start_result {
             let message = error.to_string();
             let _ = self
                 .resource_completion_tx
-                .send_child_parser_module_root_fetch(ChildParserModuleRootFetchCompletion::new(
-                    target,
-                    request_id,
-                    request_key,
-                    Err(message.clone()),
-                    Some(std::sync::Arc::new(Err(message))),
-                    network_attribution,
-                ));
+                .send_child_parser_module_root_fetch(
+                    ChildParserModuleRootFetchCompletion::new(
+                        target,
+                        request_id,
+                        request_key,
+                        Err(message.clone()),
+                        Some(std::sync::Arc::new(Err(message))),
+                        network_attribution,
+                    )
+                    .with_csp_context(csp_context),
+                );
         }
     }
 

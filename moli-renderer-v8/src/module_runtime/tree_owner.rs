@@ -27,6 +27,11 @@ pub(crate) struct NativeModuleTreeFrameDocumentOwner<'a> {
 }
 
 pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
+    fn module_fetch_csp_context(
+        &self,
+        _key: &ModuleMapKey,
+        _metadata: &ModuleFetchMetadata,
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError>;
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -47,17 +52,10 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
 
     fn module_request_initiator_url(&self, child_handle: Option<DomHandle>) -> Url;
 
-    fn dispatch_module_fetch_csp_report_only_violation(
+    fn queue_module_fetch_csp_violations(
         &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
     );
-
-    fn csp_blocked_module_fetch_error(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError>;
 
     fn suspend_module_fetch_waiter(
         &mut self,
@@ -111,6 +109,13 @@ pub(crate) trait NativeModuleTreeDocumentOwnerAdapter {
 impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentOwnerAdapter
     for &mut T
 {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
+        (**self).module_fetch_csp_context(key, metadata)
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -141,20 +146,11 @@ impl<T: NativeModuleTreeDocumentOwnerAdapter + ?Sized> NativeModuleTreeDocumentO
         (**self).module_request_initiator_url(child_handle)
     }
 
-    fn dispatch_module_fetch_csp_report_only_violation(
+    fn queue_module_fetch_csp_violations(
         &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
-        (*self).dispatch_module_fetch_csp_report_only_violation(key, fetch_metadata);
-    }
-
-    fn csp_blocked_module_fetch_error(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError> {
-        (*self).csp_blocked_module_fetch_error(key, fetch_metadata)
+        (*self).queue_module_fetch_csp_violations(context);
     }
 
     fn suspend_module_fetch_waiter(
@@ -279,6 +275,16 @@ impl<'a> NativeModuleTreeFrameDocumentOwner<'a> {
 }
 
 impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
+        Ok(self
+            .vm
+            .document_runtime
+            .module_fetch_csp_context(key.url(), key.kind(), metadata))
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -326,22 +332,11 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
             .unwrap_or_else(|| self.vm.document_runtime.document_url().clone())
     }
 
-    fn dispatch_module_fetch_csp_report_only_violation(
+    fn queue_module_fetch_csp_violations(
         &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
-        self.vm
-            .dispatch_module_fetch_csp_report_only_violation_for_owner(key, fetch_metadata);
-    }
-
-    fn csp_blocked_module_fetch_error(
-        &mut self,
-        key: &ModuleMapKey,
-        fetch_metadata: &ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError> {
-        self.vm
-            .csp_blocked_module_fetch_error_for_owner(key, fetch_metadata)
+        self.vm.queue_module_fetch_csp_violations(context);
     }
 
     fn suspend_module_fetch_waiter(
@@ -447,6 +442,26 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeDocumentOwner<'_> 
 }
 
 impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner<'_> {
+    fn module_fetch_csp_context(
+        &self,
+        key: &ModuleMapKey,
+        metadata: &ModuleFetchMetadata,
+    ) -> Result<crate::content_security_policy::ModuleFetchCspContext, ModuleLoadError> {
+        self.vm
+            .module_fetch_csp_context_for_child_owner(
+                self.document_owner,
+                self.realm_id,
+                key.url(),
+                key.kind(),
+                metadata,
+            )
+            .ok_or_else(|| {
+                ModuleLoadError::new(
+                    super::ModuleLoadStage::Fetch,
+                    "Child module CSP context unavailable for its Document and realm",
+                )
+            })
+    }
     fn compile_module_record(
         &mut self,
         key: ModuleMapKey,
@@ -489,19 +504,11 @@ impl NativeModuleTreeDocumentOwnerAdapter for NativeModuleTreeFrameDocumentOwner
         self.module_request_initiator_url.clone()
     }
 
-    fn dispatch_module_fetch_csp_report_only_violation(
+    fn queue_module_fetch_csp_violations(
         &mut self,
-        _key: &ModuleMapKey,
-        _fetch_metadata: &ModuleFetchMetadata,
+        context: &crate::content_security_policy::ModuleFetchCspContext,
     ) {
-    }
-
-    fn csp_blocked_module_fetch_error(
-        &mut self,
-        _key: &ModuleMapKey,
-        _fetch_metadata: &ModuleFetchMetadata,
-    ) -> Option<ModuleLoadError> {
-        None
+        self.vm.queue_module_fetch_csp_violations(context);
     }
 
     fn suspend_module_fetch_waiter(

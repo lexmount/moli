@@ -227,11 +227,10 @@ async fn html_response_timing_preserves_cancellation_before_body_completion() ->
     assert_eq!(response.next_chunk().await.as_deref(), Some("part"));
     assert!(cancel.response_timing().response_end_at().is_none());
     assert!(cancel.cancel_if_response_pending());
-    assert!(
-        tokio::time::timeout(Duration::from_secs(5), response.finish())
-            .await?
-            .is_err()
-    );
+    let error = tokio::time::timeout(Duration::from_secs(5), response.finish())
+        .await?
+        .expect_err("cancellation must terminate the held HTML response");
+    assert!(crate::is_fetch_cancelled(&error), "{error:#}");
     assert!(cancel.response_timing().response_end_at().is_some());
     assert!(!cancel.response_completion_is_committed());
     release.send(())?;
@@ -392,7 +391,7 @@ fn transfer_progress_preserves_cancellation_and_body_observations_on_reuse() {
         FetchTransferHandler::new_buffered(ResponseCollector::new(Some(cancel.clone())));
     for _ in 0..2 {
         cancel.begin_response_progress();
-        handler.buffered_mut().unwrap().begin_request(None);
+        handler.buffered_mut().unwrap().begin_request(None, false);
         handler.begin_transfer(None, false);
         assert!(handler.progress(4.0, 0.0, 0.0, 0.0));
         assert!(!cancel.response_timing().body_bytes_received());

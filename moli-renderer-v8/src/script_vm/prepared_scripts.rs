@@ -663,24 +663,18 @@ impl ScriptVm {
         source: &str,
         request: ContentSecurityPolicyScriptElementRequest<'_>,
     ) -> Option<String> {
-        let context_host = self._context_host.clone();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                // SAFETY: context_ptr points to self.page_default_runtime.context, which
-                // remains live for this non-escaping isolate closure.
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                Ok(
-                    crate::native_bridge::element::inline_script_source_for_execution(
-                        scope, host_ptr, node_id, source, request,
-                    ),
-                )
-            })
-            .ok()
-            .flatten()
+        self.with_default_context_scope(|scope, host_ptr| {
+            Ok(
+                crate::native_bridge::element::inline_script_source_for_execution(
+                    scope, host_ptr, node_id, source, request,
+                ),
+            )
+        })
+        .unwrap_or_else(|error| {
+            self.record_runtime_warning(format_args!(
+                "main world source preparation failed: {error}"
+            ));
+            None
+        })
     }
 }

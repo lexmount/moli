@@ -7,13 +7,14 @@ use moli_cookie_jar::{
     StoredCookieSetReport,
 };
 use moli_http_cache::HttpCacheBodyWriter;
+use moli_url::WebOrigin;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use url::Url;
 
 use crate::{
-    FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
-    RequestRedirectHandling,
+    CrossOriginResourcePolicy, FetchCancelHandle, FetchConfig, NegotiatedHttpVersion,
+    NetworkRequestExtraInfo, Request, RequestRedirectHandling,
     cancellation::ResponseProgress,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
     headers::{decode_http_header_bytes, parse_http_response_header_line},
@@ -129,7 +130,10 @@ pub(crate) fn log_request_completion(
 pub(crate) struct ResponseCollector {
     body: Vec<u8>,
     headers: Vec<(String, Vec<u8>)>,
+    status: u16,
     status_text: Option<String>,
+    stop_at_redirect: bool,
+    header_terminated: bool,
     max_response_size: Option<usize>,
     response_too_large: bool,
     cancel_handle: Option<FetchCancelHandle>,
@@ -151,13 +155,20 @@ impl ResponseCollector {
         }
     }
 
-    pub(crate) fn begin_request(&mut self, max_response_size: Option<usize>) {
+    pub(crate) fn begin_request(
+        &mut self,
+        max_response_size: Option<usize>,
+        stop_at_redirect: bool,
+    ) {
         if let Some(cancel) = &self.cancel_handle {
             self.response_progress = Some(cancel.response_progress());
         }
         self.body.clear();
         self.headers.clear();
+        self.status = 0;
         self.status_text = None;
+        self.stop_at_redirect = stop_at_redirect;
+        self.header_terminated = false;
         self.max_response_size = max_response_size;
         self.response_too_large = false;
     }
@@ -173,11 +184,16 @@ impl ResponseCollector {
     pub(crate) fn body(&self) -> &[u8] {
         &self.body
     }
+
+    pub(crate) fn header_terminated(&self) -> bool {
+        self.header_terminated
+    }
 }
 
 #[derive(Debug)]
 pub struct StreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
+    corp_origin: Option<WebOrigin>,
     headers: Vec<(String, Vec<u8>)>,
     status_text: Option<String>,
     current_url: Option<Url>,
@@ -250,6 +266,7 @@ impl StreamingCachePlan {
 #[derive(Debug)]
 pub struct RawStreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
+    corp_origin: Option<WebOrigin>,
     headers: Vec<(String, Vec<u8>)>,
     status_text: Option<String>,
     current_url: Option<Url>,
@@ -282,6 +299,10 @@ pub struct RawStreamingResponseCollector {
 }
 
 impl StreamingResponseCollector {
+    pub(crate) fn set_corp_origin(&mut self, origin: Option<&WebOrigin>) {
+        self.corp_origin = origin.cloned();
+    }
+
     pub(crate) fn response_progress(&self) -> &ResponseProgress {
         &self.response_progress
     }
@@ -294,6 +315,7 @@ impl StreamingResponseCollector {
     ) -> Self {
         Self {
             cookie_store,
+            corp_origin: None,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -339,6 +361,7 @@ impl StreamingResponseCollector {
         self.headers.clear();
         self.status_text = None;
         self.current_url = Some(current_url);
+        self.corp_origin = None;
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
         self.max_response_size = max_response_size;
@@ -506,6 +529,13 @@ impl StreamingResponseCollector {
             self.client_hint_restart_requested = true;
             return false;
         }
+        if let Some(origin) = &self.corp_origin
+            && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
+            && let Err(error) = policy.check(origin, &current_url)
+        {
+            self.callback_error = Some(error);
+            return false;
+        }
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
         // Create the cache writer only after final response headers prove the
@@ -568,6 +598,7 @@ impl StreamingResponseCollector {
                 redirected: !self.redirect_chain.is_empty(),
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));
@@ -680,6 +711,10 @@ impl StreamingResponseCollector {
 }
 
 impl RawStreamingResponseCollector {
+    pub(crate) fn set_corp_origin(&mut self, origin: Option<&WebOrigin>) {
+        self.corp_origin = origin.cloned();
+    }
+
     pub(crate) fn response_progress(&self) -> &ResponseProgress {
         &self.response_progress
     }
@@ -693,6 +728,7 @@ impl RawStreamingResponseCollector {
         let response_progress = cancel_handle.response_progress();
         Self {
             cookie_store,
+            corp_origin: None,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -738,6 +774,7 @@ impl RawStreamingResponseCollector {
         self.headers.clear();
         self.status_text = None;
         self.current_url = Some(current_url);
+        self.corp_origin = None;
         self.current_cookie_context = Some(current_cookie_context);
         self.status = 0;
         self.max_response_size = max_response_size;
@@ -909,6 +946,15 @@ impl RawStreamingResponseCollector {
             self.client_hint_restart_requested = true;
             return false;
         }
+        // A 304 is checked against the merged cached response before delivery.
+        if !(self.status == 304 && self.defer_not_modified_start)
+            && let Some(origin) = &self.corp_origin
+            && let Some(policy) = CrossOriginResourcePolicy::from_headers(&self.headers)
+            && let Err(error) = policy.check(origin, &current_url)
+        {
+            self.callback_error = Some(error);
+            return false;
+        }
         let declared_body_length = identity_encoded_content_length(&self.headers);
         self.declared_identity_body_length = declared_body_length.and_then(NonZeroUsize::new);
         if declared_body_length == Some(0) {
@@ -976,6 +1022,7 @@ impl RawStreamingResponseCollector {
                 redirected: !self.redirect_chain.is_empty(),
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));
@@ -1070,11 +1117,21 @@ impl Handler for ResponseCollector {
         let line = line.trim_end_matches(['\r', '\n']);
 
         if line.is_empty() {
+            if self.stop_at_redirect
+                && matches!(self.status, 301 | 302 | 303 | 307 | 308)
+                && self.headers.iter().any(|(name, _)| name == "location")
+            {
+                // The caller owns the next hop. Its unused body must not
+                // delay redirects, including libcurl's buffered auth path.
+                self.header_terminated = true;
+                return false;
+            }
             return !self.response_too_large;
         }
 
         if let Some(parsed) = parse_http_response_status_line(data) {
             self.headers.clear();
+            self.status = parsed.status;
             self.status_text = Some(parsed.status_text);
             self.body.clear();
             if let Some(progress) = &self.response_progress {
@@ -1305,7 +1362,7 @@ mod tests {
     #[test]
     fn buffered_status_message_tracks_final_response_and_resets_between_requests() {
         let mut collector = ResponseCollector::new(None);
-        collector.begin_request(None);
+        collector.begin_request(None, false);
         assert!(collector.header(b"HTTP/1.1 103 Early Hints\r\n"));
         assert!(collector.header(b"Link: </early.css>; rel=preload\r\n"));
         assert!(collector.header(b"\r\n"));
@@ -1314,10 +1371,46 @@ mod tests {
         assert_eq!(collector.status_text(), Some("\u{a0}caf\u{e9}\u{ff}"));
         assert!(collector.headers().is_empty());
 
-        collector.begin_request(None);
+        collector.begin_request(None, false);
         assert_eq!(collector.status_text(), None);
         assert!(collector.header(b"HTTP/1.1 200 \r\n"));
         assert_eq!(collector.status_text(), Some(""));
+    }
+
+    #[test]
+    fn buffered_single_hop_stops_at_redirect_headers_but_preserves_auth_and_final_bodies() {
+        let mut collector = ResponseCollector::new(None);
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 401 Unauthorized\r\n"));
+        assert!(collector.header(b"WWW-Authenticate: Digest realm=\"test\"\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"challenge").unwrap(), 9);
+        assert!(!collector.header_terminated());
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"Location: /next\r\n"));
+        assert!(!collector.header(b"\r\n"));
+        assert!(collector.header_terminated());
+        assert!(collector.body().is_empty());
+
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 200 OK\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"final").unwrap(), 5);
+        assert!(!collector.header_terminated());
+        assert_eq!(collector.body(), b"final");
+
+        collector.begin_request(None, false);
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"Location: /next\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"redirect body").unwrap(), 13);
+        assert!(!collector.header_terminated());
+
+        collector.begin_request(None, true);
+        assert!(collector.header(b"HTTP/1.1 302 Found\r\n"));
+        assert!(collector.header(b"\r\n"));
+        assert_eq!(collector.write(b"no Location").unwrap(), 11);
+        assert!(!collector.header_terminated());
     }
 
     fn raw_streaming_collector_with_headers(

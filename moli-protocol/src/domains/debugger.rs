@@ -32,25 +32,27 @@ mod tests {
     use crate::testing::TestContext;
 
     async fn with_loaded_document(ctx: &mut TestContext) {
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-debugger".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .set_active_target_id("TID-debugger");
+        ctx.with_fixture(|conn| {
+            conn.insert_browser_context(BrowserContext::new("BID-debugger".into()))
+        });
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .set_active_target_id("TID-debugger")
+        });
         let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<body>debugger</body>")
+            .build_fixture_page("data:text/html,<body>debugger</body>")
             .await
             .expect("load debugger test page");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .active_page_target_mut()
+                .runtime_slot
+                .replace_loaded_page(Some(page))
+        });
     }
 
     async fn command(ctx: &mut TestContext, message: Value, command_id: u64) -> Value {
@@ -188,18 +190,17 @@ mod tests {
             .map(str::to_owned)
             .expect("Debugger.scriptParsed for the suspended-renderer source");
 
-        let navigation_owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let navigation = ctx
-            .conn
-            .start_document_navigation_for_owner(
+        let navigation_owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+        let navigation = ctx.with_fixture(|conn| {
+            conn.start_document_navigation_for_owner(
                 &navigation_owner,
                 "LOADER-debugger-interrupt".to_owned(),
             )
-            .expect("start cross-Document navigation");
-        assert!(
-            ctx.conn
-                .renderer_document_navigation_is_suspended_for_session_owner(None)
-        );
+            .expect("start cross-Document navigation")
+        });
+        ctx.with_fixture(|conn| {
+            assert!({ conn.renderer_document_navigation_is_suspended_for_session_owner(None) })
+        });
 
         let source = command(
             &mut ctx,
@@ -218,14 +219,15 @@ mod tests {
             "interruptible Debugger command must address the suspended renderer: {source:?}"
         );
 
-        let _ = ctx
-            .conn
-            .finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation);
-        ctx.conn
-            .clear_pending_document_navigation_for_owner_if_loader_matches(
+        let _ = ctx.with_fixture(|conn| {
+            conn.finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation)
+        });
+        ctx.with_fixture(|conn| {
+            conn.clear_pending_document_navigation_for_owner_if_loader_matches(
                 &navigation_owner,
                 &navigation.loader_id,
-            );
+            )
+        });
     }
 
     #[tokio::test]
@@ -438,12 +440,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-debugger-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-debugger",
-                "SID-debugger-attached".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-debugger-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-debugger",
+                    "SID-debugger-attached".to_owned(),
+                ));
+            });
         }
         for (session_id, session_key) in [
             (
@@ -455,14 +459,16 @@ mod tests {
                 moli_page_types::DevToolsSessionKey::Attached("SID-debugger-attached".to_owned()),
             ),
         ] {
-            ctx.conn.register_session_route_for_test(
-                session_id,
-                crate::conn::CdpSessionRoute::PageTarget {
-                    browser_context_id: "BID-debugger".to_owned(),
-                    target_id: "TID-debugger".to_owned(),
-                    session_key,
-                },
-            );
+            ctx.with_fixture(|conn| {
+                conn.register_session_route_for_test(
+                    session_id,
+                    crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: "BID-debugger".to_owned(),
+                        target_id: "TID-debugger".to_owned(),
+                        session_key,
+                    },
+                )
+            });
         }
 
         let enable = command(
@@ -535,12 +541,14 @@ mod tests {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
         {
-            let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.attach_active_session("SID-debugger-primary");
-            assert!(browser_context.assign_attached_session_to_target(
-                "TID-debugger",
-                "SID-debugger-attached".to_owned(),
-            ));
+            ctx.with_fixture(|conn| {
+                let browser_context = conn.browser_context.as_mut().expect("browser context");
+                browser_context.attach_active_session("SID-debugger-primary");
+                assert!(browser_context.assign_attached_session_to_target(
+                    "TID-debugger",
+                    "SID-debugger-attached".to_owned(),
+                ));
+            });
         }
         for (session_id, session_key) in [
             (
@@ -552,14 +560,16 @@ mod tests {
                 moli_page_types::DevToolsSessionKey::Attached("SID-debugger-attached".to_owned()),
             ),
         ] {
-            ctx.conn.register_session_route_for_test(
-                session_id,
-                crate::conn::CdpSessionRoute::PageTarget {
-                    browser_context_id: "BID-debugger".to_owned(),
-                    target_id: "TID-debugger".to_owned(),
-                    session_key,
-                },
-            );
+            ctx.with_fixture(|conn| {
+                conn.register_session_route_for_test(
+                    session_id,
+                    crate::conn::CdpSessionRoute::PageTarget {
+                        browser_context_id: "BID-debugger".to_owned(),
+                        target_id: "TID-debugger".to_owned(),
+                        session_key,
+                    },
+                )
+            });
         }
 
         for (id, session_id) in [(61, "SID-debugger-primary"), (62, "SID-debugger-attached")] {

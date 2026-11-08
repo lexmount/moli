@@ -87,8 +87,20 @@ impl ScriptVmInitialDocumentEnvironment {
                 host.inherited_document_domain(child)
             })
             .unwrap_or_default();
+        let opaque_origin = (!policy_container.sandbox.forces_opaque_origin)
+            .then(|| crate::util::context_host_ptr_from_context_slot(context))
+            .flatten()
+            .and_then(|host_ptr| {
+                let host = unsafe { &*host_ptr };
+                let dispatch = host
+                    .window_execution_context_identity_for_access_check(context)?
+                    .dispatch_scope();
+                host.window_message_source_security(dispatch)?
+                    .opaque_origin()
+            });
         Ok(Self {
             security_token,
+            opaque_origin,
             document_domain_override,
             origin,
             policy_container,
@@ -115,9 +127,8 @@ impl ScriptVm {
             .forces_opaque_origin;
         self.document_runtime
             .set_main_navigation_policy_container(policy);
-        // The main context exists before its navigation response policy is applied.
-        // Refresh its token so a CSP sandbox cannot retain the URL's tuple token.
-        let _ = self.with_default_context_scope(|scope, host_ptr| {
+        // A deferred Context reads the policy at bootstrap; update only an existing token.
+        let _ = self.with_current_main_world_scope(|scope, host_ptr| {
             let key = unsafe { &*host_ptr }.main_default_world_security_token_key();
             let context = scope.get_current_context();
             if !crate::native_bridge::set_window_security_token(scope, context, key.as_deref()) {
@@ -249,11 +260,11 @@ impl ScriptVm {
         idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     ) -> Result<()> {
         self.set_idle_override(idle_override);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+        self.with_current_main_world_scope(|scope, _| {
             crate::context_bootstrap::apply_idle_override_to_current_context(scope, idle_override);
             Ok(())
         })
+        .map(|_| ())
     }
 
     pub(crate) fn stylesheet_preload_media_matches(&self, media: Option<&str>) -> bool {
@@ -338,19 +349,16 @@ impl ScriptVm {
     }
 
     pub(super) fn sync_document_fonts_for_environment(&mut self) {
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let host = self._context_host.borrow();
-                for document in host.documents_with_adopted_style_sheets() {
-                    crate::native_bridge::document::sync_document_fonts_for_handle(
-                        scope, &host, document,
-                    );
-                }
-            });
+        let context_host = self._context_host.clone();
+        let _ = self.with_current_main_world_scope(|scope, _| {
+            let host = context_host.borrow();
+            for document in host.documents_with_adopted_style_sheets() {
+                crate::native_bridge::document::sync_document_fonts_for_handle(
+                    scope, &host, document,
+                );
+            }
+            Ok(())
+        });
     }
 
     pub(crate) fn set_network_offline(&mut self, offline: bool) {
@@ -375,8 +383,7 @@ impl ScriptVm {
             .borrow_mut()
             .set_navigator_overrides(overrides);
         if changed {
-            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-            self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+            self.with_current_main_world_scope(|scope, _| {
                 crate::context_bootstrap::notify_geolocation_override_changed(scope);
                 Ok(())
             })?;
@@ -416,8 +423,7 @@ impl ScriptVm {
         &mut self,
         preserve_navigation_referrer: bool,
     ) -> Result<ScriptVmInitialDocumentEnvironment> {
-        self.with_default_context_scope(|scope, host_ptr| {
-            let host = unsafe { &mut *host_ptr };
+        let capture = |host: &mut crate::native_bridge::JsContextHost, security_token| {
             let origin = host
                 .current_main_document_resource_loader()
                 .expect("a live Document has a resource authority")
@@ -449,15 +455,25 @@ impl ScriptVm {
                     )
                 })
                 .unwrap_or_default();
-            let token = scope.get_current_context().get_security_token(scope);
-            Ok(ScriptVmInitialDocumentEnvironment {
-                security_token: Some(v8::Global::new(scope, token)),
+            ScriptVmInitialDocumentEnvironment {
+                security_token,
+                opaque_origin: host
+                    .window_message_source_security(crate::native_bridge::OwnerDispatchScope::Top)
+                    .and_then(|security| security.opaque_origin()),
                 document_domain_override: host.inherited_document_domain(None),
                 origin,
                 policy_container,
                 fallback_base_url,
                 storage_key: Some(host.top_web_storage_scope().storage_key().clone()),
-            })
-        })
+            }
+        };
+        let environment = self.with_current_main_world_scope(|scope, host_ptr| {
+            let token = scope.get_current_context().get_security_token(scope);
+            Ok(capture(
+                unsafe { &mut *host_ptr },
+                Some(v8::Global::new(scope, token)),
+            ))
+        })?;
+        Ok(environment.unwrap_or_else(|| capture(&mut self._context_host.borrow_mut(), None)))
     }
 }

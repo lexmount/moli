@@ -1,6 +1,7 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::set_indexed_db_request_error_pending;
 
-pub(in crate::context_bootstrap::indexed_db) fn release_request_dispatch_refs<'s>(
+fn release_request_dispatch_refs<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
@@ -16,6 +17,7 @@ pub(super) fn finish_request_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
+    set_indexed_db_request_error_pending(scope, request, false);
     request_finished(scope, request);
     release_request_dispatch_refs(scope, request);
 }
@@ -34,8 +36,6 @@ fn request_finished<'s>(scope: &mut v8::PinScope<'s, '_>, request: v8::Local<'s,
         v8::Number::new(scope, next_pending).into(),
     );
     if next_pending == 0.0
-        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-            .unwrap_or(false)
         && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
     {

@@ -12,17 +12,22 @@ use super::super::{
     css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
+    dom_quad::dom_quad_constructor_callback,
+    encoded_video_chunk::encoded_video_chunk_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
         build_value_event_template, event_constructor_callback,
     },
-    exposed_interfaces::install_interface_template_metadata,
+    exposed_interfaces::{TemplateBuildProfile, install_interface_template_metadata},
     file_api::{
         data_transfer_constructor_callback, file_constructor_callback,
         file_reader_constructor_callback, file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
-    geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
+    geometry_runtime::{
+        dom_matrix_constructor_callback, dom_matrix_readonly_constructor_callback,
+        dom_point_constructor_callback, dom_point_readonly_constructor_callback,
+    },
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
     location_runtime::build_location_constructor_template,
@@ -58,8 +63,13 @@ use super::super::{
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
+        audio_buffer_constructor, audio_buffer_source_constructor_callback,
         build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
-        offline_audio_context_constructor_callback,
+        channel_merger_constructor, channel_splitter_constructor,
+        constant_source_constructor_callback, convolver_constructor, delay_constructor,
+        gain_node_constructor_callback, iir_constructor, media_element_source_constructor_callback,
+        offline_audio_context_constructor_callback, oscillator_constructor,
+        periodic_wave_constructor, stereo_panner_constructor, wave_shaper_constructor,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
@@ -84,6 +94,14 @@ use anyhow::{Result, anyhow};
 pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    build_constructor_template_for_profile(scope, spec, TemplateBuildProfile::Window)
+}
+
+pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = match spec.kind {
         ConstructorKind::Illegal => v8::FunctionTemplate::builder(illegal_constructor_callback)
@@ -113,6 +131,12 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::TransitionEvent => {
             build_value_event_template(scope, ValueEventKind::Transition)
         }
+        ConstructorKind::MIDIMessageEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiMessage)
+        }
+        ConstructorKind::MIDIConnectionEvent => {
+            build_value_event_template(scope, ValueEventKind::MidiConnection)
+        }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
         ConstructorKind::GamepadEvent => build_value_event_template(scope, ValueEventKind::Gamepad),
         ConstructorKind::PictureInPictureEvent => {
@@ -132,6 +156,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::PaymentMethodChangeEvent => {
             build_value_event_template(scope, ValueEventKind::PaymentMethodChange)
+        }
+        ConstructorKind::RtcEncodedAudioFrame => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCEncodedAudioFrame,
+                super::super::webrtc::encoded_frames::audio_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcEncodedVideoFrame => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCEncodedVideoFrame,
+                super::super::webrtc::encoded_frames::video_constructor
+            ))
+            .length(1)
+            .build(scope)
         }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
@@ -249,6 +289,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMException,
                 dom_exception_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::WebTransportError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WebTransportError,
+                web_transport_error_constructor_callback
             ))
             .length(0)
             .build(scope)
@@ -448,6 +496,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::EncodedVideoChunk => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::EncodedVideoChunk,
+                encoded_video_chunk_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::ImageData => {
             let template =
                 v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
@@ -548,10 +604,34 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::DomPointReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMPointReadOnly,
+                dom_point_readonly_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
         ConstructorKind::DomPoint => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMPoint,
                 dom_point_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomQuad => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMQuad,
+                dom_quad_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomMatrixReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMMatrixReadOnly,
+                dom_matrix_readonly_constructor_callback
             ))
             .length(0)
             .build(scope)
@@ -653,7 +733,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 web_api_interfaces::RTCSessionDescription,
                 rtc_session_description_constructor_callback
             ))
-            .length(1)
+            .length(0)
             .build(scope)
         }
         ConstructorKind::RtcPeerConnectionIceEvent => {
@@ -930,22 +1010,132 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::AudioContext => build_audio_context_constructor_template(scope),
         ConstructorKind::AudioWorkletNode => build_audio_worklet_node_constructor_template(scope),
+        ConstructorKind::GainNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::GainNode,
+                gain_node_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::MediaElementAudioSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::MediaElementAudioSourceNode,
+                media_element_source_constructor_callback
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::AudioBufferSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::AudioBufferSourceNode,
+                audio_buffer_source_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ConstantSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ConstantSourceNode,
+                constant_source_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ConvolverNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ConvolverNode,
+                convolver_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::IIRFilterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::IIRFilterNode,
+                iir_constructor
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::PeriodicWave => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::PeriodicWave,
+                periodic_wave_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::OscillatorNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::OscillatorNode,
+                oscillator_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::WaveShaperNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WaveShaperNode,
+                wave_shaper_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelMergerNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelMergerNode,
+                channel_merger_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelSplitterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelSplitterNode,
+                channel_splitter_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::DelayNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DelayNode,
+                delay_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::StereoPannerNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::StereoPannerNode,
+                stereo_panner_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::OfflineAudioContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::OfflineAudioContext,
                 offline_audio_context_constructor_callback
             ))
-            .length(3)
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::AudioBuffer => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::AudioBuffer,
+                audio_buffer_constructor
+            ))
+            .length(1)
             .build(scope)
         }
         ConstructorKind::BaseAudioContext
         | ConstructorKind::AudioDestinationNode
-        | ConstructorKind::OscillatorNode
         | ConstructorKind::DynamicsCompressorNode
         | ConstructorKind::AnalyserNode
         | ConstructorKind::BiquadFilterNode
-        | ConstructorKind::AudioParam
-        | ConstructorKind::AudioBuffer => {
+        | ConstructorKind::AudioParam => {
             v8::FunctionTemplate::builder(illegal_constructor_callback)
                 .length(0)
                 .build(scope)
@@ -1011,7 +1201,7 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 super::super::events::audio::AudioEventKind::Completion,
             )
         }
-        ConstructorKind::Url => build_url_constructor_template(scope),
+        ConstructorKind::Url => build_url_constructor_template(scope, profile),
         ConstructorKind::UrlSearchParams => build_url_search_params_constructor_template(scope),
         ConstructorKind::FormData => build_form_data_constructor_template(scope),
         ConstructorKind::IndexedDb => v8::FunctionTemplate::builder(illegal_constructor_callback)
@@ -1026,24 +1216,27 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
     };
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 pub(in crate::context_bootstrap) fn build_constructor_template_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+    length: i32,
+    profile: TemplateBuildProfile,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = v8::FunctionTemplate::builder(callback)
-        .length(1)
+        .length(length)
         .build(scope);
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 fn finalize_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
     template: v8::Local<'s, v8::FunctionTemplate>,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let class_name = v8_string(scope, spec.interface.name()).ok_or_else(|| {
         anyhow!(
@@ -1060,7 +1253,7 @@ fn finalize_constructor_template<'s>(
         template.read_only_prototype();
     }
 
-    install_constructor_template_bindings(scope, template, spec);
+    install_constructor_template_bindings(scope, template, spec, profile);
     install_interface_template_metadata(scope, template, spec.interface.name());
 
     Ok(template)

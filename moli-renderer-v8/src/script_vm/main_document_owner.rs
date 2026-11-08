@@ -46,10 +46,10 @@ impl ScriptVm {
         }
     }
 
-    pub(crate) fn accept_main_document_blocking_stylesheet_inputs(
+    pub(crate) fn accept_main_document_stylesheet_inputs(
         &mut self,
         expected_owner: FrameDocumentTaskOwner,
-        inputs: &[crate::stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput],
+        inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
     ) -> usize {
         if self.current_main_document_task_owner() != Some(expected_owner) {
             tracing::debug!(
@@ -62,8 +62,27 @@ impl ScriptVm {
         }
         let completed_stylesheet_clients = self
             .document_runtime
-            .note_discovered_document_owned_blocking_stylesheet_inputs(inputs.iter());
+            .note_discovered_document_owned_stylesheet_inputs(inputs.iter());
         self.settle_stylesheet_link_clients(completed_stylesheet_clients);
+        if inputs.iter().any(|input| {
+            matches!(
+                input.signature(),
+                crate::stylesheet_blocking::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
+            )
+        }) {
+            // Closing a parser-created style queues its owner processing until
+            // discovery can supply the shared import operation. Bind it now so
+            // the graph is installed before its terminal releases the script.
+            let prepared = self
+                .document_runtime
+                .prepare_parser_style_import_loads(inputs);
+            self.commit_and_apply_connected_style_loads(prepared);
+            let prime_result = self
+                .document_runtime
+                .prime_document_lifecycle_processing_for_owner(self._context_host.as_ref().as_ptr());
+            self.apply_connected_style_load_prime_result(prime_result);
+            self.record_ready_stylesheet_network_results();
+        }
         inputs.len()
     }
 

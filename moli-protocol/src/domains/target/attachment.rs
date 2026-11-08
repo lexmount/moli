@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use serde::Deserialize;
 use serde_json::json;
 
@@ -10,11 +12,12 @@ use super::*;
 #[serde(rename_all = "camelCase")]
 struct AttachParams {
     target_id: String,
+    flatten: Option<bool>,
 }
 
 fn target_command_error_without_session(
     code: i32,
-    message: impl Into<String>,
+    message: impl std::fmt::Display,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Complete(CommandOutputPlan::error_without_session(code, message))
 }
@@ -67,14 +70,10 @@ impl TargetCommandOutput {
         self.plan.push_success();
     }
 
-    fn push_error(&mut self, code: i32, message: impl Into<String>) {
+    fn push_error(&mut self, code: i32, message: impl std::fmt::Display) {
         self.flush_side_effects();
-        self.plan.push_error_without_session(code, message);
-    }
-
-    fn insert_renderer_output_boundary(&mut self, cursor: moli_core::RendererOutputFence) {
-        self.flush_side_effects();
-        self.plan.insert_renderer_output_boundary(cursor);
+        self.plan
+            .push_error_without_session(code, format!("{message:#}"));
     }
 
     fn into_plan(mut self) -> CommandOutputPlan {
@@ -97,7 +96,12 @@ pub(super) fn start_attach_to_target_command(
             return target_command_error_without_session(-32602, "InvalidParams");
         }
     };
-    do_attach(conn, cmd, &params.target_id)
+    do_attach(
+        conn,
+        cmd,
+        &params.target_id,
+        params.flatten.unwrap_or(false),
+    )
 }
 
 pub(super) fn attach_to_browser_target_command(
@@ -107,33 +111,46 @@ pub(super) fn attach_to_browser_target_command(
     if cmd.session_id.is_some() && !conn.is_browser_session_id(cmd.session_id) {
         return CommandOutputPlan::error(-32000, "Not allowed");
     }
-    attach_browser_target(conn, cmd.session_id)
+    attach_browser_target(conn, cmd.session_id, true)
 }
 
 fn attach_browser_target(
     conn: &mut CdpConnection,
     owner_session_id: Option<&str>,
+    flattened_protocol: bool,
 ) -> CommandOutputPlan {
     let session_id = conn.gen_session_id();
     let target_info = super::browser_context::devtools_browser_target_info();
     let mut plan = CommandOutputPlan::default();
-    for event in conn.commit_browser_attached_session_event_plan(
-        session_id.clone(),
-        owner_session_id,
-        super::browser_context::DEVTOOLS_BROWSER_TARGET_ID,
-        target_info,
-    ) {
+    for event in conn
+        .commit_browser_attached_session_event_plan(
+            session_id.clone(),
+            owner_session_id,
+            super::browser_context::DEVTOOLS_BROWSER_TARGET_ID,
+            target_info,
+        )
+        .with_flattened_protocol(flattened_protocol)
+    {
         plan.push_background_event(event);
     }
     plan.push_result(json!({ "sessionId": session_id }));
     plan
 }
 
-fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> TargetCommandTaskStep {
+fn do_attach(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    target_id: &str,
+    flattened_protocol: bool,
+) -> TargetCommandTaskStep {
     if target_id == super::browser_context::DEVTOOLS_BROWSER_TARGET_ID {
         // Chromium applies its browser access-mode check to the specialized
         // AttachToBrowserTarget action, not to generic attachment of a known host.
-        return TargetCommandTaskStep::Complete(attach_browser_target(conn, cmd.session_id));
+        return TargetCommandTaskStep::Complete(attach_browser_target(
+            conn,
+            cmd.session_id,
+            flattened_protocol,
+        ));
     }
     conn.ensure_default_target_live(target_id);
     let attach_from_browser_session = conn.is_browser_session_id(cmd.session_id);
@@ -141,7 +158,13 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         .primary_page_target_id_for_tab_target_id(target_id)
         .is_some()
     {
-        return do_attach_tab_target(conn, cmd.session_id, target_id, attach_from_browser_session);
+        return do_attach_tab_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            attach_from_browser_session,
+            flattened_protocol,
+        );
     }
     let restore_browser_context_id =
         attach_from_browser_session.then(|| previously_active_browser_context_id(conn));
@@ -164,13 +187,23 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         }
     };
     if bc.has_shared_worker_target(target_id) {
-        return do_attach_shared_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_shared_worker_target(conn, cmd.session_id, target_id, flattened_protocol);
     }
     if bc.has_dedicated_worker_target(target_id) {
-        return do_attach_dedicated_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_dedicated_worker_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            flattened_protocol,
+        );
     }
     if bc.has_service_worker_target(target_id) {
-        return do_attach_service_worker_target(conn, cmd.session_id, target_id);
+        return do_attach_service_worker_target(
+            conn,
+            cmd.session_id,
+            target_id,
+            flattened_protocol,
+        );
     }
     if bc.active_target_id().is_none() && bc.has_no_background_targets() {
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
@@ -224,7 +257,8 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
             session_key,
         },
         false,
-    );
+    )
+    .with_flattened_protocol(flattened_protocol);
     let owner = crate::conn::CommandOwnerScope::for_route(prepared_session.route().clone());
 
     let initial_document = match conn.start_initial_document_page_ensure_for_owner(&owner) {
@@ -262,6 +296,7 @@ fn do_attach_tab_target(
     command_session_id: Option<&str>,
     tab_target_id: &str,
     attach_from_browser_session: bool,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let is_attached_session = attach_from_browser_session
         || conn
@@ -277,80 +312,82 @@ fn do_attach_tab_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
-pub(super) async fn complete_attach_to_target_command_async(
+pub(crate) fn commit_target_attachment(
     conn: &mut CdpConnection,
-    prepared_session: crate::conn::TargetAttachSessionCommit,
+    prepared: TargetAttachSessionCommit,
     target_info: DevToolsTargetInfo,
-    initial_document: Option<
-        Result<
-            Box<crate::conn::CompletedInitialDocumentPageBuild>,
-            crate::conn::FailedInitialDocumentPageBuild,
-        >,
-    >,
-) -> CommandOutputPlan {
-    let attached_session_id = prepared_session.session_id().to_owned();
-    match initial_document {
-        Some(Ok(completed_initial_document)) => {
-            let completed_initial_document = *completed_initial_document;
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed_initial_document)
-                .await
-            {
-                conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                    .await;
-                return CommandOutputPlan::error_without_session(-32000, message);
-            }
-        }
-        Some(Err(failed)) => {
-            let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
-            conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                .await;
-            return CommandOutputPlan::error_without_session(-32000, message);
-        }
-        None => {}
-    }
-    if let Err(message) = conn
-        .apply_runtime_binding_state_for_owner_async(&crate::conn::CommandOwnerScope::for_route(
-            prepared_session.route().clone(),
-        ))
-        .await
-        && message != "NoDocumentLoaded"
+) -> Result<CommandOutputPlan, CommandOutputPlan> {
+    use super::session_disposal::SessionDisposalError;
+    let owner = CommandOwnerScope::for_route(prepared.route().clone());
+    if conn.target_is_closing_for_owner(&owner)
+        || prepared
+            .owner_session_id()
+            .is_some_and(|session| conn.session_is_closing(session))
     {
-        tracing::warn!(
-            %message,
-            session_id = attached_session_id.as_str(),
-            "target attach renderer binding state apply failed"
-        );
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::Closing,
+        ));
     }
-    if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
-        conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-            .await;
-        return CommandOutputPlan::error_without_session(-32000, message);
-    }
-    let Some(attached_target_id) = target_info
+    let Some(target_id) = target_info
         .target_id
         .as_ref()
-        .map(|target_id| target_id.as_str().to_owned())
+        .map(|id| id.as_str().to_owned())
     else {
-        conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-            .await;
-        return CommandOutputPlan::error_without_session(-32000, "MissingTargetId");
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::UnknownTarget,
+        ));
     };
-    let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-        &attached_target_id,
+    let binding_exists = prepared
+        .route()
+        .browser_context_id()
+        .and_then(|context| conn.browser_context_by_id(context))
+        .and_then(|context| context.page_target(&target_id))
+        .is_some_and(|target| {
+            target
+                .devtools_sessions
+                .key_for_wire_session_id(prepared.session_id())
+                .is_some()
+        });
+    if !binding_exists
+        || prepared
+            .owner_session_id()
+            .is_some_and(|session| conn.session_route(Some(session)).is_none())
+    {
+        return Err(CommandOutputPlan::error_without_session(
+            -32000,
+            SessionDisposalError::UnknownTarget,
+        ));
+    }
+    if let Some(error) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
+        return Err(CommandOutputPlan::error_without_session(-32000, error));
+    }
+    let session_id = prepared.session_id().to_owned();
+    let events = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
+        target_id,
         target_info,
-        [prepared_session],
+        [prepared],
     ));
-    attach_session_events_then_result_plan(attached_session_id, event_plan.into_background_events())
+    Ok(attach_session_events_then_result_plan(
+        session_id,
+        events.into_background_events(),
+    ))
 }
 
 fn do_attach_shared_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_shared_worker_target_session_event_plan(
@@ -361,13 +398,19 @@ fn do_attach_shared_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 fn do_attach_service_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_service_worker_target_session_event_plan(
@@ -378,13 +421,19 @@ fn do_attach_service_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 fn do_attach_dedicated_worker_target(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
     target_id: &str,
+    flattened_protocol: bool,
 ) -> TargetCommandTaskStep {
     let session_id = conn.gen_session_id();
     let event_plan = match conn.attach_dedicated_worker_target_session_event_plan(
@@ -395,7 +444,12 @@ fn do_attach_dedicated_worker_target(
         Ok(event_plan) => event_plan,
         Err(message) => return target_command_error_without_session(-31998, message),
     };
-    attach_session_events_then_result_step(session_id, event_plan.into_background_events())
+    attach_session_events_then_result_step(
+        session_id,
+        event_plan
+            .with_flattened_protocol(flattened_protocol)
+            .into_background_events(),
+    )
 }
 
 #[derive(Deserialize)]
@@ -405,113 +459,9 @@ struct SendMessageParams {
     session_id: Option<String>,
 }
 
-pub(super) fn start_send_message_to_target_command(cmd: &Cmd<'_>) -> TargetCommandTaskStep {
-    let params: SendMessageParams = match cmd.get_params() {
-        Ok(Some(p)) => p,
-        _ => {
-            return super::target_command_error(-32602, "InvalidParams");
-        }
-    };
-    pending_send_message_to_target_command(
-        cmd.id,
-        cmd.session_id,
-        params.message,
-        params.session_id,
-    )
-}
-
-pub(super) async fn complete_send_message_to_target_command_async(
-    conn: &mut CdpConnection,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    message: String,
-    target_session_id: Option<String>,
-) -> CommandOutputPlan {
-    let previously_active_browser_context_id = previously_active_browser_context_id(conn);
-    let mut out = TargetCommandOutput::default();
-    send_message_to_target_inner_async(
-        conn,
-        command_context,
-        &mut out,
-        SendMessageParams {
-            message,
-            session_id: target_session_id,
-        },
-    )
-    .await;
-    restore_previously_active_browser_context(
-        conn,
-        previously_active_browser_context_id.as_deref(),
-    );
-    out.into_plan()
-}
-
-async fn send_message_to_target_inner_async(
-    conn: &mut CdpConnection,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    out: &mut TargetCommandOutput,
-    params: SendMessageParams,
-) {
-    if let Some(session_id) = params.session_id.as_deref()
-        && !conn.activate_browser_context_for_session(session_id)
-    {
-        out.push_error(-31998, "InvalidSessionId");
-        return;
-    }
-    let Some(bc) = conn.browser_context.as_ref() else {
-        out.push_error(-31998, "BrowserContextNotLoaded");
-        return;
-    };
-    let Some((_, current_session_id)) = bc.active_target_identity() else {
-        out.push_error(-31998, "TargetNotLoaded");
-        return;
-    };
-    if current_session_id.as_deref() != params.session_id.as_deref() {
-        out.push_error(-31998, "InvalidSessionId");
-        return;
-    }
-
-    // Non-flat Target transport is an adapter boundary: the nested terminal
-    // response is consumed here and re-emitted as receivedMessageFromTarget.
-    // It must never escape as a direct Page/Worker frontend response.
-    let nested_outcome =
-        Box::pin(conn.process_nested_target_message_adapter_async(&params.message)).await;
-    let (
-        nested_events,
-        post_renderer_output_events,
-        renderer_output_boundary,
-        post_response_events,
-        nested_scheduler_events,
-        renderer_output_predecessor,
-    ) = nested_outcome.into_renderer_owner_turn_parts();
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
-    conn.extend_scheduler_events(nested_scheduler_events);
-    out.push_success();
-    if let Some(session_id) = params.session_id.as_deref() {
-        for nested in nested_events {
-            out.background_events_mut().push(
-                BackgroundProtocolEvent::target_received_message_from_target(session_id, nested),
-            );
-        }
-        if let Some(renderer_output_boundary) = renderer_output_boundary {
-            out.insert_renderer_output_boundary(renderer_output_boundary);
-        } else {
-            assert!(
-                post_renderer_output_events.is_empty(),
-                "nested post-renderer output requires an exact boundary"
-            );
-        }
-        for nested in post_renderer_output_events
-            .into_iter()
-            .chain(post_response_events)
-        {
-            out.background_events_mut().push(
-                BackgroundProtocolEvent::target_received_message_from_target(session_id, nested),
-            );
-        }
-    }
-}
+mod message;
+pub(crate) use message::retain_target_message_output;
+pub(super) use message::start_send_message_to_target_command;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -520,232 +470,35 @@ struct DetachParams {
     session_id: Option<String>,
 }
 
-pub(super) fn start_detach_from_target_command(cmd: &Cmd<'_>) -> TargetCommandTaskStep {
-    let params: DetachParams = match cmd.get_params() {
+mod detachment;
+pub(super) use detachment::TargetDetachment;
+pub(crate) use detachment::TargetDetachmentOutput;
+pub(crate) use detachment::{TargetDetachmentFailureCleanup, TargetDetachmentRecovery};
+
+pub(super) fn start_detach_from_target_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> TargetCommandTaskStep {
+    let params = match cmd.get_params::<DetachParams>() {
         Ok(Some(params)) => params,
         Ok(None) => DetachParams {
             target_id: None,
             session_id: None,
         },
-        Err(e) => {
-            return super::target_command_error(-32602, e);
-        }
+        Err(error) => return super::target_command_error(-32602, error),
     };
-    pending_detach_from_target_command(cmd.id, cmd.session_id, params.target_id, params.session_id)
-}
-
-pub(super) async fn complete_detach_from_target_command_async(
-    conn: &mut CdpConnection,
-    command_session_id: Option<&str>,
-    target_id: Option<String>,
-    detach_session_id: Option<String>,
-    command_context: &mut crate::conn::CommandDispatchContext,
-) -> CommandOutputPlan {
-    let previously_active_browser_context_id = previously_active_browser_context_id(conn);
-    let mut out = TargetCommandOutput::default();
-    detach_from_target_inner_async(
-        conn,
-        &mut out,
-        command_session_id,
-        command_context,
-        DetachParams {
-            target_id,
-            session_id: detach_session_id,
-        },
-    )
-    .await;
-    restore_previously_active_browser_context(
-        conn,
-        previously_active_browser_context_id.as_deref(),
-    );
-    out.into_plan()
-}
-
-async fn detach_from_target_inner_async(
-    conn: &mut CdpConnection,
-    out: &mut TargetCommandOutput,
-    command_session_id: Option<&str>,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    params: DetachParams,
-) {
-    if let Some(session_id) = params.session_id.as_deref() {
-        let Some(route) = conn.session_route(Some(session_id)) else {
-            out.push_error(-31998, "InvalidSessionId");
-            return;
-        };
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && detach_session_route_target_id(&route)
-                .is_some_and(|target_id| target_id != requested_target_id)
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-    }
-    if let Some(target_id) = params.target_id.as_deref()
-        && let Err(message) = select_browser_context_for_target(conn, target_id)
-    {
-        out.push_error(-31998, message);
-        return;
-    }
-
-    if let Some(session_id) = params.session_id.as_deref() {
-        super::auto_attach::detach_attached_sessions_for_owner_async(
-            conn,
-            out.target_events_mut(),
-            Some(session_id),
-            command_context,
-        )
-        .await;
-    }
-
-    if let Some(session_id) = params.session_id.as_deref()
-        && conn.is_browser_session_id(Some(session_id))
-    {
-        match super::session_disposal::dispose_browser_session_event_plan_async(conn, session_id)
-            .await
-        {
-            Ok(detached) => {
-                out.target_events_mut().extend_background_events(detached);
-            }
-            Err(error) => {
-                out.push_error(-31998, error.to_string());
-                return;
-            }
-        }
-        out.push_success();
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref() {
-        let Some(route) = conn.session_route(Some(session_id)) else {
-            out.push_error(-31998, "InvalidSessionId");
-            return;
-        };
-        let Some(target_id) = detach_session_route_target_id(&route).map(str::to_owned) else {
-            out.push_error(-31998, "InvalidSessionId");
-            return;
-        };
-        match super::session_disposal::dispose_target_session_async(
-            conn,
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            crate::conn::TargetSessionDetachCleanupPlan::new(
-                target_id,
-                session_id,
-                None,
-                command_session_id,
-            ),
-        )
-        .await
-        {
-            Ok(outcome) => {
-                let (event_plan, predecessor) = outcome.into_parts();
-                if let Some(predecessor) = predecessor {
-                    command_context.set_renderer_output_predecessor(predecessor);
-                }
-                out.push_success();
-                out.target_events_mut().extend_background_events(event_plan);
-            }
-            Err(error) => out.push_error(-32000, error.to_string()),
-        }
-        return;
-    }
-    if conn.browser_context.is_none() {
-        out.push_success();
-        return;
-    }
-    if let Some(target_id) = params.target_id.as_deref() {
-        let worker_session_ids = conn.browser_context.as_ref().and_then(|browser_context| {
-            browser_context
-                .shared_worker_target(target_id)
-                .map(|target| target.session_ids())
-                .or_else(|| {
-                    browser_context
-                        .dedicated_worker_target(target_id)
-                        .map(|target| target.session_ids())
-                })
-                .or_else(|| {
-                    browser_context
-                        .service_worker_target(target_id)
-                        .map(|target| target.session_ids())
-                })
-        });
-        if let Some(session_ids) = worker_session_ids {
-            match dispose_target_sessions_async(conn, out, command_context, target_id, session_ids)
-                .await
-            {
-                Ok(()) => out.push_success(),
-                Err(error) => out.push_error(-32000, error.to_string()),
-            }
-            return;
-        }
-    }
-    let Some((target_id, Some(current_session_id))) = conn
-        .browser_context
-        .as_ref()
-        .and_then(BrowserContext::active_target_identity)
-    else {
-        out.push_success();
-        return;
-    };
-    if let Some(requested_target_id) = params.target_id.as_deref()
-        && requested_target_id != target_id
-    {
-        out.push_error(-31998, "UnknownTargetId");
-        return;
-    }
-
-    match super::session_disposal::dispose_target_session_async(
-        conn,
-        out.background_events_mut(),
-        command_context.protocol_events_mut(),
-        crate::conn::TargetSessionDetachCleanupPlan::new(target_id, current_session_id, None, None),
-    )
-    .await
-    {
-        Ok(outcome) => {
-            let (event_plan, predecessor) = outcome.into_parts();
-            if let Some(predecessor) = predecessor {
-                command_context.set_renderer_output_predecessor(predecessor);
-            }
-            out.push_success();
-            out.target_events_mut().extend_background_events(event_plan);
-        }
-        Err(error) => out.push_error(-32000, error.to_string()),
-    }
-}
-
-async fn dispose_target_sessions_async(
-    conn: &mut CdpConnection,
-    out: &mut TargetCommandOutput,
-    command_context: &mut crate::conn::CommandDispatchContext,
-    target_id: &str,
-    session_ids: Vec<String>,
-) -> anyhow::Result<()> {
-    for session_id in session_ids {
-        let outcome = super::session_disposal::dispose_target_session_async(
-            conn,
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            crate::conn::TargetSessionDetachCleanupPlan::new(target_id, &session_id, None, None),
-        )
-        .await?;
-        let (event_plan, predecessor) = outcome.into_parts();
-        if let Some(predecessor) = predecessor {
-            command_context.set_renderer_output_predecessor(predecessor);
-        }
-        out.target_events_mut().extend_background_events(event_plan);
-    }
-    Ok(())
-}
-
-fn detach_session_route_target_id(route: &crate::conn::CdpSessionRoute) -> Option<&str> {
-    match route {
-        crate::conn::CdpSessionRoute::Browser
-        | crate::conn::CdpSessionRoute::BrowserContext { .. } => None,
-        crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. } => Some(tab_target_id),
-        crate::conn::CdpSessionRoute::PageTarget { target_id, .. }
-        | crate::conn::CdpSessionRoute::SharedWorkerTarget { target_id, .. }
-        | crate::conn::CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
-        | crate::conn::CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Some(target_id),
+    let previous_context = previously_active_browser_context_id(conn);
+    let prepared = TargetDetachment::prepare(conn, cmd.session_id, params);
+    restore_previously_active_browser_context(conn, previous_context.as_deref());
+    match prepared {
+        Ok(detachment) => TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
+            command_id: cmd.id,
+            session_id: cmd.session_id.map(str::to_owned),
+            kind: Box::new(PendingTargetCommandKind::DetachFromTarget {
+                detachment,
+                access: conn.protocol_state_access(),
+            }),
+        }),
+        Err(error) => super::target_command_error(-31998, format!("{error:#}")),
     }
 }

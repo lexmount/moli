@@ -45,27 +45,6 @@ struct BroadcastChannelObjectDeclaration<'scope> {
 
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_add_event_listener_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_dispatch_event_callback
-    )]
-    dispatch_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -628,13 +607,8 @@ fn dispatch_broadcast_channel_event<'s>(
 ) -> bool {
     match event {
         BroadcastChannelEvent::Message(payload) => {
-            let target_origin = crate::context_bootstrap::current_runtime_message_origin(scope);
-            let target_agent_cluster =
-                crate::context_bootstrap::current_runtime_message_agent_cluster(scope);
-            if !crate::context_bootstrap::wasm_module_message_allowed_for_target(
-                &payload,
-                target_origin.as_deref(),
-                target_agent_cluster,
+            if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
+                scope, &payload,
             ) {
                 if let Some(event) = new_broadcast_channel_message_event(
                     scope,

@@ -1,4 +1,5 @@
 use super::*;
+pub(super) use crate::css_style::compress_box_components;
 
 pub(super) fn resolve_moli_computed_style_value(
     runtime: &JsContextHost,
@@ -1664,22 +1665,6 @@ pub(super) fn compress_box_shorthand_value(value: &str) -> String {
     box_shorthand_value_components(value)
         .and_then(|values| compress_box_components(&values))
         .unwrap_or_else(|| value.to_owned())
-}
-
-pub(super) fn compress_box_components(values: &[String]) -> Option<String> {
-    match values {
-        [start, end] if start == end => Some(start.clone()),
-        [start, end] => Some(format!("{start} {end}")),
-        [top, right, bottom, left] if top == right && top == bottom && top == left => {
-            Some(top.clone())
-        }
-        [top, right, bottom, left] if top == bottom && right == left => {
-            Some(format!("{top} {right}"))
-        }
-        [top, right, bottom, left] if right == left => Some(format!("{top} {right} {bottom}")),
-        [top, right, bottom, left] => Some(format!("{top} {right} {bottom} {left}")),
-        _ => None,
-    }
 }
 
 fn normalize_computed_color(value: &str) -> String {

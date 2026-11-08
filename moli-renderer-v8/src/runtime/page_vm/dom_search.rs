@@ -16,7 +16,6 @@ pub(super) enum DocumentSearchMatch {
     Generated {
         host: DomHandle,
         identity: DocumentNodeInspectorIdentity,
-        is_whitespace_text: bool,
     },
 }
 
@@ -35,10 +34,9 @@ impl PageVm {
                 .document_node_id(),
         ];
         documents.extend(
-            self.vm()
-                .live_child_document_handles_in_snapshot_order()
+            self.inspector_child_document_handles()
                 .into_iter()
-                .map(|(_, _, document)| document),
+                .map(|(_, document)| document),
         );
         let matches = search_document_matches(
             self.vm().document_runtime.dom_host(),
@@ -232,8 +230,6 @@ fn generated_search_match(
     Some(DocumentSearchMatch::Generated {
         host,
         identity: snapshot.inspector_identity?,
-        is_whitespace_text: snapshot.node_type == NodeType::Text as u8
-            && snapshot.node_value.trim().is_empty(),
     })
 }
 

@@ -95,6 +95,7 @@ pub trait PageInputExt {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        intercept_drags: bool,
     ) -> Result<PendingPageCommand>;
     fn finish_dispatch_mouse_event_at_point_with_outcome(
         &mut self,
@@ -161,6 +162,7 @@ pub trait PageInputExt {
     ) -> Result<RendererInputDispatchOutcome>;
     async fn clear_active_drag_data_transfer_async(&mut self) -> Result<()>;
     fn start_clear_active_drag_data_transfer(&self) -> Result<PendingPageCommand>;
+    fn start_cancel_dragging(&self) -> Result<PendingPageCommand>;
     fn finish_clear_active_drag_data_transfer(
         &mut self,
         completion: CompletedPageCommand,
@@ -261,6 +263,7 @@ impl PageInputExt for Page {
             delta_y,
             RendererPointerEventProperties::default(),
             0,
+            false,
         )
     }
 
@@ -276,6 +279,7 @@ impl PageInputExt for Page {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        intercept_drags: bool,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DispatchMouseEventAtPoint {
             x,
@@ -288,6 +292,7 @@ impl PageInputExt for Page {
             delta_y,
             pointer,
             modifiers,
+            intercept_drags,
         })
     }
 
@@ -411,6 +416,10 @@ impl PageInputExt for Page {
 
     fn start_clear_active_drag_data_transfer(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::ClearActiveDragDataTransfer)
+    }
+
+    fn start_cancel_dragging(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::CancelDragging)
     }
 
     fn finish_clear_active_drag_data_transfer(

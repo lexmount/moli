@@ -265,7 +265,6 @@ pub struct NoContentNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
     NoContent(Box<NoContentNavigation>),
     NetworkFailure(String),
@@ -290,9 +289,28 @@ pub(crate) enum NavigationResultProjection {
     Cdp(Value),
     WebDriverClassic(Value),
     WebDriverBidi(Value),
+    Automation {
+        protocol: FrontendProtocol,
+        payload: Value,
+        result: crate::domains::page::AutomationNavigationResult,
+    },
 }
 
 impl NavigationResultProjection {
+    pub(crate) fn automation_result(
+        &self,
+    ) -> Option<&crate::domains::page::AutomationNavigationResult> {
+        match self {
+            Self::Automation { result, .. } => Some(result),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_payload(mut self, payload: Value) -> Self {
+        *self.payload_mut() = payload;
+        self
+    }
+
     pub(crate) fn new(protocol: FrontendProtocol, payload: Value) -> Self {
         match protocol {
             FrontendProtocol::Cdp => Self::Cdp(payload),
@@ -306,30 +324,34 @@ impl NavigationResultProjection {
             Self::Cdp(_) => FrontendProtocol::Cdp,
             Self::WebDriverClassic(_) => FrontendProtocol::WebDriverClassic,
             Self::WebDriverBidi(_) => FrontendProtocol::WebDriverBidi,
+            Self::Automation { protocol, .. } => *protocol,
         }
     }
 
     pub(crate) fn payload(&self) -> &Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 
     pub(crate) fn payload_mut(&mut self) -> &mut Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 
     pub(crate) fn into_payload(self) -> Value {
         match self {
-            Self::Cdp(payload) | Self::WebDriverClassic(payload) | Self::WebDriverBidi(payload) => {
-                payload
-            }
+            Self::Cdp(payload)
+            | Self::WebDriverClassic(payload)
+            | Self::WebDriverBidi(payload)
+            | Self::Automation { payload, .. } => payload,
         }
     }
 }
@@ -352,6 +374,7 @@ pub struct NavigationDispatchState {
     pub request_id: Option<String>,
     pub loader_id: String,
     pub request_announced: bool,
+    pub(crate) announced_redirects: usize,
     pub requested_url: Url,
     pub request_method: String,
     /// Text projection used by CDP request events and Fetch interception.

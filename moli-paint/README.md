@@ -39,12 +39,46 @@ The dependency update preserves the subsetting algorithm, variable fonts and
 CFF2 support. Krilla's `imagesize` 0.14 and `base64` 0.22
 also coexist with usvg's 0.15 and 0.23; their version requirements do not overlap.
 
+Synthetic weight is expressed in local CSS pixels. The pinned AnyRender CPU
+adapter passes it to both fill and stroke; the Glifo patch converts it when
+absorbing transforms and preparing cached outlines. Its `vello_common` source
+matches the published 0.2.0 crate and is pinned alongside Glifo to share types.
+
+The AnyRender CPU adapter exposes a cached glyph measurer backed by Glifo's
+prepared-glyph ink query. Native PDF culling and filter image allocation consume
+the adapter's result types, without depending on Glifo builders or caches.
+The query resolves COLR layers and clip boxes, supported
+bitmap strikes and outlines in renderer priority order, with variation,
+hinting, synthetic weight, stroke joins and transforms applied. Bounds exclude
+device sampling, filters and caller clips. Empty ink is distinct from unavailable
+geometry, which retains a conservative fallback. PDF measurement reuses its
+adapter-owned measurement cache; raster allocation adds a sampling guard. This replaces
+the adapter's separate outline-metric, side-bearing and empty-path checks.
+Native bitmap culling retains a conservative fallback because Krilla selects
+and places bitmap strikes differently from the CPU renderer.
+
 The PDF adapter embeds and subsets fonts, using Parley's existing glyph positions
 and the snapshot's shared logical text/UTF-8 cluster ranges. These mappings are
 collected only for print demands, keeping them out of the screenshot hot path.
 Ligature ranges are joined in logical order before arranging RTL clusters visually. Synthetic italic
-uses a glyph-local shear; synthetic weight uses PDF fill-and-stroke. Font instances
+uses a glyph-local shear. Opaque, uniform synthetic weight keeps native PDF
+fill-and-stroke text; unequal X/Y expansion or translucent fills use the expanded
+contour so each axis and the fill opacity are preserved. Authored text stroke
+follows that contour with its original width. Contours are prepared only after
+page and cluster clipping. Moli caches contours and painted PDF graphics for the
+whole export, across text runs and pages, and submits them through Krilla's existing
+path/graphic APIs. Contour keys include the font instance, font size and independent
+X/Y expansion; graphics also include fill or stroke paint. Placement and paint order
+do not duplicate geometry. This cache is separate from prepared-ink measurement;
+Krilla remains pinned to upstream without an expanded-glyph extension. The visible native
+fill carries text semantics when available; path-only text retains one invisible
+native copy for searching and extraction. Font instances
 are cached separately by font identity and normalized variation coordinates.
+The PDF backend leaves SVG glyph rendering disabled, so SVG-backed glyphs use
+their available base outlines for synthetic fill and stroke. Fonts with SVG data
+bypass the native synthetic-fill shortcut, whose Type3 rendering forces a fill.
+Synthetic passes resolve each glyph's contour or native outline fallback independently;
+neighboring glyphs do not select its drawing mode or add searchable copies.
 The adapter reverses `avar` v1 and `fvar` normalization for Krilla's design-space
 variation API. Non-default `avar` v2 instances currently return an explicit error.
 

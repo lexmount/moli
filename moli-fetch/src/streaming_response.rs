@@ -31,6 +31,7 @@ pub struct StreamingHtmlResponse {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
     body_chunks: mpsc::UnboundedReceiver<String>,
@@ -58,6 +59,7 @@ impl StreamingHtmlResponse {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             body_chunks,
@@ -82,6 +84,7 @@ impl StreamingHtmlResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
             body_chunks,
@@ -101,6 +104,7 @@ impl StreamingHtmlResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -174,6 +178,7 @@ pub struct StreamingRawResponse {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
     body_chunks: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -205,6 +210,7 @@ impl StreamingRawResponse {
             redirected,
             redirect_chain,
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
             network_request_extra_info: None,
             body_chunks,
@@ -230,6 +236,7 @@ impl StreamingRawResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
             body_chunks,
@@ -321,6 +328,7 @@ impl StreamingRawResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -387,6 +395,7 @@ mod tests {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         }
     }

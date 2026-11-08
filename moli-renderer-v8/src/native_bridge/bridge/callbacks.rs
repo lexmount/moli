@@ -50,6 +50,13 @@ pub(crate) fn wrapped_handle_value_for_receiver<'s>(
     receiver: v8::Local<'_, v8::Object>,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let receiver = v8::Local::new(scope, receiver);
+    let receiver =
+        if receiver.is_proxy() && crate::web_api_interfaces::Node::is_instance(scope, receiver) {
+            crate::native_bridge::document::canonical_detached_node_object(scope, receiver)?
+        } else {
+            receiver
+        };
     let context = receiver.get_creation_context(scope)?;
     if context == scope.get_current_context() {
         return wrapped_handle_value(scope, runtime_ptr, handle);

@@ -448,6 +448,7 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("JS baseline mousedown should set then clear pending capture");
             page_vm
@@ -462,6 +463,7 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("JS baseline mouseup should not use removed pending capture");
             let js_log = page_vm
@@ -486,6 +488,7 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("parser baseline mousedown should set pending capture");
 
@@ -527,6 +530,7 @@ window.parserPendingPointerCapture = installPendingPointerCaptureTarget('parser-
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("parser baseline mouseup should not use removed pending capture");
             let parser_log = page_vm
@@ -618,6 +622,7 @@ window.parserPendingPointerCaptureReparent =
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("JS baseline mousedown should set then clear pending capture by reparent");
             page_vm
@@ -632,6 +637,7 @@ window.parserPendingPointerCaptureReparent =
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("JS baseline mouseup should not use reparented pending capture");
             let js_log = page_vm
@@ -656,6 +662,7 @@ window.parserPendingPointerCaptureReparent =
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("parser baseline mousedown should set pending capture");
 
@@ -715,6 +722,7 @@ window.parserPendingPointerCaptureReparent =
                     0.0,
                     RendererPointerEventProperties::default(),
                     0,
+                    false,
                 )
                 .expect("parser baseline mouseup should not use reparented pending capture");
             let parser_log = page_vm

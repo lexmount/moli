@@ -422,9 +422,18 @@ impl LivePagePendingNavigationCompletion {
 
     pub(super) fn detach_command_observer(self) -> (Self, bool) {
         match self {
-            Self::CompletePageCreation { .. } | Self::CompletePageReplacement { .. } => {
-                (self, false)
-            }
+            Self::CompletePageCreation { .. } => (self, false),
+            Self::CompletePageReplacement {
+                navigation_reply_policy,
+            } => (
+                // The existing Page still has its original close owner after
+                // this observer is cancelled. Keep the committed Document's
+                // parser and lifecycle work on that Page.
+                Self::PublishedPageCreation {
+                    navigation_reply_policy,
+                },
+                true,
+            ),
             Self::Background
             | Self::PublishedPageCreation { .. }
             | Self::ReplyWithSnapshot { .. }
@@ -1118,9 +1127,14 @@ impl RendererOwnerLocalStore {
         // `FollowBeforeReply` must observe that navigation before publishing
         // the old Document; generic lifecycle observers still treat the
         // milestone itself as reached.
-        let observation = bound::reconcile_navigation_lifecycle_observation(
+        let observation = bound::reconcile_navigation_follow_lifecycle_observation(
             observation,
             entry.page_vm().vm().has_pending_location_navigation(),
+            entry
+                .page_vm()
+                .vm()
+                .pending_location_navigation_source_document()
+                == Some(document),
         );
         match observation {
             DocumentLifecycleObserverOutcome::Reached => {
@@ -1396,18 +1410,22 @@ impl RendererOwnerLocalStore {
     fn take_entry_for_command(&mut self, token: RendererPageToken) -> Result<LivePageEntry> {
         match self.checkout_entry_for_owner_turn(token) {
             Ok(entry) => Ok(entry),
-            Err(LivePageEntryCheckoutError::Busy) => Err(anyhow!(
-                "renderer local host page {} is already running an owner turn",
-                token.page_id.as_u64()
-            )),
-            Err(LivePageEntryCheckoutError::Retired) => Err(anyhow!(
-                "renderer local host page {} is retiring",
-                token.page_id.as_u64()
-            )),
-            Err(LivePageEntryCheckoutError::Missing) => Err(anyhow!(
-                "renderer local host no longer tracks page {}",
-                token.page_id.as_u64()
-            )),
+            Err(LivePageEntryCheckoutError::Busy) => Err(super::RendererPageAccessError::Busy {
+                page_id: token.page_id,
+            }
+            .into()),
+            Err(LivePageEntryCheckoutError::Retired) => {
+                Err(super::RendererPageAccessError::Retiring {
+                    page_id: token.page_id,
+                }
+                .into())
+            }
+            Err(LivePageEntryCheckoutError::Missing) => {
+                Err(super::RendererPageAccessError::Missing {
+                    page_id: token.page_id,
+                }
+                .into())
+            }
         }
     }
 
@@ -1628,16 +1646,11 @@ impl RendererOwnerLocalStore {
                 .expect("phase-one admission requires a resident continuation");
             pending.phase_one_restore_requirement()
         };
-        let streaming_input_ready = entry.pending_phase_one_navigation_has_ready_streaming_input();
         let page_turn_is_runnable = !bound::page_ready_descriptor_snapshot(entry, task_sources)
             .eligible
             .is_empty();
 
-        PhaseOneResidenceAdmission::after_stable_restore(
-            restore_requirement,
-            page_turn_is_runnable,
-            streaming_input_ready,
-        )
+        PhaseOneResidenceAdmission::after_stable_restore(restore_requirement, page_turn_is_runnable)
     }
 
     fn page_turn_readiness_after_restore(

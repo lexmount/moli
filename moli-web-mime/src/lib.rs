@@ -1,6 +1,7 @@
 mod classification;
 mod data_url;
 mod destination;
+mod file;
 mod headers;
 mod media;
 mod media_capabilities;
@@ -25,6 +26,7 @@ pub use data_url::{
     data_url_body_and_computed_mime_type, data_url_body_and_mime_type, data_url_mime_type,
 };
 pub use destination::FetchDestination;
+pub use file::selected_file_mime_type;
 pub use headers::{
     effective_response_mime_essence, effective_response_mime_type, extract_response_mime_essence,
     extract_response_mime_type, response_content_type, response_document_content_type,

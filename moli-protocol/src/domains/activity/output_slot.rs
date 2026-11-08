@@ -1,6 +1,7 @@
-use std::{future::Future, pin::Pin};
+use anyhow::Result;
+use futures_util::{FutureExt as _, future::LocalBoxFuture};
 
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, CommandWorkflowContext, ProtocolWorkflowDriver};
 
 use super::contextual_projection::ProtocolOutputProjectionContext;
 use super::output_payloads::{ProtocolOutputPayload, ProtocolOutputPayloads};
@@ -57,7 +58,6 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     DocumentTitleChanged,
     DocumentLifecycle,
     RuntimeObservable,
-    DomStorage,
     ChildFrameActivity,
     SameDocumentNavigation,
     SessionHistoryUpdate,
@@ -96,8 +96,7 @@ impl ProtocolOutputSlot {
             | Self::DomMutations
             | Self::MainDocumentCommit
             | Self::DocumentTitleChanged
-            | Self::DocumentLifecycle
-            | Self::DomStorage => ProtocolOutputDelivery::ProtocolObservation,
+            | Self::DocumentLifecycle => ProtocolOutputDelivery::ProtocolObservation,
         }
     }
 
@@ -143,123 +142,143 @@ impl ProtocolOutputSlot {
             | Self::DocumentTitleChanged
             | Self::DocumentLifecycle
             | Self::RuntimeObservable
-            | Self::DomStorage
             | Self::WebMcp
             | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation => ProtocolOutputResponseOrder::BeforeResponse,
         }
     }
 
-    pub(in crate::domains::activity) fn project_async<'a>(
+    /// Consumes only already-frozen facts and finite owner-state changes.
+    /// Native waits are returned to the ordinary async projection workflow.
+    pub(in crate::domains::activity) fn project_finite(
         self,
-        conn: &'a mut CdpConnection,
-        context: &'a mut ProtocolOutputProjectionContext<'_>,
-        payloads: &'a mut ProtocolOutputPayloads,
-    ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-        Box::pin(async move {
-            match self {
-                Self::WebMcp => crate::domains::web_mcp::project_async(context, payloads).await,
-                Self::PendingSubresourceContinueEvents => {
-                    crate::domains::network::project_pending_subresource_continue_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::NetworkBacklog => {
-                    crate::domains::network::project_network_backlog_async(conn, context, payloads)
-                        .await;
-                }
-                Self::RendererNetworkLive => {
-                    crate::domains::network::project_renderer_network_live_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::SubresourceFetchInterception => {
-                    crate::domains::network::project_subresource_fetch_interception_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeBindingCalls => {
-                    crate::domains::runtime::project_runtime_binding_calls_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeInspectorMessages => {
-                    crate::domains::runtime::project_runtime_inspector_messages_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::RuntimeInspectorPostResponseMessages => {
-                    crate::domains::runtime::project_runtime_inspector_post_response_messages_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Audits => {
-                    crate::domains::observable_output::project_audits_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Console => {
-                    crate::domains::observable_output::project_console_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Log => {
-                    crate::domains::observable_output::project_log_async(conn, context, payloads)
-                        .await;
-                }
-                Self::RuntimeObservable => {
-                    crate::domains::observable_output::project_runtime_observable_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::DomMutations => {
-                    crate::domains::dom::project_dom_mutations_async(conn, context, payloads).await;
-                }
-                Self::DomStorage => {
-                    crate::domains::dom_storage::project_dom_storage_async(context, payloads).await;
-                }
-                Self::MainDocumentCommit => {
-                    crate::domains::page::project_main_document_commit_async(
-                        conn, context, payloads,
-                    )
-                    .await;
-                }
-                Self::Download
-                | Self::FileChooser
-                | Self::JavascriptDialog
-                | Self::WindowOpen
-                | Self::Popup
-                | Self::CloseAuxiliaryWindow
-                | Self::NavigateAuxiliaryWindow
-                | Self::DocumentTitleChanged
-                | Self::DocumentLifecycle
-                | Self::ChildFrameActivity
-                | Self::SessionHistoryUpdate
-                | Self::SameDocumentNavigation
-                | Self::TopLevelLocationNavigation
-                | Self::TopLevelHistoryTraversal => {
-                    crate::domains::page::project_page_output_async(self, conn, context, payloads)
-                        .await;
-                }
-                Self::SharedWorkerTargetLifecycle
-                | Self::ServiceWorkerTargetLifecycle
-                | Self::DedicatedWorkerTargetLifecycle => {
-                    crate::domains::target::project_worker_target_output_async(
-                        self, conn, context, payloads,
-                    )
-                    .await;
-                }
+        conn: &mut CdpConnection,
+        context: &mut ProtocolOutputProjectionContext<'_>,
+        payloads: &mut ProtocolOutputPayloads,
+    ) -> Result<(), Self> {
+        match self {
+            Self::WebMcp => crate::domains::web_mcp::project_web_mcp(context, payloads),
+            Self::NetworkBacklog => {
+                crate::domains::network::project_network_backlog(conn, context, payloads)
             }
-        })
+            Self::RendererNetworkLive => {
+                crate::domains::network::project_renderer_network_live(conn, context, payloads)
+            }
+            Self::SubresourceFetchInterception => {
+                crate::domains::network::project_subresource_fetch_interception(
+                    conn, context, payloads,
+                )
+            }
+            Self::RuntimeBindingCalls => {
+                crate::domains::runtime::project_runtime_binding_calls(conn, context, payloads)
+            }
+            Self::Audits => {
+                crate::domains::observable_output::project_audits(conn, context, payloads)
+            }
+            Self::Console => {
+                crate::domains::observable_output::project_console(conn, context, payloads)
+            }
+            Self::Log => crate::domains::observable_output::project_log(conn, context, payloads),
+            Self::RuntimeObservable => {
+                crate::domains::observable_output::project_runtime_observable(
+                    conn, context, payloads,
+                )
+            }
+            Self::DomMutations => {
+                crate::domains::dom::project_dom_mutations(conn, context, payloads)
+            }
+            Self::MainDocumentCommit => {
+                crate::domains::page::project_main_document_commit(conn, context, payloads)
+            }
+            Self::DocumentLifecycle
+            | Self::DocumentTitleChanged
+            | Self::JavascriptDialog
+            | Self::WindowOpen
+            | Self::ChildFrameActivity
+            | Self::NavigateAuxiliaryWindow
+            | Self::SessionHistoryUpdate
+            | Self::TopLevelLocationNavigation
+            | Self::TopLevelHistoryTraversal
+            | Self::SameDocumentNavigation => {
+                return crate::domains::page::project_page_output_finite(
+                    self, conn, context, payloads,
+                );
+            }
+            _ => return Err(self),
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_wait(
+        self,
+        conn: &mut CdpConnection,
+        owner: &crate::conn::CommandOwnerScope,
+        payloads: &mut ProtocolOutputPayloads,
+        context: &mut CommandWorkflowContext,
+    ) -> Option<PreparedProtocolOutputWait> {
+        match self {
+            Self::CloseAuxiliaryWindow => {
+                crate::domains::page::PreparedPageOutputClose::take(payloads)
+                    .map(PreparedProtocolOutputWait::Close)
+            }
+            Self::Popup => crate::domains::page::PreparedPopupOutputProjection::take(payloads)
+                .map(PreparedProtocolOutputWait::Popup),
+            Self::PendingSubresourceContinueEvents => {
+                crate::domains::network::PreparedSubresourceProjection::take(
+                    conn, owner, payloads, context,
+                )
+                .map(PreparedProtocolOutputWait::Subresource)
+            }
+            Self::RuntimeInspectorMessages | Self::RuntimeInspectorPostResponseMessages => {
+                crate::domains::runtime::PreparedRuntimeInspectorProjection::take(
+                    conn, context, self, payloads,
+                )
+                .map(PreparedProtocolOutputWait::Runtime)
+            }
+            Self::Download | Self::FileChooser => {
+                crate::domains::input::PreparedInputOutputProjection::take(
+                    self, conn, owner, payloads,
+                )
+                .map(PreparedProtocolOutputWait::Input)
+            }
+            Self::SharedWorkerTargetLifecycle
+            | Self::ServiceWorkerTargetLifecycle
+            | Self::DedicatedWorkerTargetLifecycle => {
+                crate::domains::target::WorkerTargetOutputProjection::take(payloads)
+                    .map(PreparedProtocolOutputWait::Worker)
+            }
+            _ => unreachable!("finite projection selects the native output family"),
+        }
+    }
+}
+
+pub(crate) enum PreparedProtocolOutputWait {
+    Close(crate::domains::page::PreparedPageOutputClose),
+    Popup(crate::domains::page::PreparedPopupOutputProjection),
+    Subresource(crate::domains::network::PreparedSubresourceProjection),
+    Worker(crate::domains::target::WorkerTargetOutputProjection),
+    Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
+    Input(crate::domains::input::PreparedInputOutputProjection),
+}
+
+impl PreparedProtocolOutputWait {
+    pub(in crate::domains::activity) fn run<'a>(
+        self,
+        driver: &'a mut ProtocolWorkflowDriver,
+        context: &'a mut CommandWorkflowContext,
+    ) -> LocalBoxFuture<'a, Result<()>> {
+        match self {
+            Self::Close(projection) => projection.run(driver, context).boxed_local(),
+            Self::Popup(projection) => projection.run(driver, context).boxed_local(),
+            Self::Subresource(projection) => projection.run(driver, context).boxed_local(),
+            Self::Worker(projection) => projection.run(driver, context).boxed_local(),
+            Self::Runtime(projection) => projection.run(driver, context).boxed_local(),
+            Self::Input(projection) => async move {
+                projection.run(driver, context).await;
+                Ok(())
+            }
+            .boxed_local(),
+        }
     }
 }
 
@@ -318,7 +337,6 @@ mod tests {
             (DocumentTitleChanged, ProtocolObservation, BeforeResponse),
             (DocumentLifecycle, ProtocolObservation, BeforeResponse),
             (RuntimeObservable, OwnerAction, BeforeResponse),
-            (DomStorage, ProtocolObservation, BeforeResponse),
             (WebMcp, ProtocolObservation, BeforeResponse),
             (ChildFrameActivity, OwnerAction, AfterResponse),
             (SameDocumentNavigation, OwnerAction, BeforeResponse),

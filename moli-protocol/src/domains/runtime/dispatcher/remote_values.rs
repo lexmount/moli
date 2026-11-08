@@ -200,7 +200,7 @@ pub(super) fn devtools_empty_result_from_response(
     Ok(AutomationResult::Empty)
 }
 
-pub(super) fn validate_protocol_neutral_runtime_handle_realms(
+pub(crate) fn validate_protocol_neutral_runtime_handle_realms(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
     command: &AutomationCommand,
@@ -243,7 +243,7 @@ pub(super) fn validate_protocol_neutral_runtime_handle_realms(
     Ok(())
 }
 
-pub(super) fn register_devtools_script_result_remote_object_realm(
+pub(crate) fn register_devtools_script_result_remote_object_realm(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     result: &AutomationResult,
@@ -276,7 +276,7 @@ pub(super) fn register_devtools_script_result_remote_object_realm(
     );
 }
 
-pub(super) fn register_devtools_script_result_remote_object(
+pub(crate) fn register_devtools_script_result_remote_object(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     result: &AutomationResult,
@@ -374,49 +374,25 @@ pub(super) fn devtools_window_remote_candidate(
     })
 }
 
-pub(super) async fn devtools_probe_remote_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_probe_remote_value_using(
+    workflow: &mut RuntimeWorkflow,
     target: DevToolsRuntimeTarget,
     command: AutomationCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
     let result_ownership = devtools_runtime_result_ownership(&command);
-    let internal_command_id = conn.next_internal_runtime_command_id();
-    let mut step =
-        start_protocol_neutral_runtime_command(conn, target, command, internal_command_id).await;
-    loop {
-        match step {
-            RuntimeCommandTaskStep::Complete(plan) => {
-                let (response, _events) = plan
-                    .into_runtime_inspector_response_and_background_events(
-                        internal_command_id,
-                        None,
-                    );
-                let Some(response) = response else {
-                    return Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        "MissingDevToolsCommandResult",
-                    ));
-                };
-                let result =
-                    devtools_script_result_from_response(response, result_ownership, None)?;
-                let AutomationResult::Script(result) = result else {
-                    return Ok(None);
-                };
-                let DevToolsScriptResult::Value(value) = *result else {
-                    return Ok(None);
-                };
-                return Ok(Some(value));
-            }
-            RuntimeCommandTaskStep::Pending(pending) => {
-                let completed = pending.wait().await;
-                step = complete_pending_runtime_command(conn, completed).await;
-            }
-        }
-    }
+    let response = workflow.native(target, command).await?;
+    let result = devtools_script_result_from_response(response, result_ownership, None)?;
+    let AutomationResult::Script(result) = result else {
+        return Ok(None);
+    };
+    let DevToolsScriptResult::Value(value) = *result else {
+        return Ok(None);
+    };
+    Ok(Some(value))
 }
 
-pub(super) async fn materialize_devtools_script_deep_serialized_root_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn materialize_devtools_script_deep_serialized_root_value_using(
+    workflow: &mut RuntimeWorkflow,
     result: &mut AutomationResult,
     serialization_options: Option<&DevToolsSerializationOptions>,
     target: &DevToolsRuntimeTarget,
@@ -464,7 +440,7 @@ pub(super) async fn materialize_devtools_script_deep_serialized_root_value_async
         serialization_options: Some(serialization_options.clone()),
     });
     let deep_serialized_value =
-        match devtools_probe_remote_value_async(conn, target.clone(), command).await {
+        match devtools_probe_remote_value_using(workflow, target.clone(), command).await {
             Ok(Some(readback)) => readback.deep_serialized_value,
             Ok(None) => None,
             Err(error) => {
@@ -510,32 +486,22 @@ pub(super) fn devtools_script_result_remote_value_mut(
 
 pub(super) fn bidi_script_message_serialization_options_from_value(
     value: &Value,
-) -> Result<DevToolsSerializationOptions, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "InvalidChannelArgument".to_owned())?;
+) -> Result<DevToolsSerializationOptions, InvalidBidiChannelArgument> {
+    let object = value.as_object().ok_or(InvalidBidiChannelArgument)?;
     let max_object_depth = match object.get("maxObjectDepth") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(
-            value
-                .as_u64()
-                .ok_or_else(|| "InvalidChannelArgument".to_owned())?,
-        ),
+        Some(value) => Some(value.as_u64().ok_or(InvalidBidiChannelArgument)?),
     };
     let max_dom_depth = match object.get("maxDomDepth") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(
-            value
-                .as_u64()
-                .ok_or_else(|| "InvalidChannelArgument".to_owned())?,
-        ),
+        Some(value) => Some(value.as_u64().ok_or(InvalidBidiChannelArgument)?),
     };
     let include_shadow_tree = match object.get("includeShadowTree") {
         None => None,
         Some(Value::String(value)) if matches!(value.as_str(), "none" | "open" | "all") => {
             Some(value.clone())
         }
-        Some(_) => return Err("InvalidChannelArgument".to_owned()),
+        Some(_) => return Err(InvalidBidiChannelArgument),
     };
     Ok(DevToolsSerializationOptions {
         max_object_depth,
@@ -544,12 +510,12 @@ pub(super) fn bidi_script_message_serialization_options_from_value(
     })
 }
 
-pub(super) async fn devtools_probe_value_async(
-    conn: &mut CdpConnection,
+pub(super) async fn devtools_probe_value_using(
+    workflow: &mut RuntimeWorkflow,
     target: DevToolsRuntimeTarget,
     command: AutomationCommand,
 ) -> Result<Option<Value>, DevToolsError> {
-    let Some(value) = devtools_probe_remote_value_async(conn, target, command).await? else {
+    let Some(value) = devtools_probe_remote_value_using(workflow, target, command).await? else {
         return Ok(None);
     };
     Ok(Some(value.value))

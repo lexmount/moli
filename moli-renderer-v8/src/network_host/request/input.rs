@@ -32,11 +32,106 @@ pub(super) fn request_method_allows_body(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD")
 }
 
+pub(crate) fn validate_request_method_body(
+    method: &str,
+    body: Option<&bytes::Bytes>,
+) -> Result<(), webidl::WebIdlError> {
+    if body.is_some() && !request_method_allows_body(method) {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with GET/HEAD method cannot have body",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn request_headers_guard_for_mode(mode: &str) -> HeadersGuard {
     if mode == "no-cors" {
         HeadersGuard::RequestNoCors
     } else {
         HeadersGuard::Request
+    }
+}
+
+/// Standard RequestInfo paths retain the native Request or converted URL.
+/// The boxed snapshot is confined to the existing request-like object extension.
+pub(crate) enum RequestInfo<'s> {
+    Native(v8::Local<'s, v8::Object>),
+    Url(String),
+    Legacy(v8::Local<'s, v8::Object>, Box<RequestInputSnapshot>),
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for RequestInfo<'s> {
+    type Options = ();
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+            if is_branded_request_object(scope, object) {
+                return Ok(Self::Native(object));
+            }
+            if let Some(snapshot) = request_input_snapshot_for_constructor(scope, value)? {
+                return Ok(Self::Legacy(object, Box::new(snapshot)));
+            }
+        }
+        webidl::convert::<webidl::UsvString>(scope, value, context).map(|value| Self::Url(value.0))
+    }
+}
+
+impl<'s> RequestInfo<'s> {
+    pub(crate) fn materialize_for_fetch(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        inherit_body: bool,
+    ) -> Result<
+        (
+            String,
+            Option<RequestInputSnapshot>,
+            Option<v8::Local<'s, v8::Object>>,
+        ),
+        webidl::WebIdlError,
+    > {
+        let (url, mut inherited, source) = self.materialize(scope)?;
+        // Fetch's buffered transport needs the selected source bytes. Preserve
+        // read errors, and do not read an input body replaced by RequestInit.
+        if inherit_body
+            && let (Some(snapshot), Some(source)) = (inherited.as_mut(), source)
+            && is_branded_request_object(scope, source)
+            && !snapshot.body_unusable
+        {
+            snapshot.body = try_network_body_bytes_from_object(scope, source)
+                .map_err(|_| {
+                    webidl::WebIdlError::custom_message("Failed to materialize request body")
+                })?
+                .map(bytes::Bytes::from);
+        }
+        Ok((url, inherited, source))
+    }
+
+    pub(crate) fn materialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Result<
+        (
+            String,
+            Option<RequestInputSnapshot>,
+            Option<v8::Local<'s, v8::Object>>,
+        ),
+        webidl::WebIdlError,
+    > {
+        match self {
+            Self::Url(url) => Ok((url, None, None)),
+            Self::Legacy(source, snapshot) => {
+                Ok((snapshot.url.clone(), Some(*snapshot), Some(source)))
+            }
+            Self::Native(source) => {
+                let snapshot = request_input_snapshot_for_constructor(scope, source.into())?
+                    .expect("native Request snapshot");
+                Ok((snapshot.url.clone(), Some(snapshot), Some(source)))
+            }
+        }
     }
 }
 
@@ -57,21 +152,6 @@ pub(crate) struct RequestInputSnapshot {
     pub(crate) body_unusable: bool,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) signal: Option<v8::Global<v8::Object>>,
-}
-
-pub(super) fn request_input_url<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<String, webidl::WebIdlError> {
-    webidl::convert::<webidl::UsvString>(scope, value, webidl::Context::argument("Request", 1))
-        .map(Into::into)
-}
-
-pub(crate) fn request_input_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<Option<RequestInputSnapshot>, webidl::WebIdlError> {
-    request_input_snapshot_inner(scope, value, false)
 }
 
 pub(crate) fn mark_request_input_body_used_for_fetch<'s>(
@@ -98,14 +178,13 @@ pub(super) fn request_input_snapshot_for_constructor<'s>(
 fn request_input_snapshot_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-    allow_unusable_body: bool,
+    for_constructor: bool,
 ) -> Result<Option<RequestInputSnapshot>, webidl::WebIdlError> {
     let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
         return Ok(None);
     };
     if is_branded_request_object(scope, object) {
-        return request_input_snapshot_from_private_slots(scope, object, allow_unusable_body)
-            .map(Some);
+        return request_input_snapshot_from_private_slots(scope, object, for_constructor).map(Some);
     }
     let Some(url) = defined_object_string_property(scope, object, "url") else {
         return Ok(None);
@@ -169,7 +248,7 @@ fn request_input_snapshot_inner<'s>(
 fn request_input_snapshot_from_private_slots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    allow_unusable_body: bool,
+    for_constructor: bool,
 ) -> Result<RequestInputSnapshot, webidl::WebIdlError> {
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
@@ -196,10 +275,12 @@ fn request_input_snapshot_from_private_slots<'s>(
     let duplex = request_slot_string(scope, object, REQUEST_DUPLEX_SLOT)
         .unwrap_or_else(|| "half".to_owned());
     let body_unusable = request_body_unusable(scope, object);
-    if body_unusable && !allow_unusable_body {
+    if body_unusable && !for_constructor {
         return Err(request_body_already_used_error());
     }
-    let body = if body_unusable {
+    // Constructing from a Request transfers its current stream;
+    // copying its immutable source bytes would bypass pending reads and tee.
+    let body = if body_unusable || for_constructor {
         None
     } else {
         try_network_body_bytes_from_object(scope, object)
@@ -233,7 +314,7 @@ fn request_input_snapshot_from_private_slots<'s>(
     })
 }
 
-pub(super) fn request_body_already_used_error() -> webidl::WebIdlError {
+pub(crate) fn request_body_already_used_error() -> webidl::WebIdlError {
     webidl::WebIdlError::custom_message(
         "Cannot construct a Request with a Request object that has already been used.",
     )

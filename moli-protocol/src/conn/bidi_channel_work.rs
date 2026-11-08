@@ -15,6 +15,10 @@ use super::{
 pub(crate) struct BidiChannelPageOwner {
     owner_scope: CommandOwnerScope,
     attachment: TargetPageProtocolAttachmentIdentity,
+    host: crate::conn::PageTargetHostIdentity,
+    binding: Option<crate::conn::SessionDisposalWait>,
+    renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
+    renderer_attachment: Option<moli_core::page::RendererAgentAttachmentId>,
 }
 
 impl BidiChannelPageOwner {
@@ -22,8 +26,32 @@ impl BidiChannelPageOwner {
         conn: &CdpConnection,
         owner_scope: CommandOwnerScope,
     ) -> Option<Self> {
+        let attachment = conn.target_page_protocol_attachment_identity_for_owner(&owner_scope)?;
+        // A named binding is already exact. Implicit Browser/Context routes
+        // must be narrowed once so later active-target selection cannot move
+        // a listener or suppress cleanup of its original Page.
+        let owner_scope = if owner_scope.session_id().is_none()
+            && !matches!(
+                owner_scope.explicit_route(),
+                Some(crate::conn::CdpSessionRoute::PageTarget { .. })
+            ) {
+            CommandOwnerScope::for_page_residence(attachment.page_owner())
+        } else {
+            owner_scope
+        };
+        let session = owner_scope
+            .session_id()
+            .map(str::to_owned)
+            .or_else(|| conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope));
+        let binding = session
+            .as_deref()
+            .and_then(|id| conn.session_binding_lifetime(id));
         Some(Self {
-            attachment: conn.target_page_protocol_attachment_identity_for_owner(&owner_scope)?,
+            host: conn.page_target_host_identity_for_owner(&owner_scope)?,
+            binding,
+            renderer_page: conn.renderer_page_residence_identity_for_owner(&owner_scope),
+            renderer_attachment: conn.current_renderer_agent_attachment_id_for_owner(&owner_scope),
+            attachment,
             owner_scope,
         })
     }
@@ -40,12 +68,46 @@ impl BidiChannelPageOwner {
         &self.owner_scope
     }
 
-    /// Checks the captured Page attachment directly.
-    ///
-    /// The attachment contains its exact context, target, and Page residence,
-    /// so this check does not depend on the connection's ambient route.
+    /// New listeners and proxy materialization share one lifecycle admission
+    /// boundary. Existing receipts and object-group cleanup retain is_current
+    /// authority while the original session is Closing.
+    pub(crate) fn can_start_listener(&self, conn: &CdpConnection) -> bool {
+        if !self.is_current(conn) || conn.target_is_closing_for_owner(&self.owner_scope) {
+            return false;
+        }
+        let session = self
+            .owner_scope
+            .session_id()
+            .map(str::to_owned)
+            .or_else(|| {
+                conn.target_renderer_runtime_inspector_session_id_for_owner(&self.owner_scope)
+            });
+        session
+            .as_deref()
+            .is_none_or(|id| !conn.session_is_closing(id))
+    }
+
+    /// Journal cancellation may retire an old call on the same host, but
+    /// cannot follow a reused binding or a recreated target host.
+    pub(crate) fn owns_current_host(&self, conn: &CdpConnection) -> bool {
+        self.binding
+            .as_ref()
+            .is_none_or(|binding| !binding.is_closed())
+            && conn
+                .page_target_host_identity_for_owner(&self.owner_scope)
+                .as_ref()
+                .is_some_and(|host| self.host.matches(host))
+    }
+
+    /// Authorizes this original Page, native attachment and binding, using
+    /// its frozen route rather than the connection's current active target.
     pub(crate) fn is_current(&self, conn: &CdpConnection) -> bool {
-        conn.target_page_protocol_attachment_identity_is_current(&self.attachment)
+        self.owns_current_host(conn)
+            && conn.target_page_protocol_attachment_identity_is_current(&self.attachment)
+            && conn.renderer_page_residence_identity_for_owner(&self.owner_scope)
+                == self.renderer_page
+            && conn.current_renderer_agent_attachment_id_for_owner(&self.owner_scope)
+                == self.renderer_attachment
     }
 }
 
@@ -66,13 +128,6 @@ impl BidiChannelListenerResidence {
             owner,
             listener: Box::new(listener),
         }
-    }
-
-    pub(crate) fn from_boxed(
-        owner: BidiChannelPageOwner,
-        listener: Box<PendingBidiChannelListener>,
-    ) -> Self {
-        Self { owner, listener }
     }
 
     pub(crate) fn owner(&self) -> &BidiChannelPageOwner {
@@ -173,6 +228,39 @@ mod tests {
     }
 
     #[test]
+    fn page_owner_rejects_rebound_session_and_recreated_host_with_the_same_ids() {
+        for recreate_host in [false, true] {
+            let mut conn = connection_with_page_session();
+            let owner = BidiChannelPageOwner::capture_for_owner(
+                &conn,
+                CommandOwnerScope::for_session("SID-owner"),
+            )
+            .unwrap();
+            if recreate_host {
+                let context = conn.browser_context.as_mut().unwrap();
+                let _old = context.take_page_target_for_close("TID-owner").unwrap();
+                assert!(
+                    context.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+                        "TID-owner".into(),
+                        Some("SID-owner".into()),
+                        "about:blank".into(),
+                    ))
+                );
+                conn.runtime_session_owner_slot_mut(Some("SID-owner"))
+                    .unwrap()
+                    .set_page_attachment_id_for_test(1);
+            } else {
+                let route = conn.session_route(Some("SID-owner")).unwrap();
+                conn.register_session_route_for_test("SID-owner", route);
+            }
+            assert!(
+                !owner.is_current(&conn),
+                "literal ids and Page counters do not authorize a successor binding or host (recreated host: {recreate_host})"
+            );
+        }
+    }
+
+    #[test]
     fn page_owner_rejects_replacement_attachment() {
         let mut conn = connection_with_page_session();
         let owner = BidiChannelPageOwner::capture_for_owner(
@@ -215,6 +303,35 @@ mod tests {
             !owner.is_current(&conn),
             "a channel action must not survive its exact protocol attachment"
         );
+    }
+
+    #[test]
+    fn browser_route_owner_keeps_its_original_target_after_selection_changes() {
+        let mut conn = connection_with_page_session();
+        let owner = BidiChannelPageOwner::capture_for_owner(
+            &conn,
+            CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
+        )
+        .unwrap();
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .stage_background_target(
+                "TID-next".into(),
+                Some("SID-next".into()),
+                "about:blank".into(),
+                None,
+                None,
+            );
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_active_target_id("TID-next");
+        assert!(
+            owner.is_current(&conn),
+            "active selection cannot move or retire the original channel owner"
+        );
+        assert_eq!(owner.target_id(), Some("TID-owner"));
     }
 
     #[test]

@@ -14,7 +14,7 @@ pub(super) fn dedicated_worker_target_is_current(
         .get(&renderer_instance_id)
         .is_some_and(|target| {
             target.target_id == target_id
-                && context.target_page_residence_is_current(&target.owner_page)
+                && conn.target_page_output_residence_is_current(&target.owner_page)
         })
 }
 
@@ -188,6 +188,9 @@ pub(super) fn record_dedicated_worker_main_script(
             },
             waiting_for_debugger,
         );
+        let attachment = conn
+            .worker_protocol_attachment_identity_for_route(prepared_session.route(), &session_id)
+            .expect("prepared worker attach captures its original renderer attachment");
         if waiting_for_debugger
             && let Some(context) = conn.browser_context_by_id_mut(browser_context_id)
             && let Some(target) = context
@@ -205,7 +208,8 @@ pub(super) fn record_dedicated_worker_main_script(
                 target_id.clone(),
                 target_info,
                 [prepared_session],
-            ),
+            )
+            .with_worker_attachment(attachment),
         });
     }
     let changed_snapshot = should_emit_info_changed
@@ -278,9 +282,16 @@ pub(in crate::domains::target) fn dedicated_worker_auto_attach_owner_session_all
     let Some(owner_session_id) = owner_session_id else {
         return false;
     };
-    conn.target_page_residence_identity_for_session(Some(owner_session_id))
+    let owner = CommandOwnerScope::for_session(owner_session_id);
+    (conn
+        .target_page_residence_identity_for_owner(&owner)
         .as_ref()
         == Some(owner_page)
+        || conn
+            .pending_target_page_residence_identity_for_owner(&owner)
+            .as_ref()
+            == Some(owner_page))
+        && conn.target_page_output_residence_is_current(owner_page)
 }
 
 pub(super) fn shared_worker_auto_attach_owner_sessions(
@@ -527,111 +538,42 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     ))
 }
 
-pub(in crate::domains) async fn retire_dedicated_worker_targets_for_replaced_page_async(
+/// A failed worker has no native execution left to resume or dispose. Its
+/// owner's retirement must still settle the protocol target and sessions.
+pub(in crate::domains) fn prepare_failed_dedicated_worker_retirements_for_owner(
     conn: &mut CdpConnection,
-    replaced_page_owner: &TargetPageResidenceIdentity,
-) -> Vec<BackgroundProtocolEvent> {
-    let renderer_instance_ids = conn
-        .browser_context_by_id(replaced_page_owner.browser_context_id())
-        .map(|context| {
-            context
-                .dedicated_worker_targets
-                .iter()
-                .filter_map(|(renderer_instance_id, target)| {
-                    (&target.owner_page == replaced_page_owner).then_some(*renderer_instance_id)
-                })
-                .collect::<Vec<_>>()
+    owner: &CommandOwnerScope,
+) -> Vec<TargetPreparedOutputs> {
+    let Some((context_id, Some(target_id))) = conn.target_owner_identity_for_owner(owner) else {
+        return Vec::new();
+    };
+    let Some(context) = conn.browser_context_by_id(&context_id) else {
+        return Vec::new();
+    };
+    let workers = context
+        .dedicated_worker_targets
+        .values()
+        .filter(|worker| {
+            worker.owner_page.target_id() == Some(target_id.as_str())
+                && worker.failed_load_waits_for_debugger()
+                && !worker.is_retiring()
         })
-        .unwrap_or_default();
-    let mut events = Vec::new();
-    for renderer_instance_id in renderer_instance_ids {
-        let outputs = prepare_dedicated_worker_target_retirement(
-            conn,
-            replaced_page_owner.browser_context_id(),
-            renderer_instance_id,
-            DedicatedWorkerRetirementCause::OwnerRetired,
-        );
-        for output in outputs.worker_target_lifecycle_outputs {
-            match commit_dedicated_worker_retirement_output_async(conn, output).await {
-                Ok(output_events) => events.extend(output_events),
-                Err(output) => {
-                    debug_assert!(
-                        false,
-                        "Page replacement DedicatedWorker retirement contained non-terminal output: {output:?}"
-                    );
-                }
-            }
-        }
-    }
-    events
-}
-
-// Non-retirement output is handed back unchanged for the caller to route.
-#[allow(clippy::result_large_err)]
-pub(super) async fn commit_dedicated_worker_retirement_output_async(
-    conn: &mut CdpConnection,
-    output: WorkerTargetLifecycleOutput,
-) -> Result<Vec<BackgroundProtocolEvent>, WorkerTargetLifecycleOutput> {
-    let mut events = Vec::new();
-    match output {
-        WorkerTargetLifecycleOutput::DedicatedWorkerDetached {
-            target_delta,
-            cleanup_plan,
-        } => {
-            if let Some(target_delta) = target_delta {
-                events.extend(
-                    conn.prepared_target_info_changed_event_plan_for_discovery_owners(target_delta),
-                );
-            }
-            let mut response_events = Vec::new();
-            let outcome = super::super::session_disposal::dispose_dedicated_worker_session_after_prepared_state_delta_async(
+        .map(|worker| worker.renderer_instance_id)
+        .collect::<Vec<_>>();
+    workers
+        .into_iter()
+        .map(|instance_id| {
+            prepare_dedicated_worker_target_retirement(
                 conn,
-                &mut events,
-                &mut response_events,
-                cleanup_plan,
+                &context_id,
+                instance_id,
+                DedicatedWorkerRetirementCause::OwnerRetired,
             )
-            .await
-            .expect("retired dedicated-worker session cleanup should succeed");
-            let (event_plan, predecessor) = outcome.into_parts();
-            debug_assert!(
-                predecessor.is_none(),
-                "DedicatedWorker disposal cannot publish a Page renderer fence"
-            );
-            events.extend(response_events);
-            events.extend(event_plan);
-        }
-        WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed {
-            browser_context_id,
-            renderer_instance_id,
-            target_id,
-            target_delta,
-        } => {
-            let removed = conn
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|context| {
-                    let target = context
-                        .dedicated_worker_targets
-                        .get(&renderer_instance_id)?;
-                    (target.target_id == target_id).then(|| {
-                        context.remove_dedicated_worker_target_by_renderer_instance(
-                            renderer_instance_id,
-                        )
-                    })
-                })
-                .flatten();
-            if removed.is_none() {
-                return Ok(events);
-            }
-            if let Some(target_delta) = target_delta {
-                events.extend(conn.prepared_target_host_delta_event_plan(target_delta));
-            }
-        }
-        output => return Err(output),
-    }
-    Ok(events)
+        })
+        .collect()
 }
 
-pub(super) fn commit_failed_dedicated_worker_retirement_sync(
+pub(in crate::domains) fn commit_failed_dedicated_worker_retirement_sync(
     conn: &mut CdpConnection,
     outputs: TargetPreparedOutputs,
 ) -> Vec<BackgroundProtocolEvent> {
@@ -793,6 +735,10 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
     let mut outputs = TargetPreparedOutputs::default();
     if matches!(cause, DedicatedWorkerRetirementCause::RendererDestroyed)
         && conn
+            .browser_context_by_id(browser_context_id)
+            .and_then(|context| context.dedicated_worker_targets.get(&renderer_instance_id))
+            .is_some_and(|target| conn.target_page_output_residence_is_current(&target.owner_page))
+        && conn
             .browser_context_by_id_mut(browser_context_id)
             .and_then(|context| {
                 context
@@ -801,6 +747,17 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
             })
             .is_some_and(|target| target.defer_renderer_destroyed_for_debugger_resume())
     {
+        return outputs;
+    }
+    let first_retirement = conn
+        .browser_context_by_id_mut(browser_context_id)
+        .and_then(|context| {
+            context
+                .dedicated_worker_targets
+                .get_mut(&renderer_instance_id)
+        })
+        .is_some_and(|target| target.begin_retirement());
+    if !first_retirement {
         return outputs;
     }
     let target_id = match conn

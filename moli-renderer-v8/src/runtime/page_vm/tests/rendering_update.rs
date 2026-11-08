@@ -55,8 +55,10 @@ async fn dispatch_main_document_domcontentloaded_for_rendering_test(
 
 mod form_controls;
 mod layout_geometry;
+mod optical_sizing;
 mod painting_tables;
 mod scrollbars;
+mod text_stroke;
 mod text_styles;
 mod update_lifecycle;
 mod visual_output;

@@ -8,11 +8,22 @@ mod file_entry_file;
 mod file_list;
 mod file_reader;
 mod file_reader_sync;
+mod file_reading;
 mod install;
+
+#[cfg(test)]
+pub(crate) use data_transfer::drag_data_read_count_for_test;
 
 pub(super) use data_transfer::data_transfer_constructor_callback;
 pub(crate) use data_transfer::{
-    apply_drag_modifier_drop_effect, build_data_transfer_object, is_branded_data_transfer_object,
+    DragDataStoreMode, NativeDragDataStore, create_drag_data_transfer_view,
+    create_external_drag_data_store, create_native_drag_data_store, finish_drag_data_transfer_view,
+    is_branded_data_transfer_object, native_data_transfer_drop_effect,
+    native_data_transfer_effect_allowed, native_data_transfer_file_count,
+    native_data_transfer_files, native_data_transfer_get_data, native_data_transfer_has_type,
+    native_set_drag_drop_effect, populate_native_drag_data_store, protect_native_drag_source_view,
+    read_string_drag_data, readonly_data_transfer_for_input, replace_drag_data_store_contents,
+    update_drag_data_store_operations_mask,
 };
 pub(crate) use data_transfer::{
     data_transfer_clear_data_callback, data_transfer_get_data_callback,
@@ -31,8 +42,13 @@ pub(crate) use directory_reader::{
 };
 pub(super) use file::bind_file_world_wrapper;
 pub(super) use file::file_constructor_callback;
-pub(in crate::context_bootstrap) use file::file_name_from_object;
-pub(crate) use file::{build_file_object, selected_file_from_object};
+pub(crate) use file::{
+    build_file_object, build_file_object_unpublished, file_clone_metadata,
+    selected_file_from_object,
+};
+pub(in crate::context_bootstrap) use file::{
+    file_last_modified_from_object, file_name_from_object,
+};
 pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
     file_system_file_entry_file_callback,
@@ -42,11 +58,14 @@ pub(crate) use file_list::{
     build_file_list_object, file_list_files_from_object, is_file_list_object,
     sync_file_list_contents,
 };
-pub(crate) use file_reader::flush_one_pending_file_reader;
+pub(crate) use file_reader::{FileReaderReadMode, finish_file_reader_read};
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_constructor_callback,
     file_reader_read_as_array_buffer_callback, file_reader_read_as_binary_string_callback,
     file_reader_read_as_data_url_callback, file_reader_read_as_text_callback,
 };
 pub(super) use file_reader_sync::file_reader_sync_constructor_callback;
-pub(super) use install::{initialize_file_api_runtime_queues, install_file_api_template_bindings};
+pub(crate) use file_reading::{
+    FileReadingTask, flush_one_pending_file_reading_task, queue_file_reading_task,
+};
+pub(super) use install::install_file_api_template_bindings;

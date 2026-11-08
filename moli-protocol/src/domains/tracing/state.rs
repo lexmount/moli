@@ -6,7 +6,8 @@ use parking_lot::Mutex;
 use serde_json::{Map, Value, json};
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, monotonic_timestamp_seconds,
+    BackgroundProtocolEvent, CapturedBody, CdpConnection, CommandOwnerScope,
+    monotonic_timestamp_seconds,
 };
 
 pub(crate) const DEFAULT_TRACE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
@@ -563,7 +564,7 @@ pub(crate) enum CompletedTraceOutput {
         data_loss_occurred: bool,
     },
     ReturnAsStream {
-        bytes: Vec<u8>,
+        body: CapturedBody,
         data_loss_occurred: bool,
     },
 }
@@ -588,7 +589,7 @@ impl CompletedTrace {
                     },
                 }))?;
                 Ok(CompletedTraceOutput::ReturnAsStream {
-                    bytes,
+                    body: CapturedBody::from_bytes_spooled(bytes),
                     data_loss_occurred: self.data_loss_occurred,
                 })
             }
@@ -783,16 +784,12 @@ impl CdpConnection {
         self.tracing_state.cancel(&owner).is_some()
     }
 
-    pub(crate) async fn cancel_tracing_for_session_owner_async(
+    pub(crate) fn start_cancel_tracing_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> bool {
+    ) -> Option<PendingTraceCancel> {
         let owner = self.tracing_owner_scope(session_id);
-        let Some(pending) = self.tracing_state.cancel(&owner) else {
-            return false;
-        };
-        pending.wait().await;
-        true
+        self.tracing_state.cancel(&owner)
     }
 }
 

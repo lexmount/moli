@@ -340,7 +340,6 @@ impl ClassicPageLoadStrategy {
 
 #[derive(Debug, Default)]
 pub struct ClassicSessionRegistry {
-    next_session_id: u64,
     sessions: BTreeMap<String, ClassicSessionState>,
 }
 
@@ -368,8 +367,7 @@ impl ClassicSessionRegistry {
         page_load_strategy: ClassicPageLoadStrategy,
         unhandled_prompt_behavior: ClassicUnhandledPromptBehavior,
     ) -> ClassicSessionState {
-        self.next_session_id = self.next_session_id.wrapping_add(1);
-        let session_id = format!("classic-session-{}", self.next_session_id);
+        let session_id = uuid::Uuid::new_v4().to_string();
         let session = ClassicSessionState {
             session_id: session_id.clone(),
             current_target_id: None,

@@ -3,7 +3,7 @@ use crate::dom::native::Node;
 use crate::style_engine::StyleMutationEffect;
 use crate::util::serialize_v8_array;
 use crate::util::throw_type_error;
-use crate::util::v8str;
+use crate::webidl;
 
 use super::super::super::{
     JsContextHost,
@@ -17,6 +17,27 @@ use super::super::{
     attribute_property_getter_from_object_or_detached, set_attribute_property_on_object_or_detached,
 };
 use crate::native_bridge::document;
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "AssignedNodesOptions")]
+struct AssignedNodesOptions {
+    #[webidl(default = false)]
+    flatten: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "HTMLSlotElement.assignedNodes")]
+struct AssignedNodesArgs {
+    #[webidl(dictionary)]
+    options: AssignedNodesOptions,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "HTMLSlotElement.assignedElements")]
+struct AssignedElementsArgs {
+    #[webidl(dictionary)]
+    options: AssignedNodesOptions,
+}
 
 pub(in crate::native_bridge) fn slot_name_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -87,15 +108,17 @@ pub(in crate::native_bridge) fn slot_assigned_nodes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<AssignedNodesArgs>(scope, &args) else {
+        return;
+    };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         rv.set_null();
         return;
     };
-    let flatten = slot_flatten_option(scope, &args);
     let handles = unsafe { &*runtime_ptr }
         .dom_host()
-        .assigned_nodes_for_slot_with_options(handle, flatten);
+        .assigned_nodes_for_slot_with_options(handle, parsed.options.flatten);
     let receiver_is_detached =
         document::detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some();
     set_slot_handle_array(
@@ -113,6 +136,9 @@ pub(in crate::native_bridge) fn slot_assigned_elements_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<AssignedElementsArgs>(scope, &args) else {
+        return;
+    };
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         rv.set_null();
@@ -121,7 +147,7 @@ pub(in crate::native_bridge) fn slot_assigned_elements_callback<'s>(
     let runtime = unsafe { &*runtime_ptr };
     let handles = runtime
         .dom_host()
-        .assigned_nodes_for_slot_with_options(handle, slot_flatten_option(scope, &args))
+        .assigned_nodes_for_slot_with_options(handle, parsed.options.flatten)
         .into_iter()
         .filter(|candidate| {
             runtime
@@ -213,30 +239,6 @@ pub(in crate::native_bridge) fn slot_assign_callback<'s>(
     }
     runtime.queue_slotchange_events(scope, &changed_slots);
     rv.set_undefined();
-}
-
-fn slot_flatten_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> bool {
-    if args.length() == 0 {
-        return false;
-    }
-    let options = args.get(0);
-    if options.is_null_or_undefined() || !options.is_object() {
-        return false;
-    }
-    options.to_object(scope).is_some_and(|options| {
-        for name in ["flatten", "flattened"] {
-            if options
-                .get(scope, v8str(scope, name).into())
-                .is_some_and(|value| value.boolean_value(scope))
-            {
-                return true;
-            }
-        }
-        false
-    })
 }
 
 fn set_slot_handle_array<'s>(

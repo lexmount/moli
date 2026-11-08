@@ -1,8 +1,188 @@
 use super::*;
 
 #[tokio::test]
+async fn bidi_node_arguments_release_temporary_handles_on_success_and_error() {
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+    let (context, shared_id, _) =
+        materialize_bidi_target_node_for_test(&mut ctx, "<div id='target'>Hello</div>", "#target")
+            .await;
+    let owner = ctx.with_fixture(|conn| {
+        conn.command_owner_scope_for_devtools_context(&context)
+            .unwrap()
+    });
+    let roots = |ctx: &mut crate::testing::TestContext| {
+        ctx.with_fixture(|conn| {
+            conn.target_devtools_session_state_for_owner(&owner)
+                .unwrap()
+                .runtime_remote_object_ids
+                .clone()
+        })
+    };
+    let before = roots(&mut ctx);
+    for (function, arguments, expected_error) in [
+        (
+            "function(node) { return node.textContent; }",
+            vec![json!({"sharedId": shared_id.as_str()})],
+            None,
+        ),
+        (
+            "function(node) { throw null; }",
+            vec![json!({"sharedId": shared_id.as_str()})],
+            None,
+        ),
+        (
+            "function(node, other) { return node; }",
+            vec![
+                json!({"sharedId": shared_id.as_str()}),
+                json!({"sharedId": "moli:bidi-renderer-node:4294967295"}),
+            ],
+            Some(DevToolsErrorKind::NoSuchNode),
+        ),
+        (
+            "function(node, other) { return node; }",
+            vec![
+                json!({"sharedId": shared_id.as_str()}),
+                json!({"handle": "not-exported"}),
+            ],
+            Some(DevToolsErrorKind::NoSuchHandle),
+        ),
+    ] {
+        let result = ctx
+            .execute_automation_command_through_renderer_fence_for_test(
+                AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                    context: context.clone(),
+                    realm_id: None,
+                    world_name: None,
+                    object_id: None,
+                    this_parameter: None,
+                    function_declaration: function.to_owned(),
+                    arguments,
+                    await_promise: false,
+                    user_gesture: false,
+                    webdriver_bidi_file_prompt_handler: None,
+                    result_ownership: DevToolsResultOwnership::None,
+                    object_group: None,
+                    preserve_remote_metadata: false,
+                    serialization_options: None,
+                    materialize_bidi_script_result: true,
+                }),
+            )
+            .await;
+        if let Some(kind) = expected_error {
+            assert_eq!(result.unwrap_err().kind, kind, "{function}");
+        } else if function == "function(node) { throw null; }" {
+            let AutomationResult::Script(result) = result.unwrap() else {
+                panic!("expected the script exception result");
+            };
+            assert!(matches!(*result, DevToolsScriptResult::Exception(_)));
+        } else {
+            assert_eq!(
+                expect_script_value_result(result.unwrap(), function).value,
+                "Hello"
+            );
+        }
+        ctx.wait_for_direct_command_work_completion_for_test("temporary node argument cleanup")
+            .await;
+        assert_eq!(
+            roots(&mut ctx),
+            before,
+            "temporary argument handles escaped {function}"
+        );
+    }
+    // Native interoperability lookup must also be independent of inspector
+    // roots, including repeated first-use checks by Classic commands.
+    for _ in 0..3 {
+        let reference = ctx
+            .state
+            .with_state(|state| {
+                state.webdriver_node_reference(
+                    &context,
+                    shared_id.as_str(),
+                    crate::automation::WebDriverNodeKind::Element,
+                )
+            })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reference.kind,
+            crate::automation::WebDriverNodeKind::Element
+        );
+    }
+    assert_eq!(roots(&mut ctx), before);
+    // Releasing the argument group must not disown the separately returned
+    // client-owned root, even when both handles point at the same DOM node.
+    let returned = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                context: context.clone(),
+                realm_id: None,
+                world_name: None,
+                object_id: None,
+                this_parameter: None,
+                function_declaration: "function(node) { return node; }".to_owned(),
+                arguments: vec![json!({"sharedId": shared_id.as_str()})],
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::Root,
+                object_group: None,
+                preserve_remote_metadata: false,
+                serialization_options: None,
+                materialize_bidi_script_result: true,
+            }),
+        )
+        .await
+        .unwrap();
+    let remote = expect_script_value_result(returned, "returning the node should succeed");
+    let handle = remote.handle.unwrap();
+    let mut realm_context = context.clone();
+    realm_context.target_id = None;
+    let reused = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CallFunction(DevToolsCallFunctionCommand {
+                context: realm_context,
+                realm_id: Some(remote.realm.unwrap()),
+                world_name: None,
+                object_id: None,
+                this_parameter: Some(json!({"handle": handle.as_str()})),
+                function_declaration:
+                    "function(node) { return this === node && node.textContent; }".to_owned(),
+                arguments: vec![json!({"sharedId": shared_id.as_str()})],
+                await_promise: false,
+                user_gesture: false,
+                webdriver_bidi_file_prompt_handler: None,
+                result_ownership: DevToolsResultOwnership::None,
+                object_group: None,
+                preserve_remote_metadata: false,
+                serialization_options: None,
+                materialize_bidi_script_result: true,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        expect_script_value_result(reused, "client root must remain live").value,
+        "Hello"
+    );
+    ctx.execute_automation_command_through_renderer_fence_for_test(
+        AutomationCommand::ReleaseObjects(DevToolsReleaseObjectsCommand {
+            context,
+            realm_id: None,
+            world_name: None,
+            handles: vec![handle],
+        }),
+    )
+    .await
+    .unwrap();
+    ctx.wait_for_direct_command_work_completion_for_test("temporary node argument cleanup")
+        .await;
+    assert_eq!(roots(&mut ctx), before);
+}
+
+#[tokio::test]
 async fn bidi_fetch_control_resolves_background_request_owner() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
@@ -11,51 +191,61 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
     ));
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
-    conn.register_pending_fetch_navigation_request_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-background"),
-        PendingFetchNavigation {
-            auth_retry_budget: Default::default(),
-            fetch_request_id: "FETCH-background".to_owned(),
-            interception_session_id: Some("bidi-session-1".to_owned()),
-            document_navigation_token: None,
-            navigation: NavigationDispatchState {
-                web_mcp_invocation: None,
-                navigation_initiator: None,
-                initial_document_environment: None,
-                auxiliary_document_response: None,
-                redirect_chain: Vec::new(),
-                redirect_headers: None,
-                navigate_id: None,
-                owner: CommandOwnerScope::for_session("SID-background"),
-                result_projection: NavigationResultProjection::WebDriverBidi(json!({})),
-                frame_id: "TID-background".to_owned(),
-                session_id: Some("SID-background".to_owned()),
-                request_id: Some("NETWORK-background".to_owned()),
-                loader_id: "LOADER-background".to_owned(),
-                request_announced: false,
-                requested_url: url::Url::parse("https://example.test/background").unwrap(),
-                request_method: "GET".to_owned(),
-                request_body: None,
-                request_body_bytes: None,
-                request_headers: Vec::new().into(),
-                request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
-                timestamp: 0.0,
-                source_document_security: Default::default(),
+    ctx.with_fixture(|conn| {
+        conn.register_pending_fetch_navigation_request_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-background"),
+            PendingFetchNavigation {
+                reserved_service_worker_client: None,
+                interception: None,
+                remaining_request_stages: Vec::new(),
+                redirected_request_id: None,
+                auth_retry_budget: Default::default(),
+                fetch_request_id: "FETCH-background".to_owned(),
+                interception_session_id: Some("bidi-session-1".to_owned()),
+                document_navigation_token: None,
+                navigation: NavigationDispatchState {
+                    web_mcp_invocation: None,
+                    navigation_initiator: None,
+                    initial_document_environment: None,
+                    auxiliary_document_response: None,
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
+                    navigate_id: None,
+                    owner: CommandOwnerScope::for_session("SID-background"),
+                    result_projection: NavigationResultProjection::WebDriverBidi(json!({})),
+                    frame_id: "TID-background".to_owned(),
+                    session_id: Some("SID-background".to_owned()),
+                    request_id: Some("NETWORK-background".to_owned()),
+                    loader_id: "LOADER-background".to_owned(),
+                    request_announced: false,
+                    announced_redirects: 0,
+                    requested_url: url::Url::parse("https://example.test/background").unwrap(),
+                    request_method: "GET".to_owned(),
+                    request_body: None,
+                    request_body_bytes: None,
+                    request_headers: Vec::new().into(),
+                    request_load_policy:
+                        crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                    timestamp: 0.0,
+                    source_document_security: Default::default(),
+                },
+                request_cookie_report: None,
+                intercept_response: false,
+                response_stage_url_match_policy: ResponseStageUrlMatchPolicy::AlreadyMatched,
+                auth_required_blocked_intercepts: Vec::new(),
             },
-            request_cookie_report: None,
-            intercept_response: false,
-            response_stage_url_match_policy: ResponseStageUrlMatchPolicy::AlreadyMatched,
-            auth_required_blocked_intercepts: Vec::new(),
-        },
-    )
-    .expect("background pending navigation should register");
+        )
+        .expect("background pending navigation should register")
+    });
 
-    assert!(matches!(
-        conn.pending_fetch_request_session_route("FETCH-background"),
-        Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
-    ));
+    ctx.with_fixture(|conn| {
+        assert!(matches!(
+            conn.pending_fetch_request_session_route("FETCH-background"),
+            Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
+        ))
+    });
 
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
@@ -63,8 +253,8 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         target_id: None,
         browser_context_id: None,
     };
-    let outcome = conn
-        .execute_automation_command(AutomationCommand::FailInterceptedRequest(
+    let outcome = ctx
+        .execute_owned_automation_command_for_test(AutomationCommand::FailInterceptedRequest(
             DevToolsFailInterceptedRequestCommand {
                 context,
                 request_id: DevToolsRequestId::from("FETCH-background"),
@@ -78,19 +268,23 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         result.expect("BiDi failRequest should resolve background owner"),
         AutomationResult::Empty
     );
-    assert!(
-        conn.pending_fetch_request_session_route("FETCH-background")
-            .is_none(),
-        "resolved background request should be consumed"
-    );
-    assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_target_id(),
-        Some("TID-active"),
-        "resolving a BiDi request id must not activate the background target"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.pending_fetch_request_session_route("FETCH-background")
+                .is_none(),
+            "resolved background request should be consumed"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .active_target_id(),
+            Some("TID-active"),
+            "resolving a BiDi request id must not activate the background target"
+        )
+    });
 }
 
 #[tokio::test]
@@ -140,7 +334,7 @@ async fn bidi_fetch_request_actions_resolve_background_request_owner() {
 
 #[tokio::test]
 async fn bidi_create_target_installs_initial_about_blank_page_without_default_preload() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {
         protocol: FrontendProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-lifecycle-create")),
@@ -148,29 +342,29 @@ async fn bidi_create_target_installs_initial_about_blank_page_without_default_pr
         browser_context_id: None,
     };
 
-    let (create_result, _) = conn
-        .execute_automation_command(AutomationCommand::CreateTarget(
-            DevToolsCreateTargetCommand {
+    let create_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context,
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: true,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::CreateTarget(_) =
         create_result.expect("active target create should succeed")
     else {
         panic!("expected create target result");
     };
-    assert!(
-        conn.browser_context
+    ctx.with_fixture(|conn| { assert!(
+        conn
+            .browser_context
             .as_ref()
             .expect("browser context")
             .has_loaded_page(),
         "BiDi Target.createTarget should install initial page even without default preload scripts"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -288,15 +482,20 @@ async fn bidi_node_remote_value_registers_renderer_shared_node_binding() {
         "BiDi node remote value should carry renderer-owned backend id"
     );
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let renderer_binding = ctx
-        .conn
-        .document_bidi_node_binding_for_owner_async(&owner, shared_id.as_str())
-        .await
-        .expect("renderer BiDi shared-node binding lookup should run");
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let renderer_binding = {
+        let prepared = ctx
+            .state
+            .with_state(|state| {
+                state.prepare_runtime_bidi_binding_query(&owner, (shared_id.as_str()).to_owned())
+            })
+            .expect("live query owner")
+            .expect("Native query admission");
+        ctx.finish_fixture_query(prepared).await
+    }
+    .expect("renderer BiDi shared-node binding lookup should run");
     assert_eq!(
         renderer_binding,
         moli_core::page::RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id),
@@ -449,15 +648,20 @@ async fn bidi_node_remote_value_registers_child_shared_node_bindings() {
         .unwrap_or_else(|| panic!("serialized child should expose sharedId: {node_value}"))
         .to_owned();
 
-    ctx.conn
-        .clear_runtime_remote_object_tracking_for_session_owner(None);
+    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
 
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let renderer_binding = ctx
-        .conn
-        .document_bidi_node_binding_for_owner_async(&owner, &child_shared_id)
-        .await
-        .expect("child shared-node binding lookup should run");
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    let renderer_binding = {
+        let prepared = ctx
+            .state
+            .with_state(|state| {
+                state.prepare_runtime_bidi_binding_query(&owner, child_shared_id.to_owned())
+            })
+            .expect("live query owner")
+            .expect("Native query admission");
+        ctx.finish_fixture_query(prepared).await
+    }
+    .expect("child shared-node binding lookup should run");
     assert!(
         matches!(
             renderer_binding,
@@ -505,15 +709,22 @@ async fn set_file_input_files_shared_id_uses_renderer_binding_without_protocol_r
             .await;
     let fake_shared_id =
         crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .register_document_bidi_node_binding_for_owner_async(
-            &owner,
-            fake_shared_id.as_str(),
-            backend_node_id,
-        )
-        .await
-        .expect("renderer fake shared-node binding registration should run");
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    {
+        let prepared = ctx
+            .state
+            .with_state(|state| {
+                state.prepare_runtime_bidi_binding_registration(
+                    &owner,
+                    (fake_shared_id.as_str()).to_owned(),
+                    backend_node_id,
+                )
+            })
+            .expect("live query owner")
+            .expect("Native query admission");
+        ctx.finish_fixture_query(prepared).await
+    }
+    .expect("renderer fake shared-node binding registration should run");
 
     let upload_bytes = b"from renderer registry";
     let set_result = ctx
@@ -571,15 +782,22 @@ async fn locate_nodes_start_node_shared_id_uses_renderer_binding_without_protoco
     .await;
     let fake_shared_id =
         crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .register_document_bidi_node_binding_for_owner_async(
-            &owner,
-            fake_shared_id.as_str(),
-            backend_node_id,
-        )
-        .await
-        .expect("renderer fake shared-node binding registration should run");
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    {
+        let prepared = ctx
+            .state
+            .with_state(|state| {
+                state.prepare_runtime_bidi_binding_registration(
+                    &owner,
+                    (fake_shared_id.as_str()).to_owned(),
+                    backend_node_id,
+                )
+            })
+            .expect("live query owner")
+            .expect("Native query admission");
+        ctx.finish_fixture_query(prepared).await
+    }
+    .expect("renderer fake shared-node binding registration should run");
 
     let locate_result = ctx
         .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::LocateNodes(
@@ -620,15 +838,22 @@ async fn call_function_shared_id_uses_renderer_binding_without_protocol_registry
     .await;
     let fake_shared_id =
         crate::automation::webdriver_bidi_node_shared_id_for_backend_node_id(backend_node_id);
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .register_document_bidi_node_binding_for_owner_async(
-            &owner,
-            fake_shared_id.as_str(),
-            backend_node_id,
-        )
-        .await
-        .expect("renderer fake shared-node binding registration should run");
+    let owner = ctx.with_fixture(|conn| CommandOwnerScope::capture(conn, None));
+    {
+        let prepared = ctx
+            .state
+            .with_state(|state| {
+                state.prepare_runtime_bidi_binding_registration(
+                    &owner,
+                    (fake_shared_id.as_str()).to_owned(),
+                    backend_node_id,
+                )
+            })
+            .expect("live query owner")
+            .expect("Native query admission");
+        ctx.finish_fixture_query(prepared).await
+    }
+    .expect("renderer fake shared-node binding registration should run");
 
     let call_result = ctx
         .execute_automation_command_through_renderer_fence_for_test(

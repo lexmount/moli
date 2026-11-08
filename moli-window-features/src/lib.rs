@@ -7,7 +7,6 @@ use style::attr::parse_integer;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WindowFeatures {
     values: IndexMap<String, String>,
-    entries: Vec<(String, String)>,
 }
 
 impl WindowFeatures {
@@ -79,16 +78,16 @@ impl WindowOpenFeatures {
     pub fn parse(feature_string: &str) -> Self {
         let tokenized = tokenize_window_features(feature_string);
         let mut features = Self::default();
-        if tokenized.entries.is_empty() {
+        if tokenized.is_empty() {
             return features;
         }
 
         let mut ui_features_were_disabled = false;
         let mut explicit_popup = None;
-        for (name, value) in &tokenized.entries {
+        for (name, value) in tokenized.iter() {
             let value = feature_integer_value(value);
             if !ui_features_were_disabled
-                && !matches!(name.as_str(), "noopener" | "noreferrer" | "attributionsrc")
+                && !matches!(name, "noopener" | "noreferrer" | "attributionsrc")
             {
                 ui_features_were_disabled = true;
                 features.menu_bar = false;
@@ -97,7 +96,7 @@ impl WindowOpenFeatures {
                 features.scrollbars = false;
             }
 
-            match name.as_str() {
+            match name {
                 "left" => features.x = Some(value),
                 "top" => features.y = Some(value),
                 "width" => features.width = Some(value),
@@ -184,7 +183,6 @@ impl WindowOpenFeatures {
 /// Tokenizes a `window.open()` features argument according to the HTML Standard.
 pub fn tokenize_window_features(features: &str) -> WindowFeatures {
     let mut values = IndexMap::new();
-    let mut entries = Vec::new();
     let mut input = features.chars().peekable();
 
     while input.peek().is_some() {
@@ -227,12 +225,11 @@ pub fn tokenize_window_features(features: &str) -> WindowFeatures {
         }
 
         if !name.is_empty() {
-            entries.push((name.clone(), value.clone()));
             values.insert(name, value);
         }
     }
 
-    WindowFeatures { values, entries }
+    WindowFeatures { values }
 }
 
 /// Parses the value of a boolean window feature according to the HTML Standard.
@@ -301,6 +298,77 @@ mod tests {
         assert!(!features.boolean("noopener"));
         assert!(features.boolean("noreferrer"));
         assert_eq!(features.iter().count(), 2);
+    }
+
+    #[test]
+    fn duplicate_location_uses_last_value_for_popup_classification() {
+        let features = WindowOpenFeatures::parse(
+            "location=yes,location=no,menubar=yes,scrollbars=yes,status=yes,resizable=yes",
+        );
+
+        assert!(features.is_popup());
+    }
+
+    #[test]
+    fn duplicate_popup_feature_values_use_last_value() {
+        for (feature_string, expected_popup) in [
+            ("popup=yes,popup=no", false),
+            ("popup=no,popup=yes", true),
+            (
+                "location=yes,location=no,toolbar=no,menubar=yes,resizable=yes,scrollbars=yes,status=yes",
+                true,
+            ),
+            (
+                "location=no,location=yes,toolbar=no,menubar=yes,resizable=yes,scrollbars=yes,status=yes",
+                false,
+            ),
+            (
+                "toolbar=yes,toolbar=no,location=no,menubar=yes,resizable=yes,scrollbars=yes,status=yes",
+                true,
+            ),
+            (
+                "toolbar=no,toolbar=yes,location=no,menubar=yes,resizable=yes,scrollbars=yes,status=yes",
+                false,
+            ),
+            (
+                "menubar=yes,menubar=no,location=yes,resizable=yes,scrollbars=yes,status=yes",
+                true,
+            ),
+            (
+                "menubar=no,menubar=yes,location=yes,resizable=yes,scrollbars=yes,status=yes",
+                false,
+            ),
+            (
+                "resizable=yes,resizable=no,location=yes,menubar=yes,scrollbars=yes,status=yes",
+                true,
+            ),
+            (
+                "resizable=no,resizable=yes,location=yes,menubar=yes,scrollbars=yes,status=yes",
+                false,
+            ),
+            (
+                "scrollbars=yes,scrollbars=no,location=yes,menubar=yes,resizable=yes,status=yes",
+                true,
+            ),
+            (
+                "scrollbars=no,scrollbars=yes,location=yes,menubar=yes,resizable=yes,status=yes",
+                false,
+            ),
+            (
+                "status=yes,status=no,location=yes,menubar=yes,resizable=yes,scrollbars=yes",
+                true,
+            ),
+            (
+                "status=no,status=yes,location=yes,menubar=yes,resizable=yes,scrollbars=yes",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                WindowOpenFeatures::parse(feature_string).is_popup(),
+                expected_popup,
+                "{feature_string}"
+            );
+        }
     }
 
     #[test]

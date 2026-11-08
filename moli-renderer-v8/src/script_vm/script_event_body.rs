@@ -5,8 +5,6 @@
 //! synchronous parser/module/runtime algorithms that still need a checkpoint
 //! consume them through their own named completion boundary.
 
-use std::pin::pin;
-
 use anyhow::{Result, anyhow};
 
 use super::ScriptVm;
@@ -15,7 +13,6 @@ use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT, dispatch_window_error_event_with_details,
 };
 use crate::host::ScriptEventTask;
-use crate::native_bridge::JsContextHost;
 use crate::util::{get_private_value, v8_string, v8str};
 
 impl ScriptVm {
@@ -30,21 +27,11 @@ impl ScriptVm {
     }
 
     pub(crate) fn dispatch_script_event_body(&mut self, task: &ScriptEventTask) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        let document_runtime = &mut self.document_runtime;
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                document_runtime
-                    .host_dispatch_script_event(scope, host_ptr, task)
-                    .map_err(anyhow::Error::msg)
-            })
+        self.with_main_world_document_scope(|scope, host_ptr, document_runtime| {
+            document_runtime
+                .host_dispatch_script_event(scope, host_ptr, task)
+                .map_err(anyhow::Error::msg)
+        })
     }
 
     pub(crate) fn report_window_error_body_best_effort(
@@ -67,49 +54,36 @@ impl ScriptVm {
         filename: Option<&str>,
         error_constructor: Option<crate::types::ScriptErrorConstructorKind>,
     ) -> Result<()> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
-        let context_host = self._context_host.clone();
-        self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let global = scope.get_current_context().global(scope);
-                let message_value = v8_string(scope, message)
-                    .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
-                let error_value = window_script_failure_error_value(
+        self.with_default_context_scope(|scope, host_ptr| {
+            let global = scope.get_current_context().global(scope);
+            let message_value = v8_string(scope, message)
+                .ok_or_else(|| anyhow!("failed to allocate reportError message"))?;
+            let error_value =
+                window_script_failure_error_value(scope, global, error_constructor, message_value);
+            if let Some(filename) = filename
+                && let Some(filename_value) = v8_string(scope, filename)
+                && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
+            {
+                let _ = error_object.set(
                     scope,
-                    global,
-                    error_constructor,
-                    message_value,
+                    v8str(scope, "fileName").into(),
+                    filename_value.into(),
                 );
-                if let Some(filename) = filename
-                    && let Some(filename_value) = v8_string(scope, filename)
-                    && let Ok(error_object) = v8::Local::<v8::Object>::try_from(error_value)
-                {
-                    let _ = error_object.set(
-                        scope,
-                        v8str(scope, "fileName").into(),
-                        filename_value.into(),
-                    );
-                }
-                // Internal script failure reporting must not call the page-visible
-                // window.reportError function while lifecycle state is unwinding.
-                // Dispatch the equivalent ErrorEvent body directly.
-                // SAFETY: as_ptr() — V8 callbacks are re-entrant; borrow_mut() panics. See util.rs.
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
-                dispatch_window_error_event_with_details(
-                    scope,
-                    host_ptr,
-                    message,
-                    filename.unwrap_or(""),
-                    0,
-                    0,
-                    Some(error_value),
-                )
-                .map_err(anyhow::Error::msg)
-            })
+            }
+            // Internal script failure reporting must not call the page-visible
+            // window.reportError function while lifecycle state is unwinding.
+            // Dispatch the equivalent ErrorEvent body directly.
+            dispatch_window_error_event_with_details(
+                scope,
+                host_ptr,
+                message,
+                filename.unwrap_or(""),
+                0,
+                0,
+                Some(error_value),
+            )
+            .map_err(anyhow::Error::msg)
+        })
     }
 }
 

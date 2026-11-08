@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     context_bootstrap::{
-        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path, event_is_error_event,
-        mark_event_trusted, set_event_composed_path,
+        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, clear_event_composed_path,
+        error_event_handler_arguments, mark_event_trusted, set_event_composed_path,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
@@ -41,6 +41,13 @@ struct EventListenerEntry {
     once: bool,
     passive: bool,
     removed: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ListenerFilter {
+    Capturing,
+    Bubbling,
+    All,
 }
 
 pub(crate) struct EventListenerRegistration {
@@ -156,9 +163,53 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
 ) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
-    let context = callback.relevant_context(scope);
-    let (receiver, event) =
-        crate::context_bootstrap::event_callback_values(scope, receiver, event, context)?;
+    let (receiver, event) = {
+        let context = callback.relevant_context(scope);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let scope = &mut catch.init();
+        // The current native ownerDocument supplies a Node's execution
+        // context. Its wrapper can have been created in another Window or
+        // adopted there, and an inert Document need not have a frame.
+        let node_context = if let EventTargetHandle::Node(node) = target {
+            Some(unsafe { &*host_ptr }.node_event_execution_context(scope, node)?)
+        } else {
+            None
+        };
+        let window = node_context
+            .map(|context| context.global(scope))
+            .or_else(|| v8::Local::<v8::Object>::try_from(receiver).ok());
+        if let Some(window) = window {
+            match crate::native_bridge::window_event_access(scope, window, context) {
+                crate::native_bridge::WindowEventAccess::Retired => return None,
+                crate::native_bridge::WindowEventAccess::Denied => {
+                    let exception = crate::context_bootstrap::new_dom_exception_value(
+                        scope,
+                        "Blocked an event listener from accessing a cross-origin target.",
+                        "SecurityError",
+                    );
+                    return Some(v8::Global::new(scope, exception));
+                }
+                crate::native_bridge::WindowEventAccess::Allowed
+                | crate::native_bridge::WindowEventAccess::Unmanaged => {}
+            }
+        }
+        let projection = if let Some(node_context) = node_context {
+            crate::context_bootstrap::node_event_callback_values(
+                scope,
+                receiver,
+                event,
+                node_context,
+                context,
+            )
+        } else {
+            crate::context_bootstrap::event_callback_values(scope, receiver, event, context)
+        };
+        if let Some(exception) = scope.exception() {
+            return Some(v8::Global::new(scope, exception));
+        }
+        projection?
+    };
     // Window.onerror's five arguments are JS values, not an Event conversion.
     let event_arguments = [event.into()];
     let arguments = if has_event_argument {
@@ -203,6 +254,11 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
         current_event,
     )
     .with_execution_context_currentness(host_ptr, relevant_identity);
+    let invocation = if let Some(initiator) = callback.resource_initiator() {
+        invocation.with_resource_initiator(initiator.clone())
+    } else {
+        invocation
+    };
     match CallbackInvoker::invoke(
         scope,
         "event listener",
@@ -255,50 +311,106 @@ fn invoke_event_handler_property<'s>(
             ) {
                 return;
             }
-            let Some(key) = v8_string(scope, &handler_name) else {
-                return;
+            let wrapper_handler = matches!(target, EventTargetHandle::Node(_))
+                .then(|| {
+                    crate::native_bridge::element::node_event_handler_value_from_wrapper(
+                        scope,
+                        target_object,
+                        &handler_name,
+                    )
+                })
+                .flatten();
+            let native_inline = if wrapper_handler.is_some() {
+                None
+            } else {
+                match target {
+                EventTargetHandle::Window if matches!(event_type, "load" | "pageshow") => Some(
+                    crate::native_bridge::element::compile_window_body_event_attribute(
+                        scope, host_ptr, event_type,
+                    ),
+                ),
+                EventTargetHandle::Node(handle)
+                    if crate::native_bridge::element::is_global_event_handler_attribute(
+                        &handler_name,
+                    ) && unsafe { &*host_ptr }
+                        .dom_host()
+                        .node(handle)
+                        .and_then(|node| node.as_element())
+                        .is_some_and(|element| {
+                            element.namespace() == "http://www.w3.org/1999/xhtml"
+                        }) =>
+                {
+                    Some(
+                        crate::native_bridge::element::compile_node_content_attribute_for_dispatch(
+                            scope, host_ptr, handle, event_type,
+                        ),
+                    )
+                }
+                _ => None,
+            }
             };
-            let handler = target_object
-                .get(scope, key.into())
-                .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-            let (handler, persistent) = match handler {
-                Some(handler) => (handler, false),
-                None if target == EventTargetHandle::Window && event_type == "messageerror" => {
-                    let Some(handler) =
-                        crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
+            let (handler, persistent) = if let Some(value) = wrapper_handler {
+                let Ok(handler) = v8::Local::<v8::Function>::try_from(value) else {
+                    return;
+                };
+                // A foreign wrapper can still be updated in its producer realm.
+                // Do not cache a second registration in its new document.
+                (handler, false)
+            } else if let Some(handler) = native_inline {
+                let Some(handler) = handler else {
+                    return;
+                };
+                (handler, true)
+            } else {
+                let Some(key) = v8_string(scope, &handler_name) else {
+                    return;
+                };
+                let handler = target_object
+                    .get(scope, key.into())
+                    .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
+                match handler {
+                    Some(handler) => (handler, false),
+                    None if target == EventTargetHandle::Window && event_type == "messageerror" => {
+                        let Some(handler) = crate::native_bridge::element::compile_window_body_onmessageerror_attribute(
                             scope, host_ptr,
-                        )
-                    else {
-                        return;
-                    };
-                    (handler, true)
+                        ) else { return; };
+                        (handler, true)
+                    }
+                    None => return,
                 }
-                None => return,
             };
-            let callback = v8::Local::<v8::Object>::from(handler);
-            let relevant_context = callback
-                .get_creation_context(scope)
-                .unwrap_or_else(|| scope.get_current_context());
-            let incumbent_context = scope
-                .get_incumbent_context()
-                .unwrap_or_else(|| scope.get_current_context());
-            let callback_id = unsafe { &mut *host_ptr }.register_event_callback(
-                scope,
-                callback,
-                relevant_context,
-                incumbent_context,
-            );
-            if persistent {
-                if let Some(previous) = registry.set_event_handler_property(
-                    EventTargetHandle::Window,
-                    event_type,
-                    Some(callback_id),
-                ) {
-                    unsafe { &mut *host_ptr }.release_event_callback(previous);
-                }
+            // Native inline compilation already installed its exact callback
+            // and realm. Reuse that identity rather than registering a second
+            // temporary callback for the same function.
+            if persistent
+                && let Some(EventHandlerPropertyValue::Callback(callback_id)) =
+                    registry.event_handler_property_value(target, event_type)
+            {
                 (callback_id, false)
             } else {
-                (callback_id, true)
+                let callback = v8::Local::<v8::Object>::from(handler);
+                let relevant_context = callback
+                    .get_creation_context(scope)
+                    .unwrap_or_else(|| scope.get_current_context());
+                let incumbent_context = scope
+                    .get_incumbent_context()
+                    .unwrap_or_else(|| scope.get_current_context());
+                let callback_id = unsafe { &mut *host_ptr }.register_event_callback(
+                    scope,
+                    callback,
+                    relevant_context,
+                    incumbent_context,
+                );
+                if persistent {
+                    if let Some(previous) =
+                        registry.set_event_handler_property(target, event_type, Some(callback_id))
+                    {
+                        unsafe { &mut *host_ptr }.release_event_callback(previous);
+                    }
+                    (callback_id, false)
+                } else {
+                    (callback_id, true)
+                }
             }
         }
     };
@@ -312,24 +424,8 @@ fn invoke_event_handler_property<'s>(
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
     if target == EventTargetHandle::Window
         && event_type == "error"
-        && event_is_error_event(scope, event)
+        && let Some(arguments) = error_event_handler_arguments(scope, event)
     {
-        let message = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "message").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let source = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "filename").into())
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        let lineno = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "lineno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let colno = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "colno").into())
-            .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-        let error = crate::context_bootstrap::event_backing(scope, event)
-            .get(scope, v8str(scope, "error").into())
-            .unwrap_or_else(|| v8::null(scope).into());
-
         let returned = invoke_prepared_event_callback(
             scope,
             host_ptr,
@@ -339,7 +435,7 @@ fn invoke_event_handler_property<'s>(
             prepared,
             target,
             event,
-            &[message, source, lineno, colno, error],
+            &arguments,
         );
         if temporary {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
@@ -460,7 +556,11 @@ fn call_event_target_listeners_filtered<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        capture_only,
+        if capture_only {
+            ListenerFilter::Capturing
+        } else {
+            ListenerFilter::Bubbling
+        },
         at_target,
     )
 }
@@ -611,11 +711,12 @@ fn event_listener_error_event_from_report<'s>(
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PublicEventDispatchResult {
     pub default_prevented: bool,
+    canceled_before_dispatch: bool,
 }
 
 impl PublicEventDispatchResult {
     pub(crate) fn allows_default(self) -> bool {
-        !self.default_prevented
+        !self.default_prevented && !self.canceled_before_dispatch
     }
 
     pub(crate) fn dispatch_event_return_value(self) -> bool {
@@ -964,6 +1065,22 @@ impl HostEventTargetRegistry {
             .is_some_and(|entries| entries.iter().any(|entry| !entry.removed))
     }
 
+    pub(crate) fn has_listener_in_dispatch_path(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+        include_bubbling: bool,
+    ) -> bool {
+        self.listeners
+            .get(&target)
+            .and_then(|listeners| listeners.get(event_type))
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| !entry.removed && (entry.capture || include_bubbling))
+            })
+    }
+
     fn allocate_listener_id(&mut self) -> u64 {
         let id = self.next_listener_id;
         self.next_listener_id = self
@@ -1059,7 +1176,7 @@ impl HostEventTargetRegistry {
         invocation_target_in_shadow_tree: bool,
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
-        capture_only: bool,
+        filter: ListenerFilter,
         at_target: bool,
     ) -> std::result::Result<DispatchStatus, String> {
         let snapshot: Vec<(
@@ -1083,10 +1200,10 @@ impl HostEventTargetRegistry {
             entries
                 .iter()
                 .filter(|entry| !entry.removed)
-                .filter(|entry| {
-                    (at_target && entry.capture == capture_only)
-                        || (capture_only && entry.capture)
-                        || (!capture_only && !entry.capture)
+                .filter(|entry| match filter {
+                    ListenerFilter::Capturing => entry.capture,
+                    ListenerFilter::Bubbling => !entry.capture,
+                    ListenerFilter::All => true,
                 })
                 .map(|entry| {
                     (
@@ -1116,7 +1233,7 @@ impl HostEventTargetRegistry {
                 stage = "event_listener_batch_start",
                 event_type,
                 ?target,
-                capture_only,
+                ?filter,
                 at_target,
                 listener_count = snapshot.len(),
             );
@@ -1207,7 +1324,7 @@ impl HostEventTargetRegistry {
                     listener_id,
                     event_type,
                     ?target,
-                    capture_only,
+                    ?filter,
                     at_target,
                     listener_index,
                     function_name = function_name.as_str(),
@@ -1269,7 +1386,43 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
     propagation_path: &[EventTargetHandle],
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<PublicEventDispatchResult, String> {
+    let result = dispatch_public_event_with_original_target_impl(
+        registry,
+        scope,
+        host_ptr,
+        dispatch_target,
+        original_target,
+        propagation_path,
+        event,
+    );
+    // InputEvent's live ranges end with Node dispatch, including error exits.
+    // Direct Window and ordinary EventTarget dispatch retain them in Chromium.
+    if matches!(dispatch_target, EventTargetHandle::Node(_)) {
+        crate::context_bootstrap::clear_input_event_target_ranges(scope, event);
+    }
+    result
+}
+
+fn dispatch_public_event_with_original_target_impl<'s, 'i>(
+    registry: &mut HostEventTargetRegistry,
+    scope: &mut v8::PinScope<'s, 'i>,
+    host_ptr: *mut JsContextHost,
+    dispatch_target: EventTargetHandle,
+    original_target: EventTargetHandle,
+    propagation_path: &[EventTargetHandle],
+    event: v8::Local<'s, v8::Object>,
+) -> std::result::Result<PublicEventDispatchResult, String> {
     unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("public event dispatch");
+    if let EventTargetHandle::Node(node) = dispatch_target
+        && unsafe { &*host_ptr }
+            .document_execution_context_for_node(node)
+            .is_none()
+    {
+        return Ok(PublicEventDispatchResult {
+            canceled_before_dispatch: true,
+            default_prevented: event_default_prevented(scope, event),
+        });
+    }
     let target_object = event_target_object(scope, host_ptr, dispatch_target)?;
     let event_type = normalize_public_event_record(scope, event, target_object.into())?;
 
@@ -1418,7 +1571,24 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
 
         let stop_immediate = event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_SLOT);
         let stop_prop = event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT);
-        if !stop_immediate {
+        if !stop_immediate && dispatch_target == EventTargetHandle::Window {
+            // A Window dispatches to itself once, in registration order. DOM
+            // Node paths retain their capture/bubble and retargeting passes.
+            let status = registry.call_listeners_filtered(
+                scope,
+                host_ptr,
+                dispatch_target,
+                invocation_targets_in_shadow_tree.contains(&dispatch_target),
+                &event_type,
+                event,
+                ListenerFilter::All,
+                true,
+            )?;
+            stopped = matches!(
+                status,
+                DispatchStatus::StopPropagation | DispatchStatus::StopImmediate
+            );
+        } else if !stop_immediate {
             if stop_prop {
                 stopped = true;
             }
@@ -1661,6 +1831,7 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
     clear_event_composed_path(scope, event);
     Ok(PublicEventDispatchResult {
         default_prevented: event_default_prevented(scope, event),
+        canceled_before_dispatch: false,
     })
 }
 
@@ -1745,6 +1916,20 @@ fn run_host_event_dispatch<'s>(
         event,
     );
 
+    if dispatch_target == EventTargetHandle::Window {
+        registry.call_listeners_filtered(
+            scope,
+            host_ptr,
+            dispatch_target,
+            invocation_target_in_shadow_tree,
+            event_type,
+            event,
+            ListenerFilter::All,
+            true,
+        )?;
+        return Ok(());
+    }
+
     let status = registry.call_listeners_filtered(
         scope,
         host_ptr,
@@ -1752,7 +1937,7 @@ fn run_host_event_dispatch<'s>(
         invocation_target_in_shadow_tree,
         event_type,
         event,
-        true,
+        ListenerFilter::Capturing,
         true,
     )?;
     if status != DispatchStatus::StopImmediate {
@@ -1763,7 +1948,7 @@ fn run_host_event_dispatch<'s>(
             invocation_target_in_shadow_tree,
             event_type,
             event,
-            false,
+            ListenerFilter::Bubbling,
             true,
         )?;
     }

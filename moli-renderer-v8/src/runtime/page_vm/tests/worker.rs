@@ -1259,8 +1259,41 @@ try {{
     (format!("http://{addr}"), request_rx, server)
 }
 
-async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
--> (String, JoinHandle<()>, JoinHandle<()>) {
+struct SharedWorkerRedirectServers {
+    origin: String,
+    source_server: JoinHandle<()>,
+    target_server: JoinHandle<()>,
+    source_response: tokio::sync::oneshot::Receiver<()>,
+    target_request: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl SharedWorkerRedirectServers {
+    async fn assert_rejected_before_cross_origin_fetch(&mut self) {
+        tokio::time::timeout(Duration::from_secs(5), &mut self.source_response)
+            .await
+            .expect("the same-origin redirect response must complete")
+            .expect("the source fixture must write its redirect response");
+        assert!(
+            matches!(
+                self.target_request.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "same-origin worker mode must reject before contacting a cross-origin redirect target"
+        );
+    }
+}
+
+impl Drop for SharedWorkerRedirectServers {
+    fn drop(&mut self) {
+        self.source_server.abort();
+        self.target_server.abort();
+    }
+}
+
+async fn spawn_cross_origin_redirecting_shared_worker_script_servers() -> SharedWorkerRedirectServers
+{
+    let (source_response_tx, source_response) = tokio::sync::oneshot::channel();
+    let (target_request_tx, target_request) = tokio::sync::oneshot::channel();
     let target_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind shared worker redirect target server");
@@ -1273,6 +1306,7 @@ async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
             .accept()
             .await
             .expect("accept shared worker redirect target request");
+        let _ = target_request_tx.send(());
         let request = read_http_request_head(&mut stream)
             .await
             .expect("read shared worker redirect target request");
@@ -1322,12 +1356,21 @@ async fn spawn_cross_origin_redirecting_shared_worker_script_servers()
             .write_all(response.as_bytes())
             .await
             .expect("write shared worker redirect source response");
+        let _ = source_response_tx.send(());
     });
 
-    (source_base_url, source_server, target_server)
+    SharedWorkerRedirectServers {
+        origin: source_base_url,
+        source_server,
+        target_server,
+        source_response,
+        target_request,
+    }
 }
 
-async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHandle<()>) {
+async fn spawn_sw_return_redirect_servers() -> SharedWorkerRedirectServers {
+    let (source_response_tx, source_response) = tokio::sync::oneshot::channel();
+    let (target_request_tx, target_request) = tokio::sync::oneshot::channel();
     let cross_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind shared worker intermediate redirect server");
@@ -1352,6 +1395,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .accept()
             .await
             .expect("accept shared worker intermediate redirect request");
+        let _ = target_request_tx.send(());
         let request = read_http_request_head(&mut stream)
             .await
             .expect("read shared worker intermediate redirect request");
@@ -1391,6 +1435,7 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .write_all(response.as_bytes())
             .await
             .expect("write shared worker initial redirect response");
+        let _ = source_response_tx.send(());
 
         let (mut stream, _) = source_listener
             .accept()
@@ -1417,7 +1462,13 @@ async fn spawn_sw_return_redirect_servers() -> (String, JoinHandle<()>, JoinHand
             .expect("write shared worker returning redirect target response");
     });
 
-    (source_base_url, source_server, cross_server)
+    SharedWorkerRedirectServers {
+        origin: source_base_url,
+        source_server,
+        target_server: cross_server,
+        source_response,
+        target_request,
+    }
 }
 
 async fn drive_shared_worker_probe(page_vm: &mut PageVm, context: &str) -> anyhow::Result<()> {
@@ -2056,52 +2107,63 @@ async fn spawn_audio_worklet_dynamic_descendant_server() -> (String, JoinHandle<
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_audio_worklet_json_destination_server() -> (String, JoinHandle<()>) {
+async fn spawn_audio_worklet_synthetic_destination_server(
+    module_type: &'static str,
+) -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("bind AudioWorklet JSON destination server");
+        .expect("bind AudioWorklet synthetic destination server");
     let addr = listener
         .local_addr()
-        .expect("AudioWorklet JSON destination server addr");
+        .expect("AudioWorklet synthetic destination server addr");
     let server = tokio::spawn(async move {
         let (mut entry_stream, _) = listener
             .accept()
             .await
-            .expect("accept AudioWorklet JSON entry request");
+            .expect("accept AudioWorklet synthetic entry request");
         let (entry_request, entry_path) =
-            read_request_head_and_path(&mut entry_stream, "AudioWorklet JSON entry").await;
+            read_request_head_and_path(&mut entry_stream, "AudioWorklet synthetic entry").await;
         assert_eq!(entry_path, "/worklet/entry.js");
-        assert_audio_worklet_fetch_destination(&entry_request, "AudioWorklet JSON entry");
+        assert_audio_worklet_fetch_destination(&entry_request, "AudioWorklet synthetic entry");
         write_script_response(
             &mut entry_stream,
             [
-                "import data from './data.json' with { type: 'json' };",
-                "if (data.answer !== 42) throw new Error('missing JSON module');",
-                "registerProcessor('json-destination', class extends AudioWorkletProcessor {});",
+                format!("import data from './data.json' with {{ type: '{module_type}' }};"),
+                if module_type == "text" {
+                    r#"if (data !== '{"answer":42}') throw new Error('missing text module');"#.to_owned()
+                } else {
+                    "if (data.answer !== 42) throw new Error('missing JSON module');".to_owned()
+                },
+                "registerProcessor('synthetic-destination', class extends AudioWorkletProcessor {});".to_owned(),
             ]
             .join("\n"),
-            "AudioWorklet JSON entry",
+            "AudioWorklet synthetic entry",
         )
         .await;
 
-        let (mut json_stream, _) = listener
+        let (mut dependency_stream, _) = listener
             .accept()
             .await
-            .expect("accept AudioWorklet JSON dependency request");
-        let (json_request, json_path) =
-            read_request_head_and_path(&mut json_stream, "AudioWorklet JSON dependency").await;
-        assert_eq!(json_path, "/worklet/data.json");
-        assert_fetch_destination(&json_request, "json", "AudioWorklet JSON dependency");
+            .expect("accept AudioWorklet synthetic dependency request");
+        let (dependency_request, dependency_path) =
+            read_request_head_and_path(&mut dependency_stream, "AudioWorklet synthetic dependency")
+                .await;
+        assert_eq!(dependency_path, "/worklet/data.json");
+        assert_fetch_destination(
+            &dependency_request,
+            module_type,
+            "AudioWorklet synthetic dependency",
+        );
         let body = r#"{"answer":42}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
-        json_stream
+        dependency_stream
             .write_all(response.as_bytes())
             .await
-            .expect("write AudioWorklet JSON dependency response");
+            .expect("write AudioWorklet synthetic dependency response");
     });
 
     (format!("http://{addr}"), server)

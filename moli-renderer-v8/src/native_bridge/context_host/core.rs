@@ -13,6 +13,17 @@ fn slotchange_microtask_callback(
 }
 
 impl JsContextHost {
+    pub(crate) fn initialize_native_bridge_bindings(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        global: v8::Local<'_, v8::ObjectTemplate>,
+        cross_origin: v8::Local<'_, v8::ObjectTemplate>,
+    ) {
+        self.bridge
+            .bindings
+            .initialize_if_needed(scope, global, cross_origin);
+    }
+
     pub(crate) fn mark_main_document_initial_empty(&mut self) {
         assert!(moli_url::is_about_blank(self.document_url()));
         self.initial_empty_main_document = true;
@@ -91,6 +102,8 @@ impl JsContextHost {
         );
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.style_engine
             .clear_for_document_replacement(document_handle);
         self.reset_document_layout_state();
@@ -300,8 +313,6 @@ impl JsContextHost {
         let broadcast_channel_registry = browser_context_runtime.broadcast_channel_registry();
         let shared_worker_client_owner_id =
             browser_context_runtime.next_shared_worker_client_owner_id();
-        let javascript_dialog_handler_enabled =
-            browser_context_runtime.javascript_dialog_handler_enabled();
         let document_url = runtime.document_url().clone();
         let main_document_owner = frame_owner_store
             .current_main_document_task_owner()
@@ -381,23 +392,26 @@ impl JsContextHost {
             observers: ObserverStore::default(),
             child_browsing_contexts: IndexMap::new(),
             frame_owner_store,
+            inert_document_execution_contexts: None,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),
             frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore::default(),
-            frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore::default(),
+            frame_document_stylesheets: FrameDocumentStylesheetStore::default(),
             child_document_script_schedulers: FrameDocumentScriptSchedulerStore::default(),
             child_document_parsers: ChildDocumentParserStore::default(),
             child_window_proxy_records: ChildWindowProxyRecords::default(),
             child_default_context_bootstrap: None,
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
+            #[cfg(test)]
+            force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell::new(false),
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: Rc::new(RefCell::new(None)),
-            next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
             document_resource_loaders: DocumentResourceLoaderRegistry::default(),
             web_storage_store: new_shared_web_storage_store(),
+            local_storage_areas: HashMap::new(),
             session_storage_store: new_shared_web_storage_store(),
             indexed_db_manager: None,
             storage_bucket_store: new_shared_storage_bucket_store(),
@@ -410,8 +424,6 @@ impl JsContextHost {
             protocol_user_gesture_activation_depth: 0,
             current_input_event: None,
             webdriver_bidi_file_prompt_handler_stack: Vec::new(),
-            emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
-            viewport_surface: None,
             document_activity: moli_page_types::DocumentActivity::default(),
             initial_empty_main_document: false,
             subframe_loading_disabled_documents: Rc::default(),
@@ -440,8 +452,7 @@ impl JsContextHost {
             pending_active_lightweight_popup_restore: None,
             pending_child_subresource_request_scope_pop: false,
             pending_text_control_change_commit: None,
-            directory_reader_callbacks:
-                super::directory_reader_callbacks::DirectoryReaderCallbackState::default(),
+            file_reading_tasks: super::file_reading_tasks::FileReadingState::default(),
             misc_platform_api_tasks:
                 super::misc_platform_api_tasks::MiscPlatformApiTaskState::default(),
             file_entry_file_callbacks:
@@ -469,6 +480,7 @@ impl JsContextHost {
             next_image_decode_id: 1,
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
+            pending_font_face_loads: HashMap::new(),
             next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId::first(),
             pending_webcrypto_tasks: HashMap::new(),
             opfs_owner_state: None,
@@ -569,7 +581,6 @@ impl JsContextHost {
             pending_javascript_dialogs: Vec::new(),
             javascript_dialog_runtime,
             next_javascript_dialog_id: 1,
-            javascript_dialog_handler_enabled,
             pending_network_output: Vec::new(),
             focus_change_epoch: 0,
             next_subresource_network_request_handle: 1,
@@ -593,7 +604,6 @@ impl JsContextHost {
             pending_network_body_sources: HashMap::new(),
             pending_network_body_clones: HashMap::new(),
             page_task_capabilities: std::cell::OnceCell::new(),
-            resource_scheduler: RendererResourceScheduler::new(resource_completion_tx.clone()),
             resource_completion_tx,
             next_worker_id: 1,
             workers: HashMap::new(),
@@ -703,6 +713,8 @@ impl JsContextHost {
         }
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.replace_main_document_resource_loader(transition);
         let rebound_meta_refresh = {
             let runtime: &mut DocumentRuntime = self;

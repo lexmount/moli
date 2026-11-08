@@ -142,6 +142,7 @@ impl FrameOwnerStore {
                 document_id,
                 realm_id: Some(realm_id),
                 settings,
+                inherited_opaque_origin: None,
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
@@ -551,6 +552,7 @@ impl FrameOwnerStore {
                 document_id,
                 realm_id: None,
                 settings,
+                inherited_opaque_origin: None,
                 lifecycle: LocalWindowLifecycleState::Current,
             },
         );
@@ -2083,6 +2085,18 @@ impl FrameOwnerStore {
                 .documents
                 .get(&owner.document_id)
                 .is_some_and(|document| document.lifecycle_progress.load_delivery_is_ready())
+    }
+
+    pub(crate) fn current_child_document_owner_load_is_complete(
+        &self,
+        child_handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.child_document_task_owner_is_current(child_handle, owner)
+            && self
+                .documents
+                .get(&owner.document_id)
+                .is_some_and(|document| document.lifecycle_progress.child_owner_load_is_complete())
     }
 
     pub(crate) fn reserve_current_child_document_load_delivery_task(

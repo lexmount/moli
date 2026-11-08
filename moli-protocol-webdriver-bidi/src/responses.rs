@@ -157,13 +157,13 @@ fn bidi_result_payload_from_devtools_result(result: AutomationResult) -> Value {
                 .into_iter()
                 .map(bidi_cookie_from_cdp_cookie)
                 .collect::<Vec<_>>(),
-            "partitionKey": {},
+            "partitionKey": crate::storage::bidi_cookie_partition_key(&result.scope),
         }),
         AutomationResult::DeleteCookies(result) => json!({
-            "partitionKey": result.partition_key,
+            "partitionKey": crate::storage::bidi_cookie_partition_key(&result.scope),
         }),
         AutomationResult::SetCookies(result) => json!({
-            "partitionKey": result.partition_key,
+            "partitionKey": crate::storage::bidi_cookie_partition_key(&result.scope),
         }),
         AutomationResult::AddPreloadScript(result) => json!({
             "script": result.script_id.into_string(),
@@ -237,6 +237,7 @@ fn bidi_result_payload_from_devtools_result(result: AutomationResult) -> Value {
         AutomationResult::DescribeNode(result) => json!({
             "node": result.node,
         }),
+        AutomationResult::NodeReference(shared_id) => json!({"sharedId": shared_id.as_str()}),
         AutomationResult::GetFrameOwner(result) => json!({
             "nodeId": result.node_id,
             "backendNodeId": result.backend_node_id,

@@ -8,6 +8,9 @@ description = "Read-only DOM to Markdown conversion with an iterative state mach
 [lints]
 workspace = true
 
+[dependencies]
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
+
 [dev-dependencies]
 html5ever = "0.39"
 markup5ever_rcdom = "0.39"

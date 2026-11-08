@@ -189,7 +189,7 @@ fn javascript_response(source: &'static str) -> Response {
 
 #[test]
 fn cli_deferred_module_observes_stylesheet_unblocked_parser_dom() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(AnubisDeferredModuleFixture::spawn())?;
     let url = server.url("/anubis/challenge");
     let output = Command::new(env!("CARGO_BIN_EXE_moli"))

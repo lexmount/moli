@@ -1,12 +1,15 @@
 use super::*;
 
 mod auto_attach_startup;
+mod auxiliary_module_completion;
 mod auxiliary_page_identity;
 mod auxiliary_page_retirement;
 mod blank_navigation_inheritance;
 mod browser_close;
 mod noopener_blank_inheritance;
 mod popup_navigation_referrer;
+mod service_worker_reload;
+mod target_opening;
 
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -211,10 +214,13 @@ async fn enable_runtime_and_expect_default_context(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipelined_frame_tree_replies_precede_runtime_context_replay() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let browser_context_id = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &browser_context_id).await;
     let session_id = Some(target.session_id.as_str());
@@ -338,10 +344,13 @@ async fn pipelined_frame_tree_replies_precede_runtime_context_replay() {
 #[tokio::test(flavor = "current_thread")]
 async fn native_snapshot_reply_precedes_later_inspector_context_replay() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -406,10 +415,13 @@ async fn native_snapshot_reply_precedes_later_inspector_context_replay() {
 #[tokio::test(flavor = "current_thread")]
 async fn native_node_queries_publish_before_later_inspector_replay() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -689,10 +701,13 @@ async fn assert_pause_command_ordering(instrumentation: bool) {
     );
     let fixture_url = format!("http://{fixture_addr}/page");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -922,10 +937,13 @@ async fn cdp_ordering_dom_agent_frontend_commands_complete_before_resume() {
         "native-paused-dom-agent",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -1079,10 +1097,13 @@ async fn cdp_ordering_instrumentation_pause_only_allows_io() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cdp_ordering_deferred_reply_allows_its_later_resolver() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -1140,10 +1161,13 @@ async fn cdp_ordering_deferred_reply_allows_its_later_resolver() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cdp_ordering_native_focus_can_reenter_main_before_reply() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -1328,40 +1352,6 @@ async fn fetch_server_json(addr: std::net::SocketAddr, path: &str) -> serde_json
     serde_json::from_slice(&body).expect("protocol server JSON response")
 }
 
-async fn fetch_server_response(
-    addr: std::net::SocketAddr,
-    method: &str,
-    path: &str,
-) -> (u16, Vec<u8>) {
-    let mut stream = tokio::net::TcpStream::connect(addr)
-        .await
-        .expect("connect protocol server HTTP route");
-    stream
-        .write_all(
-            format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
-        .await
-        .expect("write protocol server HTTP request");
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .await
-        .expect("read protocol server HTTP response");
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("HTTP response header terminator");
-    let headers = std::str::from_utf8(&response[..header_end]).expect("HTTP response headers");
-    let status = headers
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .expect("HTTP response status");
-    (status, response[header_end + 4..].to_vec())
-}
-
 async fn dispatch_primary_click(
     socket: &mut TestCdpSocket,
     command_id: u64,
@@ -1425,7 +1415,8 @@ async fn wait_for_target_list(
     label: &str,
     predicate: impl Fn(&[serde_json::Value]) -> bool,
 ) -> Vec<serde_json::Value> {
-    timeout(Duration::from_secs(5), async {
+    let mut last_response = serde_json::Value::Null;
+    let result = timeout(Duration::from_secs(5), async {
         loop {
             let response = fetch_server_json(addr, "/json/list").await;
             if let Some(targets) = response.as_array()
@@ -1433,20 +1424,24 @@ async fn wait_for_target_list(
             {
                 return targets.clone();
             }
+            last_response = response;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| panic!("{label}"))
+    .await;
+    result.unwrap_or_else(|_| panic!("{label}; last target list: {last_response}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_mouse_wheel_scrolls_page_and_honors_prevent_default() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
 
@@ -1576,10 +1571,13 @@ async fn websocket_cdp_mouse_wheel_scrolls_page_and_honors_prevent_default() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let target_list = fetch_server_json(addr, "/json/list").await;
     let listed_target = target_list
@@ -1674,7 +1672,7 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
         3,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": target_id }),
+        json!({ "targetId": target_id, "flatten": true }),
     )
     .await;
     let browser_session_id = response_by_id(&attach, 3)["result"]["sessionId"]
@@ -1741,10 +1739,14 @@ async fn websocket_cdp_dynamic_page_routes_to_existing_target_owner() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn target_create_for_tab_exposes_distinct_chromium_agent_hosts() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (default_target_id, default_tab_target_id) = discovered_startup_target_ids(addr).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
 
     let discover = send_cdp_command(
         &mut browser,
@@ -1773,10 +1775,10 @@ async fn target_create_for_tab_exposes_distinct_chromium_agent_hosts() {
             let info = &message["params"]["targetInfo"];
             let target_id = info["targetId"].as_str().map(str::to_owned);
             match info["type"].as_str() {
-                Some("page") if target_id.as_deref() != Some(DEFAULT_TARGET_ID) => {
+                Some("page") if target_id.as_deref() != Some(default_target_id.as_str()) => {
                     page_target_id = target_id;
                 }
-                Some("tab") if target_id.as_deref() != Some(DEFAULT_TAB_TARGET_ID) => {
+                Some("tab") if target_id.as_deref() != Some(default_tab_target_id.as_str()) => {
                     tab_target_id = target_id;
                 }
                 _ => {}
@@ -1894,10 +1896,13 @@ async fn new_windows_keep_independent_tab_selection_and_bounds() {
 
 async fn verify_independent_window_selection(first_new_window: bool, background: bool) {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let first_created = send_cdp_command(
         &mut browser,
         1,
@@ -2035,10 +2040,13 @@ async fn browser_focus_moves_between_contexts_without_hiding_their_windows() {
         response_by_id(&messages, id)["result"]["result"]["value"].clone()
     }
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let first_target = create_dynamic_target(&mut browser, 1).await;
     let mut first = connect_dynamic_page(addr, &first_target).await;
     let created = send_cdp_command(
@@ -2114,10 +2122,13 @@ async fn foreground_operations_do_not_wait_for_an_unchanged_busy_context() {
         "unrelated-busy-context",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let first_id = create_dynamic_target(&mut browser, 1).await;
     let second_id = create_dynamic_target(&mut browser, 2).await;
     let mut first = connect_dynamic_page(addr, &first_id).await;
@@ -2265,10 +2276,13 @@ async fn background_page_metadata_tracks_titles_and_same_document_navigation() {
         .await
     });
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     send_cdp_command(
         &mut browser,
         1,
@@ -2388,10 +2402,13 @@ async fn window_name_survives_ordinary_navigations_and_is_available_to_parser_sc
         "window-name",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let target = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target).await;
     send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
@@ -2470,10 +2487,13 @@ async fn window_name_survives_ordinary_navigations_and_is_available_to_parser_sc
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn named_popup_rename_is_shared_with_opener_and_named_target_lookup() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     let baseline = fetch_server_json(addr, "/json/list").await;
@@ -2543,10 +2563,13 @@ async fn named_popup_rename_is_shared_with_opener_and_named_target_lookup() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn accepted_popup_identity_survives_same_turn_rename_and_name_collision() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     let baseline = fetch_server_json(addr, "/json/list").await;
@@ -2637,10 +2660,13 @@ async fn accepted_popup_identity_survives_same_turn_rename_and_name_collision() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     let baseline = fetch_server_json(addr, "/json/list").await;
@@ -2723,10 +2749,13 @@ async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn popups_from_different_openers_keep_independent_close_identities() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let first = create_dynamic_target(&mut browser, 1).await;
     let second = create_dynamic_target(&mut browser, 2).await;
     let mut first_opener = connect_dynamic_page(addr, &first).await;
@@ -2803,10 +2832,13 @@ async fn popups_from_different_openers_keep_independent_close_identities() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     let baseline = fetch_server_json(addr, "/json/list").await;
@@ -2913,10 +2945,13 @@ async fn page_location_navigation_preserves_replace_and_reload_history() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let target = create_dynamic_target(&mut browser, 1).await;
     let mut observer = connect_dynamic_page(addr, &target).await;
     send_cdp_command(&mut observer, 1, "Page.enable", None, json!({})).await;
@@ -3005,10 +3040,13 @@ async fn popup_reference_location_navigates_its_real_page_and_preserves_history_
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -3218,14 +3256,18 @@ async fn popup_reference_location_navigates_its_real_page_and_preserves_history_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn page_agent_host_and_tab_host_survive_document_navigation() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (default_target_id, default_tab_target_id) = discovered_startup_target_ids(addr).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
-    let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
+    let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{default_target_id}"))
         .await
         .expect("connect default Page websocket");
-    let mut tab = connect_discovered_tab(addr, DEFAULT_TAB_TARGET_ID).await;
+    let mut tab = connect_discovered_tab(addr, default_tab_target_id.as_str()).await;
 
     let discover = send_cdp_command(
         &mut browser,
@@ -3241,11 +3283,11 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     let tab_before = send_cdp_command(&mut tab, 1, "Target.getTargetInfo", None, json!({})).await;
     assert_eq!(
         response_by_id(&page_before, 1)["result"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TARGET_ID)
+        json!(default_target_id.as_str())
     );
     assert_eq!(
         response_by_id(&tab_before, 1)["result"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TAB_TARGET_ID)
+        json!(default_tab_target_id.as_str())
     );
 
     let destination = "data:text/html,<title>Stable Navigation Host</title>";
@@ -3260,7 +3302,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     .await;
     assert_eq!(
         response_by_id(&navigation, 2)["result"]["frameId"],
-        json!(DEFAULT_TARGET_ID),
+        json!(default_target_id.as_str()),
         "the stable Page AgentHost id is also the main Frame id"
     );
     let title = send_cdp_command(
@@ -3278,7 +3320,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
 
     let mut target_events = recv_until_match(&mut browser, |message| {
         message["method"] == json!("Target.targetInfoChanged")
-            && message["params"]["targetInfo"]["targetId"] == json!(DEFAULT_TARGET_ID)
+            && message["params"]["targetInfo"]["targetId"] == json!(default_target_id.as_str())
             && message["params"]["targetInfo"]["url"] == json!(destination)
     })
     .await;
@@ -3291,7 +3333,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     // that the Page navigation was incorrectly mirrored onto the Tab host.
     let mirrored_tab_navigation = target_events.iter().find(|message| {
         message["method"] == json!("Target.targetInfoChanged")
-            && message["params"]["targetInfo"]["targetId"] == json!(DEFAULT_TAB_TARGET_ID)
+            && message["params"]["targetInfo"]["targetId"] == json!(default_tab_target_id.as_str())
             && (message["params"]["targetInfo"]["url"] == json!(destination)
                 || message["params"]["targetInfo"]["title"] == json!(destination_title))
     });
@@ -3305,7 +3347,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
             let descriptors = fetch_server_json(addr, "/json/list?for_tab").await;
             if descriptors.as_array().is_some_and(|targets| {
                 targets.iter().any(|target| {
-                    target["id"] == json!(DEFAULT_TAB_TARGET_ID)
+                    target["id"] == json!(default_tab_target_id.as_str())
                         && target["url"] == json!(destination)
                         && target["title"] == json!(destination_title)
                 })
@@ -3319,7 +3361,7 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     .expect("Tab discovery metadata should follow its primary Page");
     assert!(descriptors.as_array().is_some_and(|targets| {
         targets.iter().any(|target| {
-            target["id"] == json!(DEFAULT_TARGET_ID)
+            target["id"] == json!(default_target_id.as_str())
                 && target["type"] == json!("page")
                 && target["url"] == json!(destination)
         })
@@ -3328,17 +3370,17 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
     let frame_tree = send_cdp_command(&mut page, 4, "Page.getFrameTree", None, json!({})).await;
     assert_eq!(
         response_by_id(&frame_tree, 4)["result"]["frameTree"]["frame"]["id"],
-        json!(DEFAULT_TARGET_ID)
+        json!(default_target_id.as_str())
     );
     let page_after = send_cdp_command(&mut page, 5, "Target.getTargetInfo", None, json!({})).await;
     let tab_after = send_cdp_command(&mut tab, 2, "Target.getTargetInfo", None, json!({})).await;
     assert_eq!(
         response_by_id(&page_after, 5)["result"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TARGET_ID)
+        json!(default_target_id.as_str())
     );
     assert_eq!(
         response_by_id(&tab_after, 2)["result"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TAB_TARGET_ID)
+        json!(default_tab_target_id.as_str())
     );
 
     abort_test_cdp_server(server).await;
@@ -3347,10 +3389,12 @@ async fn page_agent_host_and_tab_host_survive_document_navigation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut opener, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+    let (default_target_id, default_tab_target_id) = discovered_startup_target_ids(addr).await;
+    let (mut opener, _) = connect_async(format!("ws://{addr}/devtools/page/{default_target_id}"))
         .await
         .expect("connect default page websocket");
-    let opener_tab_websocket_url = discovered_tab_websocket_url(addr, DEFAULT_TAB_TARGET_ID).await;
+    let opener_tab_websocket_url =
+        discovered_tab_websocket_url(addr, default_tab_target_id.as_str()).await;
     let mut opener_tab = connect_async(&opener_tab_websocket_url)
         .await
         .expect("connect opener tab websocket")
@@ -3365,7 +3409,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     .await;
     assert_eq!(
         response_by_id(&tab_owner_info, 9001)["result"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TAB_TARGET_ID)
+        json!(default_tab_target_id.as_str())
     );
     assert_eq!(
         response_by_id(&tab_owner_info, 9001)["result"]["targetInfo"]["type"],
@@ -3381,7 +3425,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         }),
         "the Tab AgentHost must expose its Page through Target auto-attach"
     );
-    let opener_page_session = enable_tab_page(&mut opener_tab, 1, DEFAULT_TARGET_ID).await;
+    let opener_page_session = enable_tab_page(&mut opener_tab, 1, default_target_id.as_str()).await;
     let popup_url = "data:text/html,%3Ctitle%3EStable%20Popup%3C/title%3E";
     let popup_final_url = "data:text/html,<title>Stable Popup</title>";
     let opener_url = format!(
@@ -3493,7 +3537,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         "foreground popup should become the first browser surface",
         |targets| {
             targets.len() == 2
-                && targets[0]["id"] != json!(DEFAULT_TARGET_ID)
+                && targets[0]["id"] != json!(default_target_id.as_str())
                 && targets[0]["title"] == json!("Stable Popup")
                 && targets[1]["title"] == json!("Stable Opener")
         },
@@ -3530,7 +3574,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         "the opener tab socket migrated to the foreground popup: {opener_after_popup:#?}"
     );
     assert_eq!(targets[0]["title"], json!("Stable Popup"));
-    assert_eq!(targets[1]["id"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(targets[1]["id"], json!(default_target_id.as_str()));
     assert_eq!(targets[1]["title"], json!("Stable Opener"));
     assert_eq!(targets[1]["url"], json!(&opener_url));
 
@@ -3538,7 +3582,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     let tab_targets = tab_targets.as_array().expect("tab target list");
     let opener_tab_descriptor = tab_targets
         .iter()
-        .find(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
+        .find(|target| target["id"] == json!(default_tab_target_id.as_str()))
         .expect("stable opener tab descriptor");
     assert_eq!(opener_tab_descriptor["title"], json!("Stable Opener"));
     assert_eq!(opener_tab_descriptor["url"], json!(&opener_url));
@@ -3548,7 +3592,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         .and_then(|target| target["id"].as_str())
         .expect("stable popup tab target id")
         .to_owned();
-    assert_ne!(popup_tab_target_id, DEFAULT_TAB_TARGET_ID);
+    assert_ne!(popup_tab_target_id, default_tab_target_id.as_str());
 
     // This URL was discovered before popup activation. It still identifies
     // the opener tab after the browser context's active page has changed.
@@ -3557,7 +3601,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         .expect("connect opener tab from stale discovery descriptor")
         .0;
     let late_opener_page_session =
-        enable_tab_page(&mut late_opener_tab, 1, DEFAULT_TARGET_ID).await;
+        enable_tab_page(&mut late_opener_tab, 1, default_target_id.as_str()).await;
     let late_opener_location = send_cdp_command(
         &mut late_opener_tab,
         3,
@@ -3619,7 +3663,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     let (activate_status, _) = fetch_server_response(
         addr,
         "GET",
-        &format!("/json/activate/{DEFAULT_TAB_TARGET_ID}"),
+        &format!("/json/activate/{default_tab_target_id}"),
     )
     .await;
     assert_eq!(activate_status, 200);
@@ -3629,7 +3673,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         |targets| {
             targets
                 .first()
-                .is_some_and(|target| target["id"] == json!(DEFAULT_TARGET_ID))
+                .is_some_and(|target| target["id"] == json!(default_target_id.as_str()))
         },
     )
     .await;
@@ -3715,10 +3759,13 @@ async fn websocket_cdp_dynamic_page_parser_script_navigation_delivers_load_event
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 100).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
 
@@ -3795,6 +3842,7 @@ async fn websocket_cdp_dynamic_page_parser_script_navigation_delivers_load_event
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_cdp_target_management_uses_live_agent_host_directory() {
     let (addr, server) = spawn_test_protocol_server().await;
+    let (default_target_id, _) = discovered_startup_target_ids(addr).await;
 
     let (new_status, new_body) =
         fetch_server_response(addr, "PUT", "/json/new?about%3Ablank").await;
@@ -3805,7 +3853,7 @@ async fn http_cdp_target_management_uses_live_agent_host_directory() {
         .as_str()
         .expect("created target id")
         .to_owned();
-    assert_ne!(target_id, DEFAULT_TARGET_ID);
+    assert_ne!(target_id, default_target_id.as_str());
     assert_eq!(created["url"], json!("about:blank"));
 
     let listed = fetch_server_json(addr, "/json/list").await;
@@ -3856,10 +3904,13 @@ async fn http_cdp_target_management_uses_live_agent_host_directory() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_cdp_target_management_preserves_browser_discovery_events() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let discover = send_cdp_command(
         &mut browser,
         1,
@@ -3918,10 +3969,13 @@ async fn http_cdp_target_management_preserves_browser_discovery_events() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_child_session_routes_to_child_target() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let first_target_id = create_dynamic_target(&mut browser, 1).await;
     let second_target_id = create_dynamic_target(&mut browser, 2).await;
     let mut first_page = connect_dynamic_page(addr, &first_target_id).await;
@@ -3991,10 +4045,13 @@ async fn websocket_cdp_dynamic_page_child_session_routes_to_child_target() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_rejects_unknown_child_session() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
 
@@ -4033,10 +4090,13 @@ async fn websocket_cdp_dynamic_page_rejects_unknown_child_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_detach_reconnect_and_target_close_follow_host_lifecycle() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut first_page = connect_dynamic_page(addr, &target_id).await;
     let mut second_page = connect_dynamic_page(addr, &target_id).await;
@@ -4128,14 +4188,20 @@ async fn websocket_cdp_dynamic_page_detach_reconnect_and_target_close_follow_hos
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_supports_concurrent_browser_frontends_with_isolated_sessions() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut first_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut first_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect first browser websocket");
-    let (mut second_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect first browser websocket");
+    let (mut second_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect second browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect second browser websocket");
 
     for browser in [&mut first_browser, &mut second_browser] {
         browser
@@ -4305,10 +4371,13 @@ async fn websocket_cdp_supports_concurrent_browser_frontends_with_isolated_sessi
         "disconnecting one browser detached another browser's target session"
     );
 
-    let (mut third_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut third_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect third browser while second remains connected");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect third browser while second remains connected");
     let third_probe =
         send_cdp_command(&mut third_browser, 1, "Browser.getVersion", None, json!({})).await;
     assert!(
@@ -4396,10 +4465,13 @@ async fn websocket_cdp_supports_concurrent_browser_frontends_with_isolated_sessi
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_browser_reconnect_resets_discovery_state() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut discovering_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut discovering_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect discovering browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect discovering browser websocket");
 
     let discover = send_cdp_command(
         &mut discovering_browser,
@@ -4420,10 +4492,13 @@ async fn websocket_cdp_browser_reconnect_resets_discovery_state() {
         .expect("close discovering browser websocket");
     wait_for_websocket_close(&mut discovering_browser, "discovering browser").await;
 
-    let (mut replacement_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut replacement_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect replacement browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect replacement browser websocket");
     let create = send_cdp_command(
         &mut replacement_browser,
         1,
@@ -4466,10 +4541,13 @@ async fn websocket_cdp_browser_reconnect_resets_discovery_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_browser_reconnect_can_control_existing_target() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut first_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut first_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect first browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect first browser websocket");
     let target_id = create_dynamic_target(&mut first_browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
     let marker = send_cdp_command(
@@ -4491,10 +4569,13 @@ async fn websocket_cdp_browser_reconnect_can_control_existing_target() {
         .expect("close first browser websocket");
     wait_for_websocket_close(&mut first_browser, "first browser frontend").await;
 
-    let (mut second_browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut second_browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect replacement browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect replacement browser websocket");
     let targets =
         send_cdp_command(&mut second_browser, 1, "Target.getTargets", None, json!({})).await;
     assert!(
@@ -4537,10 +4618,14 @@ async fn websocket_cdp_browser_reconnect_can_control_existing_target() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_default_page_created_target_has_global_identity_and_route() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (default_target_id, _) = discovered_startup_target_ids(addr).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let browser_target_id = create_dynamic_target(&mut browser, 1).await;
     let mut browser_page = connect_dynamic_page(addr, &browser_target_id).await;
     let browser_marker = send_cdp_command(
@@ -4557,7 +4642,7 @@ async fn websocket_cdp_default_page_created_target_has_global_identity_and_route
     );
 
     let (mut default_page, _) =
-        connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+        connect_async(format!("ws://{addr}/devtools/page/{default_target_id}"))
             .await
             .expect("connect default page websocket");
     let default_page_target_id = create_dynamic_target(&mut default_page, 2).await;
@@ -4618,10 +4703,13 @@ async fn websocket_cdp_default_page_created_target_has_global_identity_and_route
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_pending_runtime_command_does_not_block_later_command() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
 
@@ -4678,10 +4766,13 @@ async fn websocket_cdp_dynamic_page_pending_runtime_command_does_not_block_later
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_matches_chromium_browser_attach_access_modes() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
 
@@ -4760,10 +4851,13 @@ async fn websocket_cdp_dynamic_page_matches_chromium_browser_attach_access_modes
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_survives_browser_frontend_disconnect_until_target_close() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
     let initial = send_cdp_command(
@@ -4907,10 +5001,13 @@ async fn websocket_cdp_dynamic_page_survives_browser_frontend_disconnect_until_t
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_owner_registry_shutdown_closes_frontends_and_joins_owner() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
     assert_eq!(owner_registry.owner_count(), 1);
@@ -4932,16 +5029,20 @@ async fn websocket_cdp_owner_registry_shutdown_closes_frontends_and_joins_owner(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_shared_owner_survives_idle_browser_reconnect() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (default_target_id, _) = discovered_startup_target_ids(addr).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let attach = send_cdp_command(
         &mut browser,
         1,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": DEFAULT_TARGET_ID, "flatten": true }),
+        json!({ "targetId": default_target_id.as_str(), "flatten": true }),
     )
     .await;
     let session_id = response_by_id(&attach, 1)["result"]["sessionId"]
@@ -4969,16 +5070,19 @@ async fn websocket_cdp_shared_owner_survives_idle_browser_reconnect() {
     wait_for_websocket_close(&mut browser, "detached empty browser").await;
     assert_eq!(owner_registry.owner_count(), 1);
 
-    let (mut replacement, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut replacement, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("reconnect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("reconnect browser websocket");
     let attach = send_cdp_command(
         &mut replacement,
         1,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": DEFAULT_TARGET_ID, "flatten": true }),
+        json!({ "targetId": default_target_id.as_str(), "flatten": true }),
     )
     .await;
     let replacement_session_id = response_by_id(&attach, 1)["result"]["sessionId"]
@@ -5006,6 +5110,7 @@ async fn websocket_cdp_shared_owner_survives_idle_browser_reconnect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_context() {
     let (addr, server) = spawn_test_protocol_server().await;
+    let (default_target_id, default_tab_target_id) = discovered_startup_target_ids(addr).await;
     let (status, body) = fetch_server_response(addr, "PUT", "/json/new?about%3Ablank").await;
     assert_eq!(status, 200);
     let created_target: serde_json::Value =
@@ -5014,19 +5119,26 @@ async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_conte
         .as_str()
         .expect("created target id")
         .to_owned();
-    assert_ne!(created_target_id, DEFAULT_TARGET_ID);
+    assert_ne!(created_target_id, default_target_id.as_str());
     // Materializing a second Page leaves the old default Page in the
     // background. Puppeteer's first Page command selects that existing target
     // again, which is the reconnect lifecycle that regressed.
-    let target_id = DEFAULT_TARGET_ID.to_owned();
+    let target_id = default_target_id.as_str().to_owned();
 
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect first browser websocket");
-    let page_session_id =
-        puppeteer_auto_attach_existing_page(&mut browser, 1, &target_id, DEFAULT_TAB_TARGET_ID)
-            .await;
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect first browser websocket");
+    let page_session_id = puppeteer_auto_attach_existing_page(
+        &mut browser,
+        1,
+        &target_id,
+        default_tab_target_id.as_str(),
+    )
+    .await;
     let page_enabled = send_cdp_command(
         &mut browser,
         3,
@@ -5066,13 +5178,20 @@ async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_conte
         .expect("close first browser frontend");
     wait_for_websocket_close(&mut browser, "first browser frontend").await;
 
-    let (mut replacement, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut replacement, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect replacement browser websocket");
-    let replacement_page_session_id =
-        puppeteer_auto_attach_existing_page(&mut replacement, 1, &target_id, DEFAULT_TAB_TARGET_ID)
-            .await;
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect replacement browser websocket");
+    let replacement_page_session_id = puppeteer_auto_attach_existing_page(
+        &mut replacement,
+        1,
+        &target_id,
+        default_tab_target_id.as_str(),
+    )
+    .await;
     assert_ne!(replacement_page_session_id, page_session_id);
     let page_enabled = send_cdp_command(
         &mut replacement,
@@ -5142,16 +5261,20 @@ async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_conte
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_browser_reconnect_clears_detached_session_emulated_media() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (default_target_id, _) = discovered_startup_target_ids(addr).await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("connect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("connect browser websocket");
     let attach = send_cdp_command(
         &mut browser,
         1,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": DEFAULT_TARGET_ID, "flatten": true }),
+        json!({ "targetId": default_target_id.as_str(), "flatten": true }),
     )
     .await;
     let session_id = response_by_id(&attach, 1)["result"]["sessionId"]
@@ -5194,16 +5317,19 @@ async fn websocket_cdp_browser_reconnect_clears_detached_session_emulated_media(
         .expect("close first browser frontend");
     wait_for_websocket_close(&mut browser, "detached browser frontend").await;
 
-    let (mut replacement, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut replacement, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .expect("reconnect browser websocket");
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .expect("reconnect browser websocket");
     let attach = send_cdp_command(
         &mut replacement,
         1,
         "Target.attachToTarget",
         None,
-        json!({ "targetId": DEFAULT_TARGET_ID, "flatten": true }),
+        json!({ "targetId": default_target_id.as_str(), "flatten": true }),
     )
     .await;
     let replacement_session_id = response_by_id(&attach, 1)["result"]["sessionId"]
@@ -5258,7 +5384,8 @@ async fn websocket_cdp_browser_reconnect_clears_detached_session_emulated_media(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_owner_registry_shutdown_joins_shared_default_page_owner() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
-    let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"))
+    let (default_target_id, _) = discovered_startup_target_ids(addr).await;
+    let (mut page, _) = connect_async(format!("ws://{addr}/devtools/page/{default_target_id}"))
         .await
         .expect("connect default page websocket");
     let frame_tree = send_cdp_command(&mut page, 1, "Page.getFrameTree", None, json!({})).await;
@@ -5282,10 +5409,13 @@ async fn assert_native_isolate_handler_waits_for_resume(method: &str) {
         "native-isolate-entry",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let context = cdp_create_browser_context(&mut browser, 1).await;
     let target = cdp_create_attached_target(&mut browser, 2, &context).await;
     let session = Some(target.session_id.as_str());
@@ -5467,10 +5597,13 @@ async fn named_popup_reuse_preserves_history_for_current_url_and_commits_new_doc
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -5581,10 +5714,13 @@ async fn unrelated_same_origin_pages_do_not_reuse_each_others_named_popups() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let first_id = create_dynamic_target(&mut browser, 1).await;
     let second_id = create_dynamic_target(&mut browser, 2).await;
     let mut first = connect_dynamic_page(addr, &first_id).await;
@@ -5670,10 +5806,13 @@ async fn browser_cross_site_navigation_changes_named_group_and_history_restores_
     let base = format!("http://{fixture_addr}");
     let cross_site = format!("http://localhost:{}", fixture_addr.port());
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -5857,10 +5996,13 @@ async fn popup_navigation_replaces_pending_load_while_runtime_read_waits() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -6037,10 +6179,13 @@ async fn popup_document_navigation_uses_one_network_response() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -6157,10 +6302,13 @@ async fn popup_reference_waits_for_debugger_and_consumes_fetch_fulfillment() {
         "popup-intercepted-response",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
@@ -6256,10 +6404,13 @@ async fn popup_reference_waits_for_debugger_and_consumes_fetch_fulfillment() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blank_popup_display_title_does_not_change_document_title() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let opener_id = create_dynamic_target(&mut browser, 1).await;
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     let before = fetch_server_json(addr, "/json/list").await;
@@ -6397,10 +6548,13 @@ async fn focus_change_does_not_wait_for_a_focused_busy_context() {
         "unrelated-busy-context",
     );
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     create_dynamic_target(&mut browser, 1).await;
     let second_id = create_dynamic_target(&mut browser, 2).await;
     let context = send_cdp_command(

@@ -24,8 +24,7 @@ async fn call_function_on_rejects_object_id_known_to_different_target_owner() {
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(other_context);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(other_context));
 
     ctx.process_async(json!({
         "id": 513,
@@ -54,13 +53,15 @@ async fn dom_resolve_node_with_execution_context_returns_handle_for_calling_sess
         "<html><body><div id='wait-handle'></div></body></html>",
     )
     .await;
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     ctx.process_async(json!({
         "id": 50_001,
@@ -212,8 +213,7 @@ async fn call_function_on_rejects_dom_resolve_node_object_id_from_different_targ
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(other_context);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(other_context));
 
     ctx.process_async(json!({
         "id": 518,
@@ -433,15 +433,16 @@ async fn release_object_group_drops_inherited_get_properties_and_call_function_h
         })
         .to_owned();
 
-    assert!(
-        ctx.conn
-            .validate_runtime_remote_object_ids_for_session_owner(
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 &[child_object_id.clone(), returned_object_id.clone()],
             )
             .is_err(),
-        "active owner should see inherited-group handles as belonging to the background target"
-    );
+            "active owner should see inherited-group handles as belonging to the background target"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 532,
@@ -454,15 +455,15 @@ async fn release_object_group_drops_inherited_get_properties_and_call_function_h
     .await;
     let response = take_response_by_id(&mut ctx, 532);
     assert_eq!(response["result"], json!({}));
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .validate_runtime_remote_object_ids_for_session_owner(
                 Some("SID-active"),
                 &[child_object_id, returned_object_id],
             )
             .is_ok(),
         "releaseObjectGroup should remove handles whose group was inherited from the receiver object"
-    );
+    ) });
 }
 
 #[tokio::test]
@@ -515,14 +516,15 @@ async fn background_runtime_evaluate_emits_runtime_observable_from_background_ow
         runtime_event["params"]["args"][0]["value"],
         json!("background observable")
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.evaluate observable drain should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.evaluate observable drain should not activate the target"
+        )
+    });
 }
 
 #[tokio::test]
@@ -581,14 +583,15 @@ async fn call_function_on_loaded_background_owner_without_activation() {
         response["result"]["result"]["value"],
         json!("background-call-target:1")
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Runtime.callFunctionOn should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Runtime.callFunctionOn should not activate the target"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 536,
@@ -628,13 +631,15 @@ async fn evaluate_in_isolated_world_preserves_remote_object_handles() {
     with_loaded_document_async(&mut ctx, "<html><body></body></html>").await;
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 379).await;
     ctx.sent.clear();
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     let isolated_context_id = create_isolated_world_async(&mut ctx, 380, "utility").await;
 
@@ -659,13 +664,15 @@ async fn isolated_world_evaluate_registers_remote_object_owner() {
     with_loaded_document_async(&mut ctx, "<html><body>owner-a</body></html>").await;
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 382).await;
     ctx.sent.clear();
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist");
-    bc.set_active_target_id("TID-1");
-    bc.attach_active_session("SID-1");
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_mut()
+                .expect("browser context should exist")
+        };
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+    });
 
     let isolated_context_id = create_isolated_world_async(&mut ctx, 383, "utility").await;
 

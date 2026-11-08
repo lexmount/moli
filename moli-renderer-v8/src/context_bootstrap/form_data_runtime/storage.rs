@@ -1,7 +1,7 @@
 use super::*;
 use crate::util::{get_private_value, serialize_v8_array, set_private_value};
 use crate::web_api_interfaces;
-use crate::{dom::native::SelectedFile, webidl};
+use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -126,7 +126,7 @@ pub(super) fn normalize_form_data_value<'s>(
     filename_context: webidl::Context,
 ) -> std::result::Result<v8::Local<'s, v8::Value>, webidl::WebIdlError> {
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-        && let Some(bytes) = blob::blob_bytes_from_object(scope, object)
+        && let Some(data) = blob::blob_data_from_object(scope, object)
     {
         let filename = filename
             .map(|value| webidl::convert::<webidl::UsvString>(scope, value, filename_context))
@@ -135,15 +135,14 @@ pub(super) fn normalize_form_data_value<'s>(
         if filename.is_none() && file_api::file_name_from_object(scope, object).is_some() {
             return Ok(value);
         }
-        let selected = SelectedFile {
-            bytes,
-            mime_type: blob::blob_mime_type_from_object(scope, object).unwrap_or_default(),
-            name: filename.unwrap_or_else(|| "blob".to_owned()),
-            last_modified: file_api::selected_file_from_object(scope, object)
-                .map(|file| file.last_modified)
-                .unwrap_or_else(unix_epoch_millis),
-        };
-        if let Some(file) = file_api::build_file_object(scope, &selected) {
+        let mime_type = blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
+        let name = filename.unwrap_or_else(|| "blob".to_owned());
+        let last_modified = file_api::file_last_modified_from_object(scope, object)
+            .filter(|modified| modified.is_finite())
+            .unwrap_or_else(unix_epoch_millis);
+        if let Some((file, _)) =
+            file_api::build_file_object_unpublished(scope, data, mime_type, &name, last_modified)
+        {
             return Ok(file.into());
         }
         return Ok(value);

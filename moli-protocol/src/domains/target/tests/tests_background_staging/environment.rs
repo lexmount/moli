@@ -44,11 +44,12 @@ async fn process_environment_conflicts_do_not_stage_navigation_policy_or_change_
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 10419480,
@@ -122,45 +123,50 @@ async fn process_environment_conflicts_do_not_stage_navigation_policy_or_change_
     );
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(
-            active
-                .active_page_target()
-                .devtools_sessions
-                .effective_locale_override()
-                .as_deref(),
-            Some("en-GB")
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .devtools_sessions
-                .effective_timezone_override()
-                .as_deref(),
-            Some("UTC")
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .expect("second target is present without a process environment claim");
-        assert_eq!(
-            staged
-                .devtools_sessions
-                .effective_locale_override()
-                .as_deref(),
-            None,
-            "a rejected process claim must not be replayed by navigation"
-        );
-        assert_eq!(
-            staged
-                .devtools_sessions
-                .effective_timezone_override()
-                .as_deref(),
-            None
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert_eq!(
+                    active
+                        .active_page_target()
+                        .devtools_sessions
+                        .effective_locale_override()
+                        .as_deref(),
+                    Some("en-GB")
+                );
+                assert_eq!(
+                    active
+                        .active_page_target()
+                        .devtools_sessions
+                        .effective_timezone_override()
+                        .as_deref(),
+                    Some("UTC")
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .expect("second target is present without a process environment claim")
+            };
+            assert_eq!(
+                staged
+                    .devtools_sessions
+                    .effective_locale_override()
+                    .as_deref(),
+                None,
+                "a rejected process claim must not be replayed by navigation"
+            );
+            assert_eq!(
+                staged
+                    .devtools_sessions
+                    .effective_timezone_override()
+                    .as_deref(),
+                None
+            );
+        });
     }
 
     let url_a = format!("http://{addr}/page-a");
@@ -310,11 +316,12 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194801,
@@ -364,11 +371,12 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
     ctx.expect_result(104194804, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
+        ctx.with_fixture(|conn| {
+let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
         assert!(
             active
                 .active_page_target()
@@ -385,6 +393,7 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
                 .is_none(),
             "clearing staged locale back to default should fold away the background state entry",
         );
+});
     }
 
     let url_a = format!("http://{addr}/page-a");
@@ -477,11 +486,12 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_activ
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194808,
@@ -531,11 +541,12 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_activ
     ctx.expect_result(104194811, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
+        ctx.with_fixture(|conn| {
+let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
         assert!(
             active
                 .active_page_target()
@@ -552,6 +563,7 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_activ
                 .is_none(),
             "clearing staged timezone back to default should fold away the background state entry",
         );
+});
     }
 
     let url_a = format!("http://{addr}/page-a");
@@ -626,11 +638,12 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194901,
@@ -730,60 +743,64 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
     ctx.expect_result(104194908, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(
-            active
-                .active_page_target()
-                .effective_emulation_state
-                .emulated_device_metrics
-                .as_ref()
-                .map(|metrics| (
-                    metrics.width,
-                    metrics.height,
-                    metrics.device_scale_factor,
-                    metrics.screen_width,
-                    metrics.screen_height
-                )),
-            Some((1280, 720, 2.0, 1440, 900))
-        );
-        assert!(
-            active
-                .active_page_target()
-                .effective_emulation_state
-                .max_touch_points
-                != 0
-        );
-        assert!(
-            active
-                .active_page_target()
-                .effective_emulation_state
-                .focus_emulation_enabled
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert_eq!(
+                    active
+                        .active_page_target()
+                        .effective_emulation_state
+                        .emulated_device_metrics
+                        .as_ref()
+                        .map(|metrics| (
+                            metrics.width,
+                            metrics.height,
+                            metrics.device_scale_factor,
+                            metrics.screen_width,
+                            metrics.screen_height
+                        )),
+                    Some((1280, 720, 2.0, 1440, 900))
+                );
+                assert!(
+                    active
+                        .active_page_target()
+                        .effective_emulation_state
+                        .max_touch_points
+                        != 0
+                );
+                assert!(
+                    active
+                        .active_page_target()
+                        .effective_emulation_state
+                        .focus_emulation_enabled
+                );
 
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert_eq!(
-            staged
-                .effective_emulation_state
-                .emulated_device_metrics
-                .as_ref()
-                .map(|metrics| (
-                    metrics.width,
-                    metrics.height,
-                    metrics.device_scale_factor,
-                    metrics.screen_width,
-                    metrics.screen_height
-                )),
-            Some((640, 360, 1.0, 800, 600))
-        );
-        assert_eq!(staged.effective_emulation_state.max_touch_points, 0);
-        assert!(!staged.effective_emulation_state.focus_emulation_enabled);
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert_eq!(
+                staged
+                    .effective_emulation_state
+                    .emulated_device_metrics
+                    .as_ref()
+                    .map(|metrics| (
+                        metrics.width,
+                        metrics.height,
+                        metrics.device_scale_factor,
+                        metrics.screen_width,
+                        metrics.screen_height
+                    )),
+                Some((640, 360, 1.0, 800, 600))
+            );
+            assert_eq!(staged.effective_emulation_state.max_touch_points, 0);
+            assert!(!staged.effective_emulation_state.focus_emulation_enabled);
+        });
     }
 
     ctx.process_async(json!({
@@ -892,11 +909,12 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194914,
@@ -958,39 +976,44 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
     ctx.expect_result(104194918, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("staged page settings for background target");
-        assert!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_bypass_csp_enabled
-        );
-        assert_eq!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_font_families
-                .get("standard"),
-            Some(&json!("Georgia"))
-        );
-        assert_eq!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_font_families
-                .get("fixed"),
-            Some(&json!("Fira Code"))
-        );
-        assert!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .page_intercept_file_chooser_dialog_enabled
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("staged page settings for background target")
+            };
+            assert!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_bypass_csp_enabled
+            );
+            assert_eq!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_font_families
+                    .get("standard"),
+                Some(&json!("Georgia"))
+            );
+            assert_eq!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_font_families
+                    .get("fixed"),
+                Some(&json!("Fira Code"))
+            );
+            assert!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .page_intercept_file_chooser_dialog_enabled
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -1001,36 +1024,42 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
     .await;
     ctx.expect_result(104194919, json!({}), None);
 
-    let active = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("activated browser context");
-    assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-    assert!(
-        active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .page_bypass_csp_enabled
-    );
-    assert_eq!(
-        active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .page_font_families
-            .get("standard"),
-        Some(&json!("Georgia"))
-    );
-    assert_eq!(
-        active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .page_font_families
-            .get("fixed"),
-        Some(&json!("Fira Code"))
-    );
-    assert!(
-        active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .page_intercept_file_chooser_dialog_enabled
-    );
+    ctx.with_fixture(|conn| {
+        let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("activated browser context")
+        };
+        assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
+        assert!(
+            active.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_bypass_csp_enabled
+        );
+        assert_eq!(
+            active.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_font_families
+                .get("standard"),
+            Some(&json!("Georgia"))
+        );
+        assert_eq!(
+            active.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_font_families
+                .get("fixed"),
+            Some(&json!("Fira Code"))
+        );
+        assert!(
+            active.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_intercept_file_chooser_dialog_enabled
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1043,11 +1072,12 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949131,
@@ -1103,11 +1133,12 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
     ctx.expect_result(1041949134, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
+        ctx.with_fixture(|conn| {
+let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
         assert!(
             active
                 .active_page_target()
@@ -1123,6 +1154,7 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
                 .is_none(),
             "clearing staged device metrics back to default should fold away the background state entry",
         );
+});
     }
 
     ctx.process_async(json!({
@@ -1208,11 +1240,12 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949141,
@@ -1280,11 +1313,12 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
     ctx.expect_result(1041949146, json!({}), Some(&second_session_id));
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
+        ctx.with_fixture(|conn| {
+let active = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
         assert!(
             active
                 .active_page_target()
@@ -1307,6 +1341,7 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
                 .is_none(),
             "clearing staged touch/focus back to defaults should fold away the background state entry",
         );
+});
     }
 
     ctx.process_async(json!({

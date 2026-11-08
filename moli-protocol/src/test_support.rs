@@ -6,13 +6,40 @@
 //! callers must obtain these values from their owning connection, navigation,
 //! lifecycle observer, or publication boundary.
 
-use moli_core::{RendererDocumentLifecycleIdentity, RendererOutputResidenceIdentity};
+use moli_core::{
+    RendererDocumentLifecycleIdentity, RendererOutputResidenceIdentity,
+    RendererOutputStreamIdentity,
+};
 
 use crate::{
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     ProtocolSchedulerWork,
     conn::{CdpConnection, DocumentNavigationToken, RendererPageResidenceIdentity},
 };
+
+pub fn command_response_flush_observer(
+    context: &crate::CommandResponseFlushContext,
+) -> tokio::sync::watch::Receiver<bool> {
+    context
+        .receiver()
+        .expect("test command owns a flush permit")
+}
+
+/// Binds a synthetic Page stream to a retired protocol Page owner, allowing
+/// scheduler tests to project historical output without a live Page.
+pub fn bind_renderer_page_output_stream_to_retired_owner(
+    conn: &mut CdpConnection,
+    stream: RendererOutputStreamIdentity,
+) {
+    let renderer_page = RendererPageResidenceIdentity::from_residence(stream.residence())
+        .expect("a synthetic Page output stream requires a Page residence");
+    let page_owner = crate::conn::TargetPageResidenceIdentity::new(
+        "BID-retired-scheduler-fixture".into(),
+        Some("TID-retired-scheduler-fixture".into()),
+        crate::conn::TargetPageAttachmentId::allocate(),
+    );
+    conn.bind_renderer_page_output_owner(renderer_page, page_owner);
+}
 
 /// Opaque exact-token fixture for scheduler tests that need a real
 /// target-owned background navigation request.
@@ -113,6 +140,14 @@ pub fn root_frame_stopped_loading_work(
     )
 }
 
+pub fn protocol_work_from_renderer_output(
+    mut work: ProtocolSchedulerWork,
+    source: moli_core::RendererOutputCursor,
+) -> ProtocolSchedulerWork {
+    work.bind_renderer_output_source(source);
+    work
+}
+
 pub fn root_frame_stopped_loading_work_for_target(
     publish_sequence: u64,
     session_ids: Vec<Option<String>>,
@@ -150,9 +185,9 @@ pub fn retired_location_navigation_work_for_target(
         Some(target_id),
         crate::conn::TargetPageAttachmentId::allocate(),
     );
-    ProtocolSchedulerWork::top_level_location_navigation_owner_action(
+    ProtocolSchedulerWork::top_level_navigation_owner_action(
         crate::ProtocolWorkPublishSequence::new(publish_sequence),
-        crate::conn::TopLevelLocationNavigationOwnerAction::from_prepared(
+        crate::conn::TopLevelNavigationOwnerAction::from_prepared(
             owner,
             page_owner,
             moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation::new(
@@ -161,4 +196,10 @@ pub fn retired_location_navigation_work_for_target(
             ),
         ),
     )
+}
+
+/// Creates one real domain lifetime for cross-crate task/receipt tests.
+pub fn revocable_command_wait_lifetime() -> (crate::CommandWaitLifetime, impl FnOnce()) {
+    let owner = crate::conn::CommandWaitLifetimeOwner::default();
+    (owner.lifetime(), move || owner.revoke())
 }

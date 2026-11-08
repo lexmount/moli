@@ -140,9 +140,66 @@ pub struct RendererPageHandle {
     _not_send: PhantomData<Rc<()>>,
 }
 
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub enum RendererPageAccessError {
+    #[error("Renderer Document is no longer current")]
+    DocumentReplaced,
+    #[error("renderer local host page {} is already running an owner turn", .page_id.as_u64())]
+    Busy { page_id: super::PageId },
+    #[error("renderer local host no longer tracks page {}", .page_id.as_u64())]
+    Missing { page_id: super::PageId },
+    #[error("renderer local host page {} is retiring", .page_id.as_u64())]
+    Retiring { page_id: super::PageId },
+}
+
+/// A revocable command capability for one exact native Document. It keeps
+/// neither a Page handle nor the renderer runtime owner alive.
+#[derive(Clone, Debug)]
+pub struct RendererDocumentCommandTarget {
+    pub(super) render_runtime: RenderRuntimeHandle,
+    pub(super) token: RendererPageToken,
+    pub(super) document: RendererDocumentLifecycleIdentity,
+}
+
+impl PartialEq for RendererDocumentCommandTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.token == other.token && self.document == other.document
+    }
+}
+
+impl Eq for RendererDocumentCommandTarget {}
+
+impl RendererDocumentCommandTarget {
+    pub fn document(&self) -> RendererDocumentLifecycleIdentity {
+        self.document
+    }
+
+    pub fn enqueue(&self, command: RendererPageCommand) -> Result<RendererPageCommandPending> {
+        let reply = self
+            .render_runtime
+            .enqueue(RendererOwnerCommand::RunProtocolPageCommand {
+                token: self.token,
+                command: RendererPageCommand::ForDocument {
+                    source_document: self.document,
+                    command: Box::new(command),
+                },
+            })?;
+        Ok(RendererPageCommandPending::from_owner_reply(reply))
+    }
+}
+
 pub struct RendererPageCommandPending {
     dispatch: RendererPageCommandPendingDispatch,
     javascript_dialog_watch: Option<RendererJavaScriptDialogWatch>,
+}
+
+impl RendererPageCommandPending {
+    pub(super) fn from_owner_reply(reply: oneshot::Receiver<Result<RendererOwnerReply>>) -> Self {
+        Self {
+            dispatch: RendererPageCommandPendingDispatch::Owner(reply),
+            javascript_dialog_watch: None,
+        }
+    }
 }
 
 enum RendererPageCommandPendingDispatch {
@@ -208,6 +265,20 @@ impl RendererPageHandle {
     fn token(&self) -> RendererPageToken {
         self.token
             .expect("renderer page handle should remain open while in use")
+    }
+
+    pub fn document_command_target(
+        &self,
+        document: RendererDocumentLifecycleIdentity,
+    ) -> Result<RendererDocumentCommandTarget> {
+        if self.token().page_id != document.frame.page_id {
+            return Err(super::page_commands::DocumentCommandError::WrongPage.into());
+        }
+        Ok(RendererDocumentCommandTarget {
+            render_runtime: self.render_runtime.clone(),
+            token: self.token(),
+            document,
+        })
     }
 
     pub fn page_id(&self) -> u64 {

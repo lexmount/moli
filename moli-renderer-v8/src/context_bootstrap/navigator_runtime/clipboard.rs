@@ -566,12 +566,13 @@ fn clipboard_item_write_validation_promise<'s>(
         return rejected_promise(scope, reason);
     }
     if entries.is_empty() {
-        return resolved_promise(scope, v8::undefined(scope).into());
+        let values = v8::Array::new(scope, 0);
+        return resolved_promise(scope, values.into());
     }
 
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
-    let state = v8::Array::new(scope, 3);
+    let state = v8::Array::new(scope, 4);
     let _ = state.set_index(scope, 0, resolver.into());
     let _ = state.set_index(
         scope,
@@ -579,19 +580,30 @@ fn clipboard_item_write_validation_promise<'s>(
         v8::Integer::new_from_unsigned(scope, entries.len() as u32).into(),
     );
     let _ = state.set_index(scope, 2, v8::Boolean::new(scope, false).into());
+    let values = v8::Array::new(scope, 0);
+    let _ = state.set_index(scope, 3, values.into());
 
-    for (validation_data, raw) in entries {
+    for (index, (validation_data, raw)) in entries.into_iter().enumerate() {
         let validator = v8::Function::builder(clipboard_validate_write_entry_callback)
             .data(validation_data.into())
             .build(scope)?;
         let validated = raw.then(scope, validator)?;
+        let reader = v8::Function::new(scope, clipboard_read_write_entry_callback)?;
+        let bytes = validated.then(scope, reader)?;
+        let fulfilled_data = v8::Array::new(scope, 2);
+        let _ = fulfilled_data.set_index(scope, 0, state.into());
+        let _ = fulfilled_data.set_index(
+            scope,
+            1,
+            v8::Integer::new_from_unsigned(scope, index as u32).into(),
+        );
         let on_fulfilled = v8::Function::builder(clipboard_validation_fulfilled_callback)
-            .data(state.into())
+            .data(fulfilled_data.into())
             .build(scope)?;
         let on_rejected = v8::Function::builder(clipboard_validation_rejected_callback)
             .data(state.into())
             .build(scope)?;
-        validated.then2(scope, on_fulfilled, on_rejected)?;
+        bytes.then2(scope, on_fulfilled, on_rejected)?;
     }
     Some(promise)
 }
@@ -651,12 +663,49 @@ fn clipboard_validate_write_entry_callback<'s>(
     }
 }
 
+fn clipboard_read_write_entry_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let data = v8::Local::<v8::Object>::try_from(args.get(0))
+        .ok()
+        .and_then(|object| blob::blob_data_from_object(scope, object));
+    let Some(data) = data else {
+        throw_type_error(scope, "Failed to read validated ClipboardItem data.");
+        return;
+    };
+    if let Some(promise) = blob::read::read_promise(scope, data, blob::read::BlobReadFormat::Bytes)
+        && let Some(rejected) =
+            v8::Function::new(scope, clipboard_read_write_entry_rejected_callback)
+        && let Some(promise) = promise.catch(scope, rejected)
+    {
+        rv.set(promise.into());
+    }
+}
+
+fn clipboard_read_write_entry_rejected_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    // Match Blink's RejectFromReadOrDecodeFailure. This handles only body
+    // reads, so author-provided representation Promise errors keep identity.
+    throw_dom_exception(scope, "Failed to read ClipboardItem data.", "DataError");
+}
+
 fn clipboard_validation_fulfilled_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((state, resolver)) = clipboard_validation_state(scope, args.data()) else {
+    let Ok(data) = v8::Local::<v8::Array>::try_from(args.data()) else {
+        return;
+    };
+    let Some(state) = data.get_index(scope, 0) else {
+        return;
+    };
+    let Some((state, resolver)) = clipboard_validation_state(scope, state) else {
         return;
     };
     if state
@@ -665,13 +714,29 @@ fn clipboard_validation_fulfilled_callback<'s>(
     {
         return;
     }
+    let Some(values) = state
+        .get_index(scope, 3)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(index) = data
+        .get_index(scope, 1)
+        .and_then(|value| value.uint32_value(scope))
+        .and_then(|index| v8_string(scope, &index.to_string()))
+    else {
+        return;
+    };
+    if values.create_data_property(scope, index.into(), args.get(0)) != Some(true) {
+        return;
+    }
     let remaining = state
         .get_index(scope, 1)
         .and_then(|value| value.uint32_value(scope))
         .unwrap_or(1);
     if remaining <= 1 {
         let _ = state.set_index(scope, 2, v8::Boolean::new(scope, true).into());
-        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        let _ = resolver.resolve(scope, values.into());
     } else {
         let _ = state.set_index(
             scope,
@@ -734,7 +799,10 @@ fn clipboard_store_validated_item_callback<'s>(
         let _ = resolver.reject(scope, reason);
         return;
     }
-    let Some(snapshot) = clipboard_item_snapshot(scope, item) else {
+    let Some(snapshot) = v8::Local::<v8::Array>::try_from(args.get(0))
+        .ok()
+        .and_then(|values| clipboard_item_snapshot(scope, item, values))
+    else {
         let reason = type_error_value(scope, "Failed to read validated ClipboardItem data.");
         let _ = resolver.reject(scope, reason);
         return;
@@ -863,6 +931,7 @@ fn copy_clipboard_items<'s>(
 fn clipboard_item_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
+    values: v8::Local<'s, v8::Array>,
 ) -> Option<ClipboardSnapshot> {
     let style = get_private_value(scope, item, CLIPBOARD_ITEM_PRESENTATION_STYLE_SLOT)?;
     let style = v8::Local::<v8::String>::try_from(style)
@@ -871,18 +940,20 @@ fn clipboard_item_snapshot<'s>(
     let presentation_style = <PresentationStyle as webidl::WebIdlEnum>::parse_token(&style)?;
     let types = get_private_value(scope, item, CLIPBOARD_ITEM_TYPES_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())?;
+    if values.length() != types.length() {
+        return None;
+    }
     let mut representations = Vec::with_capacity(types.length() as usize);
     for index in 0..types.length() {
         let mime_type = types
             .get_index(scope, index)?
             .to_string(scope)?
             .to_rust_string_lossy(scope);
-        let promise = clipboard_item_data_promise(scope, item, &mime_type)?;
-        if promise.state() != v8::PromiseState::Fulfilled {
-            return None;
-        }
-        let blob = v8::Local::<v8::Object>::try_from(promise.result(scope)).ok()?;
-        representations.push((mime_type, blob::blob_bytes_from_object(scope, blob)?));
+        let bytes = values.get_index(scope, index)?;
+        representations.push((
+            mime_type,
+            blob::buffer_source_bytes_from_value(scope, bytes)?,
+        ));
     }
     Some(ClipboardSnapshot {
         presentation_style,

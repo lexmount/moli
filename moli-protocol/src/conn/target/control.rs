@@ -20,6 +20,55 @@ pub(crate) struct TargetControlPlane {
 }
 
 impl TargetControlPlane {
+    pub(crate) fn bind_worker_attachment(
+        &mut self,
+        session_id: &str,
+        attachment: super::TargetWorkerProtocolAttachmentIdentity,
+    ) {
+        self.sessions.bind_worker_attachment(session_id, attachment);
+    }
+
+    pub(crate) fn worker_attachment(
+        &self,
+        session_id: &str,
+    ) -> Option<&super::TargetWorkerProtocolAttachmentIdentity> {
+        self.sessions.worker_attachment(session_id)
+    }
+
+    pub(crate) fn close_session_waiters(&self) {
+        self.sessions.close_session_waiters();
+    }
+
+    pub(crate) fn session_binding_lifetime(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.sessions.session_binding_lifetime(session_id)
+    }
+
+    pub(crate) fn session_disposal_wait(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.sessions.session_disposal_wait(session_id)
+    }
+
+    pub(crate) fn mark_session_closing(&mut self, session_id: &str) {
+        self.sessions.mark_session_closing(session_id);
+    }
+
+    pub(crate) fn bind_session_lifecycle(
+        &mut self,
+        session_id: &str,
+        lifecycle: crate::conn::state::DevToolsSessionLifecycle,
+    ) {
+        self.sessions.bind_session_lifecycle(session_id, lifecycle);
+    }
+
+    pub(crate) fn session_is_closing(&self, session_id: &str) -> bool {
+        self.sessions.session_is_closing(session_id)
+    }
+
     pub(crate) fn register_tab(&mut self, tab_target_id: String, primary_page_target_id: String) {
         self.graph
             .register_tab(tab_target_id, primary_page_target_id);
@@ -63,6 +112,19 @@ impl TargetControlPlane {
         self.graph
             .remove_tab_by_page_target_id(page_target_id)
             .map(TargetClosurePlan::from_tab_target)
+    }
+
+    pub(crate) fn tab_session_cleanup_plan_for_page_target(
+        &self,
+        page_target_id: &str,
+        reason: Option<&str>,
+    ) -> Option<TargetClosureCleanupPlan> {
+        let tab = self.graph.tab_for_page_target_id(page_target_id)?;
+        Some(TargetClosureCleanupPlan::new(
+            tab.id(),
+            reason,
+            tab.session_ids(),
+        ))
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
@@ -506,6 +568,7 @@ impl TargetControlPlane {
             .attached_session_cascade_for_owner(owner_session_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
         self.sessions.attached_session_cascade_for_root_frontend()
     }
@@ -621,6 +684,7 @@ mod tests {
         assert_eq!(events.len(), 2);
         let messages = events
             .into_iter()
+            .filter(crate::conn::BackgroundProtocolEvent::has_protocol_wire_message)
             .map(|event| event.into_parts().0)
             .collect::<Vec<_>>();
         for message in &messages {

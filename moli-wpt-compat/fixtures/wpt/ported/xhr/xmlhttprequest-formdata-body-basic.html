@@ -76,8 +76,8 @@ promise_test(async function () {
       'Content-Disposition: form-data; name="alpha"\r\n\r\n' +
       "one\r\n" +
       `--${boundary}\r\n` +
-      'Content-Disposition: form-data; name="line%0Aname"\r\n\r\n' +
-      "line\nvalue\r\n" +
+      'Content-Disposition: form-data; name="line%0D%0Aname"\r\n\r\n' +
+      "line\r\nvalue\r\n" +
       `--${boundary}\r\n` +
       'Content-Disposition: form-data; name="quote%22name"\r\n\r\n' +
       'quote"value\r\n' +

@@ -61,7 +61,9 @@ pub(super) fn live_form_data_iterator<'s>(
         .bind(scope)
         .ok()?;
     let prototype = form_data_iterator_prototype(scope)?;
-    iterator.set_prototype(scope, prototype.into())?;
+    iterator
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(iterator.into())
 }
 

@@ -197,19 +197,19 @@ struct DomRectReadOnlyConstructorArgs {
 
 #[derive(Clone, Copy, Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMRectInit", snapshot)]
-struct DomRectInit {
+pub(super) struct DomRectInit {
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_HEIGHT_SLOT)]
-    height: f64,
+    pub(super) height: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_WIDTH_SLOT)]
-    width: f64,
+    pub(super) width: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_X_SLOT)]
-    x: f64,
+    pub(super) x: f64,
     #[webidl(default = 0.0)]
     #[webidl(snapshot_slot = DOM_RECT_Y_SLOT)]
-    y: f64,
+    pub(super) y: f64,
 }
 
 pub(super) fn dom_rect_readonly_constructor_callback<'s>(
@@ -371,7 +371,7 @@ fn dom_rect_from_rect_callback<'s>(
     rv.set(build_dom_rect_object(scope, init.x, init.y, init.width, init.height).into());
 }
 
-fn dom_rect_init_arg<'s>(
+pub(super) fn dom_rect_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     prefix: &'static str,

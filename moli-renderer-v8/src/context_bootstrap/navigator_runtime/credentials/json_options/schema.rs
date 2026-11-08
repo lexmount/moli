@@ -1,7 +1,8 @@
 use crate::webidl;
 
 pub(super) use super::super::schema::{Parameters, RelyingParty, Selection};
-use super::super::value::{Dictionary, Text};
+use super::super::value::Text;
+use webidl::Dictionary;
 
 // The derive orders each dictionary's final member names lexicographically;
 // inherited dictionaries such as RelyingParty declare their base explicitly.

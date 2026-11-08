@@ -143,7 +143,8 @@ async fn verify_auth_retry_limit(endpoint: AuthEndpoint, intercept_response: boo
         }
     });
 
-    let mut ctx = TestContext::new();
+    let mut conn = crate::testing::real_layout_test_connection();
+    conn.set_root_target_discovery_enabled(true);
     let mut bc = attached_browser_context();
     if chained {
         assert!(bc.assign_attached_session_to_target("TID-1", "SID-auth".to_owned()));
@@ -151,18 +152,18 @@ async fn verify_auth_retry_limit(endpoint: AuthEndpoint, intercept_response: boo
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.enable_page_events_for_test(Some("SID-1"));
+    conn.install_browser_context_fixture_for_test(bc);
     let url = match endpoint {
         AuthEndpoint::Server => format!("http://{addr}/auth"),
         AuthEndpoint::HttpProxy => "http://example.test/auth".to_owned(),
         AuthEndpoint::ConnectProxy => "https://example.test/auth".to_owned(),
     };
     if !matches!(endpoint, AuthEndpoint::Server) {
-        ctx.conn
-            .set_http_proxy_override_async(Some(format!("http://{addr}")))
+        conn.set_http_proxy_override_async(Some(format!("http://{addr}")))
             .await;
     }
+    let mut ctx = TestContext::from_conn(conn);
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
         "id": 1998, "method": "Fetch.enable", "sessionId": "SID-1",
         "params": { "handleAuthRequests": true }
@@ -211,19 +212,19 @@ async fn verify_auth_retry_limit(endpoint: AuthEndpoint, intercept_response: boo
             Some("Fetch.authRequired" | "Network.loadingFinished")
         )
     }));
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-1"))
-    );
-    let fetch_owner = &ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .fetch_owner;
-    assert!(!fetch_owner.has_pending_fetch_auth_navigation_for_test(&last_request_id));
-    assert!(!fetch_owner.has_pending_fetch_auth_navigation_for_test("INT-1"));
+    ctx.with_fixture(|conn| {
+        assert!(!{ conn.has_pending_document_navigation_for_session_owner(Some("SID-1")) })
+    });
+    ctx.with_fixture(|conn| {
+        let fetch_owner = &conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner;
+        assert!(!fetch_owner.has_pending_fetch_auth_navigation_for_test(&last_request_id));
+        assert!(!fetch_owner.has_pending_fetch_auth_navigation_for_test("INT-1"));
+    });
 
     // A fresh navigation gets its own budget and can correct an earlier mistake.
     begin_navigation(&mut ctx, &url, intercept_response).await;
@@ -263,10 +264,9 @@ async fn verify_auth_retry_limit(endpoint: AuthEndpoint, intercept_response: boo
         );
         wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
     }
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-1"))
-    );
+    ctx.with_fixture(|conn| {
+        assert!(!{ conn.has_pending_document_navigation_for_session_owner(Some("SID-1")) })
+    });
     server.abort();
 }
 

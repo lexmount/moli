@@ -28,6 +28,7 @@ pub use responses::{
     bidi_response_from_devtools_error, bidi_response_from_devtools_result, error_response,
     success_response,
 };
+pub use user_context::bidi_user_context_from_browser_context_id;
 
 #[cfg(test)]
 mod tests;

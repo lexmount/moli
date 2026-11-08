@@ -10,6 +10,7 @@ members = [
     "moli-canvas",
     "moli-charset-parser",
     "moli-cookie-cache",
+    "moli-cookie-db",
     "moli-cookie-import",
     "moli-protocol-cdp",
     "moli-cookie-store",
@@ -53,6 +54,7 @@ members = [
     "moli-shared-worker",
     "moli-storage-service",
     "moli-storage-key",
+    "moli-sqlite",
     "moli-streams",
     "moli-structured-clone",
     "moli-stylesheet-blocking",
@@ -66,6 +68,7 @@ members = [
     "moli-v8-test-util",
     "moli-v8-util",
     "moli-web-mime",
+    "moli-web-storage",
     "moli-web-bot-auth",
     "moli-web-errors",
     "moli-protocol-webdriver-bidi",
@@ -98,6 +101,9 @@ members = [
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+# Share glyph preparation between CPU rendering and PDF ink measurement.
+glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
+vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 # Share AWS-LC 0.46 with aws-lc-rs until upstream openssl-sys updates its backend.
 openssl-sys = { git = "https://github.com/lexmount/rust-openssl", rev = "4497b245b09660f838dd00750616929b4cfe52ba" }
 parley = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
@@ -112,14 +118,16 @@ curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "973988b9c592a802eefdc5abe6072dd9ba221385" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "5e853c2255715a825e3f9ea043d3998a55377e77" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "moli" }
+# Resolve SVG relative font weights using the CSS inherited-weight ranges.
+usvg = { git = "https://github.com/lexmount/resvg", rev = "02b16a3cc3ca4dd019293c45aacf89ca11875ed9" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
 
 [patch."https://github.com/DioxusLabs/taffy"]

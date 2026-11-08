@@ -112,6 +112,7 @@ impl JsContextHost {
         let bindings = self.retire_runtime_binding_context_token(realm_token);
         let images = self.retire_image_decode_requests_for_context_token(realm_token);
         let crypto = self.retire_webcrypto_context_token(realm_token);
+        let fonts = self.retire_font_face_loads_for_context_token(realm_token);
         self.retire_opfs_context_token(realm_token);
         let workers = self.retire_workers_for_context_token(realm_token);
         let shared_workers = self.disconnect_shared_worker_clients_for_context_token(realm_token);
@@ -128,6 +129,7 @@ impl JsContextHost {
             bindings = bindings.retired_execution_context_count(),
             images,
             crypto,
+            fonts,
             workers,
             shared_workers,
             xhrs,
@@ -142,6 +144,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn retire_all_window_execution_context_resources_for_teardown(&mut self) {
+        self.local_storage_areas.clear();
         let owners = self
             .window_execution_contexts
             .keys()
@@ -204,10 +207,11 @@ impl JsContextHost {
         self.pending_service_worker_ready.clear();
         self.service_worker_registration_watchers.clear();
         self.pending_window_messages.clear();
-        drop(std::mem::take(&mut self.directory_reader_callbacks));
+        drop(std::mem::take(&mut self.file_reading_tasks));
         drop(std::mem::take(&mut self.misc_platform_api_tasks));
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
         drop(std::mem::take(&mut self.user_interaction_tasks));
+        self.pending_font_face_loads.clear();
         self.pending_image_load_events.clear();
         self.pending_media_load_sequences.clear();
         self.pending_text_track_load_sequences.clear();
@@ -512,6 +516,8 @@ impl JsContextHost {
         &mut self,
         owner: WindowExecutionContextOwner,
     ) -> bool {
+        self.local_storage_areas.remove(&owner);
+        self.retire_font_face_loads_for_execution_context_owner(owner);
         self.retire_event_callbacks_for_execution_context(owner);
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
@@ -523,11 +529,9 @@ impl JsContextHost {
                 binding.dispatch_scope(),
                 OwnerDispatchScope::LightweightPopup(_)
             ) {
-                let retirement = self.retire_indexed_db_owner(owner);
-                retirement.finish(self.indexed_db_manager.as_ref());
+                self.retire_indexed_db_owner(owner);
             } else {
-                let retirement = self.retire_indexed_db_context(binding.realm_token());
-                retirement.finish(self.indexed_db_manager.as_ref());
+                self.retire_indexed_db_context(binding.realm_token());
                 self.bridge
                     .retire_default_world_wrappers_for_realm(binding.realm_token());
             }
@@ -543,10 +547,9 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
-        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
-        let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
-        indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
+        let retired_indexed_db_connections = self.retire_indexed_db_context(context_token);
         let owners = self
             .window_execution_contexts
             .iter()
@@ -556,6 +559,7 @@ impl JsContextHost {
             .collect::<Vec<_>>();
         let retired_count = owners.len();
         for owner in owners {
+            self.local_storage_areas.remove(&owner);
             self.window_execution_contexts.remove(&owner);
         }
         self.bridge
@@ -592,9 +596,9 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        self.retire_font_face_loads_for_context_token(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
-        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
-        indexed_db_retirement.finish(self.indexed_db_manager.as_ref());
+        self.retire_indexed_db_context(context_token);
         let retired_realm_count = self
             .window_execution_context_realms
             .remove_token(context_token);
@@ -703,18 +707,6 @@ impl JsContextHost {
                     registration.owner == identity.owner()
                         && registration.access_policy == identity.access_policy()
                 })
-    }
-
-    pub(crate) fn window_execution_context_identity_is_default_world(
-        &self,
-        identity: WindowExecutionContextIdentity,
-    ) -> bool {
-        self.window_execution_contexts
-            .get(&identity.owner())
-            .is_some_and(|binding| {
-                binding.dispatch_scope() == identity.dispatch_scope()
-                    && binding.realm_token() == identity.realm_token()
-            })
     }
 
     pub(crate) fn allocate_runtime_observable_context_token(

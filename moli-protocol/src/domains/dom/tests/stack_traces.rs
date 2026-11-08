@@ -173,11 +173,12 @@ async fn node_creation_stacks_capture_only_the_enabled_interval() {
 async fn node_creation_stack_capture_is_session_local() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .attach_active_session("SID-stack-primary".to_owned());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context")
+            .attach_active_session("SID-stack-primary".to_owned())
+    });
     navigate_to_data_html_async(&mut ctx, 20, "<!doctype html><html><body></body></html>").await;
 
     ctx.process_async(json!({

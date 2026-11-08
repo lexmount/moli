@@ -17,7 +17,7 @@ use moli_core::page::{
     SubresourceAuthChallenge, SubresourceAuthCredentials, extract_subresource_auth_challenge,
     subresource_auth_credentials_for_challenge,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use url::Url;
 
 use super::params::HeaderEntry;
@@ -161,7 +161,7 @@ fn emit_navigation_auth_required(
     out.extend(
         events
             .into_iter()
-            .map(BackgroundProtocolEvent::into_protocol_message),
+            .filter_map(BackgroundProtocolEvent::into_wire_message),
     );
 }
 
@@ -518,7 +518,10 @@ pub(crate) fn request_paused_background_event(
             .map(DevToolsRequestId::from),
         auth_challenge: None,
     };
-    let payload = network::fetch_request_paused_params(&network_event);
+    let mut payload = network::fetch_request_paused_params(&network_event);
+    if let Some(previous) = &pending.redirected_request_id {
+        payload["redirectedRequestId"] = json!(previous);
+    }
     let message = build_event("Fetch.requestPaused", payload, session_id);
     BackgroundProtocolEvent::immediate_automation_event(
         message,

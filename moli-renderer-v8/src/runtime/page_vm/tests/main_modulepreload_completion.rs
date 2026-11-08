@@ -16,7 +16,6 @@ fn modulepreload_request(
     let key = ModuleMapKey::java_script(request_url.clone());
     let request = NativeModuleSingleFetchRequest::new(
         request_url.clone(),
-        request_url.clone(),
         document_url.clone(),
         key.clone(),
         ModuleFetchMetadata::default(),
@@ -34,7 +33,6 @@ fn modulepreload_completion(
         .map(|source| {
             ModuleGraphFetchedSource::new(
                 request_url.clone(),
-                false,
                 ModuleSource::text(source.to_owned()),
             )
         })

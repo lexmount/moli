@@ -84,6 +84,7 @@ impl Event {
 pub(crate) enum Command {
     SendText(String),
     SendBinary(Vec<u8>),
+    SendBlob(moli_file_api::BlobData),
     ReceiveText(String),
     ReceiveBinary(Vec<u8>),
     Fail(String),

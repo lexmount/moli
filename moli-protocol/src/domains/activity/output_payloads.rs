@@ -1,6 +1,5 @@
 use crate::domains::{
-    dom::DomPreparedOutputSlot, dom_storage::DomStoragePreparedOutputSlot,
-    input::InputPreparedOutputSlot, network::NetworkPreparedOutputSlot,
+    dom::DomPreparedOutputSlot, input::InputPreparedOutputSlot, network::NetworkPreparedOutputSlot,
     observable_output::ObservablePreparedOutputSlot, page::MainDocumentCommitPreparedOutput,
     page::PagePreparedOutputSlot, runtime::RuntimePreparedOutputSlot,
     target::TargetPreparedOutputSlot,
@@ -16,7 +15,6 @@ use crate::domains::{
 pub(in crate::domains) enum ProtocolOutputPayload {
     WebMcp(crate::domains::web_mcp::WebMcpPreparedOutputSlot),
     Dom(DomPreparedOutputSlot),
-    DomStorage(DomStoragePreparedOutputSlot),
     Input(InputPreparedOutputSlot),
     MainDocumentCommit(MainDocumentCommitPreparedOutput),
     Network(NetworkPreparedOutputSlot),
@@ -35,7 +33,6 @@ pub(in crate::domains) enum ProtocolOutputPayload {
 pub(in crate::domains) struct ProtocolOutputPayloads {
     web_mcp: Option<crate::domains::web_mcp::WebMcpPreparedOutputSlot>,
     dom: Option<DomPreparedOutputSlot>,
-    dom_storage: Option<DomStoragePreparedOutputSlot>,
     input: Option<InputPreparedOutputSlot>,
     main_document_commit: Option<MainDocumentCommitPreparedOutput>,
     network: Option<NetworkPreparedOutputSlot>,
@@ -69,7 +66,6 @@ impl ProtocolOutputPayloads {
         match payload {
             ProtocolOutputPayload::WebMcp(value) => merge!(web_mcp, value),
             ProtocolOutputPayload::Dom(value) => merge!(dom, value),
-            ProtocolOutputPayload::DomStorage(value) => merge!(dom_storage, value),
             ProtocolOutputPayload::Input(value) => merge!(input, value),
             ProtocolOutputPayload::MainDocumentCommit(value) => {
                 merge!(main_document_commit, value)
@@ -90,12 +86,6 @@ impl ProtocolOutputPayloads {
         &mut self,
     ) -> Option<&mut crate::domains::web_mcp::WebMcpPreparedOutputSlot> {
         self.web_mcp.as_mut()
-    }
-
-    pub(in crate::domains) fn dom_storage_mut(
-        &mut self,
-    ) -> Option<&mut DomStoragePreparedOutputSlot> {
-        self.dom_storage.as_mut()
     }
 
     pub(in crate::domains) fn input_mut(&mut self) -> Option<&mut InputPreparedOutputSlot> {
@@ -139,7 +129,6 @@ impl ProtocolOutputPayloads {
         [
             self.web_mcp.is_some(),
             self.dom.is_some(),
-            self.dom_storage.is_some(),
             self.input.is_some(),
             self.main_document_commit.is_some(),
             self.network.is_some(),
@@ -166,7 +155,6 @@ macro_rules! impl_payload_from {
 
 impl_payload_from!(DomPreparedOutputSlot, Dom);
 impl_payload_from!(crate::domains::web_mcp::WebMcpPreparedOutputSlot, WebMcp);
-impl_payload_from!(DomStoragePreparedOutputSlot, DomStorage);
 impl_payload_from!(InputPreparedOutputSlot, Input);
 impl_payload_from!(MainDocumentCommitPreparedOutput, MainDocumentCommit);
 impl_payload_from!(NetworkPreparedOutputSlot, Network);

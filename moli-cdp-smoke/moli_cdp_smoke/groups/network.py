@@ -8,6 +8,7 @@ from typing import Any, Awaitable
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..config import is_moli_browser
+from ..fixture import TRANSPARENT_PNG
 from ..helpers import isolated_network_page, read_io_to_eof, attach_cdp_event_collector, evaluate_xhr
 
 
@@ -1840,7 +1841,7 @@ async def _verify_chromium_resource_type_network_matrix(state: SmokeState) -> No
     expected_bodies: dict[str, tuple[str, bool]] = {
         "/chromium-resource-style.css": ("main { color: rgb(31, 41, 59); }", False),
         "/chromium-resource-script.js": ("globalThis.__smokeChromiumResourceScript = true;", False),
-        "/chromium-resource-image.png": (base64.b64encode(_transparent_png_bytes()).decode("ascii"), True),
+        "/chromium-resource-image.png": (base64.b64encode(TRANSPARENT_PNG).decode("ascii"), True),
         "/chromium-resource-audio.wav": (base64.b64encode(b"\x00\xffmoli-media").decode("ascii"), True),
         "/chromium-resource-video.ogv": (base64.b64encode(b"\x00\xffmoli-media").decode("ascii"), True),
         "/chromium-resource-captions.vtt": ("WEBVTT\n\n00:00.000 --> 00:01.000\ncaption\n", False),
@@ -1938,12 +1939,6 @@ async def run_network_body_cache_group(state: SmokeState) -> None:
             "maxTotalBufferSize": 20_000_000,
             "maxResourceBufferSize": 2_000_000,
         },
-    )
-
-
-def _transparent_png_bytes() -> bytes:
-    return base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )
 
 

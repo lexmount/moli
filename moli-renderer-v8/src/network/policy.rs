@@ -434,6 +434,20 @@ impl PageNetworkPolicySnapshot {
             .any(|pattern| url_pattern_matches(pattern, url.as_str()))
     }
 
+    /// Merge headers without enforcing network availability or resource policy.
+    /// Existing request fields, including empty values, take precedence.
+    pub(crate) fn apply_request_headers(&self, request: &mut Request) {
+        if !self.extra_http_headers.is_empty() {
+            let headers = moli_fetch::RequestHeaders::from_bytes(
+                self.extra_http_headers
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_vec()))
+                    .collect(),
+            );
+            request.apply_default_headers(&headers);
+        }
+    }
+
     pub(crate) fn apply_to_request(&self, mut request: Request) -> Result<Request> {
         // Worker fetch/XHR enforce their loading policy at the API boundary,
         // but still inherit the identity captured by their resource lease.
@@ -461,32 +475,13 @@ impl PageNetworkPolicySnapshot {
             return Err(anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT));
         }
 
-        if self.cache_disabled {
+        if self.cache_disabled && request.cache_mode() != RequestCacheMode::NoStore {
             request = request.with_cache_mode(RequestCacheMode::Bypass);
         }
 
-        if !self.extra_http_headers.is_empty() {
-            request.request_headers = merge_page_network_policy_headers(
-                &self.extra_http_headers,
-                &request.request_headers,
-            );
-        }
+        self.apply_request_headers(&mut request);
         Ok(request)
     }
-}
-
-fn merge_page_network_policy_headers(
-    context_headers: &[(Box<str>, Box<[u8]>)],
-    request_headers: &moli_fetch::RequestHeaders,
-) -> moli_fetch::RequestHeaders {
-    let mut headers = moli_fetch::RequestHeaders::from_bytes(
-        context_headers
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_vec()))
-            .collect(),
-    );
-    headers.overlay(request_headers.clone());
-    headers
 }
 
 #[cfg(test)]
@@ -589,21 +584,62 @@ mod tests {
     }
 
     #[test]
-    fn cache_disabled_forces_page_requests_to_bypass_cache() {
+    fn page_headers_survive_request_scoped_override_restoration_on_redirect() {
+        let policy = PageNetworkPolicy::default();
+        policy.set_extra_http_headers(&vec![("x-page".to_owned(), "page".to_owned())].into());
+        let mut request = policy
+            .snapshot()
+            .apply_to_request(
+                Request::new(
+                    "GET",
+                    "https://example.test/redirect",
+                    None,
+                    vec![("x-hop".to_owned(), "initial-only".to_owned())],
+                )
+                .unwrap()
+                .with_page_network_policy()
+                .with_redirect_headers(Some(Vec::new().into())),
+            )
+            .unwrap();
+        assert_eq!(
+            request.request_headers.to_byte_strings(),
+            vec![("x-hop".to_owned(), "initial-only".to_owned())],
+        );
+        request.apply_redirect_status(302);
+        assert_eq!(
+            request.request_headers.to_byte_strings(),
+            vec![("x-page".to_owned(), "page".to_owned())],
+        );
+    }
+
+    #[test]
+    fn cache_disabled_preserves_no_store_and_bypasses_other_modes() {
         let policy = PageNetworkPolicy::default();
         let before = policy.revision();
         policy.set_cache_disabled(true);
 
-        let request = policy
-            .snapshot()
-            .apply_to_request(
-                Request::get("https://example.test/cache")
-                    .unwrap()
-                    .with_page_network_policy(),
-            )
-            .unwrap();
-
-        assert_eq!(request.cache_mode(), RequestCacheMode::Bypass);
+        for mode in [
+            RequestCacheMode::Default,
+            RequestCacheMode::Validate,
+            RequestCacheMode::Bypass,
+            RequestCacheMode::NoStore,
+        ] {
+            let request = policy
+                .snapshot()
+                .apply_to_request(
+                    Request::get("https://example.test/cache")
+                        .unwrap()
+                        .with_cache_mode(mode)
+                        .with_page_network_policy(),
+                )
+                .unwrap();
+            let expected = if mode == RequestCacheMode::NoStore {
+                RequestCacheMode::NoStore
+            } else {
+                RequestCacheMode::Bypass
+            };
+            assert_eq!(request.cache_mode(), expected, "initial mode: {mode:?}");
+        }
         assert!(policy.cache_disabled());
         assert!(policy.revision() > before);
     }

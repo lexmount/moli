@@ -84,7 +84,7 @@ pub(in crate::context_bootstrap) fn build_navigation_runtime_state<'s>(
     let navigation = NavigationRuntimeObjectDeclaration::new(current_entry)
         .bind(scope)
         .map_err(anyhow::Error::from)?;
-    super::media_queries::install_simple_event_target_methods(scope, navigation);
+    super::media_queries::initialize_simple_event_target(scope, navigation);
     super::super::shared_event_targets::install_handlers(scope, navigation, false);
     let owner = history_window_owner(scope, window);
     if window_has_shared_history(scope, window)

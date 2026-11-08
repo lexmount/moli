@@ -9,7 +9,7 @@ anyhow = "1.0.100"
 axum = { version = "0.8.6", features = ["ws"] }
 parking_lot = "0.12"
 serde_json = "1.0.145"
-tokio = { version = "1.51.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.51.0", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = "0.1.17"
 
 [lints]

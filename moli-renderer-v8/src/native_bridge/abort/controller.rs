@@ -36,7 +36,9 @@ pub(crate) fn abort_controller_signal_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    match get_private_value(scope, args.this(), ABORT_CONTROLLER_SIGNAL_SLOT) {
+    let controller = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("AbortController receiver is checked by the binding");
+    match get_private_value(scope, controller, ABORT_CONTROLLER_SIGNAL_SLOT) {
         Some(value) => rv.set(value),
         None => rv.set_null(),
     }
@@ -51,7 +53,8 @@ pub(crate) fn abort_controller_abort_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let controller = args.this();
+    let controller = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("AbortController receiver is checked by the binding");
     let Some(_) = AbortStore::controller_id_from_object(scope, controller) else {
         rv.set_undefined();
         return;

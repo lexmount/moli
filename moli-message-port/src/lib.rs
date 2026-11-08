@@ -7,7 +7,7 @@
 //! - entangled peer tracking;
 //! - pending message and close queues;
 //! - transfer detach/attach owner state;
-//! - close-after-active-delivery behavior.
+//! - cancellation of queued messages when their receiving endpoint closes.
 //!
 //! Payload and owner wake types are supplied by the embedding layer. The
 //! renderer crate uses structured-clone bytes as the payload and page/worker
@@ -18,5 +18,8 @@ mod registry;
 mod wake;
 
 pub use id::MessagePortId;
-pub use registry::MessagePortRegistry;
+pub use registry::{
+    DiscardedMessagePort, MessagePortCloseKind, MessagePortCloseResult, MessagePortPoll,
+    MessagePortRegistry,
+};
 pub use wake::MessagePortWake;

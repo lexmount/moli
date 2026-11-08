@@ -33,6 +33,7 @@ import os
 import random
 import re
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -72,6 +73,7 @@ from .case_set import (
     parse_any_js_meta,
 )
 from .pipes import WptPipeError, parse_pipe_commands
+from .tls import FixtureCertificateAuthority
 
 
 # Match wptserve's bounded header count for both requests and responses.
@@ -84,6 +86,7 @@ MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
 REMOTE_CONTEXT_EXECUTOR_PATH = (
@@ -435,245 +438,10 @@ def _inject_bench_report_bridge_config(body: bytes, timeout_multiplier: float) -
     return BENCH_REPORT_BRIDGE_SRC_RE.sub(replace, body)
 
 
-BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
-/* Moli benchmark minimal testdriver-vendor.js bridge.
- *
- * This is intentionally narrow: it implements enough pointer/key actions for
- * static testharness pages to exercise engine behaviour without a WebDriver
- * backend. Unsupported automation APIs keep testdriver.js's default failures.
- */
+BENCH_TESTDRIVER_VENDOR_BRIDGE = (
+    Path(__file__).with_name("testdriver_input.js").read_bytes()
+    + b"""\
 (function() {
-  var rectTargets = Object.create(null);
-  function recordRectTarget(element, rect) {
-    var x = Number.isFinite(rect.x) ? rect.x : rect.left || 0;
-    var y = Number.isFinite(rect.y) ? rect.y : rect.top || 0;
-    var centerX = Math.round(x + rect.width / 2);
-    var centerY = Math.round(y + rect.height / 2);
-    var key = centerX + ',' + centerY;
-    rectTargets[key] = { element: element, x: centerX, y: centerY };
-  }
-  if (typeof Element !== 'undefined' && Element.prototype && Element.prototype.getBoundingClientRect) {
-    var nativeGetBoundingClientRect = Element.prototype.getBoundingClientRect;
-    Element.prototype.getBoundingClientRect = function() {
-      var rect = nativeGetBoundingClientRect.apply(this, arguments);
-      var x = Number.isFinite(rect.x) ? rect.x : rect.left || 0;
-      var y = Number.isFinite(rect.y) ? rect.y : rect.top || 0;
-      recordRectTarget(this, rect);
-      return {
-        x: x,
-        y: y,
-        left: Number.isFinite(rect.left) ? rect.left : x,
-        top: Number.isFinite(rect.top) ? rect.top : y,
-        right: Number.isFinite(rect.right) ? rect.right : x + (rect.width || 0),
-        bottom: Number.isFinite(rect.bottom) ? rect.bottom : y + (rect.height || 0),
-        width: rect.width || 0,
-        height: rect.height || 0,
-        toJSON: function() { return this; },
-      };
-    };
-  }
-  if (typeof Element !== 'undefined' && Element.prototype && Element.prototype.getClientRects) {
-    var nativeGetClientRects = Element.prototype.getClientRects;
-    Element.prototype.getClientRects = function() {
-      var rects = nativeGetClientRects.apply(this, arguments);
-      if (rects && rects.length) {
-        recordRectTarget(this, rects[0]);
-      }
-      return rects;
-    };
-  }
-
-  function eventInit(x, y, button) {
-    return {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      clientX: x || 0,
-      clientY: y || 0,
-      button: button || 0,
-      buttons: button === undefined ? 0 : 1,
-    };
-  }
-
-  function dispatchPointerEvent(target, type, init) {
-    var Ctor = typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
-    try { target.dispatchEvent(new Ctor(type, init)); } catch (e) {}
-  }
-
-  function dispatchMouseEvent(target, type, init) {
-    try { target.dispatchEvent(new MouseEvent(type, init)); } catch (e) {}
-  }
-
-  function focusForUserActivation(element) {
-    try {
-      var before = document.activeElement;
-      if (element && typeof element.focus === 'function') element.focus();
-      if (before && before !== document.body && document.activeElement === before &&
-          typeof before.blur === 'function') {
-        before.blur();
-      }
-    } catch (e) {}
-  }
-
-  function recordedTargetAt(x, y) {
-    var key = Math.round(x || 0) + ',' + Math.round(y || 0);
-    if (rectTargets[key]) {
-      return rectTargets[key].element;
-    }
-    var best = null;
-    var bestDistance = Infinity;
-    for (var candidateKey in rectTargets) {
-      var candidate = rectTargets[candidateKey];
-      var dx = candidate.x - (x || 0);
-      var dy = candidate.y - (y || 0);
-      var distance = dx * dx + dy * dy;
-      if (distance < bestDistance) {
-        best = candidate.element;
-        bestDistance = distance;
-      }
-    }
-    if (best) {
-      return best;
-    }
-    return null;
-  }
-
-  function targetAt(x, y) {
-    var recorded = recordedTargetAt(x, y);
-    if (recorded) {
-      return recorded;
-    }
-    if (typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') {
-      return document && document.body;
-    }
-    return document.elementFromPoint(x || 0, y || 0) || document.body;
-  }
-
-  if (typeof Document !== 'undefined' && Document.prototype &&
-      typeof Document.prototype.elementsFromPoint === 'function') {
-    var nativeElementsFromPoint = Document.prototype.elementsFromPoint;
-    Document.prototype.elementsFromPoint = function(x, y) {
-      try {
-        return nativeElementsFromPoint.apply(this, arguments);
-      } catch (e) {
-        var target = recordedTargetAt(x, y);
-        return target ? [target] : [];
-      }
-    };
-  }
-
-  function keyName(value) {
-    if (value === '\\uE004') return 'Tab';
-    if (value === '\\uE008') return 'Shift';
-    if (value === '\\uE009') return 'Control';
-    if (value === '\\uE00A') return 'Alt';
-    if (value === '\\uE00C') return 'Escape';
-    if (value === '\\uE010') return 'End';
-    if (value === '\\uE011') return 'Home';
-    if (value === '\\uE012') return 'ArrowLeft';
-    if (value === '\\uE013') return 'ArrowUp';
-    if (value === '\\uE014') return 'ArrowRight';
-    if (value === '\\uE015') return 'ArrowDown';
-    return value;
-  }
-
-  function dispatchKey(target, type, key, modifiers) {
-    target.dispatchEvent(new KeyboardEvent(type, {
-      key: key,
-      altKey: !!modifiers.Alt,
-      ctrlKey: !!modifiers.Control,
-      shiftKey: !!modifiers.Shift,
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    }));
-  }
-
-  async function action_sequence(actions, context) {
-    var pointer = { x: 0, y: 0, target: null, button: 0 };
-    var modifiers = { Alt: false, Control: false, Shift: false };
-    for (var i = 0; i < actions.length; i++) {
-      var source = actions[i];
-      var sourceActions = Array.isArray(source.actions) ? source.actions : [];
-      for (var j = 0; j < sourceActions.length; j++) {
-        var action = sourceActions[j];
-        if (!action || action.type === 'pause') {
-          continue;
-        }
-        if (source.type === 'pointer') {
-          if (action.type === 'pointerMove') {
-            pointer.x = Number(action.x) || 0;
-            pointer.y = Number(action.y) || 0;
-            var nextTarget = targetAt(pointer.x, pointer.y);
-            var init = eventInit(pointer.x, pointer.y, pointer.button);
-            if (pointer.target && pointer.target !== nextTarget) {
-              dispatchPointerEvent(pointer.target, 'pointerout', init);
-              dispatchMouseEvent(pointer.target, 'mouseout', init);
-            }
-            pointer.target = nextTarget;
-            dispatchPointerEvent(nextTarget, 'pointerover', init);
-            dispatchMouseEvent(nextTarget, 'mouseover', init);
-            dispatchPointerEvent(nextTarget, 'pointermove', init);
-            dispatchMouseEvent(nextTarget, 'mousemove', init);
-          } else if (action.type === 'pointerDown') {
-            pointer.button = Number(action.button) || 0;
-            var downTarget = pointer.target || targetAt(pointer.x, pointer.y);
-            var downInit = eventInit(pointer.x, pointer.y, pointer.button);
-            focusForUserActivation(downTarget);
-            dispatchPointerEvent(downTarget, 'pointerdown', downInit);
-            dispatchMouseEvent(downTarget, 'mousedown', downInit);
-          } else if (action.type === 'pointerUp') {
-            var upTarget = pointer.target || targetAt(pointer.x, pointer.y);
-            var upInit = eventInit(pointer.x, pointer.y, pointer.button);
-            dispatchPointerEvent(upTarget, 'pointerup', upInit);
-            dispatchMouseEvent(upTarget, 'mouseup', upInit);
-            dispatchMouseEvent(upTarget, 'click', upInit);
-            pointer.button = 0;
-          }
-        } else if (source.type === 'key') {
-          var key = keyName(action.value);
-          if (Object.prototype.hasOwnProperty.call(modifiers, key)) {
-            modifiers[key] = action.type === 'keyDown';
-          }
-          dispatchKey(
-            document.activeElement || document.body,
-            action.type === 'keyDown' ? 'keydown' : 'keyup',
-            key,
-            modifiers
-          );
-        }
-      }
-    }
-  }
-
-  async function sendKeys(element, keys) {
-    if (
-      element &&
-      typeof element.focus === 'function' &&
-      String(element.localName || '').toLowerCase() !== 'body'
-    ) {
-      element.focus();
-    }
-    var modifiers = { Alt: false, Control: false, Shift: false };
-    for (var keyValue of String(keys || '')) {
-      var key = keyName(keyValue);
-      var target = document.activeElement || element || document.body;
-      if (Object.prototype.hasOwnProperty.call(modifiers, key)) {
-        modifiers[key] = true;
-        dispatchKey(target, 'keydown', key, modifiers);
-        continue;
-      }
-      dispatchKey(target, 'keydown', key, modifiers);
-      dispatchKey(document.activeElement || target, 'keyup', key, modifiers);
-    }
-    for (var modifier in modifiers) {
-      if (modifiers[modifier]) {
-        modifiers[modifier] = false;
-        dispatchKey(document.activeElement || element || document.body, 'keyup', modifier, modifiers);
-      }
-    }
-  }
-
   function normalizedLabelText(value) {
     return String(value || '').replace(/[\\t\\n\\f\\r ]+/g, ' ').trim();
   }
@@ -851,29 +619,10 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
     window.test_driver_internal = {};
   }
   window.test_driver_internal.in_automation = true;
-  window.test_driver_internal.action_sequence = action_sequence;
-  window.test_driver_internal.send_keys = sendKeys;
   window.test_driver_internal.get_computed_label = getComputedLabel;
-  window.test_driver_internal.set_permission = async function(params) {
-    if (params && params.descriptor && params.descriptor.name === 'storage-access') {
-      return;
-    }
-    throw new Error("set_permission() is not implemented by the Moli WPT bridge");
-  };
-  window.test_driver_internal.click = async function(element) {
-    var rect = element.getBoundingClientRect();
-    var x = Math.round(rect.x + rect.width / 2);
-    var y = Math.round(rect.y + rect.height / 2);
-    var init = eventInit(x, y, 0);
-    focusForUserActivation(element);
-    dispatchPointerEvent(element, 'pointerdown', init);
-    dispatchMouseEvent(element, 'mousedown', init);
-    dispatchPointerEvent(element, 'pointerup', init);
-    dispatchMouseEvent(element, 'mouseup', init);
-    dispatchMouseEvent(element, 'click', init);
-  };
 })();
 """
+)
 
 _TRICKLE_DELAY_RE = re.compile(r"d([0-9]+(?:\.[0-9]+)?)")
 _GET_TEMPLATE_RE = re.compile(rb"\{\{GET\[([^\]\r\n]+)\]\}\}")
@@ -1472,6 +1221,11 @@ def _static_response_headers(
     port: int | None = None,
     alternate_port: int | None = None,
     remote_port: int | None = None,
+    https_port: int | None = None,
+    alternate_https_port: int | None = None,
+    remote_https_port: int | None = None,
+    request_port: int | None = None,
+    request_scheme: str = "http",
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
@@ -1486,6 +1240,11 @@ def _static_response_headers(
             port=port,
             alternate_port=alternate_port,
             remote_port=remote_port,
+            https_port=https_port,
+            alternate_https_port=alternate_https_port,
+            remote_https_port=remote_https_port,
+            request_port=request_port,
+            request_scheme=request_scheme,
             query=query,
             request_path=request_path,
             request_hostname=request_hostname,
@@ -1535,6 +1294,11 @@ def _substitute_wpt_template_variables(
     port: int,
     alternate_port: int | None = None,
     remote_port: int | None = None,
+    https_port: int | None = None,
+    alternate_https_port: int | None = None,
+    remote_https_port: int | None = None,
+    request_port: int | None = None,
+    request_scheme: str = "http",
     query: str = "",
     request_path: str = "/",
     request_hostname: str = "localhost",
@@ -1549,6 +1313,18 @@ def _substitute_wpt_template_variables(
         alternate_port = port
     if remote_port is None:
         remote_port = alternate_port
+    if https_port is None and any(marker in body for marker in (b"{{ports[https]", b"{{ports[wss]")):
+        raise WptPipeError("HTTPS/WSS template ports require a TLS listener")
+    if https_port is None:
+        https_port = port
+    if alternate_https_port is None:
+        alternate_https_port = https_port
+    if remote_https_port is None:
+        remote_https_port = alternate_https_port
+    if request_scheme not in {"http", "https"}:
+        raise WptPipeError("Unknown request scheme")
+    if request_port is None:
+        request_port = https_port if request_scheme == "https" else port
     # Named hosts belong to the configured server, not the requesting subdomain.
     # External IPv6 endpoints retain the existing loopback alias fallback.
     template_primary_hostname = primary_hostname or "localhost"
@@ -1566,9 +1342,9 @@ def _substitute_wpt_template_variables(
     request_url_host_bytes = _url_host_literal(request_hostname).encode(
         "utf-8", errors="replace"
     )
-    request_host_bytes = request_hostname_bytes + b":" + str(port).encode("ascii")
+    request_host_bytes = request_hostname_bytes + b":" + str(request_port).encode("ascii")
     current_origin = (
-        b"http://" + request_url_host_bytes + b":" + str(port).encode("ascii")
+        request_scheme.encode("ascii") + b"://" + request_url_host_bytes + b":" + str(request_port).encode("ascii")
     )
     remote_authority = (
         request_hostname_bytes + b":" + str(remote_port).encode("ascii")
@@ -1595,47 +1371,11 @@ def _substitute_wpt_template_variables(
     alternate_port_literal = b"':" + str(alternate_port).encode("ascii") + b"'"
     remote_port_literal = b"':" + str(remote_port).encode("ascii") + b"'"
     replacements = {
-        b"https://{{location[hostname]}}:{{ports[https][0]}}": (
-            current_origin
-        ),
-        b"https://{{domains[www]}}:{{ports[https][0]}}": (
-            current_origin
-        ),
-        b"https://{{domains[www1]}}:{{ports[https][0]}}": (
-            b"http://" + request_url_host_bytes + b":" + str(remote_port).encode("ascii")
-        ),
-        b"https://{{domains[www2]}}:{{ports[https][0]}}": (
-            b"http://" + request_url_host_bytes + b":" + str(remote_port).encode("ascii")
-        ),
-        b"https://{{hosts[][www]}}:{{ports[https][0]}}": (
-            b"http://www." + template_primary_host + b":" + str(port).encode("ascii")
-        ),
-        b"https://{{hosts[][www]}}:{{ports[https][1]}}": (
-            b"http://www." + template_primary_host + b":" + str(alternate_port).encode("ascii")
-        ),
-        b"https://{{hosts[][]}}:{{ports[https][0]}}": (
-            b"http://" + template_primary_host + b":" + str(port).encode("ascii")
-        ),
-        b"https://{{hosts[][]}}:{{ports[https][1]}}": (
-            b"http://" + template_primary_host + b":" + str(alternate_port).encode("ascii")
-        ),
-        b"https://{{hosts[alt][]}}:{{ports[https][0]}}": (
-            b"http://alt.localhost:" + str(port).encode("ascii")
-        ),
-        b"https://{{hosts[alt][]}}:{{ports[https][1]}}": (
-            b"http://alt.localhost:" + str(alternate_port).encode("ascii")
-        ),
-        b"https://{{hosts[alt][www]}}:{{ports[https][0]}}": (
-            b"http://www.alt.localhost:" + str(port).encode("ascii")
-        ),
-        b"https://{{hosts[alt][www]}}:{{ports[https][1]}}": (
-            b"http://www.alt.localhost:" + str(alternate_port).encode("ascii")
-        ),
         b"wss://{{host}}:{{ports[wss][0]}}": (
-            b"ws://" + primary_url_host_bytes + b":" + str(port).encode("ascii")
+            b"wss://" + primary_url_host_bytes + b":" + str(https_port).encode("ascii")
         ),
         b"wss://{{host}}:{{ports[wss][1]}}": (
-            b"ws://" + primary_url_host_bytes + b":" + str(alternate_port).encode("ascii")
+            b"wss://" + primary_url_host_bytes + b":" + str(alternate_https_port).encode("ascii")
         ),
         b"ws://{{host}}:{{ports[ws][0]}}": (
             b"ws://" + primary_url_host_bytes + b":" + str(port).encode("ascii")
@@ -1645,20 +1385,20 @@ def _substitute_wpt_template_variables(
         ),
         b"{{host}}": primary_hostname_bytes,
         b"{{domains[]}}": primary_hostname_bytes,
-        b"{{location[scheme]}}": b"http",
+        b"{{location[scheme]}}": request_scheme.encode("ascii"),
         b"{{location[server]}}": current_origin,
         b"{{location[host]}}": request_host_bytes,
         b"{{location[hostname]}}": request_hostname_bytes,
         b"{{location[path]}}": request_path_bytes,
-        b"{{location[port]}}": str(port).encode("ascii"),
+        b"{{location[port]}}": str(request_port).encode("ascii"),
         b"{{ports[http][0]}}": str(port).encode("ascii"),
         b"{{ports[http][1]}}": str(alternate_port).encode("ascii"),
-        b"{{ports[https][0]}}": str(port).encode("ascii"),
-        b"{{ports[https][1]}}": str(alternate_port).encode("ascii"),
+        b"{{ports[https][0]}}": str(https_port).encode("ascii"),
+        b"{{ports[https][1]}}": str(alternate_https_port).encode("ascii"),
         b"{{ports[ws][0]}}": str(port).encode("ascii"),
         b"{{ports[ws][1]}}": str(alternate_port).encode("ascii"),
-        b"{{ports[wss][0]}}": str(port).encode("ascii"),
-        b"{{ports[wss][1]}}": str(alternate_port).encode("ascii"),
+        b"{{ports[wss][0]}}": str(https_port).encode("ascii"),
+        b"{{ports[wss][1]}}": str(alternate_https_port).encode("ascii"),
         b"var REMOTE_HOST = (ORIGINAL_HOST === 'localhost') ? '127.0.0.1' : ('www1.' + ORIGINAL_HOST);": (
             b"var REMOTE_HOST = (ORIGINAL_HOST === 'localhost') ? 'www1.localhost' : "
             b"((ORIGINAL_HOST.indexOf(':') !== -1) ? ORIGINAL_HOST : ('www1.' + ORIGINAL_HOST));"
@@ -1671,44 +1411,39 @@ def _substitute_wpt_template_variables(
         ),
         b"REMOTE_ORIGIN: PROTOCOL + \"//\" + REMOTE_HOST + PORT_ELIDED,": (
             b"REMOTE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + REMOTE_HOST + "
-            + alternate_port_literal
+            b"(PROTOCOL + '//' + REMOTE_HOST + "
+            + (b"':" + str(alternate_https_port).encode("ascii") + b"'" if request_scheme == "https" else alternate_port_literal)
             + b") : (PROTOCOL + \"//\" + REMOTE_HOST + PORT_ELIDED),"
         ),
         b"OTHER_ORIGIN: PROTOCOL + \"//\" + OTHER_HOST + PORT_ELIDED,": (
             b"OTHER_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + ORIGINAL_HOST + "
-            + remote_port_literal
+            b"(PROTOCOL + '//' + ORIGINAL_HOST + "
+            + (b"':" + str(remote_https_port).encode("ascii") + b"'" if request_scheme == "https" else remote_port_literal)
             + b") : (PROTOCOL + \"//\" + OTHER_HOST + PORT_ELIDED),"
         ),
         b"HTTP_NOTSAMESITE_ORIGIN: 'http://' + NOTSAMESITE_HOST + HTTP_PORT_ELIDED,": (
             b"HTTP_NOTSAMESITE_ORIGIN: 'http://' + NOTSAMESITE_HOST + HTTP_PORT_ELIDED,"
         ),
-        b"HTTPS_ORIGIN: 'https://' + ORIGINAL_HOST + HTTPS_PORT_ELIDED,": (
-            b"HTTPS_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT2_ELIDED,"
-        ),
-        b"HTTPS_ORIGIN_WITH_CREDS: 'https://foo:bar@' + ORIGINAL_HOST + HTTPS_PORT_ELIDED,": (
-            b"HTTPS_ORIGIN_WITH_CREDS: 'http://foo:bar@' + ORIGINAL_HOST + HTTP_PORT2_ELIDED,"
-        ),
-        b"HTTPS_REMOTE_ORIGIN: 'https://' + REMOTE_HOST + HTTPS_PORT_ELIDED,": (
-            b"HTTPS_REMOTE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + REMOTE_HOST + "
-            + remote_port_literal
-            + b") : ('http://' + REMOTE_HOST + HTTP_PORT2_ELIDED),"
-        ),
-        b"HTTPS_NOTSAMESITE_ORIGIN: 'https://' + NOTSAMESITE_HOST + HTTPS_PORT_ELIDED,": (
-            b"HTTPS_NOTSAMESITE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + ORIGINAL_HOST + "
-            + remote_port_literal
-            + b") : ('https://' + NOTSAMESITE_HOST + HTTPS_PORT_ELIDED),"
-        ),
-        b"HTTPS_REMOTE_ORIGIN_WITH_CREDS: 'https://foo:bar@' + REMOTE_HOST + HTTPS_PORT_ELIDED,": (
-            b"HTTPS_REMOTE_ORIGIN_WITH_CREDS: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://foo:bar@' + REMOTE_HOST + "
-            + remote_port_literal
-            + b") : ('http://foo:bar@' + REMOTE_HOST + HTTP_PORT2_ELIDED),"
-        ),
     }
+    if ":" in request_hostname:
+        for marker in (
+            b"{{domains[www]}}:{{ports[https][0]}}",
+            b"{{domains[www1]}}:{{ports[https][0]}}",
+            b"{{domains[www2]}}:{{ports[https][0]}}",
+        ):
+            body = body.replace(marker, request_url_host_bytes + b":" + str(remote_https_port).encode("ascii"))
+        for marker in (
+            b"{{domains[www]}}:{{ports[https][1]}}",
+            b"{{domains[www1]}}:{{ports[https][1]}}",
+            b"{{domains[www2]}}:{{ports[https][1]}}",
+        ):
+            body = body.replace(marker, request_url_host_bytes + b":" + str(alternate_https_port).encode("ascii"))
+        for name, host, secure_port in [
+            (b"HTTPS_REMOTE_ORIGIN", b"REMOTE_HOST", alternate_https_port),
+            (b"HTTPS_NOTSAMESITE_ORIGIN", b"ORIGINAL_HOST", remote_https_port),
+        ]:
+            original = name + b": 'https://' + " + (b"NOTSAMESITE_HOST" if name == b"HTTPS_NOTSAMESITE_ORIGIN" else host) + b" + HTTPS_PORT_ELIDED,"
+            replacements[original] = name + b": 'https://' + " + host + b" + ':" + str(secure_port).encode("ascii") + b"',"
     for marker, value in replacements.items():
         body = body.replace(marker, value)
 
@@ -1857,9 +1592,32 @@ class _FixtureThreadingHTTPServer(ThreadingHTTPServer):
         # requests that outlive the harness result. The stdlib server prints a
         # full traceback for those routine disconnects, obscuring real fixture
         # failures during parallel runs.
-        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError, ssl.SSLEOFError)):
             return
         super().handle_error(request, client_address)
+
+
+class _FixtureThreadingHTTPSServer(_FixtureThreadingHTTPServer):
+    def __init__(self, *args: object, context: ssl.SSLContext) -> None:
+        self.tls_context = context
+        super().__init__(*args)
+
+    def process_request_thread(self, request: socket.socket, client_address: object) -> None:
+        # Handshake on a request thread, so an incomplete TLS client cannot
+        # prevent the listener from accepting the other parallel browsers.
+        try:
+            previous_timeout = request.gettimeout()
+            request.settimeout(10.0)
+            request = self.tls_context.wrap_socket(request, server_side=True)
+            request.settimeout(previous_timeout)
+        except (OSError, TimeoutError):
+            request.close()
+            return
+        super().process_request_thread(request, client_address)
+
+
+class _Ipv6ThreadingHTTPSServer(_FixtureThreadingHTTPSServer):
+    address_family = socket.AF_INET6
 
 
 class _Ipv6ThreadingHTTPServer(_FixtureThreadingHTTPServer):
@@ -2177,6 +1935,58 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 pass
             return True
 
+        def _serve_resource_timing_font(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != "/resource-timing/resources/cors-ahem.py":
+                return False
+            # Like the upstream handler, respond without consuming an upload.
+            self.close_connection = True
+            try:
+                operations = _pipe_response_header_operations(parsed.query)
+                pipe_status = _pipe_response_status(parsed.query)
+                delay = _pipe_trickle_delay_seconds(parsed.query)
+                trickle = any(name == "trickle" for name, _ in parse_pipe_commands(parsed.query))
+            except WptPipeError:
+                self.send_error(500)
+                return True
+            # 304 deliberately omits TAO/CORS/cache headers: the client must
+            # reuse cached metadata unless the request explicitly overrides it.
+            if self.headers.get("If-None-Match") == "123abc":
+                status, font = 304, b""
+                headers = [("X-HTTP-STATUS", "304")]
+            else:
+                try:
+                    font = (wpt_root / "fonts/Ahem.ttf").read_bytes()
+                except OSError:
+                    self.send_error(500)
+                    return True
+                status = 200
+                headers = [
+                    ("Content-Type", "font/truetype"),
+                    ("Cache-Control", "public, max-age=86400"),
+                    ("Access-Control-Allow-Origin", "*"),
+                    ("Timing-Allow-Origin", "*"),
+                    ("ETag", "123abc"),
+                ]
+            headers = _apply_header_operations(headers, operations)
+            status = pipe_status or status
+            emit_body = self.command != "HEAD" and status not in {204, 304}
+            self._send_bytes(
+                None, font, emit_body=emit_body and not trickle,
+                extra_headers=headers, status_code=status, cache_control=None,
+                auto_content_length=status != 304 and not trickle,
+            )
+            if emit_body and trickle:
+                # The font timestamp test needs headers before the body delay.
+                self.wfile.flush()
+                if delay:
+                    time.sleep(delay)
+                try:
+                    self.wfile.write(font)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            return True
+
         def _serve_document_charset_resource(self) -> bool:
             path = unquote(urlsplit(self.path).path)
             if path not in DOCUMENT_CHARSET_FIXTURES:
@@ -2199,6 +2009,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2249,6 +2061,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2340,6 +2154,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2401,6 +2217,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2451,6 +2269,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if not key:
                 self.send_error(400)
                 return
+            self.protocol_version = "HTTP/1.1"
             self.send_response(101)
             self.send_header("Upgrade", "websocket")
             self.send_header("Connection", "Upgrade")
@@ -2551,24 +2370,30 @@ requestExecutor("{executor_uuid}", {start_on_js});
             except (TimeoutError, BrokenPipeError, ConnectionResetError, OSError):
                 return
 
+        def _response_template_context(self, path: str) -> dict[str, object]:
+            port = int(getattr(self.server, "wpt_primary_port", self.server.server_address[1]))
+            alternate_port = int(getattr(self.server, "wpt_alternate_port", port))
+            https_port = int(getattr(self.server, "wpt_https_port", port))
+            alternate_https_port = int(getattr(self.server, "wpt_alternate_https_port", https_port))
+            hostname = _host_header_hostname(self.headers.get("Host"))
+            return {
+                "port": port, "alternate_port": alternate_port,
+                "remote_port": int(getattr(self.server, "wpt_remote_port", alternate_port)),
+                "https_port": https_port, "alternate_https_port": alternate_https_port,
+                "remote_https_port": int(getattr(self.server, "wpt_remote_https_port", alternate_https_port)),
+                "request_port": int(self.server.server_address[1]),
+                "request_scheme": str(getattr(self.server, "wpt_request_scheme", "http")),
+                "request_path": path, "request_hostname": hostname,
+                "primary_hostname": str(getattr(self.server, "wpt_primary_hostname", hostname)),
+                "request_headers": self.headers,
+            }
+
         def _substitute_response_template(
             self, body: bytes, path: str, query: str, *, escape_type: str,
         ) -> bytes:
-            port = int(getattr(self.server, "wpt_primary_port", self.server.server_address[1]))
-            alternate_port = int(getattr(self.server, "wpt_alternate_port", port))
-            remote_port = int(getattr(self.server, "wpt_remote_port", alternate_port))
-            hostname = _host_header_hostname(self.headers.get("Host"))
             return _substitute_wpt_template_variables(
-                body,
-                port=port,
-                alternate_port=alternate_port,
-                remote_port=remote_port,
-                query=query,
-                request_path=path,
-                request_hostname=hostname,
-                primary_hostname=str(getattr(self.server, "wpt_primary_hostname", hostname)),
-                request_headers=self.headers,
-                escape_type=escape_type,
+                body, query=query, escape_type=escape_type,
+                **self._response_template_context(path),
             )
 
         def _serve_preload_count_resource(self) -> bool:
@@ -2622,6 +2447,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_resource_timing_font():
+                return
             if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
@@ -2648,6 +2475,22 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == EVENTSOURCE_MESSAGE_PATH:
+                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                mime = params.get("mime", ["text/event-stream"])[0]
+                message = params.get("message", ["data: data"])[0].encode("latin-1")
+                newline = b"" if params.get("newline", [None])[0] == "none" else b"\n\n"
+                try:
+                    delay = int(params.get("sleep", ["0"])[0]) / 1000
+                    if delay < 0:
+                        raise ValueError("negative sleep")
+                except ValueError:
+                    self.send_error(500)
+                    return
+                if delay and stopping.wait(delay):
+                    return
+                self._send_bytes(mime, message + newline + b"\n", emit_body=emit_body, cache_control=None)
+                return
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
                 return
@@ -2914,51 +2757,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     body, path, parsed.query,
                     escape_type=_template_escape_type(file_path.name, parsed.query),
                 )
-            static_header_context = {
-                "request_headers": self.headers,
-                "port": int(
-                    getattr(
-                        self.server,
-                        "wpt_primary_port",
-                        self.server.server_address[1],
-                    )
-                ),
-                "alternate_port": int(
-                    getattr(
-                        self.server,
-                        "wpt_alternate_port",
-                        getattr(
-                            self.server,
-                            "wpt_primary_port",
-                            self.server.server_address[1],
-                        ),
-                    )
-                ),
-                "remote_port": int(
-                    getattr(
-                        self.server,
-                        "wpt_remote_port",
-                        getattr(
-                            self.server,
-                            "wpt_alternate_port",
-                            getattr(
-                                self.server,
-                                "wpt_primary_port",
-                                self.server.server_address[1],
-                            ),
-                        ),
-                    )
-                ),
-                "request_path": path,
-                "request_hostname": _host_header_hostname(self.headers.get("Host")),
-                "primary_hostname": str(
-                    getattr(
-                        self.server,
-                        "wpt_primary_hostname",
-                        _host_header_hostname(self.headers.get("Host")),
-                    )
-                ),
-            }
+            static_header_context = self._response_template_context(path)
 
             def static_headers() -> list[tuple[str, str]]:
                 return _static_response_headers(
@@ -3605,6 +3404,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     return self._serve_empty_location_resource
                 if path == FETCH_CONTENT_TYPE_PATH:
                     return self._serve_content_type_resource
+                if path == "/resource-timing/resources/cors-ahem.py":
+                    return self._serve_resource_timing_font
                 if path in DOCUMENT_CHARSET_FIXTURES:
                     return self._serve_document_charset_resource
                 if path == NAVIGATION_SECOND_VISIT_PATH:
@@ -4623,106 +4424,100 @@ class WptFixtureServer:
             self.wpt_root, self.results, self.csp_reports,
             self.fetch_stash, self._stopping,
         )
-        self.httpd = _FixtureThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
-        self.port = int(self.httpd.server_address[1])
-        self.alternate_httpd = _FixtureThreadingHTTPServer(
-            ("127.0.0.1", 0), handler_cls
-        )
-        self.alternate_port = int(self.alternate_httpd.server_address[1])
-        for httpd in (self.httpd, self.alternate_httpd):
-            self._configure_httpd_defaults(
-                httpd,
-                primary_port=self.port,
-                alternate_port=self.alternate_port,
-                primary_hostname=self.primary_hostname,
-            )
-        self.thread = threading.Thread(
-            target=self.httpd.serve_forever,
-            name="moli-benchmark-wpt-fixture",
-            daemon=True,
-        )
-        self.alternate_thread = threading.Thread(
-            target=self.alternate_httpd.serve_forever,
-            name="moli-benchmark-wpt-fixture-alt-port",
-            daemon=True,
-        )
         self.external_host = _global_ipv6_address()
-        self.external_httpd: ThreadingHTTPServer | None = None
-        self.external_port: int | None = None
-        self.external_thread: threading.Thread | None = None
-        self.external_alternate_httpd: ThreadingHTTPServer | None = None
-        self.external_alternate_port: int | None = None
-        self.external_alternate_thread: threading.Thread | None = None
-        self.external_remote_httpd: ThreadingHTTPServer | None = None
-        self.external_remote_port: int | None = None
-        self.external_remote_thread: threading.Thread | None = None
-        if self.external_host is not None:
-            try:
-                self.external_httpd = _Ipv6ThreadingHTTPServer(
-                    (self.external_host, 0), handler_cls
+        self.tls = FixtureCertificateAuthority(self.primary_hostname, self.external_host)
+        self._listeners: list[ThreadingHTTPServer] = []
+        self._listener_threads: list[threading.Thread] = []
+
+        def listener(host: str, name: str, *, secure: bool = False) -> tuple[ThreadingHTTPServer, threading.Thread]:
+            if secure:
+                cls = _Ipv6ThreadingHTTPSServer if ":" in host else _FixtureThreadingHTTPSServer
+                httpd = cls((host, 0), handler_cls, context=self.tls.context)
+            else:
+                cls = _Ipv6ThreadingHTTPServer if ":" in host else _FixtureThreadingHTTPServer
+                httpd = cls((host, 0), handler_cls)
+            self._listeners.append(httpd)
+            thread = threading.Thread(
+                target=httpd.serve_forever,
+                kwargs={"poll_interval": 0.05} if secure else {},
+                name=name, daemon=True,
+            )
+            self._listener_threads.append(thread)
+            return httpd, thread
+
+        try:
+            self.httpd, self.thread = listener("127.0.0.1", "moli-benchmark-wpt-fixture")
+            self.alternate_httpd, self.alternate_thread = listener("127.0.0.1", "moli-benchmark-wpt-fixture-alt-port")
+            self.httpsd, self.https_thread = listener("127.0.0.1", "moli-benchmark-wpt-fixture-tls", secure=True)
+            self.alternate_httpsd, self.alternate_https_thread = listener("127.0.0.1", "moli-benchmark-wpt-fixture-tls-alt", secure=True)
+            self.port = int(self.httpd.server_address[1])
+            self.alternate_port = int(self.alternate_httpd.server_address[1])
+            self.https_port = int(self.httpsd.server_address[1])
+            self.alternate_https_port = int(self.alternate_httpsd.server_address[1])
+            for httpd in self._listeners:
+                self._configure_httpd_defaults(
+                    httpd, primary_port=self.port, alternate_port=self.alternate_port,
+                    https_port=self.https_port, alternate_https_port=self.alternate_https_port,
+                    primary_hostname=self.primary_hostname,
                 )
-                self.external_port = int(self.external_httpd.server_address[1])
-                self.external_alternate_httpd = _Ipv6ThreadingHTTPServer(
-                    (self.external_host, 0), handler_cls
-                )
-                self.external_alternate_port = int(
-                    self.external_alternate_httpd.server_address[1]
-                )
-                self.external_remote_httpd = _Ipv6ThreadingHTTPServer(
-                    (self.external_host, 0), handler_cls
-                )
-                self.external_remote_port = int(
-                    self.external_remote_httpd.server_address[1]
-                )
-                self.external_thread = threading.Thread(
-                    target=self.external_httpd.serve_forever,
-                    name="moli-benchmark-wpt-fixture-ipv6",
-                    daemon=True,
-                )
-                self.external_alternate_thread = threading.Thread(
-                    target=self.external_alternate_httpd.serve_forever,
-                    name="moli-benchmark-wpt-fixture-ipv6-alt",
-                    daemon=True,
-                )
-                self.external_remote_thread = threading.Thread(
-                    target=self.external_remote_httpd.serve_forever,
-                    name="moli-benchmark-wpt-fixture-ipv6-remote",
-                    daemon=True,
-                )
-                for httpd in (
-                    self.external_httpd,
-                    self.external_alternate_httpd,
-                    self.external_remote_httpd,
-                ):
-                    self._configure_httpd_defaults(
-                        httpd,
-                        primary_port=self.external_port,
-                        alternate_port=self.external_alternate_port,
-                        remote_port=self.external_remote_port,
-                        primary_hostname=_url_host_literal(str(self.external_host)),
-                    )
-            except OSError:
-                for httpd in (
-                    self.external_httpd,
-                    self.external_alternate_httpd,
-                    self.external_remote_httpd,
-                ):
-                    if httpd is not None:
+            self.external_httpd = self.external_alternate_httpd = self.external_remote_httpd = None
+            self.external_httpsd = self.external_alternate_httpsd = self.external_remote_httpsd = None
+            self.external_thread = self.external_alternate_thread = self.external_remote_thread = None
+            self.external_https_thread = self.external_alternate_https_thread = self.external_remote_https_thread = None
+            self.external_port = self.external_alternate_port = self.external_remote_port = None
+            self.external_https_port = self.external_alternate_https_port = self.external_remote_https_port = None
+            if self.external_host is not None:
+                start = len(self._listeners)
+                try:
+                    for secure, suffix in [(False, "http"), (True, "https")]:
+                        for prefix in ["external", "external_alternate", "external_remote"]:
+                            httpd, thread = listener(self.external_host, f"moli-benchmark-wpt-{prefix}-{suffix}", secure=secure)
+                            setattr(self, prefix + ("_httpsd" if secure else "_httpd"), httpd)
+                            setattr(self, prefix + ("_https_thread" if secure else "_thread"), thread)
+                            setattr(self, prefix + ("_https_port" if secure else "_port"), int(httpd.server_address[1]))
+                    for httpd in self._listeners[start:]:
+                        self._configure_httpd_defaults(
+                            httpd, primary_port=self.external_port,
+                            alternate_port=self.external_alternate_port,
+                            remote_port=self.external_remote_port,
+                            https_port=self.external_https_port,
+                            alternate_https_port=self.external_alternate_https_port,
+                            remote_https_port=self.external_remote_https_port,
+                            primary_hostname=_url_host_literal(self.external_host),
+                        )
+                except OSError:
+                    for httpd in self._listeners[start:]:
                         httpd.server_close()
-                self.external_host = None
-                self.external_httpd = None
-                self.external_port = None
-                self.external_thread = None
-                self.external_alternate_httpd = None
-                self.external_alternate_port = None
-                self.external_alternate_thread = None
-                self.external_remote_httpd = None
-                self.external_remote_port = None
-                self.external_remote_thread = None
+                    del self._listeners[start:]
+                    del self._listener_threads[start:]
+                    self.external_host = None
+                    for secure in [False, True]:
+                        for prefix in ["external", "external_alternate", "external_remote"]:
+                            for ending in (["_httpsd", "_https_thread", "_https_port"] if secure else ["_httpd", "_thread", "_port"]):
+                                setattr(self, prefix + ending, None)
+        except BaseException:
+            for httpd in self._listeners:
+                httpd.server_close()
+            self.tls.close()
+            raise
 
     @property
     def base_url(self) -> str:
         return f"http://{self.primary_hostname}:{self.port}"
+
+    @property
+    def https_base_url(self) -> str:
+        return f"https://{self.primary_hostname}:{self.https_port}"
+
+    @property
+    def alternate_https_base_url(self) -> str:
+        return f"https://{self.primary_hostname}:{self.alternate_https_port}"
+
+    @property
+    def external_https_base_url(self) -> str | None:
+        if self.external_host is None or self.external_https_port is None:
+            return None
+        return f"https://[{self.external_host}]:{self.external_https_port}"
 
     @property
     def external_base_url(self) -> str | None:
@@ -4747,27 +4542,35 @@ class WptFixtureServer:
         return f"http://{self.primary_hostname}:{self.alternate_port}"
 
     def _configure_httpd_defaults(
-        self,
-        httpd: ThreadingHTTPServer,
-        *,
-        primary_port: int,
-        alternate_port: int,
-        remote_port: int | None = None,
-        primary_hostname: str | None = None,
+        self, httpd: ThreadingHTTPServer, *, primary_port: int, alternate_port: int,
+        https_port: int, alternate_https_port: int, remote_port: int | None = None,
+        remote_https_port: int | None = None, primary_hostname: str | None = None,
     ) -> None:
         if remote_port is None:
             remote_port = alternate_port
+        if remote_https_port is None:
+            remote_https_port = alternate_https_port
         if primary_hostname is None:
             primary_hostname = _url_host_literal(str(httpd.server_address[0]))
-        setattr(httpd, "wpt_primary_port", primary_port)
-        setattr(httpd, "wpt_alternate_port", alternate_port)
-        setattr(httpd, "wpt_remote_port", remote_port)
-        setattr(httpd, "wpt_primary_hostname", primary_hostname)
-        setattr(httpd, "wpt_harness_timeout_multiplier", 1.0)
-        setattr(httpd, "wpt_harness_timeout_multipliers", {})
+        for name, value in {
+            "wpt_primary_port": primary_port, "wpt_alternate_port": alternate_port,
+            "wpt_remote_port": remote_port, "wpt_https_port": https_port,
+            "wpt_alternate_https_port": alternate_https_port,
+            "wpt_remote_https_port": remote_https_port,
+            "wpt_primary_hostname": primary_hostname,
+            "wpt_request_scheme": "https" if isinstance(httpd, _FixtureThreadingHTTPSServer) else "http",
+            "wpt_harness_timeout_multiplier": 1.0,
+            "wpt_harness_timeout_multipliers": {},
+        }.items():
+            setattr(httpd, name, value)
 
     def url_for_case(self, case_path: str, *, external: bool = False) -> str:
-        base = self.external_base_url if external and self.external_base_url else self.base_url
+        # This is the authored WPT transport flag, not a change to the case.
+        secure = ".https." in urlsplit(case_path).path
+        if secure:
+            base = self.external_https_base_url if external and self.external_https_base_url else self.https_base_url
+        else:
+            base = self.external_base_url if external and self.external_base_url else self.base_url
         return f"{base}/{case_path.lstrip('/')}"
 
     def set_harness_timeout_multipliers(
@@ -4780,13 +4583,7 @@ class WptFixtureServer:
             _normalize_harness_case_key(case_path): _valid_timeout_multiplier(multiplier)
             for case_path, multiplier in case_multipliers.items()
         }
-        for httpd in (
-            self.httpd,
-            self.alternate_httpd,
-            self.external_httpd,
-            self.external_alternate_httpd,
-            self.external_remote_httpd,
-        ):
+        for httpd in self._listeners:
             if httpd is None:
                 continue
             setattr(
@@ -4797,37 +4594,16 @@ class WptFixtureServer:
             setattr(httpd, "wpt_harness_timeout_multipliers", normalized)
 
     def __enter__(self) -> "WptFixtureServer":
-        self.thread.start()
-        self.alternate_thread.start()
-        if self.external_thread is not None:
-            self.external_thread.start()
-        if self.external_alternate_thread is not None:
-            self.external_alternate_thread.start()
-        if self.external_remote_thread is not None:
-            self.external_remote_thread.start()
+        for thread in self._listener_threads:
+            thread.start()
         time.sleep(0.025)
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self._stopping.set()
-        self.httpd.shutdown()
-        self.httpd.server_close()
-        self.thread.join(timeout=2)
-        self.alternate_httpd.shutdown()
-        self.alternate_httpd.server_close()
-        self.alternate_thread.join(timeout=2)
-        if self.external_httpd is not None:
-            self.external_httpd.shutdown()
-            self.external_httpd.server_close()
-        if self.external_thread is not None:
-            self.external_thread.join(timeout=2)
-        if self.external_alternate_httpd is not None:
-            self.external_alternate_httpd.shutdown()
-            self.external_alternate_httpd.server_close()
-        if self.external_alternate_thread is not None:
-            self.external_alternate_thread.join(timeout=2)
-        if self.external_remote_httpd is not None:
-            self.external_remote_httpd.shutdown()
-            self.external_remote_httpd.server_close()
-        if self.external_remote_thread is not None:
-            self.external_remote_thread.join(timeout=2)
+        for httpd in self._listeners:
+            httpd.shutdown()
+            httpd.server_close()
+        for thread in self._listener_threads:
+            thread.join(timeout=2)
+        self.tls.close()

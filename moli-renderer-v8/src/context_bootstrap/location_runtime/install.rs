@@ -33,7 +33,7 @@ enum LocationAttribute {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Location)]
+#[webapi(interface = web_api_interfaces::Location, receiver)]
 struct LocationOwnSurfaceDeclaration {
     #[webapi(
         accessor_property,

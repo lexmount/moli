@@ -26,7 +26,7 @@ fn service_worker_redirect_target(
         .headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| moli_fetch::decode_header_value(value))
+        .map(|(_, value)| moli_fetch::encode_redirect_location(value))
     else {
         return Ok(None);
     };
@@ -70,9 +70,12 @@ fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchReque
 pub(super) fn service_worker_network_fallback_request_for_job(
     job: &ServiceWorkerFetchJob,
 ) -> moli_fetch::Request {
+    // A worker may serve a response while offline or blocked. Enforce Page
+    // policy on the captured request only when falling back to the network.
     let mut request = job
         .request
         .clone()
+        .with_page_network_policy()
         .with_use_cors_preflight(job.metadata.use_cors_preflight)
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
@@ -115,6 +118,7 @@ fn service_worker_fetch_stream_response_head(
         redirected: response_head.redirected || !job.request.redirect_chain().is_empty(),
         redirect_chain: job.request.redirect_chain().to_vec(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     }
 }
@@ -611,6 +615,7 @@ impl ServiceWorkerRuntimeService {
                 redirected: response.redirected || !job.request.redirect_chain().is_empty(),
                 redirect_chain: job.request.redirect_chain().to_vec(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             String::from_utf8_lossy(&response.body).into_owned(),
@@ -726,7 +731,7 @@ fn matches_service_worker_respond_with_fetch_failure(message: &str) -> bool {
         || message.starts_with("failed to resolve redirect location `")
 }
 
-fn service_worker_fetch_browser_metadata(
+pub(super) fn service_worker_fetch_browser_metadata(
     resource_type: crate::types::SubresourceResourceType,
 ) -> moli_fetch::BrowserRequestMetadata {
     match resource_type {
@@ -1996,6 +2001,29 @@ mod tests {
             headers: vec![("Location".to_owned(), b"next".to_vec())],
             body: Vec::new(),
         };
+        for (location, expected) in [
+            (
+                b"next?utf8=\xe2\x98\x83".as_slice(),
+                "https://example.test/app/next?utf8=%E2%98%83",
+            ),
+            (
+                b"next?bad=\xff".as_slice(),
+                "https://example.test/app/next?bad=%FF",
+            ),
+            (
+                b"next?%e2%98%83\xe2\x98\x83".as_slice(),
+                "https://example.test/app/next?%e2%98%83%E2%98%83",
+            ),
+        ] {
+            let raw_response = ServiceWorkerFetchResponse {
+                headers: vec![("Location".to_owned(), location.to_vec())],
+                ..response.clone()
+            };
+            assert_eq!(
+                service_worker_redirect_target(&job, &raw_response).unwrap(),
+                Some(url(expected))
+            );
+        }
         let next_url = service_worker_redirect_target(&job, &response)
             .expect("redirect target should resolve")
             .expect("redirect target should be present");

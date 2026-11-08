@@ -240,9 +240,11 @@ pub enum RendererOwnerCommand {
     },
     CommitPreparedRendererDocument {
         permit: RendererDocumentCommitPermit,
+        configuration: Option<Box<RendererPreparedDocumentCommitConfiguration>>,
     },
     CommitPreparedPageReplacement {
         permit: RendererDocumentCommitPermit,
+        configuration: Option<Box<RendererPreparedDocumentCommitConfiguration>>,
     },
     CancelPreparedRendererDocument {
         token: RendererPageReservationToken,

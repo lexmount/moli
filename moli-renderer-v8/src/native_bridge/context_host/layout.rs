@@ -7,7 +7,9 @@ use moli_layout::{
 use super::JsContextHost;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
-    css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
+    css_resource_urls::{
+        CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
+    },
     document_runtime::DomHandle,
     native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
@@ -161,7 +163,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn layout_viewport_for_document(&self, document: DomHandle) -> LayoutViewport {
-        let surface = self.viewport_surface;
+        let surface = self.viewport_surface();
         let device_pixel_ratio = surface
             .map(|surface| surface.device_pixel_ratio as f32)
             .unwrap_or(DEFAULT_WINDOW_SURFACE_PROFILE.device_pixel_ratio as f32);
@@ -309,11 +311,11 @@ impl JsContextHost {
             return Err(LayoutError::ReentrantLayoutPass);
         }
         let document = self.document_handle();
-        let dom_version = self.dom_host().dom_version();
         if self
             .document_layout_state
             .borrow()
-            .latest_layout_is_current(document, dom_version)
+            .latest_layout(document)
+            .is_some()
             && (self.layout_policy != moli_page_types::LayoutPolicy::Live
                 || self.published_layout_input_key.borrow().as_ref()
                     == Some(&self.layout_input_key()))
@@ -329,6 +331,36 @@ impl JsContextHost {
             .ok_or(LayoutError::NoLayoutRoot)?;
         self.publish_layout_pass_for_document(document, pass);
         Ok(())
+    }
+
+    /// FontFace and Canvas use the document's font service without requesting a
+    /// layout pass or changing the frozen synchronous DOM geometry snapshot.
+    pub(crate) fn with_font_services<T>(
+        &self,
+        document: DomHandle,
+        consume: impl FnOnce(&mut moli_layout::DocumentLayoutServices) -> T,
+    ) -> T {
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, self.document_handle(), |services, _| {
+                consume(services)
+            })
+    }
+
+    pub(crate) fn invalidate_document_font_layout(&self, document: DomHandle) {
+        if document != self.document_handle()
+            && self
+                .child_browsing_context_host_for_document_handle(document)
+                .is_none()
+        {
+            return;
+        }
+        // A real font registration change invalidates sampled glyph advances.
+        // Unchanged registration and read-only projections retain the tree.
+        self.clear_layout_rect_cache();
+        self.document_layout_state
+            .borrow_mut()
+            .clear_latest_layout();
     }
 
     pub(crate) fn build_layout_pass_for_document(
@@ -451,7 +483,7 @@ impl JsContextHost {
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.publish_latest_layout(document, self.dom_host().dom_version(), tree);
+            state.publish_latest_layout(document, tree);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
@@ -651,21 +683,30 @@ impl JsContextHost {
         document: DomHandle,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        self.document_layout_state.borrow_mut().retain_active_slots(
+        let changed = self.document_layout_state.borrow_mut().retain_active_slots(
             document,
             self.document_handle(),
             resources,
         );
+        if changed {
+            self.invalidate_document_font_layout(document);
+        }
     }
 
     pub(crate) fn admit_document_web_font(
         &self,
         document: DomHandle,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
-        self.document_layout_state
-            .borrow_mut()
-            .admit(document, self.document_handle(), resource)
+    ) -> Option<StylesheetSubresourceRequest> {
+        let prepared = self.document_layout_state.borrow_mut().admit(
+            document,
+            self.document_handle(),
+            resource,
+        );
+        if prepared.fonts_changed {
+            self.invalidate_document_font_layout(document);
+        }
+        prepared.request
     }
 
     pub(crate) fn complete_document_web_font(
@@ -711,6 +752,16 @@ impl JsContextHost {
         self.document_layout_state
             .borrow_mut()
             .retire_embedded_document_fonts(document);
+    }
+
+    pub(crate) fn observe_document_font_face(
+        &self,
+        document: DomHandle,
+        font: &crate::css_resource_urls::StylesheetWebFont,
+    ) -> crate::font_loading::FontFaceLoad {
+        self.document_layout_state
+            .borrow_mut()
+            .observe_font(document, self.document_handle(), font)
     }
 
     #[cfg(test)]

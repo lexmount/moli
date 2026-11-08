@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
 
 from moli_benchmark.raw_cdp import RecordedCdpMessage
 from moli_benchmark.sequential_navigate import (
@@ -97,6 +98,28 @@ def network_event(
             "params": params,
         },
     )
+
+
+def error_document_events() -> list[RecordedCdpMessage]:
+    # Chromium 145: one failed network request followed by the internal error
+    # Document's completion, correlated by its frame, loader and unreachable URL.
+    return [
+        record(1, {"sessionId": "SID-1", "method": "Network.requestWillBeSent", "params": {
+            "requestId": "REQ-error", "frameId": "FRAME-error", "loaderId": "LOADER-error",
+            "type": "Document", "request": {"url": "https://example.test/reset"},
+        }}),
+        record(2, {"sessionId": "SID-1", "method": "Network.loadingFailed", "params": {
+            "requestId": "REQ-error", "type": "Document", "canceled": False,
+            "errorText": "net::ERR_CONNECTION_RESET",
+        }}),
+        record(3, {"sessionId": "SID-1", "method": "Page.frameNavigated", "params": {"frame": {
+            "id": "FRAME-error", "loaderId": "LOADER-error", "url": "chrome-error://chromewebdata/",
+            "unreachableUrl": "https://example.test/reset",
+        }}}),
+        record(4, {"sessionId": "SID-1", "method": "Network.loadingFinished", "params": {
+            "requestId": "REQ-error", "encodedDataLength": 0,
+        }}),
+    ]
 
 
 class SequentialNavigateTests(unittest.TestCase):
@@ -405,6 +428,82 @@ class SequentialNavigateTests(unittest.TestCase):
                 ("REQ-duplicate", "duplicate_terminal"),
             ],
         )
+
+    def test_network_order_audit_accepts_correlated_error_document_completion(self) -> None:
+        self.assertEqual(
+            network_event_order_violations(error_document_events(), session_id="SID-1"), [],
+        )
+
+    def test_network_order_audit_accepts_error_document_after_redirect(self) -> None:
+        events = error_document_events()
+        initial = deepcopy(events[0].payload)
+        initial["params"]["request"]["url"] = "https://example.test/redirect"
+        records = [record(1, initial)] + [record(event.sequence + 1, event.payload) for event in events]
+        self.assertEqual(network_event_order_violations(records, session_id="SID-1"), [])
+
+    def test_network_order_audit_does_not_exempt_unrelated_or_invalid_completions(self) -> None:
+        for case in [
+            "missing_commit", "other_session", "other_frame", "other_loader", "other_url",
+            "normal_document", "missing_request_frame", "missing_request_loader", "xhr",
+            "canceled", "extra_finished", "extra_failed", "finished_before_commit",
+        ]:
+            with self.subTest(case=case):
+                events = error_document_events()
+                request = events[0].payload["params"]
+                frame_event = events[2].payload
+                frame = frame_event["params"]["frame"]
+                if case == "missing_commit":
+                    del events[2]
+                elif case == "other_session":
+                    frame_event["sessionId"] = "SID-other"
+                elif case == "other_frame":
+                    frame["id"] = "FRAME-other"
+                elif case == "other_loader":
+                    frame["loaderId"] = "LOADER-other"
+                elif case == "other_url":
+                    frame["unreachableUrl"] = "https://example.test/other"
+                elif case == "normal_document":
+                    frame["url"] = "https://example.test/reset"
+                elif case == "missing_request_frame":
+                    del request["frameId"]
+                elif case == "missing_request_loader":
+                    del request["loaderId"]
+                elif case == "xhr":
+                    request["type"] = "XHR"
+                elif case == "canceled":
+                    events[1].payload["params"]["canceled"] = True
+                elif case == "extra_finished":
+                    events.append(network_event(5, method="Network.loadingFinished", request_id="REQ-error"))
+                elif case == "extra_failed":
+                    events.append(network_event(5, method="Network.loadingFailed", request_id="REQ-error"))
+                elif case == "finished_before_commit":
+                    events = events[:2] + [record(3, events[3].payload), record(4, events[2].payload)]
+                self.assertEqual(
+                    {violation["kind"] for violation in network_event_order_violations(events, session_id="SID-1")},
+                    {"successful_terminal_before_response", "duplicate_terminal"},
+                )
+
+    def test_network_order_audit_still_rejects_duplicate_successful_terminals(self) -> None:
+        records = [
+            network_event(1, method="Network.requestWillBeSent", request_id="REQ-ok"),
+            network_event(2, method="Network.responseReceived", request_id="REQ-ok"),
+            network_event(3, method="Network.loadingFinished", request_id="REQ-ok"),
+            network_event(4, method="Network.loadingFinished", request_id="REQ-ok"),
+        ]
+        self.assertEqual(
+            [violation["kind"] for violation in network_event_order_violations(records, session_id="SID-1")],
+            ["duplicate_terminal"],
+        )
+
+    def test_error_document_completion_keeps_the_network_failure_in_summary(self) -> None:
+        summary = summarize_network_activity(error_document_events(), session_id="SID-1", started=0.0)
+        self.assertEqual(summary["failed_count"], 1)
+        self.assertEqual(summary["finished_count"], 0)
+        self.assertEqual(summary["inflight_count"], 0)
+        request = summary["requests"][0]
+        self.assertEqual(request["terminal"], "failed")
+        self.assertEqual(request["terminal_sequence"], 2)
+        self.assertEqual(request["error_text"], "net::ERR_CONNECTION_RESET")
 
 
 if __name__ == "__main__":

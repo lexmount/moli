@@ -1,6 +1,257 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_bidi_node_references_work_in_classic_element_commands() {
+    let (addr, protocol_server) = spawn_test_protocol_server().await;
+    let session_id = classic_new_session_on_server(addr).await;
+    let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+    let tree = send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+    let context = tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let url = classic_data_url_for_bidi_test(
+        "<!doctype html><h1>Ready</h1><h2>Untouched</h2><h3>Classic untouched</h3>",
+    );
+    let navigation = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.navigate",
+        json!({"context": &context, "url": url, "wait": "complete"}),
+    )
+    .await;
+    assert_eq!(navigation["type"], "success");
+    let located = send_bidi_command(
+        &mut socket,
+        3,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h1"}}),
+    )
+    .await;
+    let shared_id = located["result"]["nodes"][0]["sharedId"].as_str().unwrap();
+    let untouched = send_bidi_command(
+        &mut socket,
+        30,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h2"}}),
+    )
+    .await;
+    let untouched_id = untouched["result"]["nodes"][0]["sharedId"]
+        .as_str()
+        .unwrap();
+    let classic = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/element"),
+        json!({"using": "css selector", "value": "h3"}),
+    )
+    .await;
+    let classic_id = classic["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .unwrap();
+    let (status, text) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/{shared_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(text["value"], "Ready");
+    let echoed = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return arguments[0].textContent;",
+            "args": [{"element-6066-11e4-a52e-4f735466cecf": shared_id}]
+        }),
+    )
+    .await;
+    assert_eq!(echoed["value"], "Ready");
+    let other_session = classic_new_session_on_server(addr).await;
+    let (_, foreign) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{other_session}/element/{shared_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(foreign["value"]["error"], "no such element", "{foreign}");
+    let replacement = classic_data_url_for_bidi_test("<!doctype html><h1>Replacement</h1>");
+    let replaced = send_bidi_command(
+        &mut socket,
+        4,
+        "browsingContext.navigate",
+        json!({"context": &context, "url": replacement, "wait": "complete"}),
+    )
+    .await;
+    assert_eq!(replaced["type"], "success");
+    for id in [shared_id, untouched_id, classic_id] {
+        let (_, stale) = classic_request_status_on_server_with_body(
+            addr,
+            "GET",
+            &format!("/session/{session_id}/element/{id}/text"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            stale["value"]["error"], "stale element reference",
+            "{stale}"
+        );
+    }
+    let (_, unknown) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/moli:bidi-renderer-node:4294967295/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(unknown["value"]["error"], "no such element", "{unknown}");
+    let located_again = send_bidi_command(
+        &mut socket,
+        5,
+        "browsingContext.locateNodes",
+        json!({"context": &context, "locator": {"type": "css", "value": "h1"}}),
+    )
+    .await;
+    let fresh_id = located_again["result"]["nodes"][0]["sharedId"]
+        .as_str()
+        .unwrap();
+    assert_ne!(shared_id, fresh_id);
+    let (status, fresh) = classic_request_status_on_server_with_body(
+        addr,
+        "GET",
+        &format!("/session/{session_id}/element/{fresh_id}/text"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{fresh}");
+    assert_eq!(fresh["value"], "Replacement");
+    let old_bidi_node = send_bidi_command(&mut socket, 6, "script.callFunction", json!({
+        "functionDeclaration": "function(node) { return node.textContent; }",
+        "target": {"context": &context}, "arguments": [{"sharedId": shared_id}], "awaitPromise": false
+    })).await;
+    assert_eq!(old_bidi_node["type"], "error", "{old_bidi_node}");
+    assert_eq!(old_bidi_node["error"], "no such node", "{old_bidi_node}");
+    let old_classic_node = send_bidi_command(&mut socket, 7, "script.callFunction", json!({
+        "functionDeclaration": "function(node) { return node.textContent; }",
+        "target": {"context": &context}, "arguments": [{"sharedId": classic_id}], "awaitPromise": false
+    })).await;
+    assert_eq!(
+        old_classic_node["error"], "no such node",
+        "{old_classic_node}"
+    );
+    socket.close(None).await.unwrap();
+    for id in [&session_id, &other_session] {
+        let deleted = classic_request_on_server_with_body(
+            addr,
+            "DELETE",
+            &format!("/session/{id}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(deleted, json!({"value": null}));
+    }
+    protocol_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_bidi_navigation_started_matches_network_and_result() {
+    let fixture_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture_addr = fixture_listener.local_addr().unwrap();
+    let fixture_server = tokio::spawn(async move {
+        axum::serve(
+            fixture_listener,
+            Router::new().route(
+                "/",
+                get(|| async {
+                    (
+                        [("content-type", "text/html")],
+                        "<!doctype html><title>Navigation</title>",
+                    )
+                }),
+            ),
+        )
+        .await
+    });
+    for attached in [false, true] {
+        let (addr, protocol_server) = spawn_test_protocol_server().await;
+        let (mut socket, context) = if attached {
+            let session_id = classic_new_session_on_server(addr).await;
+            let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+            let tree =
+                send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+            let context = tree["result"]["contexts"][0]["context"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            (socket, context)
+        } else {
+            bidi_session_with_context(addr).await
+        };
+        let subscribed = send_bidi_command(&mut socket, 3, "session.subscribe", json!({
+            "events": ["browsingContext.navigationStarted", "network.beforeRequestSent", "network.responseCompleted", "browsingContext.load"],
+            "contexts": [&context]
+        })).await;
+        assert_eq!(subscribed["type"], "success");
+        for id in [4_u64, 5] {
+            let url = format!("http://{fixture_addr}/?navigation={id}");
+            socket
+                .send(WsMessage::Text(
+                    json!({
+                        "id": id, "method": "browsingContext.navigate",
+                        "params": {"context": &context, "url": &url, "wait": "complete"}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let messages = recv_until_id(&mut socket, id).await;
+            let response = bidi_message_by_id(&messages, id);
+            assert_eq!(response["type"], "success", "{messages:?}");
+            let navigation = &response["result"]["navigation"];
+            assert!(navigation.is_string());
+            let mut positions = Vec::new();
+            for method in [
+                "browsingContext.navigationStarted",
+                "network.beforeRequestSent",
+                "network.responseCompleted",
+                "browsingContext.load",
+            ] {
+                let matching = messages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m["method"] == method && m["params"]["context"] == context)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    matching.len(),
+                    1,
+                    "attached={attached}, missing/duplicate {method}: {messages:?}"
+                );
+                let (position, event) = matching[0];
+                assert_eq!(&event["params"]["navigation"], navigation, "{event}");
+                assert_eq!(
+                    event["params"]["url"]
+                        .as_str()
+                        .or_else(|| event["params"]["request"]["url"].as_str()),
+                    Some(url.as_str())
+                );
+                positions.push(position);
+            }
+            assert!(
+                positions.windows(2).all(|p| p[0] < p[1]),
+                "navigation event order: {messages:?}"
+            );
+        }
+        socket.close(None).await.unwrap();
+        protocol_server.abort();
+    }
+    fixture_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_file_navigation_returns_unknown_error_without_lifecycle_or_replacement() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
@@ -327,6 +578,10 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
     let page_url = format!("http://{fixture_addr}/empty.html");
     let fetch_url = format!("http://{fixture_addr}/empty.txt");
+    // The header-only baseline may finish its body after the subscription is
+    // enabled. Give it a distinct URL so its late completion cannot be selected
+    // as the request made after the collector was installed.
+    let baseline_fetch_url = format!("{fetch_url}?baseline");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _default_context_id) = bidi_session_with_context(cdp_addr).await;
@@ -374,7 +629,7 @@ async fn websocket_bidi_user_context_fetch_after_navigation_collects_response_bo
         "script.evaluate",
         json!({
             "expression": format!(
-                "fetch({fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
+                "fetch({baseline_fetch_url:?}).then(response => 'OK:' + response.status).catch(error => 'ERR:' + error.name + ':' + error.message)"
             ),
             "target": {
                 "context": context_id.clone()
@@ -987,7 +1242,7 @@ async fn websocket_bidi_wait_none_navigation_drains_before_next_command() {
         .await
         .expect("send script.evaluate after wait=none navigation");
     let evaluate = recv_ws_json(&mut socket).await;
-    assert_eq!(evaluate["type"], json!("success"));
+    assert_eq!(evaluate["type"], json!("success"), "{evaluate:?}");
     assert_eq!(evaluate["id"], json!(4_u64));
     assert_eq!(evaluate["result"]["type"], json!("success"));
     assert_eq!(evaluate["result"]["result"]["type"], json!("string"));
@@ -1781,6 +2036,8 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
 }
 #[tokio::test]
 async fn websocket_bidi_complete_navigation_waits_for_slow_image_load() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -1803,14 +2060,18 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
     let release_image = Arc::new(tokio::sync::Notify::new());
     let requested_for_route = Arc::clone(&image_requested);
     let release_for_route = Arc::clone(&release_image);
+    let image_response_released = Arc::new(AtomicBool::new(false));
+    let released_for_route = Arc::clone(&image_response_released);
     let fixture_app = Router::new().route("/", get(page)).route(
         "/slow.svg",
         get(move || {
             let requested_for_route = Arc::clone(&requested_for_route);
             let release_for_route = Arc::clone(&release_for_route);
+            let released_for_route = Arc::clone(&released_for_route);
             async move {
                 requested_for_route.notify_one();
                 release_for_route.notified().await;
+                released_for_route.store(true, Ordering::Release);
                 (
                     [(axum::http::header::CONTENT_TYPE.as_str(), "image/svg+xml")],
                     r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
@@ -1818,14 +2079,10 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
             }
         }),
     );
-    let fixture_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind BiDi wait=complete image fixture listener");
-    let fixture_addr = fixture_listener
-        .local_addr()
-        .expect("BiDi wait=complete image fixture addr");
-    let fixture_server =
-        tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
+    // The held HTTP response must progress independently of the protocol
+    // executor whose navigation completion this test is observing.
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "bidi-complete-image");
     let fixture_url = format!("http://{fixture_addr}/");
 
     let (cdp_addr, protocol_server) =
@@ -1898,7 +2155,13 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
     release_image.notify_one();
     let navigate = timeout(Duration::from_secs(1), recv_ws_json(&mut socket))
         .await
-        .expect("wait=complete navigate should return after image load completes");
+        .unwrap_or_else(|_| {
+            panic!(
+                "wait=complete navigate should return after image load completes; \
+                 image fixture released: {}",
+                image_response_released.load(Ordering::Acquire),
+            )
+        });
     assert_eq!(navigate["type"], json!("success"));
     assert_eq!(navigate["id"], json!(3_u64));
     assert_eq!(navigate["result"]["url"], json!(fixture_url));
@@ -1931,7 +2194,6 @@ window.addEventListener('load', () => { window.__bidiLoadFired = true; });
 
     let _ = socket.close(None).await;
     protocol_server.abort();
-    fixture_server.abort();
 }
 #[tokio::test]
 async fn websocket_bidi_complete_navigation_waits_for_slow_main_document_response() {

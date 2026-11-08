@@ -157,7 +157,7 @@ fn observation_transport_charge_bytes(observation: &RendererProtocolObservation)
                     .map_or(0, string_charge),
             )
         }
-        RendererProtocolObservation::MainDocumentCommit(commit) => [
+        RendererProtocolObservation::MainDocumentCommit { commit, .. } => [
             commit.frame_id.as_str(),
             commit.loader_id.as_str(),
             commit.url.as_str(),
@@ -314,9 +314,15 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
             )
             .saturating_add(headers_charge(event.request_headers())),
         RendererOwnerAction::TopLevelHistoryTraversal(_) => 0,
-        RendererOwnerAction::SubresourceFetchPause { info, .. } => {
-            info.renderer_transport_charge_bytes()
-        }
+        RendererOwnerAction::SubresourceFetchPause {
+            info,
+            child_document,
+            ..
+        } => info.renderer_transport_charge_bytes().saturating_add(
+            child_document
+                .as_ref()
+                .map_or(0, |document| document.renderer_transport_charge_bytes()),
+        ),
         RendererOwnerAction::SubresourceContinue { event, .. } => {
             event.renderer_transport_charge_bytes()
         }

@@ -415,6 +415,122 @@ fn window_global_accessors_use_the_borrowed_window_receiver() {
 }
 
 #[test]
+fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
+    let mut vm = new_storage_test_vm("https://window-global-receiver.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "global-receiver-frame";
+  frame.name = "dummy";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("cross-realm Window receiver child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "cross-realm Window receiver child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById("global-receiver-frame");
+  const other = frame.contentWindow;
+  const notWindow = Object.create(Object.getPrototypeOf(other));
+  const throwsOtherTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof other.TypeError && !(error instanceof TypeError);
+    }
+  };
+
+  const invalidGetters = [
+    () => { Object.create(other).window; },
+    () => Object.getOwnPropertyDescriptor(other, "history").get.call(notWindow),
+    () => Reflect.get(other, "screen", notWindow),
+    () => new Proxy(other, {}).onclick
+  ].every(throwsOtherTypeError);
+
+  let conversions = 0;
+  const nameValue = {toString() {conversions++; return "ignored";}};
+  const timerValue = {valueOf() {conversions++; return 0;}};
+  const invalidSetters = [
+    () => { Object.create(other).name = nameValue; },
+    () => Object.getOwnPropertyDescriptor(other, "status").set.call(notWindow, "ignored"),
+    () => Reflect.set(other, "parent", window, notWindow),
+    () => { new Proxy(other, {}).location = location; }
+  ].every(throwsOtherTypeError);
+
+  const invalidOperations = [
+    () => other.clearInterval.call(notWindow, timerValue),
+    () => new Proxy(other, {}).removeEventListener("foo", () => {})
+  ].every(throwsOtherTypeError);
+
+  const nameGetter = Object.getOwnPropertyDescriptor(other, "name").get;
+  const statusDescriptor = Object.getOwnPropertyDescriptor(other, "status");
+  const nullGetters =
+    Reflect.get(other, "self", null) === other &&
+    Reflect.get(other, "document", undefined) === other.document &&
+    nameGetter.call(null) === "dummy";
+
+  const newSelf = {};
+  const nullSetters =
+    Reflect.set(other, "self", newSelf, null) &&
+    Reflect.set(other, "name", "newName", undefined);
+  statusDescriptor.set.call(null, "ready");
+
+  let caughtEvent;
+  const eventListener = event => {
+    caughtEvent = event;
+  };
+  other.addEventListener.call(null, "global-receiver", eventListener);
+  const dispatchedEvent = new other.Event("global-receiver");
+  const extractedDispatch = other.dispatchEvent;
+  const dispatchResult = extractedDispatch(dispatchedEvent);
+  frame.remove();
+  let detachedCleanup = true;
+  try {
+    other.removeEventListener("global-receiver", eventListener);
+  } catch (error) {
+    detachedCleanup = false;
+  }
+
+  return [
+    invalidGetters,
+    invalidSetters,
+    invalidOperations && conversions === 0,
+    nullGetters,
+    nullSetters,
+    other.self === newSelf,
+    other.name === "newName",
+    statusDescriptor.get.call(null) === "ready",
+    dispatchResult,
+    caughtEvent === dispatchedEvent,
+    detachedCleanup
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-realm Window receiver semantics should evaluate");
+
+    assert_eq!(
+        result,
+        std::iter::repeat_n("true", 11)
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+}
+
+#[test]
 fn child_document_body_with_scope_exposes_insert_before() {
     let mut vm = new_storage_test_vm("https://child-window-with-body.test/");
 
@@ -2337,4 +2453,33 @@ fn window_closed_reflects_removed_iframe_state() {
         )
         .expect("closed should reflect iframe removal through the native getter");
     assert_eq!(result, "[false,false,true,true]");
+}
+
+#[test]
+fn media_volume_rejects_out_of_range_values_without_mutating_state() {
+    let mut vm = new_storage_test_vm("https://media-volume.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const media = document.createElement('audio');
+        media.volume = 0.25;
+        for (const [value, name] of [[-1, 'IndexSizeError'], [1.01, 'IndexSizeError'],
+            [NaN, 'TypeError'], [Infinity, 'TypeError'], [Symbol(), 'TypeError']]) {
+            let error;
+            try { media.volume = value; } catch (caught) { error = caught; }
+            if (error?.name !== name || media.volume !== 0.25) throw Error('volume validation');
+        }
+        const sentinel = {};
+        let error;
+        try { media.volume = { valueOf() { throw sentinel; } }; } catch (caught) { error = caught; }
+        if (error !== sentinel || media.volume !== 0.25) throw Error('conversion exception');
+        media.volume = 0;
+        if (media.volume !== 0) throw Error('zero boundary');
+        media.volume = 1;
+        return media.volume === 1;
+    })()"#
+        )
+        .unwrap(),
+        "true"
+    );
 }

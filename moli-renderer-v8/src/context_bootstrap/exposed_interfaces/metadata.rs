@@ -19,10 +19,19 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 ];
 
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
+    "NetworkInformation",
+    // WorkerNavigator's native Service Worker support needs the intrinsic
+    // prototype even when the interface object is hidden on the global.
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "ServiceWorker",
+    "RTCEncodedAudioFrame",
+    "RTCEncodedVideoFrame",
     "DOMRectReadOnly",
     "DOMRect",
     "DOMPointReadOnly",
     "DOMPoint",
+    "DOMQuad",
     "DOMMatrixReadOnly",
     "DOMMatrix",
     "EventTarget",
@@ -34,9 +43,11 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "SecurityPolicyViolationEvent",
     "CloseEvent",
     "Worker",
+    "WebTransportError",
     "WebTransportBidirectionalStream",
     "WebTransportDatagramDuplexStream",
     "WebSocket",
+    "WebSocketError",
     "AbortSignal",
     "AbortController",
     "Headers",
@@ -117,6 +128,10 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "BatteryManager",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "ServiceWorker",
     "PaymentRequestUpdateEvent",
     "PaymentMethodChangeEvent",
     "AuthenticatorAssertionResponse",
@@ -126,6 +141,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "Credential",
     "CredentialsContainer",
     "MIDIPort",
+    "MIDIConnectionEvent",
+    "MIDIMessageEvent",
     "MIDIAccess",
     "MIDIInput",
     "MIDIOutput",
@@ -134,6 +151,7 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "ModelContext",
     "ToolActivatedEvent",
     "ToolCancelEvent",
+    "WebTransportError",
     "WebTransportBidirectionalStream",
     "WebTransportDatagramDuplexStream",
     "MediaKeySession",
@@ -186,6 +204,7 @@ pub(in crate::context_bootstrap) const INDEXED_DB_INTERFACE_NAMES: &[&str] = &[
     "IDBCursor",
     "IDBCursorWithValue",
     "IDBKeyRange",
+    "IDBRecord",
     "IDBVersionChangeEvent",
 ];
 
@@ -197,6 +216,7 @@ pub(crate) fn dedicated_worker_lazy_interface_names_for_test() -> Vec<&'static s
         .chain(WORKER_SHARED_INTERFACE_NAMES.iter().copied())
         .chain(crate::context_bootstrap::streams::stream_interface_names())
         .chain(INDEXED_DB_INTERFACE_NAMES.iter().copied())
+        .filter(|name| exposure_for_name(name).contains(RealmKind::DedicatedWorker))
         .collect()
 }
 
@@ -289,6 +309,7 @@ impl ExposureSet {
 
     const WINDOW_ONLY: Self = Self(Self::WINDOW);
     const WINDOW_AND_DEDICATED_WORKER: Self = Self(Self::WINDOW | Self::DEDICATED_WORKER);
+    const WINDOW_AND_SERVICE_WORKER: Self = Self(Self::WINDOW | Self::SERVICE_WORKER);
     const ALL_REALMS: Self =
         Self(Self::WINDOW | Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
     const WORKERS: Self = Self(Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
@@ -341,7 +362,12 @@ impl ExposedInterfaceMetadata {
     }
 
     pub(super) fn is_supported_by(self, profile: TemplateBuildProfile) -> bool {
-        self.exposure.contains(profile.realm_kind()) && profile.supports_name(self.name)
+        // Native WorkerNavigator factories need these prototypes independently
+        // of whether their interface objects are exposed on the worker global.
+        let worker_factory_intrinsic = profile != TemplateBuildProfile::Window
+            && matches!(self.name, "ServiceWorkerContainer" | "ServiceWorker");
+        (self.exposure.contains(profile.realm_kind()) || worker_factory_intrinsic)
+            && profile.supports_name(self.name)
     }
 }
 
@@ -446,8 +472,12 @@ pub(super) fn installation_for_spec(spec: ConstructorSpec) -> GlobalInstallation
 
 fn exposure_for_name(name: &str) -> ExposureSet {
     match name {
+        "ServiceWorkerContainer" => ExposureSet::WINDOW_ONLY,
+        "ServiceWorker" => ExposureSet::WINDOW_AND_SERVICE_WORKER,
         "FileSystemSyncAccessHandle" => ExposureSet::DEDICATED_WORKER_ONLY,
-        "EncodedVideoChunk" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
+        "RTCEncodedAudioFrame" | "RTCEncodedVideoFrame" | "EncodedVideoChunk" => {
+            ExposureSet::WINDOW_AND_DEDICATED_WORKER
+        }
         _ if WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_DEDICATED_AND_SHARED_WORKER
         }

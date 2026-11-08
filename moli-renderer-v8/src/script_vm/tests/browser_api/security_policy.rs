@@ -48,8 +48,10 @@ fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
 
     let dynamic_metadata = crate::module_runtime::ModuleFetchMetadata::default();
     assert!(
-        vm.csp_blocked_module_fetch_error_for_owner(&key, &dynamic_metadata)
-            .is_none(),
+        vm.document_runtime
+            .module_fetch_csp_context(key.url(), key.kind(), &dynamic_metadata)
+            .check_initial_request(key.url())
+            .is_ok(),
         "strict-dynamic must allow a non-parser-inserted module request"
     );
 
@@ -61,8 +63,10 @@ fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
             },
         );
     assert!(
-        vm.csp_blocked_module_fetch_error_for_owner(&key, &parser_metadata)
-            .is_some(),
+        vm.document_runtime
+            .module_fetch_csp_context(key.url(), key.kind(), &parser_metadata)
+            .check_initial_request(key.url())
+            .is_err(),
         "the same URL must remain blocked when parser metadata says parser-inserted"
     );
 
@@ -75,8 +79,10 @@ fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
             },
         );
     assert!(
-        vm.csp_blocked_module_fetch_error_for_owner(&key, &trusted_parser_metadata)
-            .is_none(),
+        vm.document_runtime
+            .module_fetch_csp_context(key.url(), key.kind(), &trusted_parser_metadata)
+            .check_initial_request(key.url())
+            .is_ok(),
         "a matching inherited nonce must authorize a parser-inserted module descendant"
     );
 }

@@ -20,12 +20,10 @@ pub fn form_output_encoding_for_label(label: &str) -> Option<&'static Encoding> 
     encoding_for_label(label).map(form_output_encoding)
 }
 
+/// Selects the output encoding for form and URL serialization. HTML meta
+/// charset rewrites are handled separately by the document prescan.
 pub fn form_output_encoding(encoding: &'static Encoding) -> &'static Encoding {
-    if encoding == encoding_rs::X_USER_DEFINED {
-        encoding_rs::WINDOWS_1252
-    } else {
-        encoding.output_encoding()
-    }
+    encoding.output_encoding()
 }
 
 pub fn encode_text_for_legacy_web<'a>(

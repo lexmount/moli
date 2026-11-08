@@ -21,21 +21,77 @@ pub(crate) fn css_style_sheet_constructor_callback<'s>(
     construct_css_style_sheet(scope, &args, rv);
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CSSStyleSheet")]
+struct CssStyleSheetConstructorArgs<'s> {
+    #[webidl(dictionary)]
+    options: CssStyleSheetInit<'s>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "CSSStyleSheetInit")]
+struct CssStyleSheetInit<'s> {
+    // Constructed sheets have no title; the alternate flag has no selection
+    // effect, but its WebIDL conversion still runs before the other members.
+    #[webidl(name = "alternate", default = false)]
+    _alternate: bool,
+    #[webidl(name = "baseURL")]
+    base_url: Option<String>,
+    #[webidl(default = false)]
+    disabled: bool,
+    #[webidl(default = CssStyleSheetMedia::Text(String::new()), converter = "raw")]
+    media: CssStyleSheetMedia<'s>,
+}
+
+enum CssStyleSheetMedia<'s> {
+    Native(v8::Local<'s, v8::Object>),
+    Text(String),
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for CssStyleSheetMedia<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Ok(list) = v8::Local::<v8::Object>::try_from(value)
+            && crate::web_api_interfaces::MediaList::is_instance(scope, list)
+        {
+            return Ok(Self::Native(list));
+        }
+        webidl::convert::<webidl::DomString>(scope, value, context).map(|text| Self::Text(text.0))
+    }
+}
+
+impl<'s> CssStyleSheetMedia<'s> {
+    fn into_text(self, scope: &mut v8::PinScope<'s, '_>) -> String {
+        match self {
+            Self::Native(list) => media_list_native_text(scope, list),
+            Self::Text(text) => text,
+        }
+    }
+}
+
 fn construct_css_style_sheet<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    initialize_css_style_sheet_object(scope, args.this());
-    let Some(media_text) = constructor_media_option(scope, args) else {
+    let Some(parsed) = webidl::parse_args::<CssStyleSheetConstructorArgs>(scope, args) else {
         return;
     };
-    let disabled = constructor_disabled_option(scope, args);
     let constructor_document =
         current_css_style_sheet_constructor_document_handle_for_context(scope);
-    let Some(base_url) = constructor_base_url_option(scope, args, constructor_document) else {
+    let Some(base_url) =
+        constructor_base_url_option(scope, parsed.options.base_url, constructor_document)
+    else {
         return;
     };
+    let media_text = parsed.options.media.into_text(scope);
+    initialize_css_style_sheet_object(scope, args.this());
     set_private_value(
         scope,
         args.this(),
@@ -57,7 +113,7 @@ fn construct_css_style_sheet<'s>(
     if !media_text.is_empty() {
         sync_style_sheet_media_text(scope, args.this(), &media_text);
     }
-    if disabled {
+    if parsed.options.disabled {
         require_css_style_sheet_live_stylesheet(scope, args.this()).set_disabled(true);
     }
     rv.set(args.this().into());
@@ -89,57 +145,14 @@ fn child_handle_marker(scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
     .and_then(|value| dom_handle_from_marker_value(scope, value))
 }
 
-fn constructor_media_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<String> {
-    if args.length() == 0 || webidl::is_nullish(args.get(0)) || !args.get(0).is_object() {
-        return Some(String::new());
-    }
-    let Some(media) = v8::Local::<v8::Object>::try_from(args.get(0))
-        .ok()
-        .and_then(|options| webidl::property(scope, options, "media"))
-    else {
-        return Some(String::new());
-    };
-    if media.is_undefined() {
-        return Some(String::new());
-    }
-    cssom_dom_string_property_value(scope, media, "CSSStyleSheetInit", "media")
-}
-
-fn constructor_disabled_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> bool {
-    if args.length() == 0 || webidl::is_nullish(args.get(0)) || !args.get(0).is_object() {
-        return false;
-    }
-    v8::Local::<v8::Object>::try_from(args.get(0))
-        .ok()
-        .and_then(|options| webidl::property(scope, options, "disabled"))
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
-fn constructor_base_url_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
+fn constructor_base_url_option(
+    scope: &mut v8::PinScope<'_, '_>,
+    base_url_text: Option<String>,
     constructor_document: Option<DomHandle>,
 ) -> Option<Option<url::Url>> {
-    if args.length() == 0 || webidl::is_nullish(args.get(0)) || !args.get(0).is_object() {
-        return Some(None);
-    }
-    let Some(base_url_value) = v8::Local::<v8::Object>::try_from(args.get(0))
-        .ok()
-        .and_then(|options| webidl::property(scope, options, "baseURL"))
-    else {
+    let Some(base_url_text) = base_url_text else {
         return Some(None);
     };
-    if base_url_value.is_undefined() {
-        return Some(None);
-    }
-    let base_url_text =
-        cssom_dom_string_property_value(scope, base_url_value, "CSSStyleSheetInit", "baseURL")?;
     let document_base_url = constructor_document_base_url(scope, constructor_document)?;
     match url::Url::options()
         .base_url(Some(&document_base_url))

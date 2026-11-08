@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import asyncio
 import json
 import re
@@ -7,11 +8,15 @@ import urllib.parse
 
 from playwright.async_api import Error as PlaywrightError, expect
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..helpers import capture_layout
 from ..config import is_moli_browser
+from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..progress import await_with_progress
+from .drag_interception import run_drag_interception_workflows
+from .native_drag_semantics import run_native_drag_semantics
 
 
 async def run_dom_input_group(state: SmokeState) -> None:
@@ -53,11 +58,12 @@ async def run_dom_input_group(state: SmokeState) -> None:
     uploaded = await page.evaluate(
         """() => {
           const file = document.querySelector('#upload')?.files?.[0];
-          return file ? { name: file.name, size: file.size } : null;
+          return file ? { name: file.name, size: file.size, type: file.type } : null;
         }"""
     )
     assert_equal(uploaded.get("name"), "upload.txt", "uploaded file name")
     assert_equal(uploaded.get("size"), len("upload contents"), "uploaded file size")
+    assert_equal(uploaded.get("type"), "text/plain", "uploaded file MIME type")
     upload_text = await page.evaluate(
         """async () => {
           const file = document.querySelector('#upload')?.files?.[0];
@@ -95,6 +101,33 @@ async def run_dom_input_group(state: SmokeState) -> None:
     )
     state.record("set_input_files")
 
+    # Remote Playwright uploads supply an explicit MIME type. Use native
+    # disk-file selection to verify the browser's own extension lookup.
+    document = await state.cdp.send("DOM.getDocument", {})
+    upload_node = await state.cdp.send(
+        "DOM.querySelector",
+        {"nodeId": document["root"]["nodeId"], "selector": "#upload"},
+    )
+    for name, contents, expected_type in [
+        ("mime-upload.TXT", b"\x89PNG\r\n\x1a\n", "text/plain"),
+        ("upload.json", b"{}", "application/json"),
+        ("upload.pdf", b"%PDF-1.7\n", "application/pdf"),
+        ("upload.moli_unknown", b"\x89PNG\r\n\x1a\n", ""),
+        ("upload_without_extension", b"%PDF-1.7\n", ""),
+    ]:
+        selected_file = temp_dir / name
+        selected_file.write_bytes(contents)
+        await state.cdp.send(
+            "DOM.setFileInputFiles",
+            {"nodeId": upload_node["nodeId"], "files": [str(selected_file)]},
+        )
+        assert_equal(
+            await page.locator("#upload").evaluate("input => input.files[0].type"),
+            expected_type,
+            f"native file MIME type: {name}",
+        )
+    state.record("cdp_file_input_mime_types")
+
     await page.set_content('<input id="chooser" type="file" multiple>')
     await capture_layout(page)
     surface = await page.locator("#chooser").evaluate(
@@ -112,11 +145,12 @@ async def run_dom_input_group(state: SmokeState) -> None:
     chooser = await chooser_info.value
     await chooser.set_files(str(upload_file))
     chooser_files = await page.evaluate(
-        """() => Array.from(document.querySelector('#chooser')?.files || []).map(file => ({ name: file.name, size: file.size }))"""
+        """() => Array.from(document.querySelector('#chooser')?.files || []).map(file => ({ name: file.name, size: file.size, type: file.type }))"""
     )
     assert_equal(len(chooser_files), 1, "file chooser selected file count")
     assert_equal(chooser_files[0].get("name"), "upload.txt", "file chooser selected file name")
     assert_equal(chooser_files[0].get("size"), len("upload contents"), "file chooser selected file size")
+    assert_equal(chooser_files[0].get("type"), "text/plain", "file chooser selected file MIME type")
     chooser_text = await page.evaluate(
         """async () => {
           const file = document.querySelector('#chooser')?.files?.[0];
@@ -143,16 +177,24 @@ async def run_dom_input_group(state: SmokeState) -> None:
     scripted_chooser = await scripted_chooser_info.value
     await scripted_chooser.set_files(str(upload_file))
     scripted_files = await page.evaluate(
-        """() => Array.from(document.querySelector('#picker-script')?.files || []).map(file => ({ name: file.name, size: file.size }))"""
+        """() => Array.from(document.querySelector('#picker-script')?.files || []).map(file => ({ name: file.name, size: file.size, type: file.type }))"""
     )
     assert_equal(len(scripted_files), 1, "scripted file chooser selected file count")
     assert_equal(scripted_files[0].get("name"), "upload.txt", "scripted file chooser selected file name")
     assert_equal(scripted_files[0].get("size"), len("upload contents"), "scripted file chooser selected file size")
+    assert_equal(scripted_files[0].get("type"), "text/plain", "scripted file chooser selected file MIME type")
     state.record("file_chooser_show_picker")
 
     await page.set_content(f'<a id="go" href="{fixture}/plain">go</a>')
     await capture_layout(page)
     assert_equal(await page.get_attribute("#go", "href"), f"{fixture}/plain", "link navigation href")
+    assert_equal(
+        await page.locator("#go").evaluate(
+            "link => [getComputedStyle(link).color, getComputedStyle(link).textDecorationLine]"
+        ),
+        ["rgb(0, 0, 238)", "underline"],
+        "link user-agent color and decoration",
+    )
     await _navigate_until_dom_ready(state, f"{fixture}/plain")
     assert_equal(await page.text_content("main"), "plain ok", "click navigation target text")
     state.record("click_navigation")
@@ -197,6 +239,8 @@ async def run_dom_input_group(state: SmokeState) -> None:
     state.record("auth_style_hydrated_click_redirect")
 
     await run_locator_input_workflows(state)
+    await run_drag_interception_workflows(state)
+    await run_native_drag_semantics(state)
     await run_user_facing_locator_workflows(state)
     await run_role_selector_state_workflows(state)
     await run_playwright_expect_matcher_workflows(state)
@@ -207,6 +251,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
         run_keypress_dispatch_workflow(state),
         timeout_seconds=30,
     )
+    await run_drop_input_workflow(state)
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)
@@ -317,6 +362,7 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
             <div id="drop">drop</div>
           `;
           window.__keys = [];
+          window.__dragEvents = [];
           const textInput = document.getElementById('text');
           const hoverTarget = document.getElementById('hover');
           const hoverChild = document.getElementById('hover-child');
@@ -325,10 +371,15 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
           textInput.addEventListener('keydown', event => window.__keys.push(`${event.key}:${event.shiftKey}:${event.ctrlKey || event.metaKey}`));
           hoverTarget.addEventListener('mouseenter', () => window.__hovered = true);
           hoverChild.addEventListener('click', () => window.__hoverChildClicked = true);
-          dragSource.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', 'dragged-value'));
+          dragSource.addEventListener('dragstart', event => {
+            window.__dragEvents.push('start');
+            event.dataTransfer.setData('text/plain', 'dragged-value');
+          });
+          dragSource.addEventListener('dragend', () => window.__dragEvents.push('end'));
           dropTarget.addEventListener('dragover', event => event.preventDefault());
           dropTarget.addEventListener('drop', event => {
             event.preventDefault();
+            window.__dragEvents.push('drop');
             dropTarget.textContent = event.dataTransfer.getData('text/plain');
           });
         }"""
@@ -396,13 +447,13 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
     )
     assert_equal(form_state, {"checked": True, "radio": "b", "select": "two"}, "checkbox/radio/select state")
 
-    drag = page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000)
-    if is_moli_browser():
-        await _expect_drag_interception_boundary(drag, "Moli drag interception boundary")
-        assert_equal(await page.text_content("#drop"), "drop", "unsupported drag/drop does not dispatch")
-    else:
-        await drag
-        assert_equal(await page.text_content("#drop"), "dragged-value", "Chromium drag/drop dispatches")
+    await page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000)
+    assert_equal(await page.text_content("#drop"), "dragged-value", "drag/drop transfers the native payload")
+    assert_equal(
+        await page.evaluate("() => window.__dragEvents"),
+        ["start", "drop", "end"],
+        "drag/drop dispatches dragend on the source after drop",
+    )
     state.record("locator_input_workflows")
 
 
@@ -1015,10 +1066,17 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
             <input id="field">
             <script>
               window.__keyEvents = [];
+              window.__editEvents = [];
               window.__cancelAt = false;
               for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
                 document.getElementById('field').addEventListener(type, event => {
                   __keyEvents.push({type, trusted: event.isTrusted});
+                  if (type === 'beforeinput' || type === 'input') {
+                    __editEvents.push({type, data: event.data, inputType: event.inputType,
+                      isComposing: event.isComposing, native: event instanceof InputEvent,
+                      trusted: event.isTrusted, bubbles: event.bubbles,
+                      cancelable: event.cancelable, composed: event.composed});
+                  }
                   if (__cancelAt && type === 'keypress' && event.key === '@')
                     event.preventDefault();
                 });
@@ -1026,7 +1084,7 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
             </script>
         """))
         session = await await_with_progress(
-            "keypress/new-cdp-session", state.context.new_cdp_session(page),
+            "keypress/new-cdp-session", new_cdp_session(state.context, page),
         )
         full_sequence = ["keydown", "keypress", "beforeinput", "input", "keyup"]
 
@@ -1036,6 +1094,7 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
               field.value = '';
               field.focus();
               window.__keyEvents = [];
+              window.__editEvents = [];
               window.__cancelAt = cancelAt;
             }""", cancel_at)
 
@@ -1076,7 +1135,49 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
         await reset()
         await session.send("Input.insertText", {"text": "a"})
         await check("a", ["beforeinput", "input"], "insertText does not synthesize keyboard events")
+
+        async def check_edit(input_type: str, data: str | None) -> None:
+            assert_equal(
+                await page.evaluate("__editEvents"),
+                [{"type": kind, "data": data, "inputType": input_type,
+                  "isComposing": False, "native": True, "trusted": True,
+                  "bubbles": True, "cancelable": kind == "beforeinput", "composed": True}
+                 for kind in ["beforeinput", "input"]],
+                f"native InputEvent payload for {input_type}",
+            )
+
+        await check_edit("insertText", "a")
+        for key, input_type, expected in [
+            ("Backspace", "deleteContentBackward", "ac"),
+            ("Delete", "deleteContentForward", "ab"),
+        ]:
+            await reset()
+            await page.evaluate("field.value = 'abc'; field.setSelectionRange(2, 2)")
+            await page.keyboard.press(key)
+            await check(expected, ["keydown", "beforeinput", "input", "keyup"], f"{key} editing")
+            await check_edit(input_type, None)
+
+        for control in ['<textarea id="field"></textarea>', '<div id="field" contenteditable="true"></div>']:
+            await page.set_content(control)
+            await page.evaluate("""() => {
+              window.__editEvents = [];
+              for (const type of ['beforeinput', 'input']) field.addEventListener(type, event => {
+                __editEvents.push({type, data: event.data, inputType: event.inputType,
+                  isComposing: event.isComposing, native: event instanceof InputEvent,
+                  trusted: event.isTrusted, bubbles: event.bubbles,
+                  cancelable: event.cancelable, composed: event.composed});
+              });
+              field.focus();
+            }""")
+            await session.send("Input.insertText", {"text": "hello"})
+            await check_edit("insertText", "hello")
+            if control.startswith('<textarea'):
+                await page.evaluate("__editEvents = []")
+                await page.keyboard.press("Enter")
+                await check_edit("insertLineBreak", None)
+
         state.record("playwright_and_cdp_keypress_dispatch")
+        state.record("native_text_input_event_payloads")
     finally:
         if session is not None:
             await await_with_progress("keypress/detach", session.detach(), timeout_seconds=5)
@@ -1108,7 +1209,7 @@ async def run_cdp_control_key_name_workflow(state: SmokeState) -> None:
             }"""
         )
         await capture_layout(page)
-        session = await state.context.new_cdp_session(page)
+        session = await new_cdp_session(state.context, page)
 
         # Rod encodes Enter as a carriage-return CDP key string. Chromium
         # converts that spelling to the canonical DOM key before dispatching.
@@ -1716,17 +1817,6 @@ async def _expect_playwright_error(awaitable: object) -> str:
     except PlaywrightError as error:
         return str(error)
     raise SmokeError("expected Playwright command to fail")
-
-
-async def _expect_drag_interception_boundary(awaitable: object, label: str) -> str:
-    error = await _expect_playwright_error(awaitable)
-    explicit_unsupported = "Input.setInterceptDrags" in error and "not supported" in error
-    bounded_drag_interception = (
-        "Timeout 1000ms exceeded" in error and "performing move and up action" in error
-    )
-    if not explicit_unsupported and not bounded_drag_interception:
-        raise SmokeError(f"{label}: expected drag interception boundary, got: {error}")
-    return error
 
 
 async def run_selector_eval_and_handle_conversion_workflows(state: SmokeState) -> None:

@@ -47,13 +47,14 @@ async fn binary_request_round_trip(
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
     let mut sessions = vec!["SID-1"];
     if chained {
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_mut()
+                    .unwrap()
+                    .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
+            })
+        });
         sessions.push("SID-2");
     }
     ctx.sent.clear();

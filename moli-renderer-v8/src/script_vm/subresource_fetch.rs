@@ -18,7 +18,7 @@ use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
 use crate::document_runtime::DocumentRuntime;
 use crate::frame_owner_model::FrameDocumentModuleTerminalQueueFollowup;
-use crate::native_bridge::{JsContextHost, OwnerDispatchScope};
+use crate::native_bridge::{JsContextHost, OwnerDispatchScope, PendingTextTrackLoadTerminal};
 use crate::network::ResourceRequestClient;
 use crate::runtime::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
@@ -361,7 +361,7 @@ fn apply_text_track_subresource_terminal(
     track_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::TextTrackLoadSequenceId,
     internal_id: u64,
-    result: Result<String, String>,
+    terminal: PendingTextTrackLoadTerminal,
 ) {
     let followup = context_host
         .borrow_mut()
@@ -369,7 +369,7 @@ fn apply_text_track_subresource_terminal(
             track_handle,
             sequence,
             internal_id,
-            result,
+            terminal,
         );
     let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_text_track_terminal_followup(
@@ -737,11 +737,13 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Image { .. } => "image",
         PendingSubresourceContinuation::Media { .. } => "media",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
+        PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",
         PendingSubresourceContinuation::Xhr { .. } => "xhr",
         PendingSubresourceContinuation::WebSocket(_) => "websocket",
+        PendingSubresourceContinuation::ChildDocument(_) => "child_document",
         PendingSubresourceContinuation::WorkerFetch { .. } => "worker_fetch",
         PendingSubresourceContinuation::WorkerXhr { .. } => "worker_xhr",
         PendingSubresourceContinuation::WorkerCspReport { .. } => "worker_csp_report",

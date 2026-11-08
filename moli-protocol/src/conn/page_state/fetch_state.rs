@@ -341,7 +341,7 @@ mod tests {
 
     fn pending_subresource_fetch(internal_id: u64) -> PendingSubresourceFetchRequest {
         PendingSubresourceFetchRequest {
-            residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(
+            residence: crate::conn::PendingSubresourceFetchResidence::Page(
                 crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-fetch-state".to_owned(),
                     Some("TID-1".to_owned()),
@@ -380,6 +380,7 @@ mod tests {
             request_id: Some("REQ-1".to_owned()),
             loader_id: "LID-0000000001".to_owned(),
             request_announced: false,
+            announced_redirects: 0,
             requested_url: url.clone(),
             request_method: "GET".to_owned(),
             request_body: None,
@@ -407,6 +408,7 @@ mod tests {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 body.to_vec(),

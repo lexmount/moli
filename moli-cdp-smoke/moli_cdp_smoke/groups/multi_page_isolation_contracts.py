@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import suppress
 from typing import Any
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
 from .multi_page_support import (
@@ -39,8 +41,8 @@ async def _busy_runtime_termination_is_target_local(
             page_a.goto(f"{fixture}/plain?multi-page-runtime=a", wait_until="load"),
             page_b.goto(f"{fixture}/plain?multi-page-runtime=b", wait_until="load"),
         )
-        session_a = await context.new_cdp_session(page_a)
-        session_b = await context.new_cdp_session(page_b)
+        session_a = await new_cdp_session(context, page_a)
+        session_b = await new_cdp_session(context, page_b)
         sessions = [session_a, session_b]
         await asyncio.to_thread(
             read_fixture_json,
@@ -63,13 +65,10 @@ for (;;) {}""",
         )
 
         async def busy_loop_entered() -> bool:
-            try:
-                status = await asyncio.to_thread(
-                    read_fixture_json,
-                    f"{fixture}/inspector-routing-witness/status",
-                )
-            except Exception:
-                return False
+            status = await asyncio.to_thread(
+                read_fixture_json,
+                f"{fixture}/inspector-routing-witness/status",
+            )
             return status.get("enteredCount") == 1
 
         await wait_until(
@@ -192,8 +191,8 @@ async def _stop_loading_is_target_local(
     paused_request_id: str | None = None
     try:
         page_a, page_b = await asyncio.gather(context.new_page(), context.new_page())
-        session_a = await context.new_cdp_session(page_a)
-        session_b = await context.new_cdp_session(page_b)
+        session_a = await new_cdp_session(context, page_a)
+        session_b = await new_cdp_session(context, page_b)
         sessions = [session_a, session_b]
         events_a = attach_cdp_event_collector(
             session_a,
@@ -395,9 +394,9 @@ async def _same_target_session_policies_follow_chromium(
             owner.goto(f"{fixture}/plain?multi-page-policy=owner", wait_until="load"),
             peer.goto(f"{fixture}/plain?multi-page-policy=peer", wait_until="load"),
         )
-        first = await context.new_cdp_session(owner)
-        second = await context.new_cdp_session(owner)
-        peer_session = await context.new_cdp_session(peer)
+        first = await new_cdp_session(context, owner)
+        second = await new_cdp_session(context, owner)
+        peer_session = await new_cdp_session(context, peer)
         sessions = [first, second, peer_session]
         await asyncio.gather(
             first.send("Network.enable"),
@@ -642,7 +641,7 @@ async def _activation_churn_preserves_target_ownership(
                 for page, url in zip(pages, initial_urls, strict=True)
             )
         )
-        sessions = [await context.new_cdp_session(page) for page in pages]
+        sessions = [await new_cdp_session(context, page) for page in pages]
         for index, session in enumerate(sessions):
             await asyncio.gather(
                 session.send("Page.enable"),

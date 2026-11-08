@@ -18,7 +18,9 @@ impl Drop for ScriptVm {
         self.page_inspector
             .deactivate_page_vm_binding_for_teardown();
 
-        self.page_default_runtime.release_bridge_ref();
+        if let Some(runtime) = self.main_world.current_mut() {
+            runtime.release_bridge_ref();
+        }
         if let Some(runtime) = self.document_runtime.take_for_retained_document_host() {
             self._context_host
                 .borrow_mut()

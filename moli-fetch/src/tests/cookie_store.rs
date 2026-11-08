@@ -4,10 +4,10 @@ use moli_cookie_jar::{NetworkCookieRequestContext, new_shared_browser_cookie_sto
 use url::Url;
 
 use crate::{
-    BrowserNavigationRequestKind, BrowserRequestMetadata, FetchConfig, Request, RequestAuth,
-    RequestAuthScheme, RequestAuthTarget, RequestCredentialsMode, RequestMode, RequestResourceType,
-    ScriptFetchRequestMetadata, SubresourceRequestMetadata, cookie_header_for_request,
-    outgoing_request_headers,
+    BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, FetchConfig, Request,
+    RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCredentialsMode, RequestMode,
+    RequestResourceType, ScriptFetchRequestMetadata, SubresourceRequestMetadata,
+    cookie_header_for_request, outgoing_request_headers,
 };
 
 #[test]
@@ -235,7 +235,7 @@ fn request_cookie_header_reads_from_canonical_cookie_core() {
     let request_url = Url::parse("https://example.com/app/panel").unwrap();
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(
@@ -322,6 +322,128 @@ fn outgoing_request_headers_skip_default_cookie_when_store_cookie_exists() {
             ("X-Test".to_owned(), "ok".to_owned()),
         ]
     );
+}
+
+#[test]
+fn outgoing_request_headers_preserve_explicit_cookies_for_curl_policy() {
+    for manual_in_config in [false, true] {
+        let mut config = FetchConfig::default();
+        let headers = if manual_in_config {
+            config.push_default_request_header("Cookie", "manual=1");
+            vec![]
+        } else {
+            vec![("Cookie".to_owned(), "manual=1".to_owned())]
+        };
+        let request = Request::new("GET", "https://example.com/app/panel", None, headers)
+            .unwrap()
+            .with_additional_cookies(Some("literal=one".to_owned()))
+            .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+        assert_eq!(
+            outgoing_request_headers(&config, &request, Some("sid=server")),
+            vec![
+                ("Cookie".to_owned(), "sid=server".to_owned()),
+                ("Cookie".to_owned(), "manual=1".to_owned()),
+            ]
+        );
+    }
+}
+
+#[test]
+fn literal_cookies_obey_browser_credentials_for_both_configuration_sources() {
+    let origin = Url::parse("https://app.test/page").unwrap();
+    for in_config in [false, true] {
+        let mut config = FetchConfig::default();
+        if in_config {
+            config.set_additional_cookies(Some("session=literal".to_owned()));
+            config.bind_additional_cookie_scope(&Request::get(origin.as_str()).unwrap());
+        }
+        for target in ["https://app.test/resource", "https://app.test:444/resource"] {
+            for credentials in [
+                RequestCredentialsMode::Omit,
+                RequestCredentialsMode::SameOrigin,
+                RequestCredentialsMode::Include,
+            ] {
+                let mut request = Request::get(target)
+                    .unwrap()
+                    .with_request_origin(moli_url::WebOrigin::from_url(&origin))
+                    .with_credentials_mode(credentials);
+                if !in_config {
+                    request = request.with_additional_cookies(Some("session=literal".to_owned()));
+                }
+                let expected = match credentials {
+                    RequestCredentialsMode::Include => Some("session=literal"),
+                    RequestCredentialsMode::SameOrigin
+                        if target.starts_with("https://app.test/") =>
+                    {
+                        Some("session=literal")
+                    }
+                    _ => None,
+                };
+                let headers = outgoing_request_headers(&config, &request, None);
+                assert_eq!(
+                    header_value(&headers, "cookie"),
+                    expected,
+                    "{target}, {credentials:?}, in_config={in_config}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn configured_literal_cookie_scope_is_pinned_and_shared_by_config_clones() {
+    let mut config = FetchConfig::default();
+    config.set_additional_cookies(Some("session=literal".to_owned()));
+    let cloned = config.clone();
+    let automatic = |url: &str| {
+        Request::new("GET", url, None, Vec::new())
+            .unwrap()
+            .with_request_mode(RequestMode::NoCors)
+            .with_credentials_mode(RequestCredentialsMode::Include)
+    };
+    let page = Request::get("https://app.test/start").unwrap();
+
+    for request in [
+        automatic("https://tracker.test/early-fetch"),
+        Request::get("https://tracker.test/iframe")
+            .unwrap()
+            .with_subframe_navigation_cookie_context(),
+        Request::get("data:text/html,initial").unwrap(),
+    ] {
+        config.bind_additional_cookie_scope(&request);
+        assert_eq!(
+            header_value(&outgoing_request_headers(&config, &request, None), "cookie"),
+            None
+        );
+    }
+    // Header inspection itself cannot choose the default host.
+    assert_eq!(
+        header_value(&outgoing_request_headers(&config, &page, None), "cookie"),
+        None
+    );
+    config.bind_additional_cookie_scope(&page);
+    assert_eq!(config, cloned);
+
+    cloned.bind_additional_cookie_scope(&Request::get("https://tracker.test/later").unwrap());
+    for candidate in [&config, &cloned] {
+        for (target, expected) in [
+            ("https://APP.test/asset", Some("session=literal")),
+            ("https://app.test:8443/asset", Some("session=literal")),
+            ("http://app.test/asset", Some("session=literal")),
+            ("https://sub.app.test/asset", None),
+            ("https://tracker.test/asset", None),
+        ] {
+            let headers = outgoing_request_headers(candidate, &automatic(target), None);
+            assert_eq!(header_value(&headers, "cookie"), expected, "{target}");
+        }
+        let headers = outgoing_request_headers(
+            candidate,
+            &automatic("https://tracker.test/asset"),
+            Some("target=stored"),
+        );
+        assert_eq!(header_value(&headers, "cookie"), Some("target=stored"));
+    }
+    assert_eq!(config, cloned);
 }
 
 #[test]
@@ -434,7 +556,7 @@ fn top_level_navigation_headers_default_to_browser_style_document_navigation() {
     );
     assert_eq!(
         header_value(&headers, "sec-ch-ua"),
-        Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+        Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
     );
     assert_eq!(header_value(&headers, "referer"), None);
     assert_eq!(header_value(&headers, "cache-control"), None);
@@ -621,7 +743,7 @@ fn browser_fetch_and_xhr_subresource_headers_match_chromium_same_origin_shape() 
         assert_eq!(header_value(&headers, "origin"), None);
         assert_eq!(
             header_value(&headers, "sec-ch-ua"),
-            Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+            Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
         );
         assert_eq!(header_value(&headers, "sec-ch-ua-mobile"), Some("?0"));
         assert_eq!(
@@ -784,6 +906,32 @@ fn browser_json_module_subresource_headers_use_json_destination() {
     );
     assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
     assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("json"));
+    assert_eq!(header_value(&headers, "origin"), None);
+}
+
+#[test]
+fn browser_text_module_subresource_headers_use_text_destination() {
+    let config = FetchConfig::default();
+    let request = Request::new("GET", "https://example.com/data.json", None, vec![])
+        .unwrap()
+        .with_initiator_url(&Url::parse("https://example.com/docs/page.html").unwrap())
+        .with_request_origin(moli_url::WebOrigin::from_url(
+            &Url::parse("https://example.com/docs/page.html").unwrap(),
+        ))
+        .with_browser_request_metadata(BrowserRequestMetadata::TextModule);
+
+    let headers = outgoing_request_headers(&config, &request, None);
+
+    assert_eq!(
+        header_value(&headers, "accept"),
+        Some("text/plain,*/*;q=0.5")
+    );
+    assert_eq!(
+        header_value(&headers, "sec-fetch-site"),
+        Some("same-origin")
+    );
+    assert_eq!(header_value(&headers, "sec-fetch-mode"), Some("cors"));
+    assert_eq!(header_value(&headers, "sec-fetch-dest"), Some("text"));
     assert_eq!(header_value(&headers, "origin"), None);
 }
 
@@ -1341,7 +1489,7 @@ fn request_cookie_header_includes_document_cookie_mutations() {
     let request_url = Url::parse("https://example.com/app/panel").unwrap();
 
     {
-        let mut jar = cookie_store.lock();
+        let mut jar = cookie_store.lock().unwrap();
         jar.store_response_headers(
             &response_url,
             &[(

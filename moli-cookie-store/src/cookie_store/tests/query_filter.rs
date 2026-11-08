@@ -21,9 +21,10 @@ fn delete_matching_removes_matching_domain_cookie_but_not_host_only_cookie() {
     let removed = store.delete_matching(&CookieDeleteFilter {
         name: Some("shared"),
         domain: None,
+        serialized_domain: None,
         path: None,
         url_host: Some("deep.sub.example.com"),
-        partition_key: None,
+        partition: CookiePartitionMatch::Any,
     });
 
     assert_eq!(removed, 1);
@@ -52,9 +53,10 @@ fn delete_matching_url_host_filter_respects_host_only_semantics() {
     let removed = store.delete_matching(&CookieDeleteFilter {
         name: None,
         domain: None,
+        serialized_domain: None,
         path: None,
         url_host: Some("deep.sub.example.com"),
-        partition_key: None,
+        partition: CookiePartitionMatch::Any,
     });
 
     assert_eq!(removed, 1);

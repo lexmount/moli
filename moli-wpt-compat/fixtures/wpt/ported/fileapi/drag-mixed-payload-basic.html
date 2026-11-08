@@ -7,6 +7,7 @@
 <script>
 const dropzone = document.getElementById("dropzone");
 let dropped = null;
+let captured = null;
 let resolveDrop = null;
 
 const dropPromise = new Promise(function (resolve) {
@@ -38,51 +39,75 @@ dropzone.addEventListener("dragover", function (event) {
 dropzone.addEventListener("drop", function (event) {
   event.preventDefault();
   dropped = event.dataTransfer;
+  captured = {
+    types: Array.from(dropped.types),
+    files: Array.from(dropped.files),
+    items: Array.from(dropped.items, function (item) {
+      return {
+        item,
+        kind: item.kind,
+        type: item.type,
+        string: item.kind === "string" ? item_string(item) : null,
+        file: item.getAsFile(),
+        entry: item.webkitGetAsEntry(),
+      };
+    }),
+  };
   resolveDrop();
 });
 
 promise_test(async function () {
   await dropPromise;
 
-  assert_equals(dropped.items.length, 4, "mixed payload exposes all DataTransferItem entries");
+  assert_equals(captured.items.length, 4, "mixed payload exposes all DataTransferItem entries during drop");
   assert_array_equals(
-    Array.from(dropped.types),
+    captured.types,
     ["text/plain", "text/html", "Files"],
     "types include string MIME types followed by Files",
   );
-  assert_equals(dropped.files.length, 1, "only real file payloads appear in DataTransfer.files");
-  assert_equals(dropped.files[0].name, "report.txt", "FileList file name");
-  assert_equals(dropped.files[0].type, "text/plain", "FileList file type");
-  assert_equals(dropped.files[0].lastModified, 21, "FileList file lastModified");
-  assert_equals(await dropped.files[0].text(), "file payload", "FileList file bytes");
+  assert_equals(captured.files.length, 1, "only real file payloads appear in DataTransfer.files");
+  assert_equals(captured.files[0].name, "report.txt", "FileList file name");
+  assert_equals(captured.files[0].type, "text/plain", "FileList file type");
+  assert_equals(captured.files[0].lastModified, 21, "FileList file lastModified");
+  assert_equals(await captured.files[0].text(), "file payload", "FileList file bytes");
 
-  const plain = dropped.items[0];
+  assert_equals(dropped.items.length, 0, "retained data store is disabled after drop");
+  assert_array_equals(Array.from(dropped.types), [], "disabled data store exposes no types");
+  assert_equals(dropped.files.length, 0, "disabled data store exposes no files");
+  assert_equals(dropped.getData("text/plain"), "", "disabled data store exposes no string payload");
+  for (const item of captured.items) {
+    assert_equals(item.item.kind, "", "retained item is disabled after drop");
+    assert_equals(item.item.getAsFile(), null, "disabled item cannot expose a File again");
+    assert_equals(item.item.webkitGetAsEntry(), null, "disabled item cannot expose an entry again");
+  }
+
+  const plain = captured.items[0];
   assert_equals(plain.kind, "string", "plain item kind");
   assert_equals(plain.type, "text/plain", "plain item type");
-  assert_equals(await item_string(plain), "plain payload", "plain string payload");
-  assert_equals(plain.getAsFile(), null, "string item does not expose a File");
-  assert_equals(plain.webkitGetAsEntry(), null, "string item does not expose an entry");
+  assert_equals(await plain.string, "plain payload", "plain string payload");
+  assert_equals(plain.file, null, "string item does not expose a File");
+  assert_equals(plain.entry, null, "string item does not expose an entry");
 
-  const html = dropped.items[1];
+  const html = captured.items[1];
   assert_equals(html.kind, "string", "HTML item kind");
   assert_equals(html.type, "text/html", "HTML item type");
-  assert_equals(await item_string(html), "<b>html payload</b>", "HTML string payload");
+  assert_equals(await html.string, "<b>html payload</b>", "HTML string payload");
 
-  const fileItem = dropped.items[2];
+  const fileItem = captured.items[2];
   assert_equals(fileItem.kind, "file", "file item kind");
   assert_equals(fileItem.type, "text/plain", "file item type");
-  assert_equals(fileItem.getAsFile(), dropped.files[0], "file item shares the FileList wrapper");
-  const fileEntry = fileItem.webkitGetAsEntry();
+  assert_equals(fileItem.file, captured.files[0], "file item shares the FileList wrapper");
+  const fileEntry = fileItem.entry;
   assert_true(fileEntry instanceof FileSystemFileEntry, "file item exposes a file entry");
   assert_equals(fileEntry.fullPath, "/report.txt", "file entry fullPath");
   const entryBackedFile = await entry_file(fileEntry);
   assert_equals(await entryBackedFile.text(), "file payload", "file entry materializes the same bytes");
 
-  const directoryItem = dropped.items[3];
+  const directoryItem = captured.items[3];
   assert_equals(directoryItem.kind, "file", "directory item kind");
   assert_equals(directoryItem.type, "", "directory item has empty MIME type");
-  assert_equals(directoryItem.getAsFile(), null, "directory item does not expose a File");
-  const directoryEntry = directoryItem.webkitGetAsEntry();
+  assert_equals(directoryItem.file, null, "directory item does not expose a File");
+  const directoryEntry = directoryItem.entry;
   assert_true(directoryEntry instanceof FileSystemDirectoryEntry, "directory item exposes a directory entry");
   assert_equals(directoryEntry.fullPath, "/bundle", "directory entry fullPath");
   const children = await read_entries(directoryEntry.createReader());

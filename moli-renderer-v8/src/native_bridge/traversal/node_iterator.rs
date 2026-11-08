@@ -5,9 +5,9 @@ use super::{
 };
 use crate::native_bridge::bridge::throw_dom_exception;
 
-pub(super) fn node_iterator_root_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_root_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -24,9 +24,9 @@ pub(super) fn node_iterator_root_getter(
     );
 }
 
-pub(super) fn node_iterator_what_to_show_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_what_to_show_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -37,9 +37,9 @@ pub(super) fn node_iterator_what_to_show_getter(
     rv.set(v8::Number::new(scope, snapshot.state.what_to_show as f64).into());
 }
 
-pub(super) fn node_iterator_filter_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_filter_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -54,9 +54,9 @@ pub(super) fn node_iterator_filter_getter(
     rv.set(filter.value(scope));
 }
 
-pub(super) fn node_iterator_reference_node_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_reference_node_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -73,9 +73,9 @@ pub(super) fn node_iterator_reference_node_getter(
     );
 }
 
-pub(super) fn node_iterator_pointer_before_reference_node_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_pointer_before_reference_node_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -86,9 +86,9 @@ pub(super) fn node_iterator_pointer_before_reference_node_getter(
     rv.set_bool(snapshot.state.pointer_before_reference_node);
 }
 
-pub(super) fn node_iterator_next_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_next_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -128,9 +128,9 @@ pub(super) fn node_iterator_next_node_callback(
     );
 }
 
-pub(super) fn node_iterator_previous_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn node_iterator_previous_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();

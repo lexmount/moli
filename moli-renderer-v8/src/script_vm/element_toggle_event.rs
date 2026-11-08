@@ -49,6 +49,20 @@ impl ScriptVm {
                 "authorized element toggle event lost its exact pending payload"
             ));
         }
+        if matches!(
+            owner.target().dispatch_scope(),
+            crate::native_bridge::OwnerDispatchScope::Top
+        ) {
+            let target = crate::host::EventTargetHandle::Node(data.element());
+            if self
+                .prepare_main_document_event(target, target, "toggle")
+                .is_none()
+            {
+                // The native task was dispatched to its exact owner. Preserve
+                // ordinary task completion even when no JS wrapper is needed.
+                return Ok(true);
+            }
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             Ok(
                 unsafe { &mut *host_ptr }.dispatch_authorized_element_toggle_event(

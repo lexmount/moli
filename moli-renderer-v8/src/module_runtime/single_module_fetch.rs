@@ -8,26 +8,25 @@ use super::{ModuleFetchMetadata, ModuleMapKey, NativeModuleGraphFetchRequest};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NativeModuleSingleFetchRequest {
     source_url: Url,
-    base_url: Url,
     initiator_url: Url,
     module_key: ModuleMapKey,
     fetch_metadata: ModuleFetchMetadata,
+    csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
 }
 
 impl NativeModuleSingleFetchRequest {
     pub(crate) fn new(
         source_url: Url,
-        base_url: Url,
         initiator_url: Url,
         module_key: ModuleMapKey,
         fetch_metadata: ModuleFetchMetadata,
     ) -> Self {
         Self {
             source_url,
-            base_url,
             initiator_url,
             module_key,
             fetch_metadata,
+            csp_context: None,
         }
     }
 
@@ -42,6 +41,19 @@ impl NativeModuleSingleFetchRequest {
 
     pub(crate) fn module_key(&self) -> &ModuleMapKey {
         &self.module_key
+    }
+
+    pub(crate) fn set_csp_context(
+        &mut self,
+        context: crate::content_security_policy::ModuleFetchCspContext,
+    ) {
+        self.csp_context = Some(context);
+    }
+
+    pub(crate) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.csp_context.as_ref()
     }
 
     pub(crate) fn effective_key_for_fetched_source(
@@ -67,6 +79,7 @@ impl NativeModuleSingleFetchRequest {
             self.fetch_metadata.clone(),
             self.module_key.kind(),
         )
+        .with_csp_context(self.csp_context.clone())
     }
 }
 
@@ -113,7 +126,6 @@ mod tests {
         let base_url = Url::parse("https://example.test/base/").expect("base url should parse");
         NativeModuleSingleFetchRequest::new(
             base_url.join(path).expect("preload url should parse"),
-            base_url.clone(),
             base_url.clone(),
             ModuleMapKey::java_script(base_url.join(path).expect("preload url should parse")),
             ModuleFetchMetadata::default(),

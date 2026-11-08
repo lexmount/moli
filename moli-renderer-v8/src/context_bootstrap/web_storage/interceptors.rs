@@ -2,7 +2,7 @@ use super::helpers::{
     remove_storage_prototype_index_descriptor, set_storage_prototype_index_descriptor,
     storage_internal_name_utf16, storage_key_is_shadowed_by_prototype,
     storage_prototype_index_descriptor, storage_put_utf16, storage_remove_utf16,
-    with_storage_store,
+    with_storage_result,
 };
 use super::*;
 use crate::util::{throw_type_error, v8_string_from_utf16_units, v8_string_to_u16_string};
@@ -26,8 +26,8 @@ struct StorageAccessorPropertyDescriptorDeclaration<'scope> {
     configurable: bool,
 }
 
-fn storage_value_to_dom_string_utf16(
-    scope: &mut v8::PinScope<'_, '_>,
+fn storage_value_to_dom_string_utf16<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<Vec<u16>> {
     if value.is_symbol() {
@@ -39,10 +39,10 @@ fn storage_value_to_dom_string_utf16(
         .map(|value| v8_string_to_u16_string(scope, value).into_vec())
 }
 
-pub(super) fn storage_named_getter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -54,8 +54,8 @@ pub(super) fn storage_named_getter(
     {
         return v8::Intercepted::kNo;
     }
-    let value = with_storage_store(scope, args.holder(), |store, origin| {
-        store.get_item_utf16(origin, &key)
+    let value = with_storage_result(scope, args.holder(), |store, origin| {
+        store.try_get_item_utf16(origin, &key)
     })
     .flatten();
     let Some(value) = value else {
@@ -68,11 +68,11 @@ pub(super) fn storage_named_getter(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_named_setter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
     value: v8::Local<'_, v8::Value>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -89,10 +89,10 @@ pub(super) fn storage_named_setter(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_named_query(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -104,8 +104,8 @@ pub(super) fn storage_named_query(
     {
         return v8::Intercepted::kNo;
     }
-    let contains = with_storage_store(scope, args.holder(), |store, origin| {
-        store.contains_key_utf16(origin, &key)
+    let contains = with_storage_result(scope, args.holder(), |store, origin| {
+        store.try_contains_key_utf16(origin, &key)
     })
     .unwrap_or(false);
     if !contains {
@@ -115,10 +115,10 @@ pub(super) fn storage_named_query(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_named_deleter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -133,13 +133,13 @@ pub(super) fn storage_named_deleter(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_named_enumerator(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::PropertyCallbackArguments<'_>,
+pub(super) fn storage_named_enumerator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
-    let keys = with_storage_store(scope, args.holder(), |store, origin| {
-        store.sorted_keys_utf16(origin)
+    let keys = with_storage_result(scope, args.holder(), |store, origin| {
+        store.try_sorted_keys_utf16(origin)
     })
     .unwrap_or_default();
     let array = v8::Array::new(scope, keys.len() as i32);
@@ -151,10 +151,10 @@ pub(super) fn storage_named_enumerator(
     rv.set(array);
 }
 
-pub(super) fn storage_named_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -166,8 +166,8 @@ pub(super) fn storage_named_descriptor(
     {
         return v8::Intercepted::kNo;
     }
-    let value = with_storage_store(scope, args.holder(), |store, origin| {
-        store.get_item_utf16(origin, &key)
+    let value = with_storage_result(scope, args.holder(), |store, origin| {
+        store.try_get_item_utf16(origin, &key)
     })
     .flatten();
     let Some(value) = value else {
@@ -183,11 +183,11 @@ pub(super) fn storage_named_descriptor(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_named_definer(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_named_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: v8::Local<'_, v8::Name>,
     desc: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok(key_string) = v8::Local::<v8::String>::try_from(key) else {
@@ -204,10 +204,10 @@ pub(super) fn storage_named_definer(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_indexed_getter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     if storage_prototype_index_getter_value(scope, index, args.holder(), &mut rv) {
@@ -219,11 +219,11 @@ pub(super) fn storage_indexed_getter(
     storage_named_getter(scope, key.into(), args, rv)
 }
 
-pub(super) fn storage_indexed_setter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     value: v8::Local<'_, v8::Value>,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(key) = v8_string(scope, &index.to_string()) else {
@@ -232,10 +232,10 @@ pub(super) fn storage_indexed_setter(
     storage_named_setter(scope, key.into(), value, args, rv)
 }
 
-pub(super) fn storage_indexed_query(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
     if storage_prototype_index_descriptor(scope, index).is_some() {
@@ -249,10 +249,10 @@ pub(super) fn storage_indexed_query(
     storage_named_query(scope, key.into(), args, rv)
 }
 
-pub(super) fn storage_indexed_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     if storage_prototype_index_descriptor(scope, index).is_some() {
@@ -264,10 +264,10 @@ pub(super) fn storage_indexed_descriptor(
     storage_named_descriptor(scope, key.into(), args, rv)
 }
 
-pub(super) fn storage_indexed_deleter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(key) = v8_string(scope, &index.to_string()) else {
@@ -276,11 +276,11 @@ pub(super) fn storage_indexed_deleter(
     storage_named_deleter(scope, key.into(), args, rv)
 }
 
-pub(super) fn storage_indexed_definer(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_indexed_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     desc: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(key) = v8_string(scope, &index.to_string()) else {
@@ -289,10 +289,10 @@ pub(super) fn storage_indexed_definer(
     storage_named_definer(scope, key.into(), desc, args, rv)
 }
 
-pub(super) fn storage_prototype_indexed_getter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_prototype_indexed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'_>,
+    args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     if storage_prototype_index_getter_value(scope, index, args.holder(), &mut rv) {
@@ -305,7 +305,7 @@ pub(super) fn storage_prototype_indexed_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     value: v8::Local<'s, v8::Value>,
-    _args: v8::PropertyCallbackArguments<'_>,
+    _args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(descriptor) = storage_value_property_descriptor(scope, value) else {
@@ -317,10 +317,10 @@ pub(super) fn storage_prototype_indexed_setter<'s>(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_prototype_indexed_query(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_prototype_indexed_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    _args: v8::PropertyCallbackArguments<'_>,
+    _args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
     let Some(descriptor) = storage_prototype_index_descriptor(scope, index) else {
@@ -330,21 +330,21 @@ pub(super) fn storage_prototype_indexed_query(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_prototype_indexed_deleter(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_prototype_indexed_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    _args: v8::PropertyCallbackArguments<'_>,
+    _args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     rv.set_bool(remove_storage_prototype_index_descriptor(scope, index));
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_prototype_indexed_definer(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_prototype_indexed_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     desc: &v8::PropertyDescriptor,
-    _args: v8::PropertyCallbackArguments<'_>,
+    _args: v8::PropertyCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Some(descriptor) = storage_descriptor_object_from_property_descriptor(scope, desc) else {
@@ -356,10 +356,10 @@ pub(super) fn storage_prototype_indexed_definer(
     v8::Intercepted::kYes
 }
 
-pub(super) fn storage_prototype_indexed_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(super) fn storage_prototype_indexed_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
-    _args: v8::PropertyCallbackArguments<'_>,
+    _args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
     let Some(descriptor) = storage_prototype_index_descriptor(scope, index) else {
@@ -412,8 +412,8 @@ fn storage_descriptor_local_value<'s>(
     v8::Local::new(scope, &value)
 }
 
-fn storage_prototype_index_getter_value(
-    scope: &mut v8::PinScope<'_, '_>,
+fn storage_prototype_index_getter_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     index: u32,
     receiver: v8::Local<'_, v8::Object>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
@@ -445,8 +445,8 @@ fn storage_prototype_index_getter_value(
     true
 }
 
-fn property_attributes_for_descriptor(
-    scope: &mut v8::PinScope<'_, '_>,
+fn property_attributes_for_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     descriptor: v8::Local<'_, v8::Object>,
 ) -> v8::PropertyAttribute {
     let mut attributes = v8::PropertyAttribute::NONE;
@@ -469,8 +469,8 @@ fn property_attributes_for_descriptor(
     attributes
 }
 
-fn descriptor_bool(
-    scope: &mut v8::PinScope<'_, '_>,
+fn descriptor_bool<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     descriptor: v8::Local<'_, v8::Object>,
     key: &'static str,
 ) -> bool {
@@ -479,8 +479,8 @@ fn descriptor_bool(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-fn descriptor_has_own(
-    scope: &mut v8::PinScope<'_, '_>,
+fn descriptor_has_own<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     descriptor: v8::Local<'_, v8::Object>,
     key: &'static str,
 ) -> bool {

@@ -117,15 +117,13 @@ async fn open_auto_attached_popup_from_session(
         .as_str()
         .expect("popup session id")
         .to_owned();
-    let popup_runtime = ctx
-        .conn
-        .runtime_session_owner_slot(Some(&popup_session_id))
-        .expect("auto-attached popup runtime slot");
-    assert!(
-        popup_runtime.has_loaded_page(),
-        "window.open completion must leave a command-addressable popup Document; diagnostics={}",
-        popup_runtime.moli_memory_diagnostics()
-    );
+    ctx.with_fixture(|conn| {
+        let popup_runtime = conn.runtime_session_owner_slot(Some(&popup_session_id))
+            .expect("auto-attached popup runtime slot");
+        assert!(popup_runtime.has_loaded_page(),
+            "window.open completion must leave a command-addressable popup Document; diagnostics={}",
+            popup_runtime.moli_memory_diagnostics());
+    });
     (target_id, popup_session_id)
 }
 
@@ -880,14 +878,15 @@ async fn background_websocket_synthetic_socket_injection_routes_to_session_owner
         "background synthetic WebSocket text frame should dispatch to owner page",
     )
     .await;
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|browser_context| browser_context.active_target_id()),
-        Some("TID-active"),
-        "background Fetch.dispatchWebSocketMessage should not activate the target"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id()),
+            Some("TID-active"),
+            "background Fetch.dispatchWebSocketMessage should not activate the target"
+        )
+    });
 
     server.abort();
 }

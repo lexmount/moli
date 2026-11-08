@@ -45,7 +45,7 @@ fn indexed_db_handlers_share_synthetic_and_native_listener_order() {
           globalThis.__idbHandlerOrder = 'pending';
           const open = indexedDB.open('handler-order', 1);
           for (const type of ['success', 'error', 'blocked', 'upgradeneeded']) {
-            checkHandlerDispatch(open, type);
+            checkHandlerDispatch(open, type, globalThis, true);
           }
           checkUnregisteredHandler(open);
           open.onupgradeneeded = () => open.result.createObjectStore('values');
@@ -61,7 +61,7 @@ fn indexed_db_handlers_share_synthetic_and_native_listener_order() {
               [tx, ['abort', 'complete', 'error']],
               [request, ['success', 'error']],
             ]) {
-              for (const type of types) checkHandlerDispatch(target, type);
+              for (const type of types) checkHandlerDispatch(target, type, globalThis, true);
               checkUnregisteredHandler(target);
             }
             request.addEventListener('success', () => trace.push('request-before'));

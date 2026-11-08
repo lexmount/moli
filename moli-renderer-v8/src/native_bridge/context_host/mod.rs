@@ -15,7 +15,7 @@ use crate::{
         },
         document_runtime::{DocumentRuntime, DomHandle, EventTargetHandle},
         document_script_scheduler::{
-            FrameDocumentBlockingStylesheetStore, FrameDocumentScriptSchedulerStore,
+            FrameDocumentScriptSchedulerStore, FrameDocumentStylesheetStore,
             FrameParserClassicScriptRunnerStore, FrameParserDeferredScriptOrderStore,
         },
         frame_owner_model::{
@@ -27,7 +27,6 @@ use crate::{
         native_bridge::{bindings::NativeBridgeBindings, element::ClientRect},
         observer_runtime::{ObserverStore, ObserverStoreAccessToken},
         page_task_queue::RendererResourceCompletionSender,
-        renderer_resource_scheduler::RendererResourceScheduler,
         runtime::{
             RendererBrowserContextRuntime, RendererDocumentLifecycleJournalHandle,
             RendererPageContextCancelReceiver, SharedRendererBackendNodeRegistry,
@@ -85,7 +84,6 @@ mod child_frame_snapshots;
 mod child_frames;
 mod core;
 mod dialogs;
-mod directory_reader_callbacks;
 mod document_domain;
 mod document_script_ready_inputs;
 mod dom_debugger;
@@ -93,6 +91,7 @@ mod element_toggle_events;
 mod event_callbacks;
 mod file_chooser;
 mod file_entry_file_callbacks;
+mod file_reading_tasks;
 mod focus;
 mod frame_document_ready_routes;
 mod hash_changes;
@@ -147,6 +146,8 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod document_execution_context;
+mod font_face_loads;
 mod shared_workers;
 mod signal_bridge;
 mod storage_events;
@@ -156,11 +157,13 @@ mod traversal_state;
 mod user_interaction_tasks;
 mod view_transition_updates;
 pub(crate) mod visual_resource_generation;
+mod web_storage;
 mod webcrypto_tasks;
 mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
+mod window_world;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
@@ -174,7 +177,9 @@ use crate::{
     service_worker_runtime::ServiceWorkerClientId,
 };
 pub(crate) use bridge_install::JsContextHostBridgeRef;
-pub(crate) use child_documents::{ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity};
+pub(crate) use child_documents::{
+    ChildDocumentFetch, ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity,
+};
 use child_documents::{ChildDocumentParserStore, PendingChildDocumentNavigation};
 use child_events::ChildWindowEventListenerEntry;
 use child_frame_runtime::ChildWindowProxyRecords;
@@ -189,6 +194,7 @@ pub(crate) use child_frame_snapshots::{
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
+pub(crate) use document_execution_context::DocumentExecutionContext;
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};
 pub(crate) use host_loads::ChildFrameAttachmentSnapshot;
 #[cfg(test)]
@@ -234,6 +240,14 @@ use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
     WindowExecutionContextScopedRealmRegistration,
 };
+#[cfg(test)]
+pub(crate) use window_world::install_isolated_window_world_for_context;
+pub(crate) use window_world::{
+    IsolatedWindowWorld, IsolatedWindowWorldId, PrebootstrappedIsolatedWindowContext,
+    PrebootstrappedWindowContexts, WindowEventAccess, install_isolated_window_world_definition,
+    isolated_window_world_for_context, remember_isolated_window_context,
+    window_context_in_wrapper_world, window_event_access, window_in_wrapper_world,
+};
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
@@ -252,9 +266,9 @@ impl std::ops::Deref for PrebootstrappedChildDefaultContext {
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =
-    Rc<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Rc<RefCell<PrebootstrappedWindowContexts>>;
 pub(crate) type WeakPrebootstrappedChildDefaultContexts =
-    Weak<RefCell<HashMap<DomHandle, PrebootstrappedChildDefaultContext>>>;
+    Weak<RefCell<PrebootstrappedWindowContexts>>;
 
 #[derive(Clone)]
 struct ChildDefaultContextBootstrapConfig {
@@ -722,6 +736,8 @@ pub(crate) enum PendingImageLoadNetworkState {
 pub(crate) enum PendingImageLoadTerminalSource {
     Local,
     Network,
+    /// Decoded pixels accepted by this Document; no new fetch took place.
+    Reused,
 }
 
 impl PendingImageLoadEvent {
@@ -858,23 +874,27 @@ pub(crate) struct JsContextHost {
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
     frame_owner_store: FrameOwnerStore,
+    inert_document_execution_contexts:
+        Option<Box<document_execution_context::InertDocumentExecutionContexts>>,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
-    frame_document_blocking_stylesheets: FrameDocumentBlockingStylesheetStore,
+    frame_document_stylesheets: FrameDocumentStylesheetStore,
     child_document_script_schedulers: FrameDocumentScriptSchedulerStore,
     child_document_parsers: ChildDocumentParserStore,
     child_window_proxy_records: ChildWindowProxyRecords,
     child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
+    #[cfg(test)]
+    force_reused_isolated_proxy_bootstrap_failure: std::cell::Cell<bool>,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Rc<RefCell<Option<String>>>,
-    next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
     document_resource_loaders: DocumentResourceLoaderRegistry,
     web_storage_store: SharedWebStorageStore,
+    local_storage_areas: HashMap<WindowExecutionContextOwner, web_storage::WindowStorageArea>,
     session_storage_store: SharedWebStorageStore,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
@@ -887,8 +907,6 @@ pub(crate) struct JsContextHost {
     protocol_user_gesture_activation_depth: usize,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
-    emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     document_activity: moli_page_types::DocumentActivity,
     initial_empty_main_document: bool,
     subframe_loading_disabled_documents: Rc<RefCell<HashMap<DomHandle, usize>>>,
@@ -922,7 +940,7 @@ pub(crate) struct JsContextHost {
     /// checkpoint; it must never survive into another selected task.
     pending_child_subresource_request_scope_pop: bool,
     pending_text_control_change_commit: Option<PendingTextControlChangeCommit>,
-    directory_reader_callbacks: directory_reader_callbacks::DirectoryReaderCallbackState,
+    file_reading_tasks: file_reading_tasks::FileReadingState,
     misc_platform_api_tasks: misc_platform_api_tasks::MiscPlatformApiTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
@@ -943,6 +961,7 @@ pub(crate) struct JsContextHost {
     next_image_decode_id: u64,
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
+    pending_font_face_loads: HashMap<u64, font_face_loads::PendingFontFaceLoad>,
     next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
     pending_webcrypto_tasks: HashMap<
         crate::page_task_queue::RendererPageWebCryptoTaskId,
@@ -964,7 +983,7 @@ pub(crate) struct JsContextHost {
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
     active_child_browsing_context_host_loads: Vec<DomHandle>,
     character_data_utf16_overrides: HashMap<DomHandle, U16String>,
-    child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshNavigationTask>,
+    child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshState>,
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
     style_engine: MoliStyleEngine,
@@ -1060,7 +1079,6 @@ pub(crate) struct JsContextHost {
     pending_javascript_dialogs: Vec<dialogs::PendingJavaScriptDialogRecord>,
     javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
     next_javascript_dialog_id: u64,
-    javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
     next_subresource_network_request_handle: u64,
@@ -1086,7 +1104,6 @@ pub(crate) struct JsContextHost {
     pub(crate) pending_network_body_clones: HashMap<NetworkBodySourceId, Vec<NetworkBodySourceId>>,
     page_task_capabilities: OnceCell<JsContextHostPageTaskCapabilities>,
     resource_completion_tx: RendererResourceCompletionSender,
-    resource_scheduler: RendererResourceScheduler,
     next_worker_id: u64,
     workers: HashMap<DedicatedWorkerId, WorkerConnectionState>,
     next_websocket_id: u64,

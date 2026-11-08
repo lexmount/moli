@@ -97,7 +97,7 @@ struct NodeListPrototypeMembersDeclaration {
     #[webapi(accessor_property, enumerable, getter = node_list_length_getter)]
     length: (),
 
-    #[webapi(method, length = 1, callback = node_list_item_callback)]
+    #[webapi(method, length = 1, enumerable, callback = node_list_item_callback)]
     item: (),
 
     #[webapi(

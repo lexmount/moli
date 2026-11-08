@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from contextlib import suppress
 from typing import Any
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..helpers import attach_cdp_event_collector
@@ -200,8 +202,8 @@ async def _verify_chromium_child_frame_multi_session_fanout_sample(
     try:
         await page.goto(f"{state.fixture}/plain?child-frame-session-fanout", wait_until="load")
 
-        page_only = await state.context.new_cdp_session(page)
-        lifecycle = await state.context.new_cdp_session(page)
+        page_only = await new_cdp_session(state.context, page)
+        lifecycle = await new_cdp_session(state.context, page)
         page_only_events = attach_cdp_event_collector(page_only, methods)
         lifecycle_events = attach_cdp_event_collector(lifecycle, methods)
         await page_only.send("Page.enable")
@@ -440,7 +442,6 @@ async def _verify_chromium_page_fragment_navigation_sample(state: SmokeState) ->
     if second.get("frameId") and second.get("frameId") != first.get("frameId"):
         raise SmokeError(f"Page.navigate fragment should stay in the same frame: {first} -> {second}")
     state.record("chromium_page_fragment_navigation_sample")
-
 
 
 async def run_frame_group(state: SmokeState) -> None:

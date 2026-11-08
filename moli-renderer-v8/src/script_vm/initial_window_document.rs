@@ -7,6 +7,12 @@ impl ScriptVm {
         policy: &crate::document_runtime::DocumentPolicyContainer,
         inherited: Option<&ScriptVmInitialDocumentEnvironment>,
     ) -> Result<crate::frame_owner_model::FrameDocumentLocalWindowTransition> {
+        // No WindowProxy or realm has been exposed, so there is no JS identity to retain.
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(
+                crate::frame_owner_model::FrameDocumentLocalWindowTransition::ReplaceLocalWindow,
+            );
+        };
         // Serialized opaque origins are all "null". Compare the inherited
         // identity instead, so a shared opaque origin can reuse its Window
         // without treating independently sandboxed documents as same-origin.
@@ -18,7 +24,7 @@ impl ScriptVm {
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    let context = v8::Local::new(scope, &self.page_default_runtime.context);
+                    let context = v8::Local::new(scope, &runtime.context);
                     let token = v8::Local::new(scope, token);
                     Ok(context.get_security_token(scope).strict_equals(token))
                 })?
@@ -108,6 +114,7 @@ impl ScriptVm {
                 runtime.set_bypass_content_security_policy(
                     env.document_settings.bypass_content_security_policy,
                 );
+                runtime.retain_performance_clock_from_initial_document(&vm.document_runtime);
                 runtime.retain_event_targets_from_initial_document(&mut vm.document_runtime);
                 // JsContextHost and retained native wrappers point into this allocation.
                 // Replace its contents while keeping the allocation's address stable.
@@ -154,7 +161,8 @@ impl ScriptVm {
                             host.service_worker_client_id(),
                         );
                 }
-                let context = &vm.page_default_runtime.context;
+                let context = &vm.main_world.current()
+                    .ok_or_else(|| anyhow!("initial Window reuse requires an existing realm"))?.context;
                 vm.renderer_document_isolate
                     .with_entered_renderer_document_isolate(|isolate| {
                         let scope = pin!(v8::HandleScope::new(isolate));

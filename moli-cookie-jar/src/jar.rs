@@ -1,37 +1,35 @@
 //! Browser cookie store wrapper and cross-crate entry points.
 
+mod persistence;
+mod shared;
 mod site_data;
+pub use persistence::{BrowserCookieObserver, StoredCookieIdentity, StoredCookieMutation};
+pub use shared::{
+    BrowserCookieStoreHandle, CookieStoreError, SharedBrowserCookieStore,
+    new_shared_browser_cookie_store,
+};
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use cookie_store::{
-    CanonicalCookieInput, CookieDeleteFilter, CookieExpiration, CookieStore, CookieStoreLimits,
-    HttpRequestType, InsertContext, QueryContext, SameSite, SameSiteContext,
+    CanonicalCookieInput, CookieDeleteFilter, CookieExpiration, CookiePartitionMatch, CookieStore,
+    CookieStoreLimits, HttpRequestType, InsertContext, QueryContext, SameSite, SameSiteContext,
     SameSiteRequestContext,
 };
 use moli_site::{public_suffix_list, same_site_urls};
-use parking_lot::Mutex;
 use url::Url;
 
 use super::model::{
     BrowserCookieFacadeContext, CookieSource, NetworkCookieRequestContext,
     NetworkCookieRequestType, NetworkSameSiteContext, NetworkSameSiteHttpMethod,
-    NetworkSameSiteRedirectType, StoredCookie, StoredCookieQueryReport, StoredCookieSameSite,
+    NetworkSameSiteRedirectType, StoredCookie, StoredCookieDomainMatch,
+    StoredCookiePartitionFilter, StoredCookieQueryReport, StoredCookieSameSite,
     StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
     StoredCookieSourceScheme, core_browser_site_context_from_facade,
     core_cookie_partition_key_for_url, core_partition_key_from_stored,
     core_same_site_context_metadata_from_stored, core_source_scheme_from_stored,
     has_invalid_cookie_octets, stored_query_report_from_core, stored_set_report_from_core,
 };
-
-/// Thread-shareable cookie store used by browser/runtime components.
-pub type SharedBrowserCookieStore = Arc<Mutex<BrowserCookieStore>>;
-
-/// Builds a shared cookie store with browser-grade defaults.
-pub fn new_shared_browser_cookie_store() -> SharedBrowserCookieStore {
-    Arc::new(Mutex::new(BrowserCookieStore::default()))
-}
 
 const DEFAULT_PER_DOMAIN_MAX_COOKIES: usize = 180;
 const DEFAULT_GLOBAL_MAX_COOKIES: usize = 3300;
@@ -363,6 +361,42 @@ impl BrowserCookieStore {
         cookies
     }
 
+    /// Deletes only the exact identities selected by a predicate over stored cookies.
+    ///
+    /// An absent partition key identifies an unpartitioned cookie. Site and
+    /// opaque partition keys retain their full identity throughout deletion.
+    pub fn delete_cookies_matching(
+        &mut self,
+        mut matches: impl FnMut(&StoredCookie) -> bool,
+    ) -> usize {
+        self.purge_expired();
+        let keys = self
+            .full_core
+            .iter_unexpired()
+            .filter(|cookie| matches(&super::model::stored_cookie_from_core(cookie)))
+            .map(|cookie| {
+                (
+                    String::from(&cookie.domain),
+                    String::from(&cookie.path),
+                    cookie.name().to_owned(),
+                    cookie.partition_key().cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut removed = 0;
+        for (domain, path, name, partition_key) in keys {
+            removed += usize::from(
+                self.full_core
+                    .remove_with_partition_key(&domain, &path, &name, partition_key.as_ref())
+                    .is_some(),
+            );
+        }
+        if removed > 0 {
+            self.bump_document_cookie_generation();
+        }
+        removed
+    }
+
     /// Deletes cookies matching optional CDP-style name/domain/path/url filters.
     pub fn delete_cookies(
         &mut self,
@@ -384,14 +418,59 @@ impl BrowserCookieStore {
         url_host: Option<&str>,
         partition_key: Option<&super::model::StoredCookiePartitionKey>,
     ) -> usize {
-        self.purge_expired();
-        let partition_key = partition_key.map(core_partition_key_from_stored);
-        let removed = self.full_core.delete_matching(&CookieDeleteFilter {
+        let partition_filter = partition_key.cloned().map_or(
+            StoredCookiePartitionFilter::All,
+            StoredCookiePartitionFilter::Partition,
+        );
+        self.delete_cookies_with_filters(
             name,
             domain,
             path,
             url_host,
-            partition_key: partition_key.as_ref(),
+            &partition_filter,
+            StoredCookieDomainMatch::Canonical,
+        )
+    }
+
+    /// Deletes cookies using explicit partition scope and canonical or
+    /// serialized domain matching.
+    pub fn delete_cookies_with_filters(
+        &mut self,
+        name: Option<&str>,
+        domain: Option<&str>,
+        path: Option<&str>,
+        url_host: Option<&str>,
+        partition_filter: &StoredCookiePartitionFilter,
+        domain_match: StoredCookieDomainMatch,
+    ) -> usize {
+        self.purge_expired();
+        let exact_key;
+        let (domain, serialized_domain) = match domain_match {
+            StoredCookieDomainMatch::Canonical => (domain, None),
+            StoredCookieDomainMatch::Serialized => (None, domain),
+        };
+        let partition = match partition_filter {
+            StoredCookiePartitionFilter::Partition(key) => {
+                exact_key = core_partition_key_from_stored(key);
+                CookiePartitionMatch::Exact(&exact_key)
+            }
+            StoredCookiePartitionFilter::Serialized {
+                top_level_site,
+                has_cross_site_ancestor,
+            } => CookiePartitionMatch::Serialized {
+                top_level_site: top_level_site.as_deref(),
+                has_cross_site_ancestor: *has_cross_site_ancestor,
+            },
+            StoredCookiePartitionFilter::Unpartitioned => CookiePartitionMatch::Unpartitioned,
+            StoredCookiePartitionFilter::All => CookiePartitionMatch::Any,
+        };
+        let removed = self.full_core.delete_matching(&CookieDeleteFilter {
+            name,
+            domain,
+            serialized_domain,
+            path,
+            url_host,
+            partition,
         });
         if removed > 0 {
             self.bump_document_cookie_generation();
@@ -526,6 +605,7 @@ fn canonical_cookie_input_from_stored_cookie(
             priority: cookie.priority,
             source_scheme: core_source_scheme_from_stored(cookie.source_scheme),
             source_port: cookie.source_port,
+            creation_time: cookie.creation_time,
         },
         request_url,
     ))
@@ -556,28 +636,25 @@ fn request_url_for_stored_cookie(cookie: &StoredCookie) -> Option<Url> {
     Url::parse(&format!("{scheme}://{host}{}", cookie.path)).ok()
 }
 
+fn core_same_site_request_context(context: NetworkSameSiteContext) -> SameSiteRequestContext {
+    match context {
+        NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
+        NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
+        NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
+            SameSiteRequestContext::SameSiteLaxMethodUnsafe
+        }
+        NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
+    }
+}
+
 pub(super) fn network_query_context<'a>(
     url: &'a Url,
     request_context: NetworkCookieRequestContext,
 ) -> QueryContext<'a> {
     let mut context = QueryContext::http(url);
     context.same_site_context = SameSiteContext::new(
-        match request_context.site_context.context {
-            NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
-            NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
-            NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
-                SameSiteRequestContext::SameSiteLaxMethodUnsafe
-            }
-            NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
-        },
-        match request_context.site_context.schemeful_context {
-            NetworkSameSiteContext::SameSiteStrict => SameSiteRequestContext::SameSiteStrict,
-            NetworkSameSiteContext::SameSiteLax => SameSiteRequestContext::SameSiteLax,
-            NetworkSameSiteContext::SameSiteLaxMethodUnsafe => {
-                SameSiteRequestContext::SameSiteLaxMethodUnsafe
-            }
-            NetworkSameSiteContext::CrossSite => SameSiteRequestContext::CrossSite,
-        },
+        core_same_site_request_context(request_context.site_context.context),
+        core_same_site_request_context(request_context.site_context.schemeful_context),
     );
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);
@@ -635,23 +712,32 @@ fn document_query_context<'a>(
     context.browser_context = core_browser_site_context_from_facade(browser_context);
     context.browser_context.cookie_partition_key =
         Some(core_cookie_partition_key_for_url(browser_context, url));
+    context.same_site_context = document_site_context(url, browser_context);
+    context
+}
+
+fn document_site_context(
+    url: &Url,
+    browser_context: &BrowserCookieFacadeContext,
+) -> SameSiteContext {
     if let Some(site_basis_url) = browser_context.site_basis_url() {
         let schemeless_same_site = same_site_urls(url, site_basis_url, false);
         let schemeful_same_site = same_site_urls(url, site_basis_url, true);
-        context.same_site_context = SameSiteContext::new(
+        SameSiteContext::new(
             if schemeless_same_site {
-                SameSiteRequestContext::SameSiteLax
+                SameSiteRequestContext::SameSiteStrict
             } else {
                 SameSiteRequestContext::CrossSite
             },
             if schemeful_same_site {
-                SameSiteRequestContext::SameSiteLax
+                SameSiteRequestContext::SameSiteStrict
             } else {
                 SameSiteRequestContext::CrossSite
             },
-        );
+        )
+    } else {
+        SameSiteContext::same_site()
     }
-    context
 }
 
 fn effective_document_cookie_url(url: &Url) -> Cow<'_, Url> {
@@ -668,6 +754,7 @@ fn document_insert_context<'a>(
     browser_context: &BrowserCookieFacadeContext,
 ) -> InsertContext<'a> {
     let mut context = InsertContext::document(url);
+    context.same_site_context = document_site_context(url, browser_context);
     context.browser_context = core_browser_site_context_from_facade(browser_context);
     context.browser_context.cookie_partition_key =
         Some(core_cookie_partition_key_for_url(browser_context, url));
@@ -679,6 +766,14 @@ fn network_insert_context<'a>(
     request_context: &NetworkCookieRequestContext,
 ) -> InsertContext<'a> {
     let mut context = InsertContext::http(url);
+    context.same_site_context = SameSiteContext::new(
+        core_same_site_request_context(request_context.site_context.context),
+        core_same_site_request_context(request_context.site_context.schemeful_context),
+    );
+    context.request_type = match request_context.request_type {
+        NetworkCookieRequestType::Subresource => HttpRequestType::Subresource,
+        NetworkCookieRequestType::TopLevelNavigation => HttpRequestType::TopLevelNavigation,
+    };
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);
     context.browser_context.cookie_partition_key = Some(core_cookie_partition_key_for_url(

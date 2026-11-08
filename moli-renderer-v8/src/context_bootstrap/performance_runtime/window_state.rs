@@ -16,14 +16,23 @@ mod pending;
 use pending::clear_pending_window_performance_state;
 pub(super) use pending::{
     increment_pending_event_count, queue_pending_resource_entry,
-    record_pending_dom_content_loaded_end, record_pending_dom_content_loaded_start,
-    record_pending_load_end, record_pending_load_start, take_pending_event_counts,
-    take_pending_lifecycle_timestamps, take_pending_resource_entries,
+    store_projected_lifecycle_timestamps, take_pending_event_counts, take_pending_resource_entries,
+    take_projected_lifecycle_timestamps,
 };
 
 const WINDOW_PERFORMANCE_TIME_ORIGIN_SEED_SLOT: &str = "__moliWindowPerformanceTimeOriginSeed";
 const WINDOW_PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
     "__moliWindowPerformanceNavigationTypeSeed";
+
+pub(crate) fn bind_document_performance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    timing: crate::document_runtime::DocumentTimingSnapshot,
+) -> Result<()> {
+    bind_window_performance_seed(scope, window, "navigate", timing.time_origin)?;
+    super::install::project_window_lifecycle_timing(scope, window, timing.lifecycle, false);
+    Ok(())
+}
 
 pub(crate) fn bind_window_performance_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,

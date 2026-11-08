@@ -89,8 +89,8 @@
   const modifierMembers = ['altKey', 'ctrlKey', 'metaKey', 'modifierAltGraph', 'modifierCapsLock',
     'modifierFn', 'modifierFnLock', 'modifierHyper', 'modifierNumLock', 'modifierScrollLock',
     'modifierSuper', 'modifierSymbol', 'modifierSymbolLock', 'shiftKey'];
-  const order = ['bubbles', 'cancelable', 'composed', 'detail', 'view', 'which', ...modifierMembers,
-    'charCode', 'code', 'isComposing', 'key', 'keyCode', 'location', 'repeat'];
+  const order = ['bubbles', 'cancelable', 'composed', 'detail', 'sourceCapabilities', 'view', ...modifierMembers,
+    'charCode', 'code', 'isComposing', 'key', 'keyCode', 'location', 'repeat', 'which'];
   check('complete inherited dictionary order', () => {
     const seen = [];
     new KeyboardEvent('x', new Proxy({}, {get(_target, name) { seen.push(name); }}));

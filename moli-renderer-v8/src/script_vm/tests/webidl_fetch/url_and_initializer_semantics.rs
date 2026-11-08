@@ -498,9 +498,13 @@ fn web_api_mime_surfaces_use_parser_normalization() {
     );
 }
 
-#[test]
-fn response_body_consumers_use_shared_content_type_helpers() {
-    let mut vm = new_storage_test_vm("https://response-body-mime.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_consumers_use_shared_content_type_helpers() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-body-mime.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -550,19 +554,33 @@ fn response_body_consumers_use_shared_content_type_helpers() {
     )
     .expect("Response body MIME probe should evaluate");
 
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseBodyMimeProbe !== null)",
+        "true",
+        "Body MIME conversions",
+    )
+    .await;
     let result = vm
-        .eval("JSON.stringify(globalThis.__responseBodyMimeProbe)")
+        .eval_without_microtask_checkpoint_for_test(
+            "JSON.stringify(globalThis.__responseBodyMimeProbe)",
+        )
         .expect("Response body MIME promise chain should settle");
 
     assert_eq!(
         result,
-        r#"["a,1|b,two","value|true|blob|application/json|{\"ok\":true}","application/json","text/plain;charset=UTF-8","application/json"]"#
+        r#"["a,1|b,two","value|true|blob|application/json|{\"ok\":true}","application/json","text/plain; charset=utf-8","text/plain, application/json"]"#
     );
 }
 
-#[test]
-fn response_body_consumers_materialize_readable_stream_chunks() {
-    let mut vm = new_storage_test_vm("https://response-body-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_body_consumers_materialize_readable_stream_chunks() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-body-stream.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -604,10 +622,14 @@ fn response_body_consumers_materialize_readable_stream_chunks() {
     )
     .expect("Response stream body probe should evaluate");
 
-    for _ in 0..8 {
-        vm.eval("0")
-            .expect("Response stream body promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseBodyStreamProbe.includes('settled'))",
+        "true",
+        "response_body_consumers_materialize_readable_stream_chunks",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseBodyStreamProbe.sort())")
         .expect("Response stream body probe result should evaluate");
@@ -618,9 +640,13 @@ fn response_body_consumers_materialize_readable_stream_chunks() {
     );
 }
 
-#[test]
-fn response_clone_tees_user_readable_stream_body() {
-    let mut vm = new_storage_test_vm("https://response-clone-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_clone_tees_user_readable_stream_body() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-clone-stream.test/",
+        &loader,
+    );
 
     vm.eval(
         r#"
@@ -676,10 +702,14 @@ fn response_clone_tees_user_readable_stream_body() {
     )
     .expect("Response clone stream setup should evaluate");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("Response clone stream promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__responseCloneStreamProbe.length === 3)",
+        "true",
+        "response_clone_tees_user_readable_stream_body",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__responseCloneStreamProbe.sort())")
         .expect("Response clone stream probe result should evaluate");
@@ -690,16 +720,21 @@ fn response_clone_tees_user_readable_stream_body() {
     );
 }
 
-#[test]
-fn response_clone_tees_pending_network_body_after_parent_consumption() {
-    let mut vm = new_storage_test_vm("https://response-clone-pending-stream.test/");
+#[tokio::test(flavor = "current_thread")]
+async fn response_clone_tees_pending_network_body_after_parent_consumption() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://response-clone-pending-stream.test/",
+        &loader,
+    );
     let body_source_id = crate::network_host::new_network_body_source_id();
     let document_url = Url::parse("https://response-clone-pending-stream.test/")
         .expect("document URL should parse");
     let response_url = Url::parse("https://response-clone-pending-stream.test/data.json")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -724,6 +759,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     body_source_id,
@@ -764,7 +800,8 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
     )
     .expect("pending fetch clone fan-out should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -781,10 +818,14 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
         })
         .expect("pending fetch response body should close");
 
-    for _ in 0..12 {
-        vm.eval("0")
-            .expect("pending fetch clone promise chain should drain");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__pendingFetchCloneProbe.length === 3)",
+        "true",
+        "response_clone_tees_pending_network_body_after_parent_consumption",
+    )
+    .await;
     let result = vm
         .eval("JSON.stringify(globalThis.__pendingFetchCloneProbe.sort())")
         .expect("pending fetch clone probe result should evaluate");
@@ -804,7 +845,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     let response_url = Url::parse("https://pending-fetch-pipe-through.test/stream.txt")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -829,6 +871,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     body_source_id,
@@ -865,7 +908,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     )
     .expect("pending fetch pipeThrough setup should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -890,7 +934,8 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
         .expect("first pending pipeThrough result should evaluate");
     assert_eq!(first, r#"["chunk:O"]"#);
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -925,7 +970,8 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("document URL should parse");
     let final_url = Url::parse("https://response-materialize-redirected.test/final.txt")
         .expect("final URL should parse");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -951,6 +997,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                         redirected: true,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     "redirected-body".to_owned(),
@@ -969,11 +1016,15 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("redirected response should materialize");
 }
 
-#[test]
-fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
+#[tokio::test]
+async fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
     use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for (response_type, filter) in [("opaque", Opaque), ("opaqueredirect", OpaqueRedirect)] {
-        let mut vm = new_storage_test_vm("https://response-materialize-filtered.test/");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://response-materialize-filtered.test/",
+            &loader,
+        );
         let document_url = Url::parse("https://response-materialize-filtered.test/")
             .expect("document URL should parse");
         let final_url = Url::parse(
@@ -981,7 +1032,7 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
         )
         .expect("final URL should parse");
         let context_ptr: *const v8::Global<v8::Context> =
-            &vm.page_default_runtime.context as *const _;
+            &vm.current_main_world().unwrap().context as *const _;
 
         vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -1005,6 +1056,7 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
@@ -1067,6 +1119,14 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
         )
         .expect("filtered response cache roundtrip should schedule");
 
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(globalThis.__filteredResponseCacheProbe !== 'pending')",
+            "true",
+            "filtered response cache roundtrip should settle",
+        )
+        .await;
         let cache_probe = vm
             .eval("String(globalThis.__filteredResponseCacheProbe)")
             .expect("filtered response cache roundtrip should settle");
@@ -1080,7 +1140,7 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
         );
 
         let context_ptr: *const v8::Global<v8::Context> =
-            &vm.page_default_runtime.context as *const _;
+            &vm.current_main_world().unwrap().context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1132,7 +1192,8 @@ fn materialize_response_object_rejects_locked_response_body() {
         .expect("locked response setup should evaluate");
     assert_eq!(state, "true|false");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1151,19 +1212,19 @@ fn materialize_response_object_rejects_locked_response_body() {
         .expect("locked response should reject materialization");
 }
 
-#[test]
-fn fetch_body_text_removes_one_initial_utf8_bom() {
-    assert_body_utf8_bom_probe("text");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_text_removes_one_initial_utf8_bom() {
+    assert_body_utf8_bom_probe("text").await;
 }
 
-#[test]
-fn fetch_body_json_removes_initial_utf8_bom_and_preserves_syntax_errors() {
-    assert_body_utf8_bom_probe("json");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_json_removes_initial_utf8_bom_and_preserves_syntax_errors() {
+    assert_body_utf8_bom_probe("json").await;
 }
 
-#[test]
-fn fetch_body_binary_and_form_methods_preserve_bom_bytes() {
-    assert_body_utf8_bom_probe("bytes");
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_body_binary_and_form_methods_preserve_bom_bytes() {
+    assert_body_utf8_bom_probe("bytes").await;
 }
 
 #[test]
@@ -1443,7 +1504,8 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
     use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
 
     let vm = new_storage_test_vm("https://null-response.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> =
+        &vm.current_main_world().unwrap().context as *const _;
     let host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -1472,6 +1534,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             redirected: false,
                             redirect_chain: Vec::new(),
                             from_cache: false,
+                            cache_state: Default::default(),
                             negotiated_http_version: None,
                         };
                         let id = crate::network_host::new_network_body_source_id();

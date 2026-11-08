@@ -15,11 +15,12 @@ fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing {method} event in {messages:?}"))
 }
 
-fn active_context_id(ctx: &TestContext) -> Option<&str> {
-    ctx.conn
-        .browser_context
-        .as_ref()
-        .map(|context| context.id.as_str())
+fn active_context_id(ctx: &TestContext) -> Option<String> {
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .map(|context| context.id.clone())
+    })
 }
 
 async fn create_browser_context(ctx: &mut TestContext, id: u64) -> String {
@@ -121,7 +122,10 @@ async fn rust_cdp_chromium_target_create_browser_context_first_becomes_active() 
 
     let browser_context_id = create_browser_context(&mut ctx, 261_002).await;
 
-    assert_eq!(active_context_id(&ctx), Some(browser_context_id.as_str()));
+    assert_eq!(
+        active_context_id(&ctx).as_deref(),
+        Some(browser_context_id.as_str())
+    );
 }
 
 // Chromium source:
@@ -139,7 +143,7 @@ async fn rust_cdp_chromium_target_create_browser_context_second_is_inactive_and_
     .await;
     let contexts = take_response_by_id(&mut ctx, 261_005);
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
     let listed = contexts["result"]["browserContextIds"]
         .as_array()
         .expect("browserContextIds array");
@@ -165,12 +169,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_server_is_recorde
         .expect("browserContextId")
         .to_owned();
 
-    assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_http_proxy_override.as_deref()),
-        Some("http://proxy.example:8080")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context_by_id(&browser_context_id)
+                .and_then(|context| context.default_http_proxy_override.as_deref()),
+            Some("http://proxy.example:8080")
+        )
+    });
 }
 
 // Chromium source:
@@ -193,12 +198,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_bypass_normalizes
         .expect("browserContextId")
         .to_owned();
 
-    assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_http_no_proxy_override.as_deref()),
-        Some("localhost,.example.com")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context_by_id(&browser_context_id)
+                .and_then(|context| context.default_http_no_proxy_override.as_deref()),
+            Some("localhost,.example.com")
+        )
+    });
 }
 
 // Chromium source:
@@ -252,8 +258,8 @@ async fn rust_cdp_chromium_target_dispose_inactive_context_preserves_active_cont
     .await;
 
     ctx.expect_result(261_012, json!({}), None);
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
-    assert!(ctx.conn.browser_context_by_id(&second_id).is_none());
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
+    ctx.with_fixture(|conn| assert!(conn.browser_context_by_id(&second_id).is_none()));
 }
 
 // Chromium source:
@@ -272,8 +278,8 @@ async fn rust_cdp_chromium_target_dispose_active_context_activates_remaining_con
     .await;
 
     ctx.expect_result(261_015, json!({}), None);
-    assert_eq!(active_context_id(&ctx), Some(second_id.as_str()));
-    assert!(ctx.conn.browser_context_by_id(&first_id).is_none());
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(second_id.as_str()));
+    ctx.with_fixture(|conn| assert!(conn.browser_context_by_id(&first_id).is_none()));
 }
 
 // Chromium source:
@@ -282,12 +288,14 @@ async fn rust_cdp_chromium_target_dispose_active_context_activates_remaining_con
 async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download_behavior() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let browser_context_id = create_browser_context(&mut ctx, 261_016).await;
-    ctx.conn.download_behavior.set_browser_context(
-        browser_context_id.clone(),
-        "allow".into(),
-        Some("/tmp/moli-target-contexts".into()),
-        true,
-    );
+    ctx.with_fixture(|conn| {
+        conn.download_behavior.set_browser_context(
+            browser_context_id.clone(),
+            "allow".into(),
+            Some("/tmp/moli-target-contexts".into()),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 261_017,
@@ -297,10 +305,12 @@ async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download
     .await;
 
     ctx.expect_result(261_017, json!({}), None);
-    assert_eq!(
-        ctx.conn.download_behavior,
-        crate::conn::BrowserDownloadBehavior::default()
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.download_behavior,
+            crate::conn::BrowserDownloadBehavior::default()
+        )
+    });
 }
 
 // Chromium source:
@@ -319,13 +329,14 @@ async fn rust_cdp_chromium_target_create_target_in_inactive_context_restores_act
     )
     .await;
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
-    assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&second_id)
-            .and_then(|context| context.active_target_id()),
-        Some(target_id.as_str())
-    );
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context_by_id(&second_id)
+                .and_then(|context| context.active_target_id()),
+            Some(target_id.as_str())
+        )
+    });
 }
 
 // Chromium source:
@@ -335,7 +346,7 @@ async fn rust_cdp_chromium_target_create_target_in_inactive_context_emits_contex
     let mut ctx = TestContext::new_with_target_discovery(false);
     let _first_id = create_browser_context(&mut ctx, 261_021).await;
     let second_id = create_browser_context(&mut ctx, 261_022).await;
-    ctx.conn.set_root_target_discovery_enabled(true);
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
 
     ctx.process_async(json!({
         "id": 261_023,
@@ -376,7 +387,7 @@ async fn rust_cdp_chromium_target_get_target_info_in_inactive_context_restores_a
     .await;
     let info = take_response_by_id(&mut ctx, 261_027);
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
     assert_eq!(info["result"]["targetInfo"]["browserContextId"], second_id);
     assert_eq!(info["result"]["targetInfo"]["targetId"], target_id);
 }
@@ -398,7 +409,7 @@ async fn rust_cdp_chromium_target_attach_to_inactive_context_target_selects_targ
     .await;
     let messages = ctx.take_all();
 
-    assert_eq!(active_context_id(&ctx), Some(second_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(second_id.as_str()));
     let session_id = response(&messages, 261_031)["result"]["sessionId"]
         .as_str()
         .expect("session id");
@@ -406,13 +417,14 @@ async fn rust_cdp_chromium_target_attach_to_inactive_context_target_selects_targ
         event(&messages, "Target.attachedToTarget")["params"]["sessionId"],
         session_id
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&second_id)
-            .and_then(|context| context.active_session_id()),
-        Some(session_id)
-    );
-    assert!(ctx.conn.browser_context_by_id(&first_id).is_some());
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context_by_id(&second_id)
+                .and_then(|context| context.active_session_id()),
+            Some(session_id)
+        )
+    });
+    ctx.with_fixture(|conn| assert!(conn.browser_context_by_id(&first_id).is_some()));
 }
 
 // Chromium source:
@@ -434,7 +446,7 @@ async fn rust_cdp_chromium_target_browser_session_attach_inactive_target_scopes_
     .await;
     let messages = ctx.take_all();
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
     assert_eq!(
         response(&messages, 261_036)["sessionId"],
         browser_session_id
@@ -460,7 +472,7 @@ async fn rust_cdp_chromium_target_auto_attach_existing_targets_across_contexts_r
     set_auto_attach(&mut ctx, 261_041, true).await;
     let messages = ctx.take_all();
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
     let attached = messages
         .iter()
         .filter(|message| message["method"] == "Target.attachedToTarget")
@@ -491,7 +503,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_sessions_across_con
     set_auto_attach(&mut ctx, 261_047, false).await;
     let messages = ctx.take_all();
 
-    assert_eq!(active_context_id(&ctx), Some(first_id.as_str()));
+    assert_eq!(active_context_id(&ctx).as_deref(), Some(first_id.as_str()));
     let detached = messages
         .iter()
         .filter(|message| message["method"] == "Target.detachedFromTarget")

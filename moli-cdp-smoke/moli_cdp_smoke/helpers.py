@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import weakref
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, AsyncIterator
 
-from .assertions import SmokeError
+
+from .diagnostics import new_cdp_session
+from .assertions import SmokeError, wait_until
 from .state import SmokeState
 
 
@@ -17,7 +20,7 @@ async def isolated_network_page(state: SmokeState) -> AsyncIterator[SmokeState]:
     context = await state.browser.new_context()
     try:
         page = await context.new_page()
-        cdp = await context.new_cdp_session(page)
+        cdp = await new_cdp_session(context, page)
         events = attach_cdp_event_collector(cdp, [
             "Network.requestWillBeSent", "Network.responseReceived", "Network.dataReceived",
             "Network.loadingFinished", "Network.loadingFailed",
@@ -56,7 +59,7 @@ async def capture_layout(page: Any) -> bytes:
     Screenshot tests must call page.screenshot() directly on a fresh page;
     prewarming here would bypass Playwright's getLayoutMetrics preflight.
     """
-    client = await page.context.new_cdp_session(page)
+    client = await new_cdp_session(page.context, page)
     try:
         result = await client.send("Page.captureScreenshot", {"format": "png"})
         return base64.b64decode(result["data"], validate=True)
@@ -64,11 +67,96 @@ async def capture_layout(page: Any) -> bytes:
         await client.detach()
 
 
-def attach_cdp_event_collector(client: Any, methods: list[str]) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    for method in methods:
-        client.on(method, lambda params, method=method: events.append({"method": method, "params": params}))
-    return events
+def _remove_event_listeners(client: Any, handlers: list[tuple[str, Any]]) -> None:
+    for method, handler in handlers:
+        client.remove_listener(method, handler)
+
+
+def _defer_event_listener_removal(
+    loop: asyncio.AbstractEventLoop, client: Any, handlers: list[tuple[str, Any]],
+) -> None:
+    # GC can run inside the emitter's non-reentrant lock. Never call back into
+    # that emitter from a finalizer. A closed loop cannot deliver more events.
+    if not loop.is_closed():
+        loop.call_soon_threadsafe(_remove_event_listeners, client, handlers)
+
+
+class CdpEvents(list[dict[str, Any]]):
+    """Keep listeners while their events are owned, with explicit scoped cleanup."""
+
+    def __init__(self, client: Any, methods: list[str]) -> None:
+        super().__init__()
+        reference = weakref.ref(self)
+        self._client = client
+        self._handlers: list[tuple[str, Any]] = []
+        self._detach = weakref.finalize(
+            self, _defer_event_listener_removal, asyncio.get_running_loop(),
+            client, self._handlers,
+        )
+        for method in methods:
+            def collect(params: Any, method: str = method) -> None:
+                events = reference()
+                if events is not None:
+                    events.append({"method": method, "params": params})
+            client.on(method, collect)
+            self._handlers.append((method, collect))
+
+    def close(self) -> None:
+        if self._detach.detach() is not None:
+            _remove_event_listeners(self._client, self._handlers)
+
+    def __enter__(self) -> CdpEvents:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+
+def attach_cdp_event_collector(client: Any, methods: list[str]) -> CdpEvents:
+    return CdpEvents(client, methods)
+
+
+async def wait_for_document_request(
+    events: list[dict[str, Any]], url: str, *, loader_id: str, timeout_ms: int = 10_000,
+) -> str:
+    """A navigation's load event does not replace this frontend's Network terminal."""
+    request_id: str | None = None
+
+    def finished() -> bool:
+        nonlocal request_id
+        for event in events:
+            params = event.get("params", {})
+            if params.get("type") != "Document" or params.get("loaderId") != loader_id:
+                continue
+            resource = params.get("request") or params.get("response") or {}
+            if resource.get("url") == url:
+                candidate = params.get("requestId")
+                if not isinstance(candidate, str) or not candidate:
+                    raise SmokeError(f"Document event has no requestId: {event!r}")
+                request_id = candidate
+                break
+        if request_id is None:
+            return False
+        terminals = [event for event in events
+                     if event.get("params", {}).get("requestId") == request_id
+                     and event.get("method") in {"Network.loadingFailed", "Network.loadingFinished"}]
+        if len(terminals) > 1:
+            raise SmokeError(f"duplicate Network terminals request={request_id}: {terminals!r}")
+        for event in terminals:
+            params = event.get("params", {})
+            if event.get("method") == "Network.loadingFailed":
+                raise SmokeError(f"Document request failed url={url} loader={loader_id} "
+                                 f"request={request_id}: {params!r}")
+            if event.get("method") == "Network.loadingFinished":
+                return True
+        return False
+
+    try:
+        await wait_until(finished, f"Network terminal url={url} loader={loader_id}", timeout_ms=timeout_ms)
+    except SmokeError as error:
+        raise SmokeError(f"{error}; request={request_id}; events={events[-20:]!r}") from error
+    assert request_id is not None
+    return request_id
 
 
 async def run_worker_command(page: Any, payload: Any, timeout_ms: int = 10_000) -> Any:

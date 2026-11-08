@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -15,7 +16,7 @@ from ..config import is_moli_browser
 from ..pdf_document import assert_pdf_envelope
 from ..png_image import decode_png
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
-from .layout_screenshot import _capture, _open_target, _response_for_id, _success, _wait_for_load
+from .layout_screenshot import _capture, _navigate, _open_target, _response_for_id, _success
 
 
 HTML = """<!doctype html><style>
@@ -156,6 +157,7 @@ def _input(method: str, params: dict[str, Any], event: str) -> Operation:
         while expected_event not in await probe.evaluate("inputEvents"):
             if asyncio.get_running_loop().time() >= deadline:
                 raise SmokeError(f"{method} did not dispatch {event} in phase {phase}: " + str(await probe.evaluate("({events:inputEvents,focus:document.hasFocus(),rect:document.getElementById('probe').getBoundingClientRect().toJSON()})")))
+            # smoke-timing: poll the dispatched DOM event within the four-second deadline.
             await asyncio.sleep(0.02)
         if method == "Input.dispatchTouchEvent":
             await probe.call(method, {"type": "touchEnd", "touchPoints": []})
@@ -307,8 +309,7 @@ def _replacement(kind: str) -> Callable[[Probe], Awaitable[dict[str, Any]]]:
             await probe.call(kind, {"frameId": probe.frame_id, "html": HTML})
         else:
             params = {"url": "data:text/html," + quote(HTML + "<!-- replacement -->")} if kind == "Page.navigate" else {}
-            _, _, seen = await _success(probe.client, kind, params, session_id=probe.session)
-            await _wait_for_load(probe.client, probe.session, seen)
+            await _navigate(probe.client, probe.session, params, method=kind)
         await probe.set_width(160)
         assert_equal(await probe.width(), 160, "replacement Document gets a fresh initial layout")
         await probe.set_width(200)
@@ -374,8 +375,10 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
                     observed = await run(probe)
                 record(results, "layout_policy/" + name, {"policy": "frozen" if is_moli_browser() else "live", **observed})
             except Exception as error:
-                failures.append(f"{name}: {error}")
-                results.append({"name": "layout_policy/" + name, "ok": False, "error": str(error)})
+                detail = f"{type(error).__name__}: {error}"
+                failures.append(f"{name}: {detail}")
+                results.append({"name": "layout_policy/" + name, "ok": False,
+                                "error": detail, "traceback": traceback.format_exc()})
     finally:
         await client.websocket.close()
     if failures:

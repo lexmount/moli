@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ..diagnostics import write_artifact
 from ..assertions import SmokeError, record
 from ..config import clear_proxy_env
 from ..process import CapturedProcessTimeout, run_captured_process
@@ -155,9 +156,7 @@ async def run_agent_browser_group(
     browser_websocket = discovery.get("webSocketDebuggerUrl")
     if not isinstance(browser_websocket, str) or not browser_websocket:
         raise SmokeError(f"/json/version has no browser websocket: {discovery!r}")
-    is_moli_endpoint = browser_websocket.endswith(
-        "/devtools/browser/moli-browser"
-    )
+    is_moli_endpoint = isinstance(discovery.get("Moli-Version"), str)
 
     parsed_endpoint = urlparse(endpoint)
     if parsed_endpoint.port is None:
@@ -306,6 +305,7 @@ async def run_agent_browser_group(
                 "trace stop",
             )
             trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            write_artifact("agent-browser-trace.json", trace_payload)
             if not isinstance(trace_payload, dict) or not isinstance(
                 trace_payload.get("traceEvents"), list
             ):
@@ -330,13 +330,14 @@ async def run_agent_browser_group(
                 "profiler stop",
             )
             profile_payload = json.loads(profile_path.read_text(encoding="utf-8"))
+            write_artifact("agent-browser-profile.json", profile_payload)
             if not isinstance(profile_payload, dict) or not isinstance(
                 profile_payload.get("traceEvents"), list
             ):
                 raise SmokeError(
                     f"agent-browser profiler transport artifact has wrong shape: {profile_payload!r}"
                 )
-            profile_count, sample_count = _assert_cpu_profile_events(
+            profile = _assert_cpu_profile_events(
                 profile_payload["traceEvents"],
                 {"moliAgentBrowserProfilerHotFunction"},
             )
@@ -345,8 +346,9 @@ async def run_agent_browser_group(
                 "agent_browser_profiler_transport_workflow",
                 {
                     "traceEventCount": len(profile_payload["traceEvents"]),
-                    "profileCount": profile_count,
-                    "sampleCount": sample_count,
+                    "profileCount": profile.profile_count,
+                    "sampleCount": profile.sample_count,
+                    "functionSamples": profile.function_samples,
                     "cpuSamplesRequired": True,
                 },
             )

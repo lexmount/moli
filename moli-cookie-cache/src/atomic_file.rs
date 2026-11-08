@@ -19,20 +19,40 @@ pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8], label: &str) -> R
             .with_context(|| format!("failed to create {label} dir `{}`", parent.display()))?;
     }
 
-    let tmp_path = unique_temp_path(path);
     let mut options = OpenOptions::new();
     options.create_new(true).write(true);
+    match OpenOptions::new().write(true).open(path) {
+        Ok(mut destination) => {
+            // Opening the existing target enforces its write permissions even
+            // when the containing directory would allow an atomic replacement.
+            // Do not truncate regular files before the replacement is ready.
+            let metadata = destination.metadata();
+            if !metadata.as_ref().is_ok_and(|metadata| metadata.is_file()) {
+                // Like curl, write pipes and devices through the opened handle
+                // instead of replacing their paths with a regular file.
+                return write_contents(&mut destination, bytes, path, label);
+            }
+            #[cfg(unix)]
+            if let Ok(metadata) = metadata {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+                // Retain the existing mode while still applying umask to the
+                // new inode, as in curl's regular-file replacement path.
+                options.mode(0o600 | metadata.permissions().mode());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to open {label} `{}`", path.display()));
+        }
+    }
+
+    let tmp_path = unique_temp_path(path);
     let mut file = options
         .open(&tmp_path)
         .with_context(|| format!("failed to create {label} `{}`", tmp_path.display()))?;
-    let write_result = (|| -> Result<()> {
-        file.write_all(bytes)
-            .with_context(|| format!("failed to write {label} `{}`", tmp_path.display()))?;
-        file.flush()
-            .with_context(|| format!("failed to flush {label} `{}`", tmp_path.display()))?;
-        Ok(())
-    })();
+    let write_result = write_contents(&mut file, bytes, &tmp_path, label);
     drop(file);
     if let Err(error) = write_result {
         let _ = fs::remove_file(&tmp_path);
@@ -50,6 +70,13 @@ pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8], label: &str) -> R
         });
     }
     Ok(())
+}
+
+fn write_contents(file: &mut fs::File, bytes: &[u8], path: &Path, label: &str) -> Result<()> {
+    file.write_all(bytes)
+        .with_context(|| format!("failed to write {label} `{}`", path.display()))?;
+    file.flush()
+        .with_context(|| format!("failed to flush {label} `{}`", path.display()))
 }
 
 fn unique_temp_path(path: &Path) -> PathBuf {

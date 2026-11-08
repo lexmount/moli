@@ -1820,7 +1820,7 @@ async fn websocket_bidi_set_viewport_user_context_inherits_through_window_open()
         "opener should observe its userContext viewport default"
     );
 
-    let subscribe = send_bidi_command(
+    let subscribe = send_bidi_command_response(
         &mut socket,
         7,
         "session.subscribe",

@@ -122,14 +122,35 @@ pub(in crate::domains) fn service_worker_target_lifecycle_prepared_outputs_for_e
 pub(in crate::domains) fn dedicated_worker_target_lifecycle_prepared_outputs_for_event(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
+    page_source: Option<(TargetPageResidenceIdentity, RendererPageResidenceIdentity)>,
     event: RendererDedicatedWorkerTargetEvent,
 ) -> TargetPreparedOutputs {
-    let Some(owner_page) = conn.target_page_residence_identity_for_owner(owner) else {
+    let Some((owner_page, owner_renderer_page)) = page_source else {
         return TargetPreparedOutputs::default();
     };
-    let Some(owner_renderer_page) = conn.renderer_page_residence_identity_for_owner(owner) else {
+    if let RendererDedicatedWorkerTargetEvent::Destroyed { instance_id } = event {
+        let context_id = owner_page.browser_context_id();
+        if conn
+            .browser_context_by_id(context_id)
+            .and_then(|context| context.dedicated_worker_targets.get(&instance_id))
+            .is_none_or(|target| {
+                target.owner_page != owner_page
+                    || target.renderer_owner_local_host_id
+                        != owner_renderer_page.owner_local_host_id()
+            })
+        {
+            return TargetPreparedOutputs::default();
+        }
+        return prepare_dedicated_worker_target_retirement(
+            conn,
+            context_id,
+            instance_id,
+            DedicatedWorkerRetirementCause::RendererDestroyed,
+        );
+    }
+    if !conn.target_page_output_residence_is_current(&owner_page) {
         return TargetPreparedOutputs::default();
-    };
+    }
     let browser_context_id = owner_page.browser_context_id().to_owned();
     let owner_page_network_sessions = conn.network_event_session_ids_for_owner(owner);
     dedicated_worker_target_lifecycle_outputs_for_events(

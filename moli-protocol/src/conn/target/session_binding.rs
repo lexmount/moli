@@ -1,3 +1,6 @@
+use crate::domains::target::session_disposal::SessionDisposalError;
+use anyhow::Result;
+
 use crate::automation::DevToolsTargetInfo;
 #[cfg(test)]
 use crate::conn::BrowserContext;
@@ -5,11 +8,53 @@ use crate::conn::CdpConnection;
 
 use super::{
     CdpSessionRoute, PreparedTargetAttach, SessionDisposalPlan, SessionDisposalTarget,
-    TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan,
-    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
+    TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
 
 impl CdpConnection {
+    pub(crate) fn session_binding_lifetime(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.target_control.session_binding_lifetime(session_id)
+    }
+
+    pub(crate) fn session_disposal_wait(
+        &self,
+        session_id: &str,
+    ) -> Option<super::SessionDisposalWait> {
+        self.target_control.session_disposal_wait(session_id)
+    }
+
+    pub(crate) fn mark_session_closing(&mut self, plan: &SessionDisposalPlan) {
+        self.target_control.mark_session_closing(plan.session_id());
+    }
+
+    fn bind_committed_session_lifecycle(&mut self, session_id: &str) {
+        if let Some(lifecycle) = self
+            .target_devtools_session_state_for_session(Some(session_id))
+            .map(|state| state.lifecycle.clone())
+        {
+            self.target_control
+                .bind_session_lifecycle(session_id, lifecycle);
+        }
+    }
+
+    pub fn session_is_closing(&self, session_id: &str) -> bool {
+        self.target_control.session_is_closing(session_id)
+            || self
+                .session_route(Some(session_id))
+                .as_ref()
+                .and_then(|route| route.target_id())
+                .is_some_and(|target| {
+                    let page = self
+                        .primary_page_target_id_for_tab_target_id(target)
+                        .unwrap_or(target);
+                    self.page_target_is_closing(page)
+                })
+    }
+
     /// Commits target-side session declarations built by low-level test
     /// fixtures into the same control-plane registry used by production
     /// attachment transactions.
@@ -19,6 +64,41 @@ impl CdpConnection {
     /// calls this once at its fixture boundary. Runtime route lookup remains
     /// strict: it never searches target state when the committed registry has
     /// no entry.
+    /// Bind Pages explicitly installed by a low-level fixture before it yields
+    /// to the renderer. Existing production reservations keep their exact owner.
+    #[cfg(test)]
+    pub(crate) fn bind_fixture_renderer_output_owners_for_test(&mut self) {
+        let pages: Vec<_> = self
+            .browser_contexts()
+            .flat_map(|context| {
+                context.page_targets.iter().filter_map(|target| {
+                    let page = target.loaded_page()?;
+                    Some((
+                        crate::conn::RendererPageResidenceIdentity::from_page(page),
+                        crate::conn::TargetPageResidenceIdentity::new(
+                            context.id.clone(),
+                            Some(target.target_id().to_owned()),
+                            target.page_attachment_id()?,
+                        ),
+                    ))
+                })
+            })
+            .collect();
+        for (renderer, page) in pages {
+            let residence = moli_core::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: renderer.owner_local_host_id(),
+                page_id: renderer.page_id(),
+            };
+            if !self
+                .scheduler_state
+                .renderer_output_ingress
+                .owner_is_bound_for_fixture(residence)
+            {
+                self.bind_renderer_page_output_owner(renderer, page);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn commit_declared_session_fixtures_for_test(&mut self) {
         let mut declared = Vec::new();
@@ -95,10 +175,24 @@ impl CdpConnection {
                 .attached_session_route(&session_id)
                 .is_some()
             {
+                self.bind_committed_session_lifecycle(&session_id);
                 continue;
             }
-            self.target_control
-                .commit_attached_session(session_id, None, &target_id, route, false, false);
+            let attachment =
+                self.worker_protocol_attachment_identity_for_route(&route, &session_id);
+            self.target_control.commit_attached_session(
+                session_id.clone(),
+                None,
+                &target_id,
+                route,
+                false,
+                false,
+            );
+            self.bind_committed_session_lifecycle(&session_id);
+            if let Some(attachment) = attachment {
+                self.target_control
+                    .bind_worker_attachment(&session_id, attachment);
+            }
         }
     }
 
@@ -120,63 +214,59 @@ impl CdpConnection {
         self.commit_declared_session_fixtures_for_test();
     }
 
-    pub(crate) async fn clear_devtools_network_session_policy_async(
+    pub(crate) fn start_clear_devtools_network_session_policy(
         &mut self,
         session_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> super::super::SessionPageUpdates {
         let Some(CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
             session_key,
         }) = self.session_route(Some(session_id))
         else {
-            return Ok(());
+            return Default::default();
         };
-
-        let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
-            return Ok(());
-        };
-        browser_context
-            .clear_devtools_network_session_policy_async(&target_id, &session_key)
-            .await
+        self.browser_context_by_id_mut(&browser_context_id)
+            .map(|context| {
+                context.start_clear_devtools_network_session_policy(&target_id, &session_key)
+            })
+            .unwrap_or_default()
     }
 
-    pub(crate) async fn clear_devtools_emulation_session_policy_async(
+    pub(crate) fn start_clear_devtools_emulation_session_policy(
         &mut self,
         session_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> super::super::SessionPageUpdates {
         let Some(CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
             session_key,
         }) = self.session_route(Some(session_id))
         else {
-            return Ok(());
+            return Default::default();
         };
-
-        let browser_identity_changed = match self.browser_context_by_id_mut(&browser_context_id) {
-            Some(browser_context) => {
-                browser_context
-                    .clear_devtools_emulation_session_policy_async(&target_id, &session_key)
-                    .await?
+        let (identity_changed, mut updates) = self
+            .browser_context_by_id_mut(&browser_context_id)
+            .map(|context| {
+                context.start_clear_devtools_emulation_session_policy(&target_id, &session_key)
+            })
+            .unwrap_or_default();
+        if identity_changed {
+            match self.start_rebuild_resource_runtime_for_session_owner(Some(session_id)) {
+                Ok(Some(pending)) => {
+                    if let Some(page) = self.loaded_page_mut_for_session_owner(Some(session_id)) {
+                        updates.push(
+                            page,
+                            "failed to restore detached session user agent",
+                            Ok(pending),
+                        );
+                    }
+                }
+                Err(error) => updates.record_error(error),
+                Ok(None) => {}
             }
-            None => false,
-        };
-        if !browser_identity_changed {
-            return Ok(());
         }
-
-        let Some(pending) = self
-            .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
-            .map_err(anyhow::Error::msg)?
-        else {
-            return Ok(());
-        };
-        let completion = pending.wait().await.map_err(|error| {
-            anyhow::anyhow!("failed to restore detached session user agent: {error}")
-        })?;
-        self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
-            .map_err(anyhow::Error::msg)
+        updates
     }
 
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {
@@ -201,7 +291,7 @@ impl CdpConnection {
     pub(crate) fn commit_browser_session_disposal_without_event(
         &mut self,
         plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<TargetEventPlan> {
+    ) -> Result<TargetEventPlan> {
         anyhow::ensure!(
             matches!(plan.target(), SessionDisposalTarget::Browser)
                 && self.is_browser_session_id(Some(plan.session_id())),
@@ -213,7 +303,7 @@ impl CdpConnection {
     pub(crate) fn commit_browser_session_disposal_event_plan(
         &mut self,
         plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<TargetEventPlan> {
+    ) -> Result<TargetEventPlan> {
         anyhow::ensure!(
             matches!(plan.target(), SessionDisposalTarget::Browser)
                 && self.is_browser_session_id(Some(plan.session_id())),
@@ -236,6 +326,7 @@ impl CdpConnection {
         Ok(event_plan)
     }
 
+    #[cfg(test)]
     pub(crate) fn release_root_target_frontend_owner_without_event(&mut self) {
         self.download_behavior
             .set_browser_events_enabled_for_session(None, false);
@@ -243,28 +334,6 @@ impl CdpConnection {
         self.clear_auto_attach_owner(None);
         self.clear_target_discovery_for_owner(None);
         self.target_control.remove_owner(None);
-    }
-
-    pub(crate) fn release_primary_target_session_binding_without_event(
-        &mut self,
-        session_id: &str,
-    ) -> bool {
-        let Some(browser_context_id) = self
-            .session_route(Some(session_id))
-            .and_then(|route| route.browser_context_id().map(str::to_owned))
-        else {
-            return false;
-        };
-        let released = self
-            .browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context
-                    .release_primary_session_binding_preserving_frontend_state(session_id)
-            });
-        if released {
-            self.rollback_attached_session_without_event(session_id);
-        }
-        released
     }
 
     #[cfg(test)]
@@ -277,6 +346,8 @@ impl CdpConnection {
         let target_id = route.target_id().unwrap_or_else(|| {
             panic!("test auto-attached session route must identify a target: {route:?}")
         });
+        let attachment = self.worker_protocol_attachment_identity_for_route(&route, &session_id);
+        let binding_session = session_id.clone();
         self.target_control.commit_auto_attached_session_for_target(
             session_id,
             owner_session_id,
@@ -284,6 +355,11 @@ impl CdpConnection {
             route.clone(),
             false,
         );
+        self.bind_committed_session_lifecycle(&binding_session);
+        if let Some(attachment) = attachment {
+            self.target_control
+                .bind_worker_attachment(&binding_session, attachment);
+        }
     }
 
     #[cfg(test)]
@@ -305,6 +381,7 @@ impl CdpConnection {
         route: CdpSessionRoute,
     ) {
         let target_id = route.target_id().unwrap_or("browser").to_owned();
+        let attachment = self.worker_protocol_attachment_identity_for_route(&route, session_id);
         self.target_control.commit_attached_session(
             session_id.to_owned(),
             None,
@@ -313,6 +390,11 @@ impl CdpConnection {
             false,
             false,
         );
+        self.bind_committed_session_lifecycle(session_id);
+        if let Some(attachment) = attachment {
+            self.target_control
+                .bind_worker_attachment(session_id, attachment);
+        }
     }
 
     pub(crate) fn commit_prepared_attach_event_plan(
@@ -335,26 +417,70 @@ impl CdpConnection {
         emit_attached_state_delta: bool,
     ) -> TargetEventPlan {
         let (target_id, target_info, sessions) = prepared.into_parts();
-        let should_emit_attached_state_delta = emit_attached_state_delta && !sessions.is_empty();
-        let attached_state_delta_plan = should_emit_attached_state_delta
-            .then(|| self.exact_target_info_changed_event_plan_for_target_delta(&target_id));
+        let mut attached_state_delta_plan = None;
         let mut plan = TargetEventPlan::default();
         for session in sessions {
+            if session
+                .route()
+                .browser_context_id()
+                .and_then(|id| self.browser_context_by_id(id))
+                .is_some_and(|context| context.closing)
+            {
+                continue;
+            }
+            let worker_attachment = session.worker_attachment().cloned();
+            assert!(
+                worker_attachment.is_some()
+                    || !matches!(
+                        session.route(),
+                        CdpSessionRoute::SharedWorkerTarget { .. }
+                            | CdpSessionRoute::DedicatedWorkerTarget { .. }
+                            | CdpSessionRoute::ServiceWorkerTarget { .. }
+                    ),
+                "worker attach must freeze its original native attachment before waiting"
+            );
+            if worker_attachment
+                .as_ref()
+                .is_some_and(|attachment| !attachment.is_current())
+            {
+                continue;
+            }
+            if emit_attached_state_delta && attached_state_delta_plan.is_none() {
+                attached_state_delta_plan =
+                    Some(self.exact_target_info_changed_event_plan_for_target_delta(&target_id));
+            }
+            let flattened_protocol = if session.is_auto_attached() {
+                self.auto_attach_owner_sessions
+                    .get(&session.owner_session_id().map(str::to_owned))
+                    .is_none_or(|policy| policy.flattened_protocol)
+            } else {
+                session.flattened_protocol()
+            };
             let (session_id, owner_session_id, route, auto_attached, waiting_for_debugger) =
                 session.into_parts();
+            let binding_session_id = session_id.clone();
             if auto_attached {
                 self.target_control
                     .ensure_owner(owner_session_id.as_deref());
             }
-            plan.extend(self.target_control.commit_attached_session_event(
-                session_id,
-                owner_session_id.as_deref(),
-                &target_id,
-                route,
-                auto_attached,
-                waiting_for_debugger,
-                target_info.clone(),
-            ));
+            plan.extend(
+                self.target_control
+                    .commit_attached_session_event(
+                        session_id,
+                        owner_session_id.as_deref(),
+                        &target_id,
+                        route,
+                        auto_attached,
+                        waiting_for_debugger,
+                        target_info.clone(),
+                    )
+                    .with_flattened_protocol(flattened_protocol),
+            );
+            self.bind_committed_session_lifecycle(&binding_session_id);
+            if let Some(attachment) = worker_attachment {
+                self.target_control
+                    .bind_worker_attachment(&binding_session_id, attachment);
+            }
         }
         if let Some(attached_state_delta_plan) = attached_state_delta_plan {
             plan.extend(attached_state_delta_plan);
@@ -431,13 +557,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn attach_service_worker_target_session_event_plan(
@@ -469,13 +598,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn attach_dedicated_worker_target_session_event_plan(
@@ -507,13 +639,16 @@ impl CdpConnection {
             self.rollback_prepared_attach_session_sync_without_event(&prepared_session);
             return Err("UnknownTargetId");
         };
-        Ok(
-            self.commit_prepared_dedicated_worker_attach_event_plan(PreparedTargetAttach::new(
-                target_id,
-                target_info,
-                [prepared_session],
-            )),
-        )
+        let attachment = self
+            .worker_protocol_attachment_identity_for_route(
+                prepared_session.route(),
+                prepared_session.session_id(),
+            )
+            .expect("synchronous worker attachment retains its original native scope");
+        Ok(self.commit_prepared_dedicated_worker_attach_event_plan(
+            PreparedTargetAttach::new(target_id, target_info, [prepared_session])
+                .with_worker_attachment(attachment),
+        ))
     }
 
     pub(crate) fn prepare_auto_attached_tab_session_binding(
@@ -748,38 +883,7 @@ impl CdpConnection {
         plan
     }
 
-    pub(crate) async fn dispose_target_closure_sessions_event_plan_async(
-        &mut self,
-        cleanup_plan: TargetClosureCleanupPlan,
-        parent_session_id: Option<&str>,
-    ) -> TargetEventPlan {
-        let session_ids = cleanup_plan
-            .session_ids()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        for session_id in session_ids {
-            let Some(route) = self.session_route(Some(&session_id)) else {
-                tracing::warn!(
-                    session_id,
-                    "closed target session no longer has an authoritative route"
-                );
-                continue;
-            };
-            let Some(disposal_plan) = SessionDisposalPlan::for_session_route(&session_id, &route)
-            else {
-                tracing::warn!(
-                    session_id,
-                    "closed target session does not support target disposal"
-                );
-                continue;
-            };
-            crate::domains::target::dispose_closed_session_domains_async(self, &disposal_plan)
-                .await;
-        }
-        self.commit_target_closure_session_detachment_events(cleanup_plan, parent_session_id)
-    }
-
-    fn commit_target_closure_session_detachment_events(
+    pub(crate) fn commit_target_closure_session_detachment_events(
         &mut self,
         cleanup_plan: TargetClosureCleanupPlan,
         parent_session_id: Option<&str>,
@@ -791,16 +895,6 @@ impl CdpConnection {
             self.remove_detached_session_control_owner(session.session_id());
         }
         plan
-    }
-
-    pub(crate) async fn rollback_prepared_attach_session_without_event_async(
-        &mut self,
-        prepared: &TargetAttachSessionCommit,
-    ) -> TargetEventPlan {
-        self.rollback_attached_session_with_cleanup_without_event_async(
-            TargetAttachRollbackPlan::from_prepared_attach_session(prepared),
-        )
-        .await
     }
 
     pub(crate) fn rollback_prepared_attach_session_sync_without_event(
@@ -879,50 +973,12 @@ impl CdpConnection {
         }
     }
 
-    async fn rollback_attached_session_with_cleanup_without_event_async(
-        &mut self,
-        rollback_plan: TargetAttachRollbackPlan,
-    ) -> TargetEventPlan {
-        if let Some(cleanup_plan) = rollback_plan.cleanup_plan()
-            && let Err(error) =
-                crate::domains::target::dispose_uncommitted_session_async(self, cleanup_plan).await
-        {
-            tracing::warn!(
-                session_id = rollback_plan.session_id(),
-                %error,
-                "failed to clean prepared target binding during attach rollback"
-            );
-            // Keep both the domain binding and its control-plane route as
-            // retry authority. Dropping only the latter would make any
-            // renderer-owned state unreachable.
-            return TargetEventPlan::default();
-        }
-        self.rollback_attached_session_without_event(rollback_plan.session_id())
-    }
-
-    pub(crate) fn auto_attached_session_detach_plan(
-        &self,
-        session_id: &str,
-    ) -> TargetAutoAttachedSessionDetachPlan {
-        let route = self.session_route(Some(session_id)).unwrap_or_else(|| {
-            panic!("committed auto-attached session {session_id} must retain its route")
-        });
-        TargetAutoAttachedSessionDetachPlan::from_session_route(session_id, route)
-    }
-
-    pub(crate) fn rollback_auto_attached_session_detach_plan_without_event(
-        &mut self,
-        detach_plan: &TargetAutoAttachedSessionDetachPlan,
-    ) -> TargetEventPlan {
-        self.rollback_attached_session_without_event(detach_plan.session_id())
-    }
-
     pub(crate) fn commit_session_disposal(
         &mut self,
         cleanup_plan: &SessionDisposalPlan,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         match cleanup_plan.target() {
-            SessionDisposalTarget::Browser => anyhow::bail!("InvalidSessionId"),
+            SessionDisposalTarget::Browser => anyhow::bail!(SessionDisposalError::InvalidSession),
             SessionDisposalTarget::PageTarget {
                 browser_context_id,
                 target_id,
@@ -930,21 +986,24 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 anyhow::ensure!(
                     bc.remove_page_session_binding(
                         target_id,
                         cleanup_plan.session_id(),
                         session_key,
                     ),
-                    "InvalidSessionId"
+                    SessionDisposalError::InvalidSession
                 );
             }
             SessionDisposalTarget::TabTarget { tab_target_id, .. } => {
                 let removed_target_id = self
                     .remove_tab_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *tab_target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *tab_target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::SharedWorkerTarget {
                 browser_context_id,
@@ -952,11 +1011,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_shared_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::DedicatedWorkerTarget {
                 browser_context_id,
@@ -964,11 +1026,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_dedicated_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
             SessionDisposalTarget::ServiceWorkerTarget {
                 browser_context_id,
@@ -976,11 +1041,14 @@ impl CdpConnection {
             } => {
                 let bc = self
                     .browser_context_by_id_mut(browser_context_id)
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
+                    .ok_or(SessionDisposalError::InvalidSession)?;
                 let removed_target_id = bc
                     .detach_service_worker_target_session(cleanup_plan.session_id())
-                    .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-                anyhow::ensure!(removed_target_id == *target_id, "UnknownTargetId");
+                    .ok_or(SessionDisposalError::InvalidSession)?;
+                anyhow::ensure!(
+                    removed_target_id == *target_id,
+                    SessionDisposalError::UnknownTarget
+                );
             }
         }
         Ok(())
@@ -1080,6 +1148,7 @@ impl CdpConnection {
             .attached_session_cascade_for_owner(owner_session_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn attached_session_cascade_for_root_frontend(&self) -> Vec<String> {
         self.target_control
             .attached_session_cascade_for_root_frontend()

@@ -654,6 +654,31 @@ pub struct PaintGlyphRun {
     pub text: Option<PaintTextSemantics>,
     /// Maps the glyph positions from their layout coordinate space to viewport CSS pixels.
     pub transform: PaintTransform2D,
+    /// `-webkit-text-stroke` paint, if any.
+    pub stroke: Option<PaintTextStroke>,
+}
+
+/// `-webkit-text-stroke` paint for one glyph run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintTextStroke {
+    /// Stroke width in CSS pixels, centered on the glyph outline.
+    pub width: f32,
+    /// Resolved `-webkit-text-stroke-color`.
+    pub color: PaintColor,
+    /// `paint-order` paints the stroke before (beneath) the fill.
+    pub paint_first: bool,
+}
+
+impl PaintTextStroke {
+    /// Ordinary HTML text uses miter joins with this fixed limit, matching
+    /// Chromium's PaintFlags. Backends must not substitute their defaults.
+    pub const MITER_LIMIT: f32 = 4.0;
+
+    /// Conservative ink expansion in local CSS pixels for a centered miter
+    /// stroke, including the widening used to follow synthetic bold.
+    pub fn ink_outset(width: f32, embolden: f32) -> f32 {
+        (width.max(0.0) * 0.5 + embolden.max(0.0)) * Self::MITER_LIMIT
+    }
 }
 
 /// Owned text mapping retained across the layout/paint boundary for document export.

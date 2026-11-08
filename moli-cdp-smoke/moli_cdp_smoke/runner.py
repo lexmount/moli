@@ -8,12 +8,15 @@ import shutil
 import sys
 import tempfile
 import traceback
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
+
 from playwright.async_api import async_playwright
 
+from .diagnostics import current_diagnostics, diagnostics_scope, new_cdp_session, observe_playwright_connection
 from .assertions import record
 from .config import clear_current_process_proxy_env
 from .fixture import FixtureServer
@@ -30,6 +33,7 @@ from .groups.core import run_core_group
 from .groups.dom_input import run_dom_input_group
 from .groups.dom_hit_test import run_dom_hit_test_group
 from .groups.dom_parser_mutations import run_dom_parser_mutations_group
+from .groups.dom_publication import run_dom_publication_group
 from .groups.dom_shadow_outer_html import run_dom_shadow_outer_html_group
 from .groups.dom_snapshot import run_dom_snapshot_group
 from .groups.dom_whitespace import run_dom_whitespace_group
@@ -37,6 +41,9 @@ from .groups.document_content import run_document_content_group
 from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
+from .groups.fetch_font import run_fetch_font_group
+from .groups.fetch_media import run_fetch_media_group
+from .groups.fetch_resource_dispatch import run_fetch_resource_dispatch_group
 from .groups.history_worlds import run_history_worlds_group
 from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
@@ -54,6 +61,7 @@ from .groups.network import (
     run_page_network_group,
     run_websocket_group,
 )
+from .groups.lazy_main_world import run_lazy_main_world_group
 from .groups.navigation_outcomes import run_navigation_outcomes_group
 from .groups.pdf import run_pdf_group
 from .groups.playwright_compat import run_playwright_compat_group
@@ -72,6 +80,7 @@ from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.webgl_viewport import run_webgl_viewport_group
+from .groups.font_face import run_font_face_payload_group
 from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
@@ -116,6 +125,12 @@ async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "lazy-main-world",
+        "Chromium-calibrated native DOM access before Runtime, first script/Inspector activation, preload ordering, and scriptless navigation/close.",
+        "raw",
+        run_lazy_main_world_group,
+    ),
     SmokeGroup(
         "scrollbar-visibility",
         "Moli fetch/serve scrollbar defaults, CLI/environment precedence, CDP emulation, frames, paint, and input.",
@@ -169,6 +184,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "RL-shaped awaitPromise observe/fill/click navigation and error-Document contract.",
         "raw",
         run_agent_episode_group,
+    ),
+    SmokeGroup(
+        "dom-publication",
+        "Raw DOM mirror publication, search/request/describe order, associated and detached trees, mutations, and session isolation.",
+        "raw",
+        run_dom_publication_group,
     ),
     SmokeGroup(
         "dom-parser-mutations",
@@ -376,6 +397,24 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
+        "fetch-resource-dispatch",
+        "SW routing and page policy after automatic and explicit resource continuation.",
+        "browser",
+        run_fetch_resource_dispatch_group,
+    ),
+    SmokeGroup(
+        "fetch-media",
+        "Media and TextTrack Fetch interception through real element loads and mixed patterns.",
+        "browser",
+        run_fetch_media_group,
+    ),
+    SmokeGroup(
+        "fetch-font",
+        "Font Fetch interception, mixed resource patterns, request actions, and response bodies.",
+        "browser",
+        run_fetch_font_group,
+    ),
+    SmokeGroup(
         "webgl-viewport",
         "WebGL viewport state and HTML/OffscreenCanvas context lifetime.",
         "browser",
@@ -386,6 +425,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "Detached SVGRect interface, float conversion, and SVG feature detection.",
         "browser",
         run_svg_rect_group,
+    ),
+    SmokeGroup(
+        "font-face",
+        "FontFace malformed-payload rejection and valid payload control contracts.",
+        "browser",
+        run_font_face_payload_group,
     ),
     SmokeGroup(
         "media-error",
@@ -465,7 +510,7 @@ OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 
 
 PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
-    SmokeGroup("target-lifecycle", "Managed-process target churn, FD bounds, and post-close navigation.",
+    SmokeGroup("target-lifecycle", "Managed-process endpoint rotation, target churn, FD bounds, and post-close navigation.",
                "process", run_target_lifecycle_group),
 )
 
@@ -559,10 +604,12 @@ async def run_smoke(
         results = []
     temp_dir = Path(tempfile.mkdtemp(prefix="moli-pw-smoke-"))
     playwright = None
+    observations = ExitStack()
     try:
         playwright = await await_with_progress(
             "playwright/start", async_playwright().start()
         )
+        observations.enter_context(observe_playwright_connection(playwright))
         browser = await await_with_progress(
             "playwright/connect-over-cdp",
             playwright.chromium.connect_over_cdp(endpoint, timeout=10_000),
@@ -582,7 +629,7 @@ async def run_smoke(
             )
             cdp = await await_with_progress(
                 "playwright/context-new-cdp-session",
-                context.new_cdp_session(page),
+                new_cdp_session(context, page),
             )
             websocket_events = attach_cdp_event_collector(
                 cdp,
@@ -640,9 +687,12 @@ async def run_smoke(
         finally:
             await await_with_progress("playwright/browser-close", browser.close())
     finally:
-        if playwright is not None:
-            await await_with_progress("playwright/stop", playwright.stop())
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        try:
+            if playwright is not None:
+                await await_with_progress("playwright/stop", playwright.stop())
+        finally:
+            observations.close()
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -695,8 +745,7 @@ def _emit_worker_payload(
     os.replace(temporary, result_path)
 
 
-async def async_main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+async def _run_worker(args: argparse.Namespace) -> int:
     if args.list_groups:
         print(json.dumps({"groups": group_listing()}, indent=2, ensure_ascii=False))
         return 0
@@ -770,6 +819,10 @@ async def async_main(argv: list[str] | None = None) -> int:
             except Exception as error:
                 failures.append("".join(traceback.format_exception(error)))
 
+    diagnostics = current_diagnostics()
+    diagnostic_result = diagnostics.finish() if diagnostics is not None else None
+    if diagnostic_result and diagnostic_result["errors"]:
+        failures.append("diagnostic capture failed: " + "; ".join(diagnostic_result["errors"]))
     ok = not failures and not any(result.get("ok") is False for result in results)
     payload: dict[str, Any] = {
         "ok": ok,
@@ -778,6 +831,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         "fixture": fixture.url,
         "browser": identity,
         "browserLaunches": BROWSER_LAUNCHES,
+        "diagnostics": diagnostic_result,
         "results": results,
     }
     if failures:
@@ -786,6 +840,12 @@ async def async_main(argv: list[str] | None = None) -> int:
             payload["moliLogTail"] = serve.logs[-5_000:]
     _emit_worker_payload(payload, args.result, failed=not ok)
     return 0 if ok else 1
+
+
+async def async_main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    with diagnostics_scope(args.result):
+        return await _run_worker(args)
 
 
 def main(argv: list[str] | None = None) -> None:

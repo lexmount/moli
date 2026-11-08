@@ -16,13 +16,13 @@ fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
     let mut target = service_worker_target();
     target.attach_session(session_id.to_owned());
     bc.insert_service_worker_target(target);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 
 fn load_unattached_service_worker_target(ctx: &mut TestContext) {
     let mut bc = BrowserContext::new("BID-service".to_owned());
     bc.insert_service_worker_target(service_worker_target());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 
 fn service_worker_target() -> ServiceWorkerTargetState {
@@ -38,10 +38,11 @@ fn service_worker_target() -> ServiceWorkerTargetState {
 }
 
 fn record_service_worker_console(ctx: &mut TestContext, session_id: &str, message: &str) {
-    ctx.conn
-        .service_worker_target_for_session_mut(Some(session_id))
-        .expect("service worker target session should exist")
-        .record_console_message(message.to_owned(), Vec::new(), None);
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some(session_id))
+            .expect("service worker target session should exist")
+            .record_console_message(message.to_owned(), Vec::new(), None)
+    });
 }
 
 fn record_service_worker_runtime_context(ctx: &mut TestContext, session_id: &str, context_id: i64) {
@@ -56,33 +57,38 @@ fn record_service_worker_runtime_context(ctx: &mut TestContext, session_id: &str
         context_type: Some("service-worker".to_owned()),
         grant_universal_access: None,
     };
-    ctx.conn
-        .service_worker_target_for_session_mut(Some(session_id))
-        .expect("service worker target session should exist")
-        .record_runtime_execution_context_created_event(&event);
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some(session_id))
+            .expect("service worker target session should exist")
+            .record_runtime_execution_context_created_event(&event)
+    });
 }
 
 fn record_unattached_service_worker_console(ctx: &mut TestContext, message: &str) {
-    ctx.conn
-        .browser_context_by_id_mut("BID-service")
-        .and_then(|browser_context| browser_context.service_worker_target_mut("TID-service-worker"))
-        .expect("service worker target should exist")
-        .record_console_message(message.to_owned(), Vec::new(), None);
+    ctx.with_fixture(|conn| {
+        conn.browser_context_by_id_mut("BID-service")
+            .and_then(|browser_context| {
+                browser_context.service_worker_target_mut("TID-service-worker")
+            })
+            .expect("service worker target should exist")
+            .record_console_message(message.to_owned(), Vec::new(), None)
+    });
 }
 
 fn record_service_worker_exception(ctx: &mut TestContext, session_id: &str, message: &str) {
-    ctx.conn
-        .service_worker_target_for_session_mut(Some(session_id))
-        .expect("service worker target session should exist")
-        .record_exception_message(RendererServiceWorkerExceptionMessage {
-            message: message.to_owned(),
-            filename: "https://example.test/service-worker.js".to_owned(),
-            lineno: 5,
-            colno: 13,
-            event_kind: "error_event".to_owned(),
-            phase: "runtime".to_owned(),
-            source: "runtime".to_owned(),
-        });
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some(session_id))
+            .expect("service worker target session should exist")
+            .record_exception_message(RendererServiceWorkerExceptionMessage {
+                message: message.to_owned(),
+                filename: "https://example.test/service-worker.js".to_owned(),
+                lineno: 5,
+                colno: 13,
+                event_kind: "error_event".to_owned(),
+                phase: "runtime".to_owned(),
+                source: "runtime".to_owned(),
+            })
+    });
 }
 
 fn service_worker_fetch_diagnostic(internal_id: u64) -> RendererServiceWorkerFetchDiagnostic {
@@ -102,12 +108,12 @@ fn service_worker_fetch_diagnostic(internal_id: u64) -> RendererServiceWorkerFet
 async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_start() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
+    let runtime = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .expect("browser context should exist")
+            .renderer_runtime()
+    });
     assert!(!runtime.service_worker_pause_on_start_for_devtools());
 
     ctx.process_async(json!({
@@ -139,12 +145,12 @@ async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_st
 async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
+    let runtime = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .expect("browser context should exist")
+            .renderer_runtime()
+    });
     assert!(!runtime.service_worker_pause_on_start_for_devtools());
 
     ctx.process_async(json!({
@@ -166,48 +172,56 @@ async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
         !runtime.service_worker_pause_on_start_for_devtools(),
         "waitForDebuggerOnStart must not pause Service Workers when the target filter excludes them"
     );
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 0));
 }
 
 #[tokio::test]
 async fn service_worker_pause_on_start_waits_for_last_owner() {
     let mut ctx = TestContext::new();
     load_unattached_service_worker_target(&mut ctx);
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
+    let runtime = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .expect("browser context should exist")
+            .renderer_runtime()
+    });
     assert!(!runtime.service_worker_pause_on_start_for_devtools());
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 0));
 
-    crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, true);
+    ctx.with_fixture(|conn| {
+        crate::domains::target::set_service_worker_pause_on_start_owner(conn, None, true)
+    });
     assert!(runtime.service_worker_pause_on_start_for_devtools());
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 1));
 
-    crate::domains::target::set_service_worker_pause_on_start_owner(
-        &mut ctx.conn,
-        Some("SID-service-worker-owner"),
-        true,
-    );
+    ctx.with_fixture(|conn| {
+        crate::domains::target::set_service_worker_pause_on_start_owner(
+            conn,
+            Some("SID-service-worker-owner"),
+            true,
+        )
+    });
     assert!(runtime.service_worker_pause_on_start_for_devtools());
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 2);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 2));
 
-    crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, false);
+    ctx.with_fixture(|conn| {
+        crate::domains::target::set_service_worker_pause_on_start_owner(conn, None, false)
+    });
     assert!(
         runtime.service_worker_pause_on_start_for_devtools(),
         "one remaining DevTools owner must keep new Service Worker targets paused"
     );
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 1));
 
-    crate::domains::target::set_service_worker_pause_on_start_owner(
-        &mut ctx.conn,
-        Some("SID-service-worker-owner"),
-        false,
-    );
+    ctx.with_fixture(|conn| {
+        crate::domains::target::set_service_worker_pause_on_start_owner(
+            conn,
+            Some("SID-service-worker-owner"),
+            false,
+        )
+    });
     assert!(!runtime.service_worker_pause_on_start_for_devtools());
-    assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
+    ctx.with_fixture(|conn| assert_eq!(conn.service_worker_pause_on_start_owner_count(), 0));
 }
 
 #[tokio::test]
@@ -346,19 +360,19 @@ async fn get_realms_on_service_worker_target_waits_for_renderer_context() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
 
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: Some(DevToolsTargetId::from("TID-service-worker")),
-                browser_context_id: None,
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: Some(DevToolsTargetId::from("TID-service-worker")),
+                    browser_context_id: None,
+                },
+                realm_type: Some("service-worker".to_owned()),
             },
-            realm_type: Some("service-worker".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
@@ -376,19 +390,19 @@ async fn get_realms_on_service_worker_target_returns_real_renderer_realm() {
     load_service_worker_target(&mut ctx, "SID-service-worker");
     record_service_worker_runtime_context(&mut ctx, "SID-service-worker", 91_007);
 
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: Some(DevToolsTargetId::from("TID-service-worker")),
-                browser_context_id: None,
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: Some(DevToolsTargetId::from("TID-service-worker")),
+                    browser_context_id: None,
+                },
+                realm_type: Some("service-worker".to_owned()),
             },
-            realm_type: Some("service-worker".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
@@ -414,19 +428,19 @@ async fn get_realms_global_enumeration_waits_for_service_worker_renderer_context
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
 
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: None,
-                browser_context_id: None,
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: None,
+                    browser_context_id: None,
+                },
+                realm_type: Some("service-worker".to_owned()),
             },
-            realm_type: Some("service-worker".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
@@ -446,19 +460,19 @@ async fn get_realms_global_enumeration_includes_service_worker_real_renderer_rea
     load_service_worker_target(&mut ctx, "SID-service-worker");
     record_service_worker_runtime_context(&mut ctx, "SID-service-worker", 91_007);
 
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetRealms(DevToolsGetRealmsCommand {
-            context: AutomationContext {
-                protocol: FrontendProtocol::WebDriverBidi,
-                session_id: Some(DevToolsSessionId::from("bidi-session-1")),
-                target_id: None,
-                browser_context_id: None,
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(AutomationCommand::GetRealms(
+            DevToolsGetRealmsCommand {
+                context: AutomationContext {
+                    protocol: FrontendProtocol::WebDriverBidi,
+                    session_id: Some(DevToolsSessionId::from("bidi-session-1")),
+                    target_id: None,
+                    browser_context_id: None,
+                },
+                realm_type: Some("service-worker".to_owned()),
             },
-            realm_type: Some("service-worker".to_owned()),
-        }))
-        .await
-        .into_parts();
+        ))
+        .await;
     let AutomationResult::Realms(result) = result.expect("getRealms should succeed") else {
         panic!("expected Realms result");
     };
@@ -482,10 +496,9 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
     load_unattached_service_worker_target(&mut ctx);
     record_unattached_service_worker_console(&mut ctx, "log: classic buffered log");
 
-    let (result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
-            DevToolsGetServiceWorkerLogsCommand {
+    let result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetServiceWorkerLogs(DevToolsGetServiceWorkerLogsCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("classic-session-1")),
@@ -493,10 +506,9 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
                     browser_context_id: None,
                 },
                 target_id: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::ServiceWorkerLogs(result) =
         result.expect("getServiceWorkerLogs should succeed")
     else {
@@ -514,20 +526,19 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
     assert_eq!(entry.execution_context_id, None);
     assert!(entry.timestamp.is_some());
 
-    let target_info = ctx
-        .conn
-        .browser_context_by_id("BID-service")
-        .expect("browser context")
-        .target_infos()
-        .into_iter()
-        .find(|target| target["targetId"] == json!("TID-service-worker"))
-        .expect("service worker target info");
+    let target_info = ctx.with_fixture(|conn| {
+        conn.browser_context_by_id("BID-service")
+            .expect("browser context")
+            .target_infos()
+            .into_iter()
+            .find(|target| target["targetId"] == json!("TID-service-worker"))
+            .expect("service worker target info")
+    });
     assert_eq!(target_info["attached"], json!(false));
 
-    let (second_result, _) = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
-            DevToolsGetServiceWorkerLogsCommand {
+    let second_result = ctx
+        .execute_automation_command_through_renderer_fence_for_test(
+            AutomationCommand::GetServiceWorkerLogs(DevToolsGetServiceWorkerLogsCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverClassic,
                     session_id: Some(DevToolsSessionId::from("classic-session-1")),
@@ -535,10 +546,9 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
                     browser_context_id: None,
                 },
                 target_id: None,
-            },
-        ))
-        .await
-        .into_parts();
+            }),
+        )
+        .await;
     let AutomationResult::ServiceWorkerLogs(second_result) =
         second_result.expect("second getServiceWorkerLogs should succeed")
     else {
@@ -547,8 +557,7 @@ async fn get_service_worker_logs_drains_classic_cursor_without_attaching_target(
     assert!(second_result.entries.is_empty());
 
     let missing = ctx
-        .conn
-        .execute_automation_command(AutomationCommand::GetServiceWorkerLogs(
+        .execute_owned_automation_command_for_test(AutomationCommand::GetServiceWorkerLogs(
             DevToolsGetServiceWorkerLogsCommand {
                 context: AutomationContext {
                     protocol: FrontendProtocol::WebDriverClassic,
@@ -593,10 +602,11 @@ async fn runtime_evaluate_on_service_worker_session_does_not_fall_back_to_page_r
 async fn network_enable_on_service_worker_session_toggles_target_local_cursor() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    ctx.conn
-        .service_worker_target_for_session_mut(Some("SID-service-worker"))
-        .expect("service worker target session should exist")
-        .record_fetch_diagnostic(service_worker_fetch_diagnostic(1));
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some("SID-service-worker"))
+            .expect("service worker target session should exist")
+            .record_fetch_diagnostic(service_worker_fetch_diagnostic(1))
+    });
 
     ctx.process_async(json!({
         "id": 83,
@@ -606,30 +616,34 @@ async fn network_enable_on_service_worker_session_toggles_target_local_cursor() 
     .await;
 
     ctx.expect_result(83, json!({}), Some("SID-service-worker"));
-    let target = ctx
-        .conn
-        .service_worker_target_for_session(Some("SID-service-worker"))
-        .expect("service worker target session should exist");
-    assert!(target.network_enabled("SID-service-worker"));
-    assert!(
-        target
-            .pending_fetch_diagnostics("SID-service-worker")
-            .is_empty(),
-        "Network.enable should start at the current service worker diagnostic tail"
-    );
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.service_worker_target_for_session(Some("SID-service-worker"))
+                .expect("service worker target session should exist")
+        };
+        assert!(target.network_enabled("SID-service-worker"));
+        assert!(
+            target
+                .pending_fetch_diagnostics("SID-service-worker")
+                .is_empty(),
+            "Network.enable should start at the current service worker diagnostic tail"
+        );
+    });
 
-    ctx.conn
-        .service_worker_target_for_session_mut(Some("SID-service-worker"))
-        .expect("service worker target session should exist")
-        .record_fetch_diagnostic(service_worker_fetch_diagnostic(2));
-    assert_eq!(
-        ctx.conn
-            .service_worker_target_for_session(Some("SID-service-worker"))
+    ctx.with_fixture(|conn| {
+        conn.service_worker_target_for_session_mut(Some("SID-service-worker"))
             .expect("service worker target session should exist")
-            .pending_fetch_diagnostics("SID-service-worker")
-            .len(),
-        1
-    );
+            .record_fetch_diagnostic(service_worker_fetch_diagnostic(2))
+    });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.service_worker_target_for_session(Some("SID-service-worker"))
+                .expect("service worker target session should exist")
+                .pending_fetch_diagnostics("SID-service-worker")
+                .len(),
+            1
+        )
+    });
 
     ctx.process_async(json!({
         "id": 84,
@@ -639,16 +653,18 @@ async fn network_enable_on_service_worker_session_toggles_target_local_cursor() 
     .await;
 
     ctx.expect_result(84, json!({}), Some("SID-service-worker"));
-    let target = ctx
-        .conn
-        .service_worker_target_for_session(Some("SID-service-worker"))
-        .expect("service worker target session should exist");
-    assert!(!target.network_enabled("SID-service-worker"));
-    assert!(
-        target
-            .pending_fetch_diagnostics("SID-service-worker")
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        let target = {
+            conn.service_worker_target_for_session(Some("SID-service-worker"))
+                .expect("service worker target session should exist")
+        };
+        assert!(!target.network_enabled("SID-service-worker"));
+        assert!(
+            target
+                .pending_fetch_diagnostics("SID-service-worker")
+                .is_empty()
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -779,18 +795,23 @@ async fn console_enable_on_service_worker_session_starts_at_current_target_curso
     }))
     .await;
     ctx.expect_result(83, json!({}), Some("SID-service-worker"));
-    let target = ctx
-        .conn
-        .service_worker_target_for_session_mut(Some("SID-service-worker"))
-        .expect("service worker target session should exist");
-    assert!(
-        target
-            .pending_console_domain_messages("SID-service-worker")
-            .is_empty()
-    );
+    ctx.with_fixture(|conn| {
+        let pending = {
+            let target = {
+                conn.service_worker_target_for_session_mut(Some("SID-service-worker"))
+                    .expect("service worker target session should exist")
+            };
+            assert!(
+                target
+                    .pending_console_domain_messages("SID-service-worker")
+                    .is_empty()
+            );
 
-    target.record_console_message("error: after enable".to_owned(), Vec::new(), None);
-    let pending = target.pending_console_domain_messages("SID-service-worker");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message, "error: after enable");
+            target.record_console_message("error: after enable".to_owned(), Vec::new(), None);
+
+            target.pending_console_domain_messages("SID-service-worker")
+        };
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].message, "error: after enable");
+    });
 }

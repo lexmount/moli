@@ -18,7 +18,7 @@ use url::Url;
 
 use crate::automation::DevToolsRequestFailure;
 use crate::conn::{
-    BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
+    BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection, CommandOwnerScope,
     CommittedNavigationPage, CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation,
     NavigationDispatchState, NavigationLoadOutcome, NavigationRequestBlocked, NoContentNavigation,
     ResponseCommitReady, TargetRuntimeSlot,
@@ -102,7 +102,6 @@ impl FailedNavigationDocumentPolicy {
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -365,11 +364,6 @@ fn materialize_navigation_load_outcome(
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
         }
-        NavigationLoadOutcome::Loaded(navigation) => {
-            MaterializedNavigationLoadOutcome::Loaded(Box::new(
-                materialize_loaded_navigation_progress(conn, state, *navigation),
-            ))
-        }
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
@@ -609,6 +603,7 @@ struct MainDocumentLiveNetworkProgressSource {
     timestamp: f64,
     initial_request_headers: Vec<(String, String)>,
     initial_request_cookie_report: Option<StoredCookieQueryReport>,
+    announced_redirects: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1009,6 +1004,7 @@ impl MainDocumentLiveNetworkProgressSource {
             loader_id: state.loader_id.clone(),
             frame_id: state.frame_id.clone(),
             timestamp: state.timestamp,
+            announced_redirects: state.announced_redirects,
             initial_request_headers: state.request_headers.to_byte_strings(),
             initial_request_cookie_report: initial_request_cookie_report.cloned(),
         })
@@ -1144,30 +1140,32 @@ impl MainDocumentLiveNetworkProgressSource {
                     },
                 );
             }
-            events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-                target: target.clone(),
-                url: redirect.to_url.clone(),
-                method: final_request_method.to_owned(),
-                request_body: request_body.map(str::to_owned),
-                request_headers: final_request_headers.to_vec(),
-                request_initiator_type: SubresourceRequestInitiatorType::Other,
-                redirect_response: Box::new(Some(MainDocumentRedirectResponse {
-                    url: redirect.from_url.clone(),
-                    status: redirect.status,
-                    status_text: critical_client_hint_internal_redirect_status_text(
-                        &redirect.from_url,
-                        &redirect.to_url,
-                        redirect.status,
-                        redirect.network_extra_info_available,
-                        observed_response_available,
-                    ),
-                    headers: redirect.headers.clone(),
-                    from_cache: redirect.from_cache,
-                    negotiated_http_version: redirect.negotiated_http_version,
-                })),
-                redirect_has_extra_info: redirect.network_extra_info_available,
-                cookie_access_report: redirect.request_cookie_report.clone(),
-            });
+            if index >= self.announced_redirects {
+                events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
+                    target: target.clone(),
+                    url: redirect.to_url.clone(),
+                    method: final_request_method.to_owned(),
+                    request_body: request_body.map(str::to_owned),
+                    request_headers: final_request_headers.to_vec(),
+                    request_initiator_type: SubresourceRequestInitiatorType::Other,
+                    redirect_response: Box::new(Some(MainDocumentRedirectResponse {
+                        url: redirect.from_url.clone(),
+                        status: redirect.status,
+                        status_text: critical_client_hint_internal_redirect_status_text(
+                            &redirect.from_url,
+                            &redirect.to_url,
+                            redirect.status,
+                            redirect.network_extra_info_available,
+                            observed_response_available,
+                        ),
+                        headers: redirect.headers.clone(),
+                        from_cache: redirect.from_cache,
+                        negotiated_http_version: redirect.negotiated_http_version,
+                    })),
+                    redirect_has_extra_info: redirect.network_extra_info_available,
+                    cookie_access_report: redirect.request_cookie_report.clone(),
+                });
+            }
             if observed_response_available && redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     network_observation_journal,
@@ -1440,7 +1438,7 @@ pub(crate) fn emit_fetch_navigation_initial_request_for_pause_background_events(
 pub(crate) fn emit_child_document_navigation_network_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     frame_id: &str,
     loader_id: &str,
     request_id: &str,
@@ -1453,7 +1451,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     let Ok(final_url) = Url::parse(&network.final_url) else {
         return;
     };
-    let session_ids = conn.network_event_session_ids_for_session_owner(session_id);
+    // A Fetch pause already published this navigation's initial request.
+    let announced_by_fetch_pause = conn
+        .runtime_session_owner_slot_mut_for_owner(owner)
+        .is_some_and(|runtime_slot| {
+            let announced = runtime_slot.request_was_announced_by_fetch_pause(request_id);
+            runtime_slot.clear_fetch_pause_announced_request_id(request_id);
+            announced
+        });
+    let session_ids = conn.network_event_session_ids_for_owner(owner);
     if session_ids.is_empty() {
         return;
     }
@@ -1465,17 +1471,19 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         timestamp,
     };
     let mut output = MainDocumentProgressOutputTarget::background_events(out);
-    output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-        target: target.clone(),
-        url: request_url,
-        method: network.request_method.clone(),
-        request_body: None,
-        request_headers: network.request_headers.clone(),
-        request_initiator_type: SubresourceRequestInitiatorType::Parser,
-        redirect_response: Box::new(None),
-        redirect_has_extra_info: false,
-        cookie_access_report: None,
-    });
+    if !announced_by_fetch_pause {
+        output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
+            target: target.clone(),
+            url: request_url,
+            method: network.request_method.clone(),
+            request_body: None,
+            request_headers: network.request_headers.clone(),
+            request_initiator_type: SubresourceRequestInitiatorType::Parser,
+            redirect_response: Box::new(None),
+            redirect_has_extra_info: false,
+            cookie_access_report: None,
+        });
+    }
     output.emit_event(MainDocumentNavigationProgressEvent::ResponseReceived {
         target: target.clone(),
         final_url,
@@ -1493,7 +1501,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     });
     record_child_document_response_body(
         conn,
-        session_id,
+        owner,
         request_id,
         &session_ids,
         network.response_body.as_ref(),
@@ -1506,18 +1514,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
 
 fn record_child_document_response_body(
     conn: &mut CdpConnection,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     request_id: &str,
     session_ids: &[Option<String>],
     response_body: Option<&moli_core::page::SubresourceResponseBody>,
 ) {
     let data_type = crate::automation::DevToolsNetworkDataType::Response;
     let encoded_data_length = response_body.map_or(0, |body| body.len());
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        owner_session_id,
-        data_type,
-        encoded_data_length,
-    );
+    let collector_ids =
+        conn.network_data_collector_ids_for_owner_body(owner, data_type, encoded_data_length);
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
     let captured_body =
         response_body.map(crate::conn::CapturedBody::from_subresource_response_body);
@@ -1530,7 +1535,7 @@ fn record_child_document_response_body(
             collection_was_gated,
         );
     }
-    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut(owner_session_id) else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     if let Some(captured_body) = captured_body {
@@ -1666,6 +1671,7 @@ struct CompletedMainDocumentProgressContext {
     session_ids: Vec<Option<String>>,
     request_id: Option<String>,
     request_announced: bool,
+    announced_redirects: usize,
     requested_url: Url,
     request_method: String,
     request_body: Option<String>,
@@ -1681,7 +1687,7 @@ impl CompletedMainDocumentProgressContext {
         state: &NavigationDispatchState,
         request_id: Option<String>,
     ) -> Self {
-        Self::new(
+        let mut context = Self::new(
             main_document_network_event_session_ids(conn, state.session_id.as_deref()),
             request_id,
             state.request_announced,
@@ -1692,7 +1698,9 @@ impl CompletedMainDocumentProgressContext {
             state.loader_id.clone(),
             state.frame_id.clone(),
             state.timestamp,
-        )
+        );
+        context.announced_redirects = state.announced_redirects;
+        context
     }
 
     fn new(
@@ -1711,6 +1719,7 @@ impl CompletedMainDocumentProgressContext {
             session_ids,
             request_id,
             request_announced,
+            announced_redirects: 0,
             requested_url,
             request_method,
             request_body,
@@ -1807,30 +1816,32 @@ impl CompletedMainDocumentProgressContext {
                     },
                 );
             }
-            progress_events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-                target: target.clone(),
-                url: redirect.to_url.clone(),
-                method: events.request_method.clone(),
-                request_body: self.request_body.clone(),
-                request_headers: events.request_headers.clone(),
-                request_initiator_type: SubresourceRequestInitiatorType::Other,
-                redirect_response: Box::new(Some(MainDocumentRedirectResponse {
-                    url: redirect.from_url.clone(),
-                    status: redirect.status,
-                    status_text: critical_client_hint_internal_redirect_status_text(
-                        &redirect.from_url,
-                        &redirect.to_url,
-                        redirect.status,
-                        redirect.network_extra_info_available,
-                        observed_response_available,
-                    ),
-                    headers: redirect.headers.clone(),
-                    from_cache: redirect.from_cache,
-                    negotiated_http_version: redirect.negotiated_http_version,
-                })),
-                redirect_has_extra_info: redirect.network_extra_info_available,
-                cookie_access_report: redirect.request_cookie_report.clone(),
-            });
+            if index >= self.announced_redirects {
+                progress_events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
+                    target: target.clone(),
+                    url: redirect.to_url.clone(),
+                    method: events.request_method.clone(),
+                    request_body: self.request_body.clone(),
+                    request_headers: events.request_headers.clone(),
+                    request_initiator_type: SubresourceRequestInitiatorType::Other,
+                    redirect_response: Box::new(Some(MainDocumentRedirectResponse {
+                        url: redirect.from_url.clone(),
+                        status: redirect.status,
+                        status_text: critical_client_hint_internal_redirect_status_text(
+                            &redirect.from_url,
+                            &redirect.to_url,
+                            redirect.status,
+                            redirect.network_extra_info_available,
+                            observed_response_available,
+                        ),
+                        headers: redirect.headers.clone(),
+                        from_cache: redirect.from_cache,
+                        negotiated_http_version: redirect.negotiated_http_version,
+                    })),
+                    redirect_has_extra_info: redirect.network_extra_info_available,
+                    cookie_access_report: redirect.request_cookie_report.clone(),
+                });
+            }
             if observed_response_available && redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     &events.network_observation_journal,

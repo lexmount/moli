@@ -15,13 +15,13 @@ struct XhrReadyStateChangeEventDeclaration<'scope> {
 pub(in crate::network_host::xhr) fn xhr_fire_readystatechange(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    ready_state: u32,
+    ready_state: XhrReadyState,
 ) {
     // Many XHR entrypoints receive `xhr` through different callback/value paths, so its
     // `Local` lifetime is not always tied to the current scope. Re-root it here before we
     // hand it to the shared callback-reporting helper, which expects scope-owned locals.
     let xhr = local_object_in_scope(scope, xhr);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, ready_state as f64);
+    set_xhr_ready_state(scope, xhr, ready_state);
     if !xhr_has_event_observers(scope, xhr, "readystatechange") {
         return;
     }

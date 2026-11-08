@@ -26,8 +26,15 @@ struct DocumentRangePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Range, enumerable)]
-struct RangePrototypeMethodsDeclaration {
+#[webapi(interface = web_api_interfaces::Range, enumerable, receiver)]
+struct RangePrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = super::accessors::range_attribute_getter_callback,
+        data = crate::util::callback_data_index_value(scope, 5)
+    )]
+    common_ancestor_container: (),
+
     #[webapi(method, length = 2, callback = range_set_start_callback)]
     set_start: (),
     #[webapi(method, length = 2, callback = range_set_end_callback)]
@@ -79,7 +86,7 @@ struct RangePrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AbstractRange)]
+#[webapi(interface = web_api_interfaces::AbstractRange, receiver)]
 struct AbstractRangePrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -116,13 +123,6 @@ struct AbstractRangePrototypeDeclaration {
         enumerable
     )]
     collapsed: (),
-    #[webapi(
-        accessor_property,
-        getter = super::accessors::range_attribute_getter_callback,
-        data = crate::util::callback_data_index_value(scope, 5),
-        enumerable
-    )]
-    common_ancestor_container: (),
 }
 
 pub(in crate::context_bootstrap) fn install_range_template_bindings<'s>(
@@ -136,7 +136,7 @@ pub(in crate::context_bootstrap) fn install_range_template_bindings<'s>(
             DocumentRangePrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "Range" => {
-            RangePrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
+            RangePrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "AbstractRange" => {
             AbstractRangePrototypeDeclaration::initialize_prototype_template(scope, prototype);

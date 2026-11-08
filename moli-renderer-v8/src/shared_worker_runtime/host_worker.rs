@@ -24,9 +24,15 @@ impl RendererSharedWorkerHost {
         let launch_context = params.launch_context;
         let execution_policy = launch_context.execution_policy;
         let name = launch_context.name.clone();
-        let policy_context = script
-            .response_policy_context
-            .unwrap_or(execution_policy.policy_context);
+        // SharedWorker uses the default non-isolated native agent mode. Keep
+        // network policies, including a Blob creator's inherited policies,
+        // separate from the capability supplied to the new agent.
+        let policy_context = crate::types::SubresourcePolicyContext {
+            cross_origin_isolated: false,
+            ..script
+                .response_policy_context
+                .unwrap_or(execution_policy.policy_context)
+        };
         let reserved_service_worker_client_id = params.reserved_service_worker_client_id;
         let options = WorkerSpawnOptions::new_with_request_client(
             script_source,

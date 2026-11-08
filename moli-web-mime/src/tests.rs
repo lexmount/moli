@@ -1133,3 +1133,21 @@ fn classic_script_mime_block_uses_extracted_type_and_keeps_fetch_prefix_rules() 
         &ogg
     ));
 }
+
+#[test]
+fn nosniff_tokens_only_trim_http_tab_and_space() {
+    assert!(determine_nosniff(&[(
+        "X-Content-Type-Options".to_owned(),
+        b" \tNoSniff \t, other".to_vec(),
+    )]));
+    for value in [
+        b"nosniff\x0b".as_slice(),
+        b"nosniff\x0c",
+        b"nosniff\x0b,nosniff",
+        b"\x0cnosniff",
+        b"nosniff\xa0",
+    ] {
+        let headers = vec![("X-Content-Type-Options".to_owned(), value.to_vec())];
+        assert!(!determine_nosniff(&headers), "{value:?}");
+    }
+}

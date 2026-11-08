@@ -379,7 +379,20 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
             SubresourceRequestInitiatorType::Script,
         )
         .map(str::to_owned),
-        redirect_response: None,
+        redirect_response: output
+            .child_document()
+            .and_then(|document| document.redirect.as_ref())
+            .map(|redirect| NetworkRedirectResponseEvent {
+                url: redirect.from_url.as_str().to_owned(),
+                status: redirect.status,
+                status_text: None,
+                response_headers: redirect.headers.clone(),
+                encoded_data_length: 0,
+                from_cache: redirect.from_cache,
+                response_protocol: redirect
+                    .negotiated_http_version
+                    .map(|version| version.protocol_name().to_owned()),
+            }),
         redirect_has_extra_info: false,
         request_cookie_report: output.request_cookie_report().cloned(),
         resource_type: Some(resource_type),
@@ -1310,7 +1323,7 @@ mod tests {
     ) -> Vec<Value> {
         events
             .into_iter()
-            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
             .collect()
     }
 

@@ -15,7 +15,7 @@ use moli_cookie_jar::{
     StoredCookieSetReport, same_site_urls,
 };
 use moli_curl::{HostResolveOverrides, ProxyScheme};
-use moli_url::is_potentially_trustworthy_url;
+use moli_url::{is_potentially_trustworthy_url, same_origin};
 use moli_url_policy::ensure_http_network_transport_url;
 use tracing::debug;
 use url::{Host, Url};
@@ -38,9 +38,8 @@ pub(crate) use self::collectors::{
 };
 
 use crate::{
-    BrowserRequestMetadata, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo,
-    RedirectInfo, Request, RequestAuthScheme, RequestAuthTarget, ResponseHead,
-    proxy::HttpProxyRoute,
+    CookieHeaderPolicy, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, RedirectInfo,
+    Request, RequestAuthScheme, RequestAuthTarget, ResponseHead, proxy::HttpProxyRoute,
 };
 
 const MAX_REDIRECTS: usize = 10;
@@ -73,6 +72,7 @@ pub struct StreamingHtmlResponseStart {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     pub network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -89,6 +89,7 @@ impl StreamingHtmlResponseStart {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -111,7 +112,7 @@ pub(crate) fn cookie_access_report_for_request(
     request_url: &Url,
     request_context: NetworkCookieRequestContext,
 ) -> Result<Option<StoredCookieQueryReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     let report = cookie_store.cookie_access_report_for_request(request_url, request_context);
     Ok(
         (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
@@ -124,7 +125,7 @@ pub fn observe_cookie_access_report_for_request(
     request_url: &Url,
     request_context: NetworkCookieRequestContext,
 ) -> Result<Option<StoredCookieQueryReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     let report =
         cookie_store.observe_cookie_access_report_for_request(request_url, request_context);
     Ok(
@@ -167,8 +168,38 @@ pub(crate) fn outgoing_request_headers_for_url(
     request_url: &Url,
     cookie_header: Option<&str>,
 ) -> Vec<(String, String)> {
-    outgoing_request_header_bytes_for_url(config, request, request_url, cookie_header)
+    // Cache/diagnostic previews can precede admission. Reuse its preparation
+    // contract; admitted requests keep the borrowed, allocation-free path.
+    let mut prepared = std::borrow::Cow::Borrowed(request);
+    if !header_present(&request.request_headers, "accept") {
+        prepared.to_mut().prepare_accept_header(config);
+    }
+    outgoing_request_header_bytes_for_url(config, &prepared, request_url, cookie_header)
         .to_byte_strings()
+}
+
+// Header emission and cache eligibility must select the same literal data,
+// including host scope, credentials, empty values and explicit-header overrides.
+fn literal_cookie_header_for_request<'a>(
+    config: &'a FetchConfig,
+    request: &'a Request,
+    request_url: &Url,
+) -> Option<&'a str> {
+    request
+        .additional_cookies()
+        .or_else(|| config.additional_cookies_for_request(request, request_url))
+        .filter(|value| !value.is_empty())
+        .filter(|_| request.allows_credentials_for_url(request_url))
+        .filter(|_| {
+            !request
+                .request_headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+                && !config
+                    .default_request_headers()
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        })
 }
 
 fn outgoing_request_header_bytes_for_url(
@@ -179,22 +210,65 @@ fn outgoing_request_header_bytes_for_url(
 ) -> crate::RequestHeaders {
     let mut outgoing = crate::RequestHeaders::default();
 
+    let additional = literal_cookie_header_for_request(config, request, request_url);
+    let cookie_header = match (cookie_header, additional) {
+        (Some(stored), Some(literal)) => {
+            Some(std::borrow::Cow::Owned(format!("{stored}; {literal}")))
+        }
+        (Some(value), None) | (None, Some(value)) => Some(std::borrow::Cow::Borrowed(value)),
+        (None, None) => None,
+    };
+    let cookie_header = cookie_header.as_deref();
+
     if let Some(cookie_header) = cookie_header {
         outgoing.push(("Cookie".to_owned(), cookie_header.as_bytes().to_vec()));
     }
 
+    // Scope custom credentials to the transfer's initial origin. Preserve the
+    // configured headers so returning to that origin can restore them.
+    let send_authorization = same_origin(request.initial_url(), request_url);
+    let send_explicit_cookies = match request.cookie_header_policy() {
+        CookieHeaderPolicy::PreferStore => cookie_header.is_none(),
+        CookieHeaderPolicy::PreserveExplicit => send_authorization,
+    };
+
     for (name, value) in config.default_request_headers() {
-        if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
+        if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
+            || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+            || (name.eq_ignore_ascii_case("accept")
+                && header_present(&request.request_headers, "accept"))
+        {
             continue;
         }
         outgoing.push((name.clone(), value.as_bytes().to_vec()));
     }
 
     for (name, value) in request.request_headers.iter() {
-        if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
+        if (!send_explicit_cookies && name.eq_ignore_ascii_case("cookie"))
+            || (!send_authorization && name.eq_ignore_ascii_case("authorization"))
+        {
             continue;
         }
         outgoing.push((name.clone(), value.clone()));
+    }
+
+    // Cache modes affect intermediary caches as well as our local lookup.
+    // Explicit request fields retain precedence, including empty values.
+    match request.effective_cache_mode() {
+        crate::RequestCacheMode::Validate => {
+            if !header_present(&outgoing, "cache-control") {
+                outgoing.push(("Cache-Control".to_owned(), b"max-age=0".to_vec()));
+            }
+        }
+        crate::RequestCacheMode::Bypass | crate::RequestCacheMode::NoStore => {
+            if !header_present(&outgoing, "pragma") {
+                outgoing.push(("Pragma".to_owned(), b"no-cache".to_vec()));
+            }
+            if !header_present(&outgoing, "cache-control") {
+                outgoing.push(("Cache-Control".to_owned(), b"no-cache".to_vec()));
+            }
+        }
+        _ => {}
     }
 
     // Fetch selects identity whenever Range is present, even with an invalid
@@ -235,21 +309,6 @@ fn outgoing_request_header_bytes_for_url(
         outgoing.push((
             "Authorization".to_owned(),
             format!("Basic {}", encode_basic_auth(username, password)).into_bytes(),
-        ));
-    }
-
-    if let Some(auth) = request.auth()
-        && auth.target == RequestAuthTarget::Server
-        && auth.scheme == RequestAuthScheme::Basic
-        && !header_present(&outgoing, "authorization")
-    {
-        outgoing.push((
-            "Authorization".to_owned(),
-            format!(
-                "Basic {}",
-                encode_basic_auth(&auth.username, &auth.password)
-            )
-            .into_bytes(),
         ));
     }
 
@@ -307,11 +366,6 @@ fn append_browser_navigation_headers(
 
     append_encoded_header_if_missing(
         outgoing,
-        "Accept",
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7".to_owned(),
-    );
-    append_encoded_header_if_missing(
-        outgoing,
         "Accept-Language",
         request
             .browser_identity(config)
@@ -319,26 +373,17 @@ fn append_browser_navigation_headers(
             .to_owned(),
     );
     append_encoded_header_if_missing(outgoing, "Upgrade-Insecure-Requests", "1".to_owned());
-    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Mode", "navigate".to_owned());
-    append_encoded_header_if_missing(
+    append_fetch_metadata_headers(
         outgoing,
-        "Sec-Fetch-Dest",
+        request,
+        request_url,
+        "navigate",
         if request.is_subframe_navigation_request() {
             "iframe"
         } else {
             "document"
-        }
-        .to_owned(),
+        },
     );
-    append_encoded_header_if_missing(
-        outgoing,
-        "Sec-Fetch-Site",
-        request_sec_fetch_site(request, request_url),
-    );
-
-    if request.is_top_level_navigation_request() && request.cookie_context.initiator_url.is_none() {
-        append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
-    }
 
     if request.browser_navigation_kind() == crate::BrowserNavigationRequestKind::Reload {
         append_encoded_header_if_missing(outgoing, "Cache-Control", "max-age=0".to_owned());
@@ -360,71 +405,49 @@ fn append_browser_subresource_headers(
         return;
     }
 
-    match metadata {
-        BrowserRequestMetadata::Audio
-        | BrowserRequestMetadata::AudioWorklet
-        | BrowserRequestMetadata::Beacon
-        | BrowserRequestMetadata::EventSource
-        | BrowserRequestMetadata::Fetch
-        | BrowserRequestMetadata::Font
-        | BrowserRequestMetadata::Image
-        | BrowserRequestMetadata::JsonModule
-        | BrowserRequestMetadata::Manifest
-        | BrowserRequestMetadata::Ping
-        | BrowserRequestMetadata::Script
-        | BrowserRequestMetadata::Style
-        | BrowserRequestMetadata::StyleModule
-        | BrowserRequestMetadata::TextTrack
-        | BrowserRequestMetadata::Video
-        | BrowserRequestMetadata::Xhr => {
-            let accept = match metadata {
-                BrowserRequestMetadata::Image => {
-                    "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-                }
-                BrowserRequestMetadata::EventSource => "text/event-stream",
-                BrowserRequestMetadata::Manifest => "*/*",
-                BrowserRequestMetadata::TextTrack => "text/vtt,*/*;q=0.1",
-                _ => "*/*",
-            };
-            append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
-            append_encoded_header_if_missing(
-                outgoing,
-                "Accept-Language",
-                request
-                    .browser_identity(config)
-                    .accept_language()
-                    .to_owned(),
-            );
-            append_encoded_header_if_missing(
-                outgoing,
-                "Sec-Fetch-Site",
-                request_sec_fetch_site(request, request_url),
-            );
-            append_encoded_header_if_missing(
-                outgoing,
-                "Sec-Fetch-Mode",
-                request.request_mode.as_ref().to_owned(),
-            );
-            let destination = match metadata {
-                BrowserRequestMetadata::Audio => "audio",
-                BrowserRequestMetadata::AudioWorklet => "audioworklet",
-                BrowserRequestMetadata::Font => "font",
-                BrowserRequestMetadata::Image => "image",
-                BrowserRequestMetadata::JsonModule => "json",
-                BrowserRequestMetadata::Manifest => "manifest",
-                BrowserRequestMetadata::Script => "script",
-                BrowserRequestMetadata::Style | BrowserRequestMetadata::StyleModule => "style",
-                BrowserRequestMetadata::TextTrack => "track",
-                BrowserRequestMetadata::Video => "video",
-                BrowserRequestMetadata::Beacon
-                | BrowserRequestMetadata::EventSource
-                | BrowserRequestMetadata::Fetch
-                | BrowserRequestMetadata::Ping
-                | BrowserRequestMetadata::Xhr => "empty",
-            };
-            append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
-            append_browser_client_hints(outgoing, request.browser_identity(config));
-        }
+    append_encoded_header_if_missing(
+        outgoing,
+        "Accept-Language",
+        request
+            .browser_identity(config)
+            .accept_language()
+            .to_owned(),
+    );
+    let destination = metadata.fetch_destination();
+    append_fetch_metadata_headers(
+        outgoing,
+        request,
+        request_url,
+        request.request_mode.as_ref(),
+        destination,
+    );
+    append_browser_client_hints(outgoing, request.browser_identity(config));
+}
+
+// Fetch Metadata uses the current URL, including on every redirect hop.
+// Loopback and localhost HTTP destinations are potentially trustworthy too.
+fn append_fetch_metadata_headers(
+    outgoing: &mut crate::RequestHeaders,
+    request: &Request,
+    request_url: &Url,
+    mode: &str,
+    destination: &str,
+) {
+    if !is_potentially_trustworthy_url(request_url) {
+        return;
+    }
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Mode", mode.to_owned());
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
+    append_encoded_header_if_missing(
+        outgoing,
+        "Sec-Fetch-Site",
+        request_sec_fetch_site(request, request_url),
+    );
+    if request.is_navigation_request()
+        && request.is_top_level_navigation_request()
+        && request.cookie_context.initiator_url.is_none()
+    {
+        append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
     }
 }
 
@@ -518,7 +541,7 @@ pub(crate) fn store_response_cookies(
     headers: &[(String, Vec<u8>)],
     request_context: &NetworkCookieRequestContext,
 ) -> Result<Vec<StoredCookieSetReport>> {
-    let mut cookie_store = cookie_store.lock();
+    let mut cookie_store = cookie_store.lock()?;
     Ok(cookie_store.store_response_headers_with_context_reports(
         response_url,
         headers,
@@ -704,7 +727,7 @@ pub(crate) fn configure_easy(
             .context("failed to suppress curl default content-type")?;
     }
 
-    if let Some(auth) = request.auth()
+    if let Some(auth) = request.auth_for_url(request_url)
         && request.auth_requires_buffered_transport()
     {
         let mut methods = Auth::new();
@@ -912,7 +935,7 @@ fn effective_connect_timeout(config: &FetchConfig, request: &Request) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RequestMode;
+    use crate::{BrowserRequestMetadata, RequestMode};
 
     fn url(value: &str) -> Url {
         Url::parse(value).expect("valid URL")
@@ -958,6 +981,137 @@ mod tests {
             cookie_set_reports: Vec::new(),
             from_cache: false,
             negotiated_http_version: None,
+        }
+    }
+
+    #[test]
+    fn curl_explicit_cookie_headers_are_scoped_to_the_initial_origin() {
+        let initial_url = url("https://example.test/start");
+        let mut config = FetchConfig::default();
+        config.push_default_request_header("cOoKiE", "config=secret");
+        config.push_default_request_header("X-Config", "retained");
+        let original = Request::new(
+            "GET",
+            initial_url.as_str(),
+            None,
+            vec![
+                ("Cookie".to_owned(), "request=secret".to_owned()),
+                ("COOKIE".to_owned(), "duplicate=secret".to_owned()),
+                ("X-Request".to_owned(), "retained".to_owned()),
+            ],
+        )
+        .unwrap()
+        .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+
+        for (target, allowed) in [
+            ("https://EXAMPLE.test:443/final", true),
+            ("https://other.test/final", false),
+            ("https://sub.example.test/final", false),
+            ("https://example.test:444/final", false),
+            ("http://example.test:443/final", false),
+            ("http://example.test/final", false),
+        ] {
+            let target_url = url(target);
+            let mut followed = original.clone();
+            followed
+                .follow_redirect(redirect(&initial_url, &target_url))
+                .unwrap();
+            // The runtime retains request.url, while caller-owned redirect
+            // loops update it. Both must scope headers to the initial URL.
+            for request in [&original, &followed] {
+                let headers = outgoing_request_headers_for_url(
+                    &config,
+                    request,
+                    &target_url,
+                    Some("target=stored"),
+                );
+                let cookies = headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+                    .map(|(_, value)| value.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    cookies,
+                    if allowed {
+                        vec![
+                            "target=stored",
+                            "config=secret",
+                            "request=secret",
+                            "duplicate=secret",
+                        ]
+                    } else {
+                        vec!["target=stored"]
+                    },
+                    "{target}"
+                );
+                assert_eq!(
+                    header_value(&headers, "x-config").as_deref(),
+                    Some("retained")
+                );
+                assert_eq!(
+                    header_value(&headers, "x-request").as_deref(),
+                    Some("retained")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn curl_cookie_headers_restore_only_when_returning_to_the_initial_origin() {
+        let mut request = Request::new(
+            "GET",
+            "https://initial.test/start",
+            None,
+            vec![("Cookie".to_owned(), "intercepted=once".to_owned())],
+        )
+        .unwrap()
+        .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit)
+        .with_redirect_headers(Some(
+            vec![("Cookie".to_owned(), "manual=secret".to_owned())].into(),
+        ))
+        .with_additional_cookies(Some("literal=suppressed".to_owned()));
+        let config = FetchConfig::default();
+        for (target, expected) in [
+            ("https://other.test/middle", None),
+            ("https://other.test/final", None),
+            ("https://initial.test/returned", Some("manual=secret")),
+        ] {
+            request
+                .follow_redirect(redirect(&request.url, &url(target)))
+                .unwrap();
+            let headers = outgoing_request_headers_for_url(&config, &request, &request.url, None);
+            assert_eq!(
+                header_value(&headers, "cookie").as_deref(),
+                expected,
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn curl_literal_and_store_cookies_remain_independent_of_header_redirect_scope() {
+        let target_url = url("http://other.test/final");
+        for literal_in_config in [false, true] {
+            let mut config = FetchConfig::default();
+            let mut request = Request::get("https://initial.test/start")
+                .unwrap()
+                .with_cookie_header_policy(CookieHeaderPolicy::PreserveExplicit);
+            if literal_in_config {
+                config.set_additional_cookies(Some("literal=retained".to_owned()));
+                config.bind_additional_cookie_scope(&request);
+            } else {
+                request = request.with_additional_cookies(Some("literal=retained".to_owned()));
+            }
+            let headers = outgoing_request_headers_for_url(
+                &config,
+                &request,
+                &target_url,
+                Some("target=stored"),
+            );
+            assert_eq!(
+                header_value(&headers, "cookie").as_deref(),
+                Some("target=stored; literal=retained")
+            );
         }
     }
 
@@ -1171,28 +1325,38 @@ mod tests {
 
     #[test]
     fn browser_subresource_origin_uses_redirect_target_url() {
-        let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let redirected_url = url("http://api.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![redirect(&original_url, &redirected_url)];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let redirected_url = url(&format!("{scheme}://api.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![redirect(&original_url, &redirected_url)];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
+            let headers =
+                outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
 
-        assert_eq!(
-            header_value(&headers, "origin"),
-            Some("http://app.test".to_owned())
-        );
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(
+                header_value(&headers, "origin"),
+                Some(format!("{scheme}://app.test"))
+            );
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
@@ -1225,108 +1389,145 @@ mod tests {
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect() {
-        let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://api.test/redirect");
-        let redirected_url = url("http://app.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![redirect(&original_url, &redirected_url)];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://api.test/redirect"));
+            let redirected_url = url(&format!("{scheme}://app.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![redirect(&original_url, &redirected_url)];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
+            let headers =
+                outgoing_request_headers_for_url(&config, &request, &redirected_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_same_site_redirect_chain() {
-        let config = FetchConfig::default();
-        let initiator_url = url("http://app.test:8000/page");
-        let original_url = url("http://app.test:8000/redirect");
-        let intermediate_url = url("http://app.test:8001/redirect");
-        let final_url = url("http://app.test:8000/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &intermediate_url),
-            redirect(&intermediate_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test:8000/page"));
+            let original_url = url(&format!("{scheme}://app.test:8000/redirect"));
+            let intermediate_url = url(&format!("{scheme}://app.test:8001/redirect"));
+            let final_url = url(&format!("{scheme}://app.test:8000/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &intermediate_url),
+                redirect(&intermediate_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("same-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "same-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_returns_to_origin()
      {
-        let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let cross_site_url = url("http://cross.test/redirect");
-        let final_url = url("http://app.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &cross_site_url),
-            redirect(&cross_site_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let cross_site_url = url(&format!("{scheme}://cross.test/redirect"));
+            let final_url = url(&format!("{scheme}://app.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &cross_site_url),
+                redirect(&cross_site_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]
     fn browser_subresource_origin_serializes_null_after_cross_site_redirect_chain_stays_cross_site()
     {
-        let config = FetchConfig::default();
-        let initiator_url = url("http://app.test/page");
-        let original_url = url("http://app.test/redirect");
-        let cross_site_redirect_url = url("http://cross.test/redirect");
-        let final_url = url("http://api.test/data");
-        let request = Request::new("GET", original_url.as_str(), None, Vec::new())
-            .unwrap()
-            .with_initiator_url(&initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
-            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-        let redirect_chain = vec![
-            redirect(&original_url, &cross_site_redirect_url),
-            redirect(&cross_site_redirect_url, &final_url),
-        ];
-        let request = request.with_redirect_chain(redirect_chain);
+        for scheme in ["http", "https"] {
+            let config = FetchConfig::default();
+            let initiator_url = url(&format!("{scheme}://app.test/page"));
+            let original_url = url(&format!("{scheme}://app.test/redirect"));
+            let cross_site_redirect_url = url(&format!("{scheme}://cross.test/redirect"));
+            let final_url = url(&format!("{scheme}://api.test/data"));
+            let request = Request::new("GET", original_url.as_str(), None, Vec::new())
+                .unwrap()
+                .with_initiator_url(&initiator_url)
+                .with_request_origin(moli_url::WebOrigin::from_url(&initiator_url))
+                .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+            let redirect_chain = vec![
+                redirect(&original_url, &cross_site_redirect_url),
+                redirect(&cross_site_redirect_url, &final_url),
+            ];
+            let request = request.with_redirect_chain(redirect_chain);
 
-        let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
+            let headers = outgoing_request_headers_for_url(&config, &request, &final_url, None);
 
-        assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
-        assert_eq!(
-            header_value(&headers, "sec-fetch-site"),
-            Some("cross-site".to_owned())
-        );
+            assert_eq!(header_value(&headers, "origin"), Some("null".to_owned()));
+            assert_eq!(
+                header_value(&headers, "sec-fetch-site"),
+                (scheme == "https").then(|| "cross-site".to_owned())
+            );
+            if scheme == "http" {
+                assert!(
+                    headers
+                        .iter()
+                        .all(|(name, _)| { !name.to_ascii_lowercase().starts_with("sec-fetch-") })
+                );
+            }
+        }
     }
 
     #[test]

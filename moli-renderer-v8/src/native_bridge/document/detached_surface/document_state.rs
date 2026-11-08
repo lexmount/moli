@@ -188,14 +188,9 @@ pub(in crate::native_bridge) fn bridge_detached_document_url_callback<'a>(
 pub(in crate::native_bridge) fn bridge_detached_document_uri_callback<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok(document) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        rv.set_empty_string();
-        return;
-    };
-    let value = detached_document_state_string(scope, document, "documentURI", "about:blank");
-    set_string_return_value(scope, &mut rv, &value);
+    bridge_detached_document_url_callback(scope, args, rv);
 }
 
 pub(in crate::native_bridge) fn bridge_detached_document_base_uri_callback<'a>(

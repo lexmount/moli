@@ -462,8 +462,9 @@ async fn websocket_stream_send_completion_body_defers_write_reactions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch() {
+async fn websocket_stream_close_owns_rejected_native_admission() {
     run_page_vm_async_test(async move {
+        for late_handler in [false, true] {
         let (url, server) = spawn_close_after_goodbye_websocket_server().await;
         let url = serde_json::to_string(&url).unwrap();
         let page_vm = test_page_vm();
@@ -472,13 +473,24 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
             let mut page_vm = page_vm;
             page_vm.vm_mut().eval(&format!(r#"
                 globalThis.__closeEvents = [];
+                globalThis.__lateWriteHandler = {late_handler};
+                globalThis.__noteInterruptedWrite = error => {{
+                    globalThis.__interruptedWrite = error;
+                    __closeEvents.push(`write:${{error.name}}:${{error instanceof DOMException}}`);
+                }};
+                addEventListener('unhandledrejection', event => {{
+                    __closeEvents.push(`unhandled:${{event.reason?.name}}`);
+                }});
                 globalThis.__closeStream = new WebSocketStream({url});
                 __closeStream.opened.then(opened => {{
                     globalThis.__closeWriter = opened.writable.getWriter();
                 }});
                 __closeStream.closed.then(
                     () => __closeEvents.push('closed-ok'),
-                    error => __closeEvents.push(`closed:${{error.constructor === WebSocketError}}:${{error.closeCode}}:${{error.reason}}`)
+                    error => {{
+                        __closeEvents.push(`closed:${{error.constructor === WebSocketError}}:${{error.closeCode}}:${{error.reason}}`);
+                        if (__lateWriteHandler) __interruptedWritePromise.catch(__noteInterruptedWrite);
+                    }}
                 );
                 "queued"
             "#))?;
@@ -492,10 +504,8 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
                 .borrow().websocket_connection_for_test(socket_id).unwrap();
             page_vm.vm_mut().eval(r#"
                 __closeWriter.write('Goodbye').then(() => __closeEvents.push('goodbye'));
-                __closeWriter.write('queued').catch(error => {
-                    globalThis.__interruptedWrite = error;
-                    __closeEvents.push(`write:${error.name}:${error instanceof DOMException}`);
-                });
+                globalThis.__interruptedWritePromise = __closeWriter.write('queued');
+                if (!__lateWriteHandler) __interruptedWritePromise.catch(__noteInterruptedWrite);
                 "queued"
             "#)?;
             // Claim the first send completion to free ingress capacity, but let
@@ -513,8 +523,16 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
             }).await?;
             page_vm.run_claimed_selected_page_task_for_test(sent, &loader).await?;
             assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
-                "goodbye|write:InvalidStateError:true",
-                "the queued write must fail before the Close task is dispatched");
+                "goodbye",
+                "native admission failure must wait for the owner's terminal task");
+            page_vm.vm_mut().with_default_context_scope_for_test(|scope, _| {
+                let global = scope.get_current_context().global(scope);
+                let key = v8::String::new(scope, "__interruptedWritePromise").unwrap();
+                let value = global.get(scope, key.into()).unwrap();
+                let promise = v8::Local::<v8::Promise>::try_from(value).unwrap();
+                assert_eq!(promise.state(), v8::PromiseState::Pending);
+                Ok::<_, anyhow::Error>(())
+            })?;
             let closed = wait_for_websocket_candidate(
                 &mut page_vm, claim_ready_websocket_selected_task, "peer Close",
             ).await?;
@@ -524,9 +542,52 @@ async fn websocket_stream_close_remembers_write_rejected_before_close_dispatch()
                 __closeWriter.write('later').catch(error => __closeEvents.push(`later:${error === __interruptedWrite}`));
                 "checked"
             "#)?;
+            // On main, promise rejection reporting runs at the task's existing
+            // microtask checkpoint rather than through a separate Page task.
             assert_eq!(page_vm.vm_mut().eval("__closeEvents.join('|')")?,
-                "goodbye|write:InvalidStateError:true|closed:true:1000:goodbye|writer:true|later:true");
+                "goodbye|closed:true:1000:goodbye|write:InvalidStateError:true|writer:true|later:true");
             Ok::<_, anyhow::Error>(())
         }).await.expect("close after rejected queued write");
+        }
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_stream_write_after_native_retirement_rejects_without_a_close_task() {
+    run_page_vm_async_test(async move {
+        let (url, server) = spawn_close_after_goodbye_websocket_server().await;
+        let url = serde_json::to_string(&url).unwrap();
+        let page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            let mut page_vm = page_vm;
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.__retiredStream = new WebSocketStream({url});
+                __retiredStream.opened.then(opened => {{
+                    globalThis.__retiredWriter = opened.writable.getWriter();
+                }});
+                "queued"
+            "#))?;
+            let opened = wait_for_websocket_candidate(
+                &mut page_vm, claim_ready_websocket_selected_task, "retired stream open",
+            ).await?;
+            let socket_id = opened.websocket_owner().unwrap().socket_id();
+            let loader = page_vm.request_client.clone();
+            page_vm.run_claimed_selected_page_task_for_test(opened, &loader).await?;
+            assert!(page_vm.vm().context_host_weak_for_test().upgrade().unwrap()
+                .borrow_mut().retire_websocket(socket_id));
+            page_vm.vm_mut().eval(r#"
+                globalThis.__retiredWrite = 'pending';
+                __retiredWriter.write('orphaned').then(
+                    () => { __retiredWrite = 'fulfilled'; },
+                    error => { __retiredWrite = error.name; }
+                );
+                "queued"
+            "#)?;
+            assert_eq!(page_vm.vm_mut().eval("__retiredWrite")?, "InvalidStateError",
+                "retirement cancels native delivery, so an orphaned writer must not wait for Close");
+            Ok::<_, anyhow::Error>(())
+        }).await.expect("write after native connection retirement");
+        server.await.expect("retired stream server");
     }).await;
 }

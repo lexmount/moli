@@ -101,6 +101,14 @@ pub(in crate::native_bridge::document) fn generic_html_element_proxy<'s>(
         .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
     moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
+    // This factory publishes the canonical wrapper. Native aliases register
+    // their brand separately and do not replace this identity association.
+    set_private_value(
+        scope,
+        target,
+        crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+        proxy.into(),
+    );
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -118,6 +126,12 @@ pub(in crate::native_bridge::document) fn select_html_element_proxy<'s>(
     .ok()?;
     let proxy = v8::Proxy::new(scope, target, handler)?;
     moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
+    set_private_value(
+        scope,
+        target,
+        crate::dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
+        proxy.into(),
+    );
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -374,26 +388,13 @@ fn select_html_element_proxy_set_callback<'s>(
     );
 }
 
-pub(in crate::native_bridge::document) fn mirror_detached_private_slots<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    source: v8::Local<'s, v8::Object>,
-    target: v8::Local<'s, v8::Object>,
-) {
-    for slot in [
-        DETACHED_STATE_SLOT,
-        DETACHED_LIVE_DELEGATE_SLOT,
-        DETACHED_NATIVE_HANDLE_SLOT,
-    ] {
-        if let Some(value) = get_private_value(scope, source, slot) {
-            set_private_value(scope, target, slot, value);
-        }
-    }
-}
-
 pub(in crate::native_bridge::document) fn copy_detached_element_bridge_members<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
 ) {
+    let Some(target) = crate::native_bridge::node::node_backing_object(scope, target) else {
+        return;
+    };
     let Some(parent) = target.get_prototype(scope) else {
         return;
     };
@@ -453,7 +454,7 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     };
     let namespace_uri = normalize_namespace(namespace_uri);
     let html_like = document_kind == "html" && namespace_uri.as_deref() == Some(XHTML_NS);
-    let local_name = if html_like {
+    let local_name = if html_like && !split_qualified_name {
         local_name_raw.to_ascii_lowercase()
     } else {
         local_name_raw
@@ -632,32 +633,16 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     if html_like && local_name == "select" {
         install_detached_select_instance_properties(scope, object);
         if let Some(proxy) = select_html_element_proxy(scope, object) {
-            mirror_detached_private_slots(scope, object, proxy);
             if let Some((_, handle)) = native_handle {
-                define_detached_native_handle(scope, proxy, handle);
+                pair_detached_native_handle_with_wrapper(scope, proxy, handle);
             }
             object = proxy;
         }
     }
 
-    // HTMLTemplateElement spec: a template's `content` is a DocumentFragment
-    // owned by the template's *template contents owner document*, not by the
-    // surrounding document. The standard `HTMLTemplateElement.prototype.content`
-    // getter reads this native handle for both live and detached wrappers.
-    if html_like
-        && local_name == "template"
-        && let Some((runtime_ptr, template_handle)) = native_handle
-        && let Some(contents_owner) =
-            build_detached_document_object(scope, "plain", None, None, None)
-        && let Some(fragment) = build_detached_document_fragment_object(scope, contents_owner)
-        && let Some(fragment_handle) = detached_native_handle(scope, fragment)
-        && let Some(element) = unsafe { &mut *runtime_ptr }
-            .dom_host_mut()
-            .node_mut(template_handle)
-            .and_then(|node| node.data_mut().as_element_mut())
-    {
-        element.set_template_contents(Some(fragment_handle));
-    }
+    // Native allocation already establishes template contents and their inert
+    // owner document. Keep that fragment so its document kind and host survive;
+    // the standard content getter wraps the native handle.
 
     // Run custom-element upgrade only after the detached wrapper has its own
     // DOM surface installed. The HTML constructor returns this object from the

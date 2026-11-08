@@ -231,6 +231,13 @@ fn execute_source_text_on_current_stack_with_completion(
     {
         scope.set_continuation_preserved_embedder_data(value);
     }
+    if crate::resource_initiator::anchor(&mut scope).is_none() {
+        let data = crate::resource_initiator::classic_data(
+            &mut scope,
+            provenance.map(CompiledStringProvenance::source_url),
+        );
+        scope.set_continuation_preserved_embedder_data(data);
+    }
     let watchdog = V8ExecutionWatchdog::arm(
         V8ExecutionWatchdogKind::ScriptTurn,
         scope.thread_safe_handle(),
@@ -285,22 +292,6 @@ impl<T> PendingScriptTurn<T> {
         }
     }
 
-    pub(super) fn finish_with_style_drain(
-        self,
-        vm: &mut ScriptVm,
-        boundary: StyleInvalidationTurnExitBoundary,
-    ) -> T {
-        vm.finish_runtime_turn_with_style_drain(boundary, self.result)
-    }
-
-    pub(super) fn finish_with_child_record_sync_and_style_drain(
-        self,
-        vm: &mut ScriptVm,
-        boundary: StyleInvalidationTurnExitBoundary,
-    ) -> T {
-        vm.finish_runtime_turn_with_child_record_sync_and_style_drain(boundary, self.result)
-    }
-
     fn into_inner_for_enclosing_script_turn(self) -> T {
         self.result
     }
@@ -312,6 +303,32 @@ impl<T> PendingScriptTurn<T> {
     #[cfg(test)]
     pub(super) fn into_inner_for_test(self) -> T {
         self.result
+    }
+}
+
+impl<T, E: From<anyhow::Error>> PendingScriptTurn<std::result::Result<T, E>> {
+    pub(super) fn finish_with_style_drain(
+        self,
+        vm: &mut ScriptVm,
+        boundary: StyleInvalidationTurnExitBoundary,
+    ) -> std::result::Result<T, E> {
+        let publication = vm
+            .publish_prebootstrapped_isolated_window_contexts()
+            .map_err(E::from);
+        let result = self.result.and_then(|value| publication.map(|()| value));
+        vm.finish_runtime_turn_with_style_drain(boundary, result)
+    }
+
+    pub(super) fn finish_with_child_record_sync_and_style_drain(
+        self,
+        vm: &mut ScriptVm,
+        boundary: StyleInvalidationTurnExitBoundary,
+    ) -> std::result::Result<T, E> {
+        let publication = vm
+            .publish_prebootstrapped_isolated_window_contexts()
+            .map_err(E::from);
+        let result = self.result.and_then(|value| publication.map(|()| value));
+        vm.finish_runtime_turn_with_child_record_sync_and_style_drain(boundary, result)
     }
 }
 
@@ -394,8 +411,10 @@ impl ScriptVm {
         &mut self,
         job: MainFrameScriptJob<'_>,
     ) -> PendingScriptTurn<RawScriptExecutionResult<()>> {
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = match self.ensure_main_world() {
+            Ok(runtime) => runtime.context_ptr(),
+            Err(error) => return PendingScriptTurn::new(Err(error.into())),
+        };
         self.exec_in_context_ptr_without_turn_drain(
             context_ptr,
             job.source,
@@ -589,7 +608,7 @@ impl ScriptVm {
         )
     }
 
-    pub(super) fn perform_microtask_checkpoints(
+    pub(crate) fn perform_microtask_checkpoints(
         scope: &mut v8::PinScope<'_, '_>,
         script_url: Option<&Url>,
     ) -> Result<()> {
@@ -677,8 +696,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn eval(&mut self, source: &str) -> Result<String> {
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, false)
     }
 
@@ -687,10 +705,9 @@ impl ScriptVm {
         source: &str,
         base_url: &Url,
     ) -> Result<Option<String>> {
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let source = source.to_owned();
         let base_url = base_url.clone();
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
         let provenance = CompiledStringProvenance::at_url(base_url.clone());
         let pending = PendingScriptTurn::new(
             self.renderer_document_isolate
@@ -748,8 +765,7 @@ impl ScriptVm {
 
     #[cfg(test)]
     pub(crate) fn eval_with_child_record_sync(&mut self, source: &str) -> Result<String> {
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, true)
     }
 
@@ -800,8 +816,7 @@ impl ScriptVm {
         &mut self,
         source: &str,
     ) -> Result<String> {
-        let context_ptr: *const v8::Global<v8::Context> =
-            &self.page_default_runtime.context as *const _;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.eval_string_in_context_ptr_without_turn_drain(
             context_ptr,
             source,

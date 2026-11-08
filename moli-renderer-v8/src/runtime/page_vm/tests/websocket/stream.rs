@@ -1,5 +1,102 @@
 use super::*;
 
+const NATIVE_PROMISE_PROBE: &str =
+    include_str!("../../../../script_vm/tests/fixtures/websocket-stream-native-promises.js");
+
+#[tokio::test]
+async fn websocket_stream_constructor_uses_native_promises_in_each_realm() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+        let result = local_executor
+            .run(async move {
+                page_vm.vm_mut().eval(NATIVE_PROMISE_PROBE)?;
+                page_vm.vm_mut().eval(
+                    r#"
+                    globalThis.__wsStreamDone = false;
+                    (async () => {
+                        const iframe = document.createElement('iframe');
+                        document.body.appendChild(iframe);
+                        const results = [];
+                        for (const realm of [window, iframe.contentWindow]) {
+                            for (const mode of ['getter', 'subclass', 'undefined']) {
+                                results.push(await probeWebSocketStreamNativePromises(realm, mode));
+                            }
+                        }
+                        return results;
+                    })().then(
+                        results => { globalThis.__wsStreamPromiseResult = results; },
+                        error => { globalThis.__wsStreamPromiseResult = String(error); }
+                    ).finally(() => { globalThis.__wsStreamDone = true; });
+                    "#,
+                )?;
+                drive_websocket_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__wsStreamDone === true)",
+                    "aborted WebSocketStream native promises should settle in each realm",
+                )
+                .await?;
+                page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(globalThis.__wsStreamPromiseResult)")
+            })
+            .await
+            .expect("native promise constructor probe should run on the owner lane");
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&result)
+            .expect("each realm should finish all Promise replacement cases");
+        assert_eq!(rows.len(), 6);
+        for row in rows {
+            assert_eq!(
+                row,
+                serde_json::json!({"checks": 8, "authorCalls": 0, "closedThenCalls": 0})
+            );
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_stream_write_and_close_ignore_author_promise_properties() {
+    run_page_vm_async_test(async move {
+        for mode in ["getter", "subclass", "undefined"] {
+            let (url, server) = spawn_text_echo_websocket_server().await;
+            let url_literal = serde_json::to_string(&url).expect("serialize websocket url");
+            let mode_literal = serde_json::to_string(mode).expect("serialize replacement mode");
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            let result = local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(NATIVE_PROMISE_PROBE)?;
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+                        globalThis.__wsStreamDone = false;
+                        probeWebSocketStreamNativePromises(window, {mode_literal}, {url_literal}).then(
+                            result => {{ globalThis.__wsStreamPromiseResult = result; }},
+                            error => {{ globalThis.__wsStreamPromiseResult = String(error); }}
+                        ).finally(() => {{ globalThis.__wsStreamDone = true; }});
+                        "#
+                    ))?;
+                    drive_websocket_until_done(
+                        &mut page_vm,
+                        "String(globalThis.__wsStreamDone === true)",
+                        "native WebSocketStream write and close should settle",
+                    )
+                    .await?;
+                    page_vm.vm_mut().eval("JSON.stringify(globalThis.__wsStreamPromiseResult)")
+                })
+                .await
+                .expect("native promise transport probe should run on the owner lane");
+            server.await.expect("native promise echo server should finish");
+            assert_eq!(
+                result,
+                r#"{"checks":10,"authorCalls":0,"closedThenCalls":0}"#,
+                "Promise replacement mode: {mode}",
+            );
+        }
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn websocket_stream_opened_readable_writable_round_trip_text() {
     run_page_vm_async_test(async move {

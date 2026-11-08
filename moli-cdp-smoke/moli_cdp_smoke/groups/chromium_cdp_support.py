@@ -1,8 +1,12 @@
 from __future__ import annotations
+import asyncio
 from typing import Any
 from urllib.parse import urlsplit
 from . import SmokeState
-from ..assertions import SmokeError, wait_until
+from ..assertions import SmokeError
+
+
+_NAVIGATION_TIMEOUT_SECONDS = 10.0
 
 
 def _alternate_loopback_origin(url: str) -> str:
@@ -18,31 +22,53 @@ async def _performance_metrics(cdp: Any) -> dict[str, float]:
     return {metric.get("name"): metric.get("value") for metric in metrics if metric.get("name")}
 
 async def _navigate_with_cdp_until_dom_ready(state: SmokeState, url: str) -> None:
-    result = await state.cdp.send("Page.navigate", {"url": url})
-    if result.get("errorText"):
-        raise SmokeError(f"Page.navigate failed for {url}: {result}")
+    ready: set[tuple[str, Any, Any]] = set()
+    changed = asyncio.Event()
 
-    async def is_ready() -> bool:
-        ready_state = await state.cdp.send(
-            "Runtime.evaluate",
-            {
-                "expression": "document.readyState",
-                "returnByValue": True,
-            },
-        )
-        location = await state.cdp.send(
-            "Runtime.evaluate",
-            {
-                "expression": "location.href",
-                "returnByValue": True,
-            },
-        )
-        return (
-            location.get("result", {}).get("value") == url
-            and ready_state.get("result", {}).get("value") in ["interactive", "complete"]
-        )
+    def lifecycle(params: dict[str, Any]) -> None:
+        if params.get("name") == "DOMContentLoaded":
+            ready.add(("lifecycle", params.get("frameId"), params.get("loaderId")))
+            changed.set()
 
-    await wait_until(is_ready, f"CDP navigation DOM ready for {url}")
+    def within_document(params: dict[str, Any]) -> None:
+        ready.add(("within-document", params.get("frameId"), params.get("url")))
+        changed.set()
+
+    state.cdp.on("Page.lifecycleEvent", lifecycle)
+    state.cdp.on("Page.navigatedWithinDocument", within_document)
+    phase = "enabling Page lifecycle events"
+    try:
+        async with asyncio.timeout(_NAVIGATION_TIMEOUT_SECONDS):
+            await state.cdp.send("Page.enable")
+            await state.cdp.send("Page.setLifecycleEventsEnabled", {"enabled": True})
+            phase = "Page.navigate"
+            result = await state.cdp.send("Page.navigate", {"url": url})
+            if result.get("errorText"):
+                raise SmokeError(f"Page.navigate failed for {url}: {result}")
+            frame, loader = result["frameId"], result.get("loaderId")
+            phase = f"DOM ready for frame={frame}, loader={loader}"
+
+            # A lifecycle event can precede the navigate reply. Keep those
+            # events, but reject old loaders and child-frame notifications.
+            expected = (("lifecycle", frame, loader) if loader is not None
+                        else ("within-document", frame, url))
+            while expected not in ready:
+                changed.clear()
+                await changed.wait()
+            phase = "Runtime.evaluate after DOM ready"
+            snapshot = await state.cdp.send("Runtime.evaluate", {
+                "expression": "({url: location.href, readyState: document.readyState})",
+                "returnByValue": True,
+            })
+            value = snapshot.get("result", {}).get("value")
+            if (not isinstance(value, dict) or value.get("url") != url
+                    or value.get("readyState") not in ("interactive", "complete")):
+                raise SmokeError(f"Unexpected document after CDP navigation to {url}: {snapshot}")
+    except TimeoutError as error:
+        raise SmokeError(f"CDP navigation timed out during {phase}: {url}") from error
+    finally:
+        state.cdp.remove_listener("Page.lifecycleEvent", lifecycle)
+        state.cdp.remove_listener("Page.navigatedWithinDocument", within_document)
 
 async def _send_cdp_expect_optional_error(cdp: Any, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
     try:

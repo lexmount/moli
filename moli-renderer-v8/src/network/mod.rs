@@ -1,8 +1,7 @@
 pub use crate::{
     SharedWebStorageStore, WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord,
     WebStorageMutationSubscription, WebStorageString, deep_clone_shared_web_storage_store,
-    new_shared_json_web_storage_store, new_shared_web_storage_store,
-    web_storage_partitioned_area_key,
+    new_shared_web_storage_store, web_storage_partitioned_area_key,
 };
 use moli_fetch::RequestResourceType;
 
@@ -20,8 +19,8 @@ mod task_runner;
 pub use backend::{
     BrowserParkableImageDiagnostics, BrowserResourceDiskPoolDiagnostics, BrowserResourceRuntime,
     BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
-    BrowserResourceRuntimeOwnerRegistrar, BrowserResourceRuntimeOwnerRegistration,
-    SharedMemoryResourceCacheDiagnostics,
+    BrowserResourceRuntimeOwnerError, BrowserResourceRuntimeOwnerRegistrar,
+    BrowserResourceRuntimeOwnerRegistration, SharedMemoryResourceCacheDiagnostics,
 };
 pub(crate) use backend::{BrowserResourceRuntimeBinding, BrowserResourceRuntimeOwnerRoot};
 pub use devtools_resource_load::{
@@ -48,7 +47,8 @@ pub(crate) fn request_resource_type_for_subresource(
         SubresourceResourceType::CspReport => Some(RequestResourceType::CspReport),
         SubresourceResourceType::Dictionary => Some(RequestResourceType::Dictionary),
         SubresourceResourceType::Manifest => Some(RequestResourceType::Manifest),
-        SubresourceResourceType::Fetch
+        SubresourceResourceType::Document
+        | SubresourceResourceType::Fetch
         | SubresourceResourceType::EventSource
         | SubresourceResourceType::Xhr
         | SubresourceResourceType::WebSocket => None,

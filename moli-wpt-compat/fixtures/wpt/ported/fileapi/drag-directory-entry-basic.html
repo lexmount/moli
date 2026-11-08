@@ -7,6 +7,7 @@
 <script>
 const dropzone = document.getElementById("dropzone");
 let dropped = null;
+let captured = null;
 let resolveDrop = null;
 
 const dropPromise = new Promise(function (resolve) {
@@ -20,22 +21,37 @@ dropzone.addEventListener("dragover", function (event) {
 dropzone.addEventListener("drop", function (event) {
   event.preventDefault();
   dropped = event.dataTransfer;
+  const item = dropped.items[0];
+  captured = {
+    item,
+    itemCount: dropped.items.length,
+    types: Array.from(dropped.types),
+    fileCount: dropped.files.length,
+    kind: item.kind,
+    type: item.type,
+    file: item.getAsFile(),
+    entry: item.webkitGetAsEntry(),
+    repeatedEntry: item.webkitGetAsEntry(),
+  };
   resolveDrop();
 });
 
 promise_test(async function () {
   await dropPromise;
 
-  assert_equals(dropped.items.length, 1, "directory payload should expose one item");
-  assert_array_equals(Array.from(dropped.types), ["Files"], "directory payload should expose Files type");
-  assert_equals(dropped.files.length, 0, "directory payload should not expose a File object");
+  assert_equals(captured.itemCount, 1, "directory payload should expose one item during drop");
+  assert_array_equals(captured.types, ["Files"], "directory payload should expose Files type");
+  assert_equals(captured.fileCount, 0, "directory payload should not expose a File object");
 
-  const item = dropped.items[0];
-  assert_equals(item.kind, "file", "directory item still uses file kind");
-  assert_equals(item.type, "", "directory item has no MIME type");
-  assert_equals(item.getAsFile(), null, "directory item does not expose getAsFile");
+  assert_equals(captured.kind, "file", "directory item still uses file kind");
+  assert_equals(captured.type, "", "directory item has no MIME type");
+  assert_equals(captured.file, null, "directory item does not expose getAsFile");
+  assert_equals(dropped.items.length, 0, "retained data store is disabled after drop");
+  assert_array_equals(Array.from(dropped.types), [], "disabled data store exposes no types");
+  assert_equals(captured.item.kind, "", "retained directory item is disabled after drop");
+  assert_equals(captured.item.webkitGetAsEntry(), null, "disabled item cannot expose its entry again");
 
-  const entry = item.webkitGetAsEntry();
+  const entry = captured.entry;
   assert_true(entry instanceof FileSystemEntry, "directory entry inherits FileSystemEntry");
   assert_true(entry instanceof FileSystemDirectoryEntry, "directory item returns a directory entry");
   assert_false(entry instanceof FileSystemFileEntry, "directory entry is not a file entry");
@@ -43,7 +59,7 @@ promise_test(async function () {
   assert_true(entry.isDirectory, "directory entry reports isDirectory");
   assert_equals(entry.name, "photos", "directory entry name");
   assert_equals(entry.fullPath, "/photos", "directory entry fullPath");
-  assert_equals(entry, item.webkitGetAsEntry(), "webkitGetAsEntry returns a stable entry wrapper");
+  assert_equals(entry, captured.repeatedEntry, "webkitGetAsEntry returns a stable entry wrapper during drop");
 
   const reader = entry.createReader();
   assert_equals(typeof reader.readEntries, "function", "directory reader exposes readEntries");

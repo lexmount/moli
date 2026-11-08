@@ -75,6 +75,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "geolocation",
     "mediaCapabilities",
     "credentials",
+    "mediaSession",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -193,6 +194,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     geolocation: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 32))]
     media_capabilities: (),
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34), receiver = web_api_interfaces::Navigator::is_instance)]
+    media_session: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback, receiver = web_api_interfaces::Navigator::is_instance)]
     cookie_enabled: (),
 }
@@ -290,7 +293,6 @@ struct PermissionStatusPrototypeDeclaration {
 #[derive(Default, WebApiObject)]
 #[webapi(
     interface = web_api_interfaces::NetworkInformation,
-    prototype = "Object",
     receiver
 )]
 struct NavigatorConnectionDeclaration {
@@ -312,24 +314,11 @@ struct NavigatorConnectionDeclaration {
     #[webapi(accessor_property, getter = navigator_connection_save_data_getter_callback, enumerable)]
     save_data: (),
 
-    #[webapi(data_property, enumerable, init = "null")]
+    #[webapi(accessor_property, enumerable, getter = simple_event_target_handler_getter_callback, setter = simple_event_target_handler_setter_callback, data = v8str(scope, "onchange"), setter_data = v8str(scope, "onchange"))]
     onchange: (),
 
-    #[webapi(
-        method,
-        enumerable,
-        length = 2,
-        callback = navigator_connection_event_target_noop_callback
-    )]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        length = 2,
-        callback = navigator_connection_event_target_noop_callback
-    )]
-    remove_event_listener: (),
+    #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
+    event_listeners: (),
 }
 
 #[derive(WebApiObject)]
@@ -401,7 +390,7 @@ struct NavigatorUaDataPrototypeMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::ServiceWorkerContainer, prototype = "Object")]
+#[webapi(interface = web_api_interfaces::ServiceWorkerContainer)]
 struct ServiceWorkerContainerDeclaration {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
@@ -450,15 +439,6 @@ struct ServiceWorkerContainerDeclaration {
         length = 0
     )]
     get_registrations: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_remove_event_listener_callback)]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 
     #[webapi(
         accessor_property,
@@ -807,13 +787,6 @@ fn navigator_connection_save_data_getter_callback<'s>(
     );
 }
 
-fn navigator_connection_event_target_noop_callback<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-}
-
 fn navigator_get_autoplay_policy_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -874,6 +847,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     super::gamepad::install(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::credentials::install(scope, template, interface_name);
+    super::media_session::install(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MediaDevices" | "MediaDeviceInfo" | "InputDeviceInfo" => {
@@ -1085,6 +1059,9 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
         }
         NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
         NavigatorSubobject::Credentials => super::credentials::build_container(scope)?.into(),
+        NavigatorSubobject::MediaSession => {
+            super::media_session::build(scope, backing, owner_child, owner_popup)?.into()
+        }
         NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()

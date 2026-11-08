@@ -20,6 +20,56 @@ pub enum StoredCookiePartitionKey {
     },
 }
 
+/// Partition scope for cookie queries and deletion, independent of the protocol.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum StoredCookiePartitionFilter {
+    #[default]
+    All,
+    Unpartitioned,
+    Partition(StoredCookiePartitionKey),
+    /// Match each provided field of a serialized site identity, without URL parsing.
+    /// Unpartitioned and opaque cookies have no serialized site identity.
+    Serialized {
+        top_level_site: Option<String>,
+        has_cross_site_ancestor: Option<bool>,
+    },
+}
+
+impl StoredCookiePartitionFilter {
+    /// Match a complete stored identity, including keys that cannot be serialized.
+    pub fn matches(&self, key: Option<&StoredCookiePartitionKey>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Unpartitioned => key.is_none(),
+            Self::Partition(wanted) => key == Some(wanted),
+            Self::Serialized {
+                top_level_site,
+                has_cross_site_ancestor,
+            } => {
+                let Some(StoredCookiePartitionKey::Site {
+                    top_level_site: actual_site,
+                    has_cross_site_ancestor: actual_ancestor,
+                }) = key
+                else {
+                    return false;
+                };
+                top_level_site
+                    .as_ref()
+                    .is_none_or(|wanted| wanted == actual_site)
+                    && has_cross_site_ancestor.is_none_or(|wanted| wanted == *actual_ancestor)
+            }
+        }
+    }
+}
+
+/// Domain representation used by a cookie deletion filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoredCookieDomainMatch {
+    Canonical,
+    /// Match the serialized domain, including a domain cookie's leading dot.
+    Serialized,
+}
+
 impl StoredCookiePartitionKey {
     pub fn site(top_level_site: String, has_cross_site_ancestor: bool) -> Self {
         Self::Site {
@@ -150,11 +200,22 @@ pub struct StoredCookie {
     pub source_port: i32,
     /// Stable creation order projected from the canonical core cookie.
     pub creation_index: u64,
+    /// Original creation time, retained across replacement and profile storage.
+    pub creation_time: Option<OffsetDateTime>,
     /// Stable last-access order projected from the canonical core cookie.
     pub last_access_index: u64,
 }
 
 impl StoredCookie {
+    /// Effective request mode, including the limited default-cookie POST allowance.
+    pub fn effective_same_site(&self) -> super::StoredCookieEffectiveSameSite {
+        super::StoredCookieEffectiveSameSite::for_cookie(
+            self.same_site,
+            self.creation_time,
+            OffsetDateTime::now_utc(),
+        )
+    }
+
     /// Returns the eviction priority, defaulting omitted `Priority` to `Medium`.
     pub fn effective_priority(&self) -> CookiePriority {
         self.priority.unwrap_or(CookiePriority::Medium)
@@ -282,6 +343,7 @@ mod tests {
             source_scheme: StoredCookieSourceScheme::Secure,
             source_port: -1,
             creation_index: 0,
+            creation_time: None,
             last_access_index: 0,
         }
     }

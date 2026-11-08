@@ -1,5 +1,310 @@
 use super::*;
 
+fn assert_mutation_record_attribute_checks(json: &str, total: usize) {
+    let facts: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(facts["complete"], true);
+    assert_eq!(facts["total"], total);
+    let checks = facts["checks"].as_array().unwrap();
+    let failures: Vec<_> = checks.iter().filter(|row| row["passed"] != true).collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(checks.len(), total);
+    let names: std::collections::BTreeSet<_> = checks
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), total);
+}
+
+fn run_mutation_record_attribute_checks(group: &str, total: usize) {
+    let mut vm = new_storage_html_test_vm("https://mutation-record-attributes.test/");
+    vm.eval(&format!(
+        "document.body.innerHTML='<iframe id=child></iframe>'; \
+         globalThis.__mutationRecordGroup={group:?};"
+    ))
+    .unwrap();
+    vm.eval(include_str!(
+        "../../../tests/fixtures/mutation-record-attributes.js"
+    ))
+    .unwrap();
+    assert_mutation_record_attribute_checks(
+        &vm.eval("JSON.stringify(__uiEventResults)").unwrap(),
+        total,
+    );
+}
+
+#[test]
+fn mutation_record_attributes_are_readonly_prototype_snapshots() {
+    run_mutation_record_attribute_checks("snapshots", 324);
+}
+
+#[test]
+fn mutation_record_getters_validate_native_receivers_before_public_lookup() {
+    run_mutation_record_attribute_checks("brands", 228);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mutation_record_delivery_uses_callback_realm_and_retains_snapshot_values() {
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://mutation-record-delivery.test/",
+        &loader,
+    );
+    vm.exec(
+        "document.body.innerHTML='<iframe id=child></iframe>'; \
+         globalThis.__mutationRecordGroup='delivery';",
+        None,
+    )
+    .unwrap();
+    vm.exec(
+        include_str!("../../../tests/fixtures/mutation-record-attributes.js"),
+        None,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__uiEventResults?.complete === true)",
+        "true",
+        "MutationRecord callback conversion and retained snapshots",
+    )
+    .await;
+    assert_mutation_record_attribute_checks(
+        &vm.eval("JSON.stringify(__uiEventResults)").unwrap(),
+        12,
+    );
+}
+
+#[test]
+fn mutation_record_getters_read_registered_native_proxy_payloads() {
+    fn register_proxy<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: v8::FunctionCallbackArguments<'s>,
+        mut rv: v8::ReturnValue<'s>,
+    ) {
+        let target = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        assert!(crate::web_api_interfaces::MutationRecord::is_instance(
+            scope,
+            proxy.into()
+        ));
+        rv.set(proxy.into());
+    }
+    let mut vm = new_storage_html_test_vm("https://mutation-record-native-proxy.test/");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let function = v8::Function::new(scope, register_proxy).unwrap();
+        let key = crate::util::v8str(scope, "registerNativeRecordProxy");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), function.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        document.body.innerHTML='<iframe id=child></iframe>';
+        const child=document.getElementById('child').contentWindow;
+        const target=document.createElement('item');
+        target.setAttribute('keep','before\ud800');
+        const observer=new MutationObserver(()=>{});
+        observer.observe(target,{attributeOldValue:true});
+        target.setAttribute('keep','after');
+        const record=observer.takeRecords()[0]; observer.disconnect();
+        const proxy=registerNativeRecordProxy(record);
+        const revoked=Proxy.revocable(proxy,{}); revoked.revoke();
+        let traps=0;
+        const author=new Proxy(proxy,{get(){traps++;throw 42;},getPrototypeOf(){traps++;throw 43;}});
+        for(const callee of [globalThis,child]) {
+            for(const key of ['type','target','addedNodes','removedNodes','previousSibling',
+                'nextSibling','attributeName','attributeNamespace','oldValue']) {
+                const get=Object.getOwnPropertyDescriptor(callee.MutationRecord.prototype,key).get;
+                if(get.call(proxy)!==record[key])throw Error('native payload '+key);
+                for(const invalid of [author,revoked.proxy,Object.create(proxy)]) {
+                    let error;try{get.call(invalid);}catch(caught){error=caught;}
+                    if(!(error instanceof callee.TypeError))throw Error('author receiver '+key);
+                }
+            }
+        }
+        return traps===0;
+    })()"#).unwrap(), "true");
+}
+
+fn run_mutation_observer_init_checks(group: &str, total: usize) {
+    let mut vm = new_storage_html_test_vm("https://mutation-observer-init.test/");
+    vm.eval(&format!(
+        "document.body.innerHTML='<iframe id=child></iframe>'; \
+         globalThis.__mutationObserverGroup={group:?};"
+    ))
+    .unwrap();
+    vm.eval(include_str!(
+        "../../../tests/fixtures/mutation-observer-init.js"
+    ))
+    .unwrap();
+    assert_eq!(vm.eval("__uiEventResults.complete").unwrap(), "true");
+    assert_eq!(
+        vm.eval("JSON.stringify(__uiEventResults.checks.filter(row=>!row.passed))")
+            .unwrap(),
+        "[]"
+    );
+    assert_eq!(
+        vm.eval("__uiEventResults.total").unwrap(),
+        total.to_string()
+    );
+    let names: Vec<String> = serde_json::from_str(
+        &vm.eval("JSON.stringify(__uiEventResults.checks.map(row=>row.name))")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(names.len(), total);
+    assert_eq!(
+        names
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        total
+    );
+}
+
+#[test]
+fn mutation_observer_init_converts_iterables_and_preserves_dictionary_order_and_registration() {
+    run_mutation_observer_init_checks("conversion", 128);
+}
+
+#[test]
+fn mutation_observer_filters_match_exact_names_namespaces_and_utf16_identity() {
+    run_mutation_observer_init_checks("filters", 52);
+}
+
+#[test]
+fn same_value_meta_set_attribute_records_preserve_xml_case_and_namespace() {
+    let mut vm = new_storage_html_test_vm("https://meta-attribute-identity.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+        const xml = document.implementation.createDocument(
+            'http://www.w3.org/1999/xhtml', 'meta', null);
+        const cases = [
+            [xml.documentElement, 'CONTENT', null, 'CONTENT'],
+            [xml.documentElement, 'HTTP-EQUIV', null, 'HTTP-EQUIV'],
+            [document.createElement('meta'), 'CONTENT', null, 'content'],
+            [document.createElement('meta'), 'content', 'urn:test', 'content'],
+            [document.createElement('meta'), 'p:content', 'urn:test', 'content'],
+        ];
+        for (const [meta, setter, namespace, local] of cases) {
+            if (namespace === null) meta.setAttribute(setter, 'x');
+            else meta.setAttributeNS(namespace, setter, 'x');
+            const all = new MutationObserver(() => {});
+            const filtered = new MutationObserver(() => {});
+            all.observe(meta, {attributes: true, attributeOldValue: true});
+            filtered.observe(meta, {attributes: true, attributeFilter: [local]});
+            meta.setAttribute(setter, 'x');
+            const records = all.takeRecords();
+            if (records.length !== 1 || records[0].attributeName !== local ||
+                records[0].attributeNamespace !== namespace || records[0].oldValue !== 'x')
+                throw Error('wrong attribute identity: ' + setter);
+            const expected = namespace === null ? 1 : 0;
+            if (filtered.takeRecords().length !== expected)
+                throw Error('wrong filter result: ' + setter);
+            all.disconnect(); filtered.disconnect();
+        }
+        return true;
+    })()"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
+
+#[test]
+fn same_value_namespace_and_dataset_sets_deliver_one_attribute_record() {
+    let mut vm = new_storage_html_test_vm("https://same-value-attribute-records.test/");
+    assert_eq!(vm.eval(r#"(() => {
+        const cases = [
+            [null, 'data-x', element => element.setAttributeNS(null, 'data-x', 'a')],
+            [null, 'data-x', element => element.setAttributeNS('', 'data-x', 'a')],
+            [null, 'data-x', element => { element.dataset.x = 'a'; }],
+            [null, 'data-x', element => element.setAttribute('DATA-X', 'a')],
+            ['urn:test', 'p:x', element => element.setAttributeNS('urn:test', 'p:x', 'a')],
+            ['urn:test', 'p:x', element => element.setAttribute('p:x', 'a')],
+        ];
+        for (const tag of ['div', 'meta']) for (const [namespace, qualified, set] of cases) {
+            const element = document.createElement(tag);
+            element.setAttributeNS(namespace, qualified, 'a');
+            const local = qualified.split(':').pop();
+            const observer = new MutationObserver(() => {});
+            const filtered = new MutationObserver(() => {});
+            observer.observe(element, {attributes: true, attributeOldValue: true});
+            filtered.observe(element, {attributes: true, attributeFilter: [local]});
+            for (let i = 0; i < 2; i++) {
+                set(element);
+                const records = observer.takeRecords();
+                if (records.length !== 1 || records[0].target !== element ||
+                    records[0].attributeName !== local || records[0].attributeNamespace !== namespace ||
+                    records[0].oldValue !== 'a') throw Error(tag + ':' + qualified + ':same-value record');
+                if (filtered.takeRecords().length !== (namespace === null ? 1 : 0))
+                    throw Error('attributeFilter: ' + qualified);
+            }
+            observer.disconnect(); filtered.disconnect();
+        }
+        return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn mutation_observer_observe_accepts_registered_native_proxy_targets_and_receivers() {
+    fn register_proxy<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: v8::FunctionCallbackArguments<'s>,
+        mut rv: v8::ReturnValue<'s>,
+    ) {
+        let target = v8::Local::<v8::Object>::try_from(args.get(0)).unwrap();
+        let handler = crate::util::new_null_prototype_object(scope);
+        let proxy = v8::Proxy::new(scope, target, handler).unwrap();
+        moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
+        rv.set(proxy.into());
+    }
+    let mut vm = new_storage_html_test_vm("https://mutation-observer-native-proxy.test/");
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        let global = scope.get_current_context().global(scope);
+        let function = v8::Function::new(scope, register_proxy).unwrap();
+        let key = crate::util::v8str(scope, "registerNativeProxy");
+        assert_eq!(
+            global.create_data_property(scope, key.into(), function.into()),
+            Some(true)
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(vm.eval(r#"(() => {
+        const observer = new MutationObserver(() => {});
+        const target = document.createElement('div');
+        const observerProxy = registerNativeProxy(observer);
+        const targetProxy = registerNativeProxy(target);
+        MutationObserver.prototype.observe.call(observerProxy, targetProxy, {
+            attributeFilter: new Set(['keep'])
+        });
+        target.setAttribute('drop', 'x'); target.setAttribute('keep', 'y');
+        const records = MutationObserver.prototype.takeRecords.call(observerProxy);
+        if (records.length !== 1 || records[0].target !== target || records[0].attributeName !== 'keep')
+            throw Error('registered native identity');
+        let gets = 0, traps = 0;
+        for (const [receiver, node] of [
+            [new Proxy(observerProxy, {get(){traps++;}}), targetProxy],
+            [observerProxy, new Proxy(targetProxy, {get(){traps++;}})]
+        ]) {
+            let error;
+            try {MutationObserver.prototype.observe.call(receiver, node, {
+                get childList(){gets++;return true;}
+            });} catch(caught) {error = caught;}
+            if (!(error instanceof TypeError)) throw Error('author Proxy was accepted');
+        }
+        MutationObserver.prototype.disconnect.call(observerProxy);
+        return gets === 0 && traps === 0;
+    })()"#).unwrap(), "true");
+}
+
 fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_test_vm(url);
     vm.eval(
@@ -678,4 +983,18 @@ async fn element_creation_options_convert_before_dom_validation_in_each_document
     );
     assert_eq!(vm.eval("__uiEventResults.includePopup").unwrap(), "false");
     assert_eq!(vm.eval("__uiEventResults.total").unwrap(), "3106");
+}
+
+#[test]
+fn xml_serializer_ordinary_xmlns_preserves_native_attribute_namespace_identity() {
+    let mut vm = new_storage_test_vm("https://ordinary-xmlns.test/");
+    let result = vm.eval(include_str!("ordinary_xmlns_identity.js")).unwrap();
+    assert_eq!(
+        result,
+        "true",
+        "{}",
+        vm.eval("JSON.stringify(__ordinaryXmlnsChecks.filter(row => !row.passed))")
+            .unwrap(),
+    );
+    assert_eq!(vm.eval("__ordinaryXmlnsChecks.length").unwrap(), "324");
 }

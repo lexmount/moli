@@ -12,7 +12,10 @@ pub(crate) fn simple_event_target_handler_getter_callback<'s>(
     let Some((target, property)) = handler_callback_data(scope, &args) else {
         return;
     };
-    rv.set(get_private_value(scope, target, &property).unwrap_or_else(|| v8::null(scope).into()));
+    rv.set(
+        get_private_value(scope, target.identity.handler_owner, &property)
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(crate) fn simple_event_target_handler_setter_callback<'s>(
@@ -23,20 +26,21 @@ pub(crate) fn simple_event_target_handler_setter_callback<'s>(
     let Some((target, property)) = handler_callback_data(scope, &args) else {
         return;
     };
-    simple_object_event_set_handler(
+    simple_object_event_set_handler_in_registry(
         scope,
-        target,
+        target.identity.handler_owner,
         property.strip_prefix("on").expect("event handler property"),
         &property,
         args.get(0),
+        target.registry,
     );
 }
 
 fn handler_callback_data<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Option<(v8::Local<'s, v8::Object>, String)> {
-    let Some(target) = simple_event_target_receiver(scope, args.this()) else {
+) -> Option<(ResolvedSimpleEventTarget<'s>, String)> {
+    let Some(target) = resolve_simple_event_target(scope, args.this()) else {
         throw_type_error(scope, "Illegal invocation");
         return None;
     };

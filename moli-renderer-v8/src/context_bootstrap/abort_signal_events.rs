@@ -1,6 +1,6 @@
 use super::{
     construct_original_event, dispatch_simple_event_target_event, initialize_simple_event_target,
-    simple_object_event_set_handler,
+    shared_event_targets::resolve_event_target, simple_object_event_set_handler,
 };
 use crate::util::{get_private_value, set_private_value};
 
@@ -33,8 +33,11 @@ pub(crate) fn onabort_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(signal) = resolve_event_target(scope, args.this()) else {
+        return;
+    };
     rv.set(
-        get_private_value(scope, args.this(), ONABORT_SLOT)
+        get_private_value(scope, signal.handler_owner, ONABORT_SLOT)
             .unwrap_or_else(|| v8::null(scope).into()),
     );
 }
@@ -44,6 +47,14 @@ pub(crate) fn onabort_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let signal = args.this();
-    simple_object_event_set_handler(scope, signal, "abort", ONABORT_SLOT, args.get(0));
+    let Some(signal) = resolve_event_target(scope, args.this()) else {
+        return;
+    };
+    simple_object_event_set_handler(
+        scope,
+        signal.handler_owner,
+        "abort",
+        ONABORT_SLOT,
+        args.get(0),
+    );
 }

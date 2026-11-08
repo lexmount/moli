@@ -17,6 +17,28 @@ class CdpError(RuntimeError):
     pass
 
 
+class CdpTimeoutError(CdpError):
+    def __init__(
+        self,
+        method: str,
+        operation: str,
+        timeout: float,
+        *,
+        message_id: int | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            f"timed out waiting for {method} {operation} after {timeout:g}s"
+        )
+        self.context = {
+            "method": method,
+            "operation": operation,
+            "timeoutSeconds": timeout,
+            "commandId": message_id,
+            "sessionId": session_id,
+        }
+
+
 class FixtureObservationError(CdpError):
     """The page or fixture violated its deterministic observation contract."""
 
@@ -92,15 +114,18 @@ class RawCdpClient:
     ) -> dict[str, Any]:
         message_id = await self.send(method, params, session_id=session_id)
         deadline = asyncio.get_running_loop().time() + timeout
-        timeout_message = f"timed out waiting for {method} response after {timeout:g}s"
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise CdpError(timeout_message)
+                raise CdpTimeoutError(
+                    method, "response", timeout, message_id=message_id, session_id=session_id,
+                )
             try:
                 message = await asyncio.wait_for(self.recv(), timeout=remaining)
             except TimeoutError as error:
-                raise CdpError(timeout_message) from error
+                raise CdpTimeoutError(
+                    method, "response", timeout, message_id=message_id, session_id=session_id,
+                ) from error
             if message.get("id") == message_id:
                 if "error" in message:
                     raise CdpCommandError(method, message["error"])
@@ -127,15 +152,14 @@ class RawCdpClient:
             if matches(message):
                 return message
         deadline = asyncio.get_running_loop().time() + timeout
-        timeout_message = f"timed out waiting for {method} event after {timeout:g}s"
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise CdpError(timeout_message)
+                raise CdpTimeoutError(method, "event", timeout, session_id=session_id)
             try:
                 message = await asyncio.wait_for(self.recv(), timeout=remaining)
             except TimeoutError as error:
-                raise CdpError(timeout_message) from error
+                raise CdpTimeoutError(method, "event", timeout, session_id=session_id) from error
             self.events.append(message)
             if matches(message):
                 return message
@@ -436,6 +460,8 @@ async def observe_case(
     frames: list[DomFrameObservation] = []
     final_root: dict[str, Any] | None = None
     diagnostics: dict[str, Any] = {}
+    observation_stage = "setup"
+    checkpoint: dict[str, Any] | None = None
     command_timeout = max(10.0, timeout_ms / 1000 + 2.0)
     try:
         if client is None:
@@ -472,12 +498,14 @@ async def observe_case(
             timeout=command_timeout,
         )
         await client.command("Network.enable", session_id=session_id, timeout=command_timeout)
+        observation_stage = "navigate"
         await client.command(
             "Page.navigate",
             {"url": url},
             session_id=session_id,
             timeout=command_timeout,
         )
+        observation_stage = "wait_load"
         await client.wait_event(
             "Page.loadEventFired",
             session_id=session_id,
@@ -485,6 +513,7 @@ async def observe_case(
         )
         after_token: str | None = None
         while True:
+            observation_stage = "wait_checkpoint"
             evaluation = await client.command(
                 "Runtime.evaluate",
                 {
@@ -527,6 +556,8 @@ async def observe_case(
                     raise FixtureObservationError(
                         "fixture exceeded the 32-frame safety limit"
                     )
+                checkpoint = pending
+                observation_stage = "capture_checkpoint"
                 root = await _capture_document(
                     client,
                     session_id=session_id,
@@ -535,6 +566,7 @@ async def observe_case(
                 frames.append(
                     DomFrameObservation(index=index, name=name, token=token, dom=root)
                 )
+                observation_stage = "resume_checkpoint"
                 resumed = await client.command(
                     "Runtime.evaluate",
                     {
@@ -571,6 +603,7 @@ async def observe_case(
                 )
             break
 
+        observation_stage = "capture_settled"
         final_root = await _capture_document(
             client,
             session_id=session_id,
@@ -603,6 +636,12 @@ async def observe_case(
     except Exception as error:
         if not diagnostics:
             diagnostics = _diagnostics(client.events, session_id) if client and session_id else {}
+        if isinstance(error, CdpTimeoutError):
+            diagnostics["timeout"] = {
+                **error.context,
+                "observationStage": observation_stage,
+                "lastCheckpoint": checkpoint,
+            }
         return EngineObservation(
             engine=engine,
             ok=False,

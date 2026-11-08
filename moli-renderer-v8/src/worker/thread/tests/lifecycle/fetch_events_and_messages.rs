@@ -543,6 +543,38 @@ async fn service_worker_fetch_respond_with_used_response_body_fails_fetch() {
 }
 
 #[tokio::test]
+async fn service_worker_fetch_respond_with_disturbed_tee_branch_after_reader_release_fails_fetch() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("fetch", event => {
+            event.respondWith((async () => {
+                const response = await fetch("data:text/plain,used-body");
+                const clone = response.clone();
+                await clone.arrayBuffer();
+                if (response.bodyUsed) throw new Error("reading clone consumed original");
+                const reader = response.body.getReader();
+                await reader.read();
+                reader.releaseLock();
+                if (!response.bodyUsed) throw new Error("released reader lost disturbed state");
+                return response;
+            })());
+        });
+        "#,
+    );
+
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 117).await;
+    let ServiceWorkerFetchResult::Failure(message) = completion.result else {
+        panic!("expected service worker fetch failure for the disturbed branch");
+    };
+    assert_eq!(
+        message,
+        "FetchEvent.respondWith rejected a Response whose body is already used."
+    );
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_fetch_respond_with_locked_response_body_fails_fetch() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
@@ -984,13 +1016,16 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
                     }
                 };
                 const cloneBefore = request.clone();
-                const inheritedBefore = new Request(request);
                 const locked = request.clone();
                 locked.body.getReader();
+                const inheritedBefore = new Request(request);
 
                 const lockedNew = probe(() => new Request(locked));
                 const lockedClone = probe(() => locked.clone());
-                const requestText = await request.text();
+                const requestText = await request.text().then(
+                    value => `resolve:${value}`,
+                    error => `reject:${error && error.name}`
+                );
                 const cloneText = await cloneBefore.text();
                 const inheritedText = await inheritedBefore.text();
                 const secondRead = await request.text().then(
@@ -1043,7 +1078,7 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
     assert_eq!(response.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
-        r#"{"bodyIsStream":true,"bodyUsedAfter":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","requestText":"fetch-body","cloneText":"fetch-body","inheritedText":"fetch-body","secondRead":"reject:TypeError","afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
+        r#"{"bodyIsStream":true,"bodyUsedAfter":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","requestText":"reject:TypeError","cloneText":"fetch-body","inheritedText":"fetch-body","secondRead":"reject:TypeError","afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
     );
     handle.terminate_and_join();
 }
@@ -1706,5 +1741,77 @@ async fn service_worker_message_event_source_uses_service_worker_snapshot() {
         ServiceWorkerEventId::from_u64_for_worker(22)
     );
     assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_soft_reload_exposes_native_cache_mode_on_request_copies() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener('fetch', event => {
+            const request = event.request;
+            event.respondWith(new Response(JSON.stringify([
+                request.cache, new Request(request).cache, request.clone().cache
+            ])));
+        });
+        "#,
+    );
+    use moli_fetch::{BrowserNavigationRequestKind as Kind, RequestCacheMode as Cache};
+    let mut event_id = 100;
+    for kind in [Kind::Navigate, Kind::Reload] {
+        for (cache, label) in [
+            (Cache::Default, "default"),
+            (Cache::Validate, "no-cache"),
+            (Cache::Bypass, "reload"),
+            (Cache::NoStore, "no-store"),
+        ] {
+            let url = url::Url::parse("https://example.test/app/document.html").unwrap();
+            let native = moli_fetch::Request::get_with_url(url.clone())
+                .with_request_mode(moli_fetch::RequestMode::Navigate)
+                .with_browser_navigation_kind(kind)
+                .with_cache_mode(cache);
+            let request = ServiceWorkerFetchRequest {
+                client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
+                    7,
+                ),
+                resulting_client_id: None,
+                url,
+                method: "GET".to_owned(),
+                headers: Vec::new(),
+                body: None,
+                destination: ServiceWorkerRequestDestination::Document,
+                request_mode: moli_fetch::RequestMode::Navigate,
+                credentials_mode: moli_fetch::RequestCredentialsMode::Include,
+                redirect_mode: moli_fetch::RequestRedirectMode::Manual,
+                priority: None,
+                is_reload: kind == Kind::Reload,
+                metadata: crate::service_worker_runtime::service_worker_fetch_request_metadata(
+                    &native,
+                ),
+            };
+            let completion = dispatch_service_worker_fetch_event_with_request_for_test(
+                &mut handle,
+                event_id,
+                request,
+            )
+            .await;
+            event_id += 1;
+            let ServiceWorkerFetchResult::Response(response) = completion.result else {
+                panic!("expected service worker response for {kind:?} {cache:?}");
+            };
+            assert_eq!(response.status, 200);
+            let expected = if kind == Kind::Reload && cache == Cache::Default {
+                "no-cache"
+            } else {
+                label
+            };
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&response.body).unwrap(),
+                serde_json::json!([expected, expected, expected]),
+                "{kind:?} {cache:?}",
+            );
+        }
+    }
     handle.terminate_and_join();
 }

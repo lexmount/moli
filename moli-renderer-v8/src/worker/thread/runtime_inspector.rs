@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::Result;
 use std::{
     cell::{Cell, OnceCell, RefCell, UnsafeCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -174,10 +176,18 @@ impl WorkerInspectorOutbound {
                     target: "moli::cdp::worker_inspector",
                     %error,
                     %raw,
+                    call_id,
                     message_units,
                     message_width,
-                    "failed to decode worker inspector protocol response; dropping"
+                    "failed to decode worker inspector protocol response; returning protocol error"
                 );
+                self.push_response_value(session_key, call_id, json!({
+                    "id": call_id,
+                    "error": {
+                        "code": -32603,
+                        "message": format!("Failed to decode Worker Inspector response: {error}"),
+                    },
+                }));
             }
         }
     }
@@ -573,7 +583,7 @@ impl WorkerRuntimeInspector {
         scope: &mut v8::PinScope<'_, '_>,
         inspector_session_id: Option<&str>,
         raw_json: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_protocol_message_with_optional_deferred_response(
             scope,
             inspector_session_id,
@@ -589,7 +599,7 @@ impl WorkerRuntimeInspector {
         inspector_session_id: Option<&str>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let messages = with_scoped_inspector_microtasks(scope, || {
             self.dispatch_protocol_message_scoped(inspector_session_id, raw_json, deferred_response)
         })?;
@@ -602,10 +612,10 @@ impl WorkerRuntimeInspector {
         inspector_session_id: Option<&str>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let session_key = worker_inspector_session_key(inspector_session_id);
         if self.detached_sessions.borrow().contains(&session_key) {
-            return Err("Worker Inspector session has been detached".to_owned());
+            return Err(WorkerInspectorError::Detached.into());
         }
         if let Some(callback) = deferred_response {
             self.outbound
@@ -1025,7 +1035,7 @@ mod tests {
         owner.release();
         assert_eq!(read_defaults(&mut isolate, false), baseline);
         registration.unregister();
-        task_runner.dispose("test complete");
+        task_runner.dispose(WorkerInspectorError::Closed);
     }
 
     #[test]
@@ -1458,6 +1468,50 @@ mod tests {
     }
 
     #[test]
+    fn worker_inspector_outbound_decode_error_settles_only_the_matching_session() {
+        let outbound = WorkerInspectorOutbound::default();
+        let (first_tx, mut first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "SID-1",
+            RendererRuntimeInspectorResponseSender::new(7, first_tx),
+        );
+        outbound.register_response_callback(
+            "SID-2",
+            RendererRuntimeInspectorResponseSender::new(7, second_tx),
+        );
+
+        let raw = br#"{"id":7,"result":]}"#;
+        let message =
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(&raw[..]));
+        outbound.push_response_message("SID-1", 7, message);
+        let completion = first_rx
+            .try_recv()
+            .expect("a malformed response must settle its callback");
+        assert_eq!(
+            completion.output.protocol_response(7).unwrap()["error"]["code"],
+            -32603
+        );
+        assert!(matches!(
+            second_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        let raw = br#"{"id":7,"result":{"value":42}}"#;
+        let message =
+            v8::inspector::StringBuffer::create(v8::inspector::StringView::from(&raw[..]));
+        outbound.push_response_message("SID-2", 7, message);
+        let completion = second_rx
+            .try_recv()
+            .expect("the peer session must remain usable");
+        assert_eq!(
+            completion.output.protocol_response(7).unwrap()["result"]["value"],
+            42
+        );
+        assert!(outbound.take_all().is_empty());
+    }
+
+    #[test]
     fn worker_inspector_outbound_tags_peer_session_pending_messages() {
         let outbound = WorkerInspectorOutbound::default();
 
@@ -1521,8 +1575,10 @@ mod tests {
                     &json!({"id": 1, "method": "Runtime.enable"}).to_string(),
                     None,
                 )
-                .expect_err("detached session must reject a queued late command"),
-            "Worker Inspector session has been detached"
+                .expect_err("detached session must reject a queued late command")
+                .downcast::<crate::runtime::WorkerInspectorError>()
+                .unwrap(),
+            crate::runtime::WorkerInspectorError::Detached
         );
     }
 }

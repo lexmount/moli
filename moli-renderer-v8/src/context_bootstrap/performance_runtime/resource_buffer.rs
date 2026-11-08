@@ -76,6 +76,9 @@ pub(super) fn add_resource_timing_entry<'s>(
     let Some((host_ptr, buffer_id)) = resource_timing_buffer_context(scope, performance) else {
         return;
     };
+    // Count a full primary buffer when the entry is queued, including
+    // entries later rescued by a buffer-full handler.
+    unsafe { &*host_ptr }.note_resource_timing_entry_queued(buffer_id);
     if unsafe { &*host_ptr }.resource_timing_buffer_can_add_immediately(buffer_id) {
         append_resource_timing_to_primary(scope, host_ptr, performance, entry, buffer_id);
         return;
@@ -86,6 +89,17 @@ pub(super) fn add_resource_timing_entry<'s>(
     }
     unsafe { &*host_ptr }
         .push_secondary_resource_timing_entry(buffer_id, v8::Global::new(scope, entry));
+}
+
+pub(in crate::context_bootstrap) fn resource_timing_dropped_entries_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> u64 {
+    resource_timing_buffer_registry(scope)
+        .zip(resource_timing_buffer_id(scope, performance))
+        .map_or(0, |(registry, id)| {
+            registry.resource_timing_dropped_entries_count(id)
+        })
 }
 
 fn clear_resource_timings_callback<'s>(

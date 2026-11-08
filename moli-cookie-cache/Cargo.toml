@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+cookie = "0.18"
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 netscape-cookie-file-parser = "0.3"
 serde = { version = "1.0.228", features = ["derive"] }

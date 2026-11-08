@@ -5,12 +5,12 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
+#[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable, receiver)]
 struct XmlHttpRequestTemplateMethodsDeclaration {
     #[webapi(method = "open", length = 2, callback = xhr_open_callback)]
     open: (),
 
-    #[webapi(method = "send", length = 0, callback = xhr_send_callback, receiver = web_api_interfaces::XMLHttpRequest::is_instance)]
+    #[webapi(method = "send", length = 0, callback = xhr_send_callback)]
     send: (),
 
     #[webapi(method = "abort", length = 0, callback = xhr_abort_callback)]

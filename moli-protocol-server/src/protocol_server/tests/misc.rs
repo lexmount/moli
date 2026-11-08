@@ -38,154 +38,6 @@ fn protocol_server_constructor_preserves_subframe_loading_policy() {
 }
 
 #[test]
-fn merge_cookie_profiles_replaces_existing_cookie_by_storage_key() {
-    let mut cookies = vec![stored_cookie("sid", "old"), stored_cookie("theme", "dark")];
-
-    merge_cookie_profiles(
-        &mut cookies,
-        vec![stored_cookie("sid", "new"), stored_cookie("extra", "1")],
-    );
-
-    assert_eq!(cookies.len(), 3);
-    assert_eq!(
-        cookies
-            .iter()
-            .find(|cookie| cookie.name == "sid")
-            .map(|cookie| cookie.value.as_str()),
-        Some("new")
-    );
-    assert_eq!(
-        cookies
-            .iter()
-            .find(|cookie| cookie.name == "theme")
-            .map(|cookie| cookie.value.as_str()),
-        Some("dark")
-    );
-    assert_eq!(
-        cookies
-            .iter()
-            .find(|cookie| cookie.name == "extra")
-            .map(|cookie| cookie.value.as_str()),
-        Some("1")
-    );
-}
-
-#[test]
-fn commit_cookie_profile_removes_initial_cookie_missing_from_final_snapshot() {
-    let deleted = stored_cookie("sid", "old");
-    let mut cookies = vec![deleted.clone(), stored_cookie("theme", "dark")];
-
-    commit_cookie_profile(
-        &mut cookies,
-        CookieProfileCommit::new(vec![deleted], vec![stored_cookie("theme", "dark")]),
-    );
-
-    assert_eq!(cookies.len(), 1);
-    assert_eq!(cookies[0].name, "theme");
-}
-
-#[test]
-fn commit_cookie_profile_preserves_concurrent_update_when_session_deleted_stale_cookie() {
-    let initial = stored_cookie("sid", "old");
-    let concurrent = stored_cookie("sid", "newer");
-    let mut cookies = vec![concurrent];
-
-    commit_cookie_profile(
-        &mut cookies,
-        CookieProfileCommit::new(vec![initial], Vec::new()),
-    );
-
-    assert_eq!(cookies.len(), 1);
-    assert_eq!(cookies[0].name, "sid");
-    assert_eq!(cookies[0].value, "newer");
-}
-
-#[test]
-fn commit_cookie_profile_merges_final_updates_and_drops_expired_cookies() {
-    let mut expired = stored_cookie("expired", "gone");
-    expired.expires = Some(time::OffsetDateTime::now_utc() - time::Duration::days(1));
-    let mut cookies = vec![
-        stored_cookie("sid", "old"),
-        stored_cookie("theme", "dark"),
-        expired.clone(),
-    ];
-
-    commit_cookie_profile(
-        &mut cookies,
-        CookieProfileCommit::new(
-            vec![stored_cookie("sid", "old")],
-            vec![
-                stored_cookie("sid", "new"),
-                stored_cookie("extra", "1"),
-                expired,
-            ],
-        ),
-    );
-
-    assert_eq!(
-        cookies
-            .iter()
-            .find(|cookie| cookie.name == "sid")
-            .map(|cookie| cookie.value.as_str()),
-        Some("new")
-    );
-    assert_eq!(
-        cookies
-            .iter()
-            .find(|cookie| cookie.name == "theme")
-            .map(|cookie| cookie.value.as_str()),
-        Some("dark")
-    );
-    assert!(cookies.iter().any(|cookie| cookie.name == "extra"));
-    assert!(!cookies.iter().any(|cookie| cookie.name == "expired"));
-}
-
-#[test]
-fn shared_cookie_profile_merge_and_save_writes_cache_file() -> anyhow::Result<()> {
-    let path = std::env::temp_dir().join(format!(
-        "moli-cdp-cookie-profile-{}-{}.json",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let profile = SharedCookieProfile::new(vec![stored_cookie("sid", "old")], vec![path.clone()]);
-
-    profile.merge_and_save(vec![stored_cookie("sid", "new")])?;
-
-    let loaded = cookie_cache::load_cookie_cache(&path)?;
-    let _ = std::fs::remove_file(&path);
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].name, "sid");
-    assert_eq!(loaded[0].value, "new");
-    Ok(())
-}
-
-#[test]
-fn shared_cookie_profile_partition_backing_uses_storage_partition() -> anyhow::Result<()> {
-    let profile = TempDir::new("shared-cookie-profile-partition");
-    let paths = BrowserProfilePaths::new(&profile.path);
-    let partition = Arc::new(StoragePartitionState::open(Some(&profile.path))?);
-    partition.import_cookies(vec![stored_cookie("sid", "old")])?;
-    let profile = SharedCookieProfile::from_storage_partition(partition.clone());
-
-    let initial_cookies = profile.snapshot();
-    profile.commit_and_save(CookieProfileCommit::new(
-        initial_cookies,
-        vec![stored_cookie("sid", "new")],
-    ))?;
-
-    let partition_cookies = partition.cookies()?;
-    assert_eq!(partition_cookies.len(), 1);
-    assert_eq!(partition_cookies[0].value, "new");
-    let persisted = cookie_cache::load_cookie_cache(&paths.cookies_path)?;
-    assert_eq!(persisted.len(), 1);
-    assert_eq!(persisted[0].value, "new");
-    Ok(())
-}
-
-#[test]
 fn app_state_storage_partition_backing_derives_initial_partition_from_owner() -> anyhow::Result<()>
 {
     let partition = Arc::new(StoragePartitionState::open(None)?);
@@ -196,14 +48,14 @@ fn app_state_storage_partition_backing_derives_initial_partition_from_owner() ->
         OptionalResourceFetchMask::NONE,
         true,
     )?;
-    let initial_storage_partition =
-        state.initial_storage_partition(vec![stored_cookie("owner-cookie", "owner-value")]);
+    partition.import_cookies(vec![stored_cookie("owner-cookie", "owner-value")])?;
+    let initial_storage_partition = state.initial_storage_partition();
     let mut conn =
         moli_protocol::CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
-    assert!(conn.snapshot_profile_backed_cookies().is_none());
+    assert!(conn.snapshot_cookies().unwrap().is_empty());
     conn.install_default_browser_target();
-    let cookies = conn.snapshot_profile_backed_cookies().unwrap();
+    let cookies = conn.snapshot_cookies().unwrap();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "owner-cookie");
     assert_eq!(cookies[0].value, "owner-value");
@@ -212,13 +64,21 @@ fn app_state_storage_partition_backing_derives_initial_partition_from_owner() ->
 
 #[tokio::test]
 async fn discovery_endpoints_accept_trailing_slashes() {
-    let version = request_json("/json/version").await;
-    assert_eq!(version, request_json("/json/version/").await);
+    let router = build_router(test_state());
+    let version = request_json_with_router(router.clone(), Method::GET, "/json/version").await;
     assert_eq!(
-        version["webSocketDebuggerUrl"],
-        json!("ws://127.0.0.1:9222/devtools/browser/moli-browser")
+        version,
+        request_json_with_router(router.clone(), Method::GET, "/json/version/").await
     );
+    let endpoint = url::Url::parse(version["webSocketDebuggerUrl"].as_str().unwrap()).unwrap();
+    assert_eq!(endpoint.scheme(), "ws");
+    assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
+    assert_eq!(endpoint.port(), Some(9222));
+    let browser_id = Uuid::parse_str(endpoint.path().strip_prefix("/devtools/browser/").unwrap())
+        .expect("browser endpoint contains a UUID");
+    assert_eq!(browser_id.get_version_num(), 4);
     assert_eq!(version["Browser"], json!(version::PRODUCT));
+    assert_eq!(version["Moli-Version"], json!(version::MOLI_VERSION));
     assert_eq!(
         version["Protocol-Version"],
         json!(version::PROTOCOL_VERSION)
@@ -230,25 +90,40 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     assert_eq!(version["V8-Version"], json!(version::js_version()));
     assert_eq!(version["WebKit-Version"], json!(version::WEBKIT_VERSION));
 
-    let list = request_json("/json").await;
-    assert_eq!(list, request_json("/json/list").await);
-    assert_eq!(list, request_json("/json/list/").await);
+    let list = request_json_with_router(router.clone(), Method::GET, "/json").await;
+    assert_eq!(
+        list,
+        request_json_with_router(router.clone(), Method::GET, "/json/list").await
+    );
+    assert_eq!(
+        list,
+        request_json_with_router(router.clone(), Method::GET, "/json/list/").await
+    );
+    let default_target_id = list[0]["id"].as_str().unwrap();
+    assert_chromium_target_id(default_target_id);
     assert_eq!(
         list[0]["webSocketDebuggerUrl"],
-        json!("ws://127.0.0.1:9222/devtools/page/moli-default")
+        json!(format!(
+            "ws://127.0.0.1:9222/devtools/page/{default_target_id}"
+        ))
     );
     assert_eq!(list[0]["description"], json!(""));
     assert_eq!(
         list[0]["devtoolsFrontendUrl"],
-        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default")
+        json!(format!(
+            "/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/{default_target_id}"
+        ))
     );
-    assert_eq!(list[0]["id"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(list[0]["id"], json!(default_target_id));
     assert_eq!(list[0]["title"], json!(""));
     assert_eq!(list[0]["type"], json!("page"));
     assert_eq!(list[0]["url"], json!(DEFAULT_TARGET_URL));
 
-    let protocol = request_json("/json/protocol").await;
-    assert_eq!(protocol, request_json("/json/protocol/").await);
+    let protocol = request_json_with_router(router.clone(), Method::GET, "/json/protocol").await;
+    assert_eq!(
+        protocol,
+        request_json_with_router(router.clone(), Method::GET, "/json/protocol/").await
+    );
     assert_eq!(protocol["version"]["major"], json!("1"));
     assert_eq!(protocol["version"]["minor"], json!("3"));
     assert!(protocol["domains"].is_array());
@@ -266,7 +141,10 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     ] {
         assert_eq!(request_status(path).await, StatusCode::NOT_FOUND, "{path}");
     }
-    assert_eq!(version, request_json("/json/version/?query=%2F//").await);
+    assert_eq!(
+        version,
+        request_json_with_router(router.clone(), Method::GET, "/json/version/?query=%2F//").await
+    );
     for path in [
         "/session//",
         "/session/probe/cookie//",
@@ -280,12 +158,13 @@ async fn discovery_endpoints_accept_trailing_slashes() {
             "empty capture in {path}"
         );
     }
-    let new_target = request_json_with_method(
+    let new_target = request_json_with_router(
+        router.clone(),
         Method::PUT,
         "/json/new/?about%3Ablank%23trailing-slash-target",
     )
     .await;
-    assert_ne!(new_target["id"], json!(DEFAULT_TARGET_ID));
+    assert_ne!(new_target["id"], json!(default_target_id));
     assert!(
         new_target["webSocketDebuggerUrl"]
             .as_str()
@@ -300,11 +179,17 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         json!("about:blank#trailing-slash-target")
     );
     assert_eq!(
-        request_json_with_method(Method::PUT, "/json/new").await["url"],
+        request_json_with_router(router.clone(), Method::PUT, "/json/new").await["url"],
         json!(DEFAULT_TARGET_URL)
     );
     assert_eq!(
-        request_status("/json/activate/moli-default").await,
+        request_status_and_text_with_router(
+            router.clone(),
+            Method::GET,
+            &format!("/json/activate/{default_target_id}")
+        )
+        .await
+        .0,
         StatusCode::OK
     );
     assert_eq!(
@@ -312,7 +197,13 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        request_status("/json/close/moli-default").await,
+        request_status_and_text_with_router(
+            router.clone(),
+            Method::GET,
+            &format!("/json/close/{default_target_id}")
+        )
+        .await
+        .0,
         StatusCode::OK
     );
     assert_eq!(
@@ -323,6 +214,10 @@ async fn discovery_endpoints_accept_trailing_slashes() {
     assert_eq!(request_status("/cdp").await, StatusCode::NOT_FOUND);
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    assert_eq!(
+        rejected_websocket_status(format!("ws://{cdp_addr}/devtools/browser/moli-browser")).await,
+        StatusCode::NOT_FOUND.as_u16()
+    );
     assert_eq!(
         rejected_websocket_status(format!("ws://{cdp_addr}/devtools/browser/missing")).await,
         StatusCode::NOT_FOUND.as_u16()
@@ -335,11 +230,91 @@ async fn discovery_endpoints_accept_trailing_slashes() {
 }
 
 #[tokio::test]
+async fn browser_websocket_uuid_changes_between_instances_at_the_same_address() {
+    let first_router = build_router(test_state());
+    let first_version = request_json_with_router(first_router, Method::GET, "/json/version").await;
+    let router = build_router(test_state());
+    let version = request_json_with_router(router.clone(), Method::GET, "/json/version").await;
+    assert_ne!(
+        version["webSocketDebuggerUrl"],
+        first_version["webSocketDebuggerUrl"]
+    );
+    assert_eq!(
+        version,
+        request_json_with_router(router.clone(), Method::GET, "/json/version").await
+    );
+
+    let old_endpoint =
+        url::Url::parse(first_version["webSocketDebuggerUrl"].as_str().unwrap()).unwrap();
+    let unknown_path = format!("/devtools/browser/{}", Uuid::new_v4());
+    for path in [
+        "/devtools/browser/moli-browser",
+        "/devtools/browser/missing",
+        old_endpoint.path(),
+        &unknown_path,
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .header(header::HOST, "localhost")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn browser_websocket_rejects_uuid_from_another_server() {
+    let (first_addr, first_server) = spawn_test_protocol_server().await;
+    let (second_addr, second_server) = spawn_test_protocol_server().await;
+    let first_endpoint = discover_browser_websocket_url(first_addr).await.unwrap();
+    assert_eq!(
+        first_endpoint,
+        discover_browser_websocket_url(first_addr).await.unwrap()
+    );
+    let second_endpoint = discover_browser_websocket_url(second_addr).await.unwrap();
+    let first_url = url::Url::parse(&first_endpoint).unwrap();
+    let second_url = url::Url::parse(&second_endpoint).unwrap();
+    assert_ne!(first_url.path(), second_url.path());
+    for (addr, other_path) in [
+        (first_addr, second_url.path()),
+        (second_addr, first_url.path()),
+    ] {
+        assert_eq!(
+            rejected_websocket_status(format!("ws://{addr}{other_path}")).await,
+            StatusCode::NOT_FOUND.as_u16()
+        );
+    }
+    for endpoint in [first_endpoint, second_endpoint] {
+        let (mut socket, _) = connect_async(endpoint)
+            .await
+            .expect("connect to discovered endpoint");
+        let messages =
+            send_cdp_command(&mut socket, 1, "Browser.getVersion", None, json!({})).await;
+        assert!(
+            messages
+                .iter()
+                .any(|message| message["id"] == 1 && message["result"].is_object())
+        );
+        socket.close(None).await.unwrap();
+    }
+    first_server.abort();
+    second_server.abort();
+}
+
+#[tokio::test]
 async fn browser_websocket_supports_puppeteer_browser_target_session() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to browser cdp websocket");
 
@@ -404,14 +379,20 @@ async fn browser_websocket_supports_puppeteer_browser_target_session() {
 
 #[tokio::test]
 async fn browser_websocket_exposes_same_default_target_as_json_list() {
-    let list = request_json("/json/list").await;
-    assert_eq!(list[0]["id"], json!(DEFAULT_TARGET_ID));
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (status, body) = fetch_server_response(cdp_addr, "GET", "/json/list").await;
+    assert_eq!(status, 200);
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let default_target_id = list[0]["id"].as_str().unwrap();
+    assert_chromium_target_id(default_target_id);
+    assert_eq!(list[0]["id"], json!(default_target_id));
     assert_eq!(list[0]["url"], json!(DEFAULT_TARGET_URL));
 
-    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to browser cdp websocket");
 
@@ -442,7 +423,7 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
         .as_array()
         .expect("Target.getTargets targetInfos");
     assert_eq!(target_infos.len(), 1);
-    assert_eq!(target_infos[0]["targetId"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(target_infos[0]["targetId"], json!(default_target_id));
     assert_eq!(target_infos[0]["url"], json!(DEFAULT_TARGET_URL));
     assert_eq!(target_infos[0]["attached"], json!(false));
 
@@ -453,7 +434,7 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
         .expect("Target.setDiscoverTargets should report the existing default page target");
     assert_eq!(
         target_created["params"]["targetInfo"]["targetId"],
-        json!(DEFAULT_TARGET_ID)
+        json!(default_target_id)
     );
 
     let attach = send_cdp_command(
@@ -462,7 +443,7 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
         "Target.attachToTarget",
         None,
         json!({
-            "targetId": DEFAULT_TARGET_ID,
+            "targetId": default_target_id,
             "flatten": true
         }),
     )
@@ -497,13 +478,13 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
         .as_array()
         .expect("Target.getTargets targetInfos after auto-attach");
     assert_eq!(target_infos.len(), 1);
-    assert_eq!(target_infos[0]["targetId"], json!(DEFAULT_TARGET_ID));
+    assert_eq!(target_infos[0]["targetId"], json!(default_target_id));
     assert_eq!(target_infos[0]["attached"], json!(true));
 
     assert!(
         !get_targets_after_auto_attach.iter().any(|message| {
             message["method"] == json!("Target.targetCreated")
-                && message["params"]["targetInfo"]["targetId"] != json!(DEFAULT_TARGET_ID)
+                && message["params"]["targetInfo"]["targetId"] != json!(default_target_id)
         }),
         "browser-use startup sequence must not create a second page target: {get_targets_after_auto_attach:?}"
     );
@@ -523,49 +504,61 @@ async fn browser_websocket_exposes_same_default_target_as_json_list() {
 
 #[tokio::test]
 async fn chromium_devtools_json_list_accepts_non_get_methods_and_for_tab() {
-    let list = request_json("/json").await;
-    let tab_list = request_json("/json/list?for_tab").await;
+    let router = build_router(test_state());
+    let list = request_json_with_router(router.clone(), Method::GET, "/json").await;
+    let tab_list =
+        request_json_with_router(router.clone(), Method::GET, "/json/list?for_tab").await;
 
     // Ported from Chromium DevToolsHttpHandlerTest.TestJsonList: list
     // discovery is not method-gated. Chromium's remote-device discovery asks
     // for tab targets explicitly so its frontend can auto-attach the current
     // page below a stable tab root.
-    assert_eq!(request_json_with_method(Method::PUT, "/json").await, list);
     assert_eq!(
-        request_json_with_method(Method::PUT, "/json/list").await,
+        request_json_with_router(router.clone(), Method::PUT, "/json").await,
         list
     );
     assert_eq!(
-        request_json_with_method(Method::PUT, "/json/list?for_tab").await,
+        request_json_with_router(router.clone(), Method::PUT, "/json/list").await,
+        list
+    );
+    assert_eq!(
+        request_json_with_router(router.clone(), Method::PUT, "/json/list?for_tab").await,
         tab_list
     );
     assert_eq!(list[0]["type"], json!("page"));
+    let default_target_id = list[0]["id"].as_str().unwrap();
+    assert_chromium_target_id(default_target_id);
     assert_eq!(
         list[0]["webSocketDebuggerUrl"],
-        json!("ws://127.0.0.1:9222/devtools/page/moli-default")
+        json!(format!(
+            "ws://127.0.0.1:9222/devtools/page/{default_target_id}"
+        ))
     );
     assert_eq!(tab_list.as_array().map(Vec::len), Some(2));
     assert!(tab_list.as_array().is_some_and(|targets| {
         targets.iter().any(|target| {
-            target["id"] == json!(DEFAULT_TARGET_ID) && target["type"] == json!("page")
+            target["id"] == json!(default_target_id) && target["type"] == json!("page")
         })
     }));
     let tab = tab_list
         .as_array()
-        .and_then(|targets| {
-            targets
-                .iter()
-                .find(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
-        })
+        .and_then(|targets| targets.iter().find(|target| target["type"] == "tab"))
         .expect("for_tab discovery should add the stable tab target");
+    let default_tab_target_id = tab["id"].as_str().unwrap();
+    assert_chromium_target_id(default_tab_target_id);
+    assert_ne!(default_tab_target_id, default_target_id);
     assert_eq!(tab["type"], json!("tab"));
     assert_eq!(
         tab["devtoolsFrontendUrl"],
-        json!("/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/moli-default-tab")
+        json!(format!(
+            "/devtools/inspector.html?ws=127.0.0.1:9222/devtools/page/{default_tab_target_id}"
+        ))
     );
     assert_eq!(
         tab["webSocketDebuggerUrl"],
-        json!("ws://127.0.0.1:9222/devtools/page/moli-default-tab")
+        json!(format!(
+            "ws://127.0.0.1:9222/devtools/page/{default_tab_target_id}"
+        ))
     );
 }
 
@@ -597,7 +590,7 @@ async fn chromium_devtools_json_new_uses_put_and_decodes_first_query_component()
     assert!(
         target["webSocketDebuggerUrl"]
             .as_str()
-            .is_some_and(|url| url.contains("/devtools/page/TAB-"))
+            .is_some_and(|url| url.ends_with(target["id"].as_str().unwrap()))
     );
 
     let target = request_json_with_method(Method::PUT, "/json/new?url=about%3Ablank%23named").await;
@@ -619,14 +612,25 @@ async fn chromium_devtools_json_new_uses_put_and_decodes_first_query_component()
 
 #[tokio::test]
 async fn chromium_devtools_activate_and_close_return_text_payloads() {
+    let router = build_router(test_state());
+    let targets = request_json_with_router(router.clone(), Method::GET, "/json/list").await;
+    let default_target_id = targets[0]["id"].as_str().unwrap();
     // Ported from chrome/test/data/devtools/target_list/background.js.
-    let (status, body) =
-        request_status_and_text_with_method(Method::GET, "/json/activate/moli-default").await;
+    let (status, body) = request_status_and_text_with_router(
+        router.clone(),
+        Method::GET,
+        &format!("/json/activate/{default_target_id}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "Target activated");
 
-    let (status, body) =
-        request_status_and_text_with_method(Method::GET, "/json/close/moli-default").await;
+    let (status, body) = request_status_and_text_with_router(
+        router.clone(),
+        Method::GET,
+        &format!("/json/close/{default_target_id}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "Target is closing");
 
@@ -643,6 +647,7 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
         .clone()
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .uri("/json/list?for_tab")
                 .body(Body::empty())
                 .expect("list request"),
@@ -655,20 +660,28 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
             .expect("first list body"),
     )
     .expect("first list JSON");
-    assert!(first_list.as_array().is_some_and(|targets| {
-        targets
+    let page = first_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["type"] == "page")
+        .unwrap();
+    let default_target_id = page["id"].as_str().unwrap();
+    assert_chromium_target_id(default_target_id);
+    assert!(
+        first_list
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|target| target["id"] == json!(DEFAULT_TARGET_ID))
-            && targets
-                .iter()
-                .any(|target| target["id"] == json!(DEFAULT_TAB_TARGET_ID))
-    }));
+            .any(|target| target["type"] == "tab")
+    );
 
     let close = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/json/close/moli-default")
+                .header(header::HOST, "localhost")
+                .uri(format!("/json/close/{default_target_id}"))
                 .body(Body::empty())
                 .expect("close request"),
         )
@@ -679,6 +692,7 @@ async fn closed_default_target_is_not_readvertised_by_discovery() {
     let second_list = app
         .oneshot(
             Request::builder()
+                .header(header::HOST, "localhost")
                 .uri("/json/list?for_tab")
                 .body(Body::empty())
                 .expect("second list request"),

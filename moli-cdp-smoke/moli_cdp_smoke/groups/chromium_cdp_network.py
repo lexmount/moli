@@ -3,7 +3,10 @@ import asyncio
 import base64
 from contextlib import suppress
 from typing import Any
+
 from urllib.parse import urlsplit
+from ..diagnostics import new_cdp_session
+from ..navigation import navigate_cdp
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..config import is_moli_browser
@@ -214,18 +217,21 @@ async def _wait_for_successful_fetch_extra_info(
 async def _verify_chromium_page_lifecycle_order(state: SmokeState) -> None:
     events = attach_cdp_event_collector(
         state.cdp,
-        ["Page.domContentEventFired", "Page.loadEventFired"],
+        ["Page.frameNavigated", "Page.domContentEventFired", "Page.loadEventFired"],
     )
     await state.cdp.send("Page.enable")
     start = len(events)
-    await state.cdp.send("Page.navigate", {"url": f"{state.fixture}/chromium-cdp-lifecycle-page"})
-
+    navigation = await navigate_cdp(state.cdp, f"{state.fixture}/chromium-cdp-lifecycle-page")
+    committed = next(index for index, event in enumerate(events[start:], start)
+                     if event["method"] == "Page.frameNavigated"
+                     and event["params"].get("frame", {}).get("id") == navigation["frameId"]
+                     and event["params"].get("frame", {}).get("loaderId") == navigation["loaderId"])
     await wait_until(
-        lambda: _has_event(events[start:], "Page.domContentEventFired")
-        and _has_event(events[start:], "Page.loadEventFired"),
-        "Chromium Page.domContentEventFired/Page.loadEventFired sample",
+        lambda: _has_event(events[committed:], "Page.domContentEventFired")
+        and _has_event(events[committed:], "Page.loadEventFired"),
+        "requested Document Page.domContentEventFired/Page.loadEventFired sample",
     )
-    methods = [event["method"] for event in events[start:]]
+    methods = [event["method"] for event in events[committed:]]
     dom_index = methods.index("Page.domContentEventFired")
     load_index = methods.index("Page.loadEventFired")
     if dom_index > load_index:
@@ -1406,7 +1412,7 @@ async def _verify_chromium_failed_main_document_request_extra_info_sample(
 ) -> None:
     page = await state.context.new_page()
     try:
-        cdp = await state.context.new_cdp_session(page)
+        cdp = await new_cdp_session(state.context, page)
         await _verify_failed_main_document_request_extra_info_on_session(state, cdp)
     finally:
         await page.close()
@@ -1559,7 +1565,7 @@ async def _verify_chromium_redirect_then_failed_main_document_extra_info_sample(
 ) -> None:
     page = await state.context.new_page()
     try:
-        cdp = await state.context.new_cdp_session(page)
+        cdp = await new_cdp_session(state.context, page)
         observed_methods = [
             "Network.requestWillBeSent",
             "Network.requestWillBeSentExtraInfo",
@@ -1904,7 +1910,6 @@ async def _verify_chromium_main_document_response_stage_extra_info_sample(
                 await navigation_task
             except asyncio.CancelledError:
                 pass
-
 
 
 async def run_network_group(state: SmokeState) -> None:

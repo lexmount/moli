@@ -1,3 +1,5 @@
+use crate::module_runtime::import_attributes_key as worker_import_attributes_key;
+use crate::module_runtime::module_request_attributes as worker_module_request_attributes;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::pin;
@@ -60,8 +62,7 @@ struct WorkerImportMetaDeclaration<'scope> {
 pub(super) struct WorkerModuleGraphFetchCompletion {
     fetch_id: WorkerModuleGraphFetchId,
     result: Result<WorkerModuleFetchedSource, String>,
-    csp_violation: Option<ContentSecurityPolicyUrlViolation>,
-    csp_report_only_violation: Option<ContentSecurityPolicyUrlViolation>,
+    csp_violations: Vec<ContentSecurityPolicyUrlViolation>,
 }
 
 pub(super) struct WorkerModuleFetchedSource {
@@ -198,37 +199,26 @@ impl WorkerModuleGraphFetchCompletion {
         Self {
             fetch_id,
             result,
-            csp_violation: None,
-            csp_report_only_violation: None,
+            csp_violations: Vec::new(),
         }
-    }
-
-    pub(super) fn with_csp_violation(
-        mut self,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        self.csp_violation = Some(violation);
-        self
-    }
-
-    pub(super) fn with_csp_report_only_violation(
-        mut self,
-        violation: ContentSecurityPolicyUrlViolation,
-    ) -> Self {
-        self.csp_report_only_violation = Some(violation);
-        self
     }
 
     pub(super) fn fetch_id(&self) -> WorkerModuleGraphFetchId {
         self.fetch_id
     }
 
-    pub(super) fn csp_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_violation.as_ref()
+    pub(super) fn with_csp_violations(
+        mut self,
+        violations: Vec<ContentSecurityPolicyUrlViolation>,
+    ) -> Self {
+        self.csp_violations = violations;
+        self
     }
 
-    pub(super) fn csp_report_only_violation(&self) -> Option<&ContentSecurityPolicyUrlViolation> {
-        self.csp_report_only_violation.as_ref()
+    pub(super) fn csp_violations(
+        &self,
+    ) -> impl Iterator<Item = &ContentSecurityPolicyUrlViolation> {
+        self.csp_violations.iter()
     }
 
     pub(super) fn result(&self) -> Result<&WorkerModuleFetchedSource, &str> {
@@ -1791,6 +1781,7 @@ fn worker_module_browser_request_metadata(
 ) -> BrowserRequestMetadata {
     match module_type {
         WorkerModuleType::Json => BrowserRequestMetadata::JsonModule,
+        WorkerModuleType::Text => BrowserRequestMetadata::TextModule,
         WorkerModuleType::JavaScriptOrWebAssembly => graph_metadata,
     }
 }
@@ -1846,9 +1837,22 @@ pub(super) enum WorkerModuleType {
     // share this entry; the fetched MIME type selects the compiled record.
     JavaScriptOrWebAssembly,
     Json,
+    Text,
 }
 
 impl WorkerModuleType {
+    pub(super) fn csp_resource_kind(
+        self,
+        script_kind: crate::content_security_policy::ContentSecurityPolicyResourceKind,
+    ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
+        let kind = match self {
+            Self::JavaScriptOrWebAssembly => crate::module_runtime::ModuleKind::JavaScript,
+            Self::Json => crate::module_runtime::ModuleKind::Json,
+            Self::Text => crate::module_runtime::ModuleKind::Text,
+        };
+        crate::content_security_policy::module_csp_resource_kind(kind, script_kind)
+    }
+
     pub(super) fn response_kind(
         self,
         url: &Url,
@@ -1860,6 +1864,7 @@ impl WorkerModuleType {
                 super::module_mime::ensure_worker_json_module_mime_from_headers(headers)?;
                 Ok(WorkerScriptResourceKind::JsonModule)
             }
+            Self::Text => Ok(WorkerScriptResourceKind::TextModule),
             Self::JavaScriptOrWebAssembly => {
                 if super::worker_response_has_webassembly_mime(headers) {
                     return Ok(WorkerScriptResourceKind::WebAssemblyModule);
@@ -1893,6 +1898,7 @@ struct WorkerModuleDependency {
 
 enum WorkerSyntheticModuleRecord {
     Json(String),
+    Text(String),
     WebAssembly(WasmModuleRecord),
 }
 
@@ -2084,6 +2090,10 @@ impl WorkerModuleGraph {
                 .source
                 .text_source()
                 .map(|source| WorkerSyntheticModuleRecord::Json(source.to_owned())),
+            WorkerModuleType::Text => record
+                .source
+                .text_source()
+                .map(|source| WorkerSyntheticModuleRecord::Text(source.to_owned())),
             WorkerModuleType::JavaScriptOrWebAssembly => None,
         }
     }
@@ -2444,7 +2454,10 @@ fn compile_worker_module_record(
     Vec<WorkerModuleRequest>,
     Option<WasmModuleRecord>,
 )> {
-    if key.module_type == WorkerModuleType::Json {
+    if matches!(
+        key.module_type,
+        WorkerModuleType::Json | WorkerModuleType::Text
+    ) {
         return compile_worker_synthetic_module_record(scope, source_url);
     }
     if let Some(bytes) = source.binary_source() {
@@ -2636,30 +2649,6 @@ fn collect_worker_module_requests(
     Ok(records)
 }
 
-fn worker_module_request_attributes(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::ModuleRequest>,
-) -> ModuleAttributesKey {
-    let attributes = request.get_import_attributes();
-    let mut pairs = Vec::with_capacity(attributes.length() / 3);
-    let mut index = 0;
-    while index + 1 < attributes.length() {
-        let key = attributes
-            .get(scope, index)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let value = attributes
-            .get(scope, index + 1)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        if let (Some(key), Some(value)) = (key, value) {
-            pairs.push((key, value));
-        }
-        index += 3;
-    }
-    ModuleAttributesKey::from_pairs(pairs)
-}
-
 fn worker_module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {
     match phase {
         v8::ModuleImportPhase::kSource => ModuleImportPhase::Source,
@@ -2708,6 +2697,11 @@ fn worker_module_key_for_attributes(
     };
     match module_type {
         "json" => Ok(WorkerModuleKey::json(url.clone(), attributes.clone())),
+        "text" => Ok(WorkerModuleKey {
+            url: url.clone(),
+            module_type: WorkerModuleType::Text,
+            attributes: attributes.clone(),
+        }),
         other => Err(format!("module type `{other}` is not a valid module type")),
     }
 }
@@ -2966,6 +2960,10 @@ fn worker_synthetic_module_evaluation_steps<'s>(
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .and_then(|graph| graph.borrow().synthetic_module_record_for(module))?;
     match synthetic {
+        WorkerSyntheticModuleRecord::Text(source) => {
+            let value = v8_string(scope, &source)?;
+            set_worker_synthetic_default_export(scope, module, value.into())
+        }
         WorkerSyntheticModuleRecord::Json(source) => {
             evaluate_worker_json_synthetic_module(scope, module, &source)
         }
@@ -3116,29 +3114,6 @@ fn throw_worker_synthetic_module_error<'s>(
         .unwrap_or_else(|| v8::undefined(scope).into());
     scope.throw_exception(exception);
     None
-}
-
-fn worker_import_attributes_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    attributes: v8::Local<'_, v8::FixedArray>,
-) -> ModuleAttributesKey {
-    let mut pairs = Vec::with_capacity(attributes.length() / 2);
-    let mut index = 0;
-    while index + 1 < attributes.length() {
-        let key = attributes
-            .get(scope, index)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let value = attributes
-            .get(scope, index + 1)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        if let (Some(key), Some(value)) = (key, value) {
-            pairs.push((key, value));
-        }
-        index += 2;
-    }
-    ModuleAttributesKey::from_pairs(pairs)
 }
 
 pub(super) fn worker_dynamic_import_callback<'s, 'i>(

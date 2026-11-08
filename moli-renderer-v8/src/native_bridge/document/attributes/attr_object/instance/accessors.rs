@@ -1,6 +1,7 @@
 use super::value::{attr_current_value, attr_owner_document_object, attr_owner_element_object};
 use super::*;
 use crate::custom_elements;
+use crate::native_bridge::document::attributes::nullable_state_string as attr_state_nullable_string;
 use crate::native_bridge::element::{
     set_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_ns_appending_to_current_reaction_queue,
@@ -307,20 +308,4 @@ fn attr_value_setter_wrote_native<'s>(
         );
     });
     true
-}
-
-fn attr_state_nullable_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    property: &str,
-) -> Option<String> {
-    let key = v8_string(scope, property)?;
-    let value = state.get(scope, key.into())?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use moli_protocol::automation::{
     AutomationCommand, AutomationContext, DevToolsBrowserContextId, DevToolsSessionId,
@@ -228,23 +228,15 @@ impl BidiCommandOutcome {
 pub(super) fn is_event_subscribed_by(
     subscriptions: &[BidiSubscription],
     event: &Value,
-    context_user_contexts: &BTreeMap<String, String>,
-    context_top_level_contexts: &BTreeMap<String, String>,
+    frame_index: &moli_protocol::frame_index::FrameIndex,
 ) -> bool {
-    !bidi_event_subscribed_channels(
-        subscriptions,
-        event,
-        context_user_contexts,
-        context_top_level_contexts,
-    )
-    .is_empty()
+    !bidi_event_subscribed_channels(subscriptions, event, frame_index).is_empty()
 }
 
 pub(super) fn bidi_event_subscribed_channels(
     subscriptions: &[BidiSubscription],
     event: &Value,
-    context_user_contexts: &BTreeMap<String, String>,
-    context_top_level_contexts: &BTreeMap<String, String>,
+    frame_index: &moli_protocol::frame_index::FrameIndex,
 ) -> BTreeSet<Option<String>> {
     let Some(method) = event.get("method").and_then(Value::as_str) else {
         return BTreeSet::new();
@@ -264,9 +256,11 @@ pub(super) fn bidi_event_subscribed_channels(
         .and_then(Value::as_str)
         .or_else(|| {
             context.and_then(|context| {
-                context_user_contexts
-                    .get(context)
-                    .map(std::string::String::as_str)
+                frame_index.get(context).map(|record| {
+                    crate::user_context::bidi_user_context_from_browser_context_id(
+                        record.browser_context_id.as_deref(),
+                    )
+                })
             })
         });
     subscriptions
@@ -278,7 +272,7 @@ pub(super) fn bidi_event_subscribed_channels(
                         bidi_context_subscription_matches(
                             context,
                             &subscription.contexts,
-                            context_top_level_contexts,
+                            frame_index,
                         )
                     })
                 } else if !subscription.user_contexts.is_empty() {
@@ -296,25 +290,15 @@ pub(super) fn bidi_event_subscribed_channels(
 fn bidi_context_subscription_matches(
     event_context: &str,
     subscribed_contexts: &BTreeSet<String>,
-    context_top_level_contexts: &BTreeMap<String, String>,
+    frame_index: &moli_protocol::frame_index::FrameIndex,
 ) -> bool {
     if subscribed_contexts.contains(event_context) {
         return true;
     }
-    let event_top_level = bidi_top_level_context(event_context, context_top_level_contexts);
-    subscribed_contexts.iter().any(|context| {
-        bidi_top_level_context(context, context_top_level_contexts) == event_top_level
-    })
-}
-
-fn bidi_top_level_context<'a>(
-    context: &'a str,
-    context_top_level_contexts: &'a BTreeMap<String, String>,
-) -> &'a str {
-    context_top_level_contexts
-        .get(context)
-        .map(std::string::String::as_str)
-        .unwrap_or(context)
+    let event_top_level = frame_index.top_level_context(event_context);
+    subscribed_contexts
+        .iter()
+        .any(|context| frame_index.top_level_context(context) == event_top_level)
 }
 
 pub fn parse_bidi_command(message: Value) -> Result<BidiCommand, BidiError> {

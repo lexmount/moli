@@ -33,6 +33,8 @@ struct PerformanceObserverObjectDeclaration<'s> {
     active: (),
     #[webapi(slot = PERFORMANCE_OBSERVER_SCHEDULED_SLOT, init = false)]
     scheduled: (),
+    #[webapi(slot = PERFORMANCE_OBSERVER_REQUIRES_DROPPED_ENTRIES_SLOT, init = false)]
+    requires_dropped_entries: (),
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -170,6 +172,15 @@ pub(in crate::context_bootstrap) fn performance_observer_observe_callback<'s>(
         );
     }
 
+    // observe() rearms reporting before support filtering. An unsupported
+    // type or empty entryTypes keeps an existing registration, but still
+    // requests its cumulative count on the next nonempty delivery.
+    set_performance_observer_bool_slot(
+        scope,
+        args.this(),
+        PERFORMANCE_OBSERVER_REQUIRES_DROPPED_ENTRIES_SLOT,
+        true,
+    );
     let observed_entry_types = if let Some(observed_type) = init.observed_type.as_deref() {
         if !performance_observer_entry_type_supported(scope, observed_type) {
             rv.set_undefined();
@@ -335,6 +346,45 @@ pub(super) fn performance_observer_pending<'s>(
 ) -> Option<v8::Local<'s, v8::Array>> {
     performance_observer_slot_value(scope, observer, PERFORMANCE_OBSERVER_PENDING_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub(super) fn take_performance_observer_dropped_entries_count<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> Option<u64> {
+    if !performance_observer_slot_bool(
+        scope,
+        observer,
+        PERFORMANCE_OBSERVER_REQUIRES_DROPPED_ENTRIES_SLOT,
+    )
+    .unwrap_or(false)
+    {
+        return None;
+    }
+    // Resource Timing is the bounded entry buffer currently exposed by
+    // Moli; mark/measure and the other timelines do not discard queued entries.
+    let observes_resource = performance_observer_entry_types(scope, observer)
+        .is_some_and(|types| array_contains_string(scope, types, "resource"));
+    let count = if observes_resource {
+        super::super::performance_runtime::ensure_current_performance_for_api(scope).map_or(
+            0,
+            |performance| {
+                super::super::performance_runtime::resource_timing_dropped_entries_count(
+                    scope,
+                    performance,
+                )
+            },
+        )
+    } else {
+        0
+    };
+    set_performance_observer_bool_slot(
+        scope,
+        observer,
+        PERFORMANCE_OBSERVER_REQUIRES_DROPPED_ENTRIES_SLOT,
+        false,
+    );
+    Some(count)
 }
 
 pub(super) fn set_performance_observer_pending(

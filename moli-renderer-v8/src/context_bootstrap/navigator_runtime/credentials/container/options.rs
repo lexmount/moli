@@ -9,8 +9,9 @@ use crate::{abort_signal_route::ResolvedAbortSignal, web_api_interfaces, webidl}
 
 use super::super::{
     schema::{Entity, Parameters, RelyingParty, Selection},
-    value::{Dictionary, Text},
+    value::Text,
 };
+use webidl::Dictionary;
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
 #[webidl(name = "CredentialMediationRequirement")]
@@ -90,15 +91,15 @@ impl<'s> webidl::WebIdlConverter<'s> for PasswordInit {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CredentialsContainer.get")]
 pub(super) struct GetArgs<'s> {
-    #[webidl(converter = "raw", default = Dictionary::empty(scope)?)]
-    pub(super) options: Dictionary<Request<'s>>,
+    #[webidl(dictionary)]
+    pub(super) options: Request<'s>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "CredentialsContainer.create")]
 pub(super) struct CreateArgs<'s> {
-    #[webidl(converter = "raw", default = Dictionary::empty(scope)?)]
-    pub(super) options: Dictionary<Creation<'s>>,
+    #[webidl(dictionary)]
+    pub(super) options: Creation<'s>,
 }
 
 #[derive(webidl::WebIdlArgs)]

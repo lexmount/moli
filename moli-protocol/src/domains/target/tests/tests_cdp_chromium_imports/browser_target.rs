@@ -108,16 +108,20 @@ async fn rust_cdp_capability_browser_download_behavior_contract() {
     }))
     .await;
     ctx.expect_result(102_005, json!({}), None);
-    assert_eq!(ctx.conn.download_behavior.behavior, "allowAndName");
-    assert_eq!(
-        ctx.conn.download_behavior.download_path.as_deref(),
-        Some("/tmp/moli-chromium-import-downloads")
-    );
-    assert!(!ctx.conn.download_behavior.automation_events_enabled);
-    assert_eq!(
-        ctx.conn.download_behavior.browser_event_session_ids(),
-        vec![None]
-    );
+    ctx.with_fixture(|conn| assert_eq!(conn.download_behavior.behavior, "allowAndName"));
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.download_behavior.download_path.as_deref(),
+            Some("/tmp/moli-chromium-import-downloads")
+        )
+    });
+    ctx.with_fixture(|conn| assert!(!conn.download_behavior.automation_events_enabled));
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.download_behavior.browser_event_session_ids(),
+            vec![None]
+        )
+    });
 }
 
 // Puppeteer Browser.target().createCDPSession() discovers the browser agent
@@ -210,10 +214,12 @@ async fn rust_cdp_puppeteer_browser_target_session_contract() {
         attached_event["params"]["targetInfo"]["type"],
         json!("browser")
     );
-    assert_eq!(
-        ctx.conn.session_route(Some(&browser_session_id)),
-        Some(crate::conn::CdpSessionRoute::Browser)
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.session_route(Some(&browser_session_id)),
+            Some(crate::conn::CdpSessionRoute::Browser)
+        )
+    });
 
     ctx.process_async(json!({
         "id": 102_104,
@@ -227,10 +233,12 @@ async fn rust_cdp_puppeteer_browser_target_session_contract() {
     }))
     .await;
     ctx.expect_result(102_104, json!({}), Some(&browser_session_id));
-    assert_eq!(
-        ctx.conn.download_behavior.download_path.as_deref(),
-        Some("/tmp/moli-puppeteer-downloads")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.download_behavior.download_path.as_deref(),
+            Some("/tmp/moli-puppeteer-downloads")
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -277,10 +285,12 @@ async fn rust_cdp_chromium_page_session_can_attach_discovered_browser_target() {
             && message["params"]["sessionId"] == json!(browser_session_id)
     });
     assert_eq!(attached["params"]["targetInfo"]["type"], "browser");
-    assert_eq!(
-        ctx.conn.session_route(Some(&browser_session_id)),
-        Some(crate::conn::CdpSessionRoute::Browser)
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.session_route(Some(&browser_session_id)),
+            Some(crate::conn::CdpSessionRoute::Browser)
+        )
+    });
 
     ctx.sent.clear();
     ctx.process_async(json!({
@@ -290,11 +300,13 @@ async fn rust_cdp_chromium_page_session_can_attach_discovered_browser_target() {
     }))
     .await;
     ctx.expect_result(102_207, json!({}), None);
-    assert_eq!(
-        ctx.conn.session_route(Some(&browser_session_id)),
-        None,
-        "detaching the owner page session must release its browser child session"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.session_route(Some(&browser_session_id)),
+            None,
+            "detaching the owner page session must release its browser child session"
+        )
+    });
     assert!(
         ctx.sent.iter().all(|message| {
             message["method"] != json!("Target.detachedFromTarget")
@@ -359,7 +371,7 @@ async fn rust_cdp_chromium_explicit_browser_session_detach_emits_owned_event() {
         detached["params"]["targetId"],
         json!(super::super::browser_context::DEVTOOLS_BROWSER_TARGET_ID)
     );
-    assert_eq!(ctx.conn.session_route(Some(&browser_session_id)), None);
+    ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some(&browser_session_id)), None));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -421,13 +433,14 @@ async fn rust_cdp_capability_target_browser_context_proxy_and_enumeration() {
             .is_some_and(|ids| ids.iter().any(|id| id == &json!(browser_context_id))),
         "{contexts}"
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|context| context.default_http_proxy_override.as_deref()),
-        Some("http://proxy.example:8080")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|context| context.default_http_proxy_override.as_deref()),
+            Some("http://proxy.example:8080")
+        )
+    });
 }
 
 // Capability source: docs/WEB_CAPABILITIES.md multi-tab/session target control.
@@ -445,7 +458,7 @@ async fn rust_cdp_capability_target_create_attach_detach_close_contract() {
         .as_str()
         .unwrap_or_else(|| panic!("browserContextId: {context}"))
         .to_owned();
-    ctx.conn.set_root_target_discovery_enabled(true);
+    ctx.with_fixture(|conn| conn.set_root_target_discovery_enabled(true));
 
     ctx.process_async(json!({
         "id": 104_006,

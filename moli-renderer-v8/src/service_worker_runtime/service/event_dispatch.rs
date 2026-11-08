@@ -244,24 +244,36 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn dispatch_controlled_fetch(&self, dispatch: ServiceWorkerFetchDispatch) -> bool {
+        let request = &dispatch.request;
+        let native_request = {
+            let origin = dispatch.network_context.request_origin.clone();
+            moli_fetch::Request::new_browser(
+                &request.method,
+                request.url.clone(),
+                request.body.clone(),
+                moli_fetch::RequestHeaders::from_byte_strings(&request.headers)
+                    .expect("service worker request headers are ByteStrings"),
+                origin,
+            )
+            .with_initiator_url(&dispatch.network_context.document_url)
+            .with_request_mode(request.request_mode)
+            .with_credentials_mode(request.credentials_mode)
+            .with_redirect_mode(request.redirect_mode)
+            .with_fetch_priority_hint(request.priority)
+        };
+        self.dispatch_controlled_fetch_request(dispatch, native_request)
+    }
+
+    /// Resource interception already owns the complete browser request. Keep
+    /// its redirect headers, partition and policy when the worker falls back.
+    pub(crate) fn dispatch_controlled_fetch_request(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        native_request: moli_fetch::Request,
+    ) -> bool {
         let request = dispatch.request.clone();
         let fetch_job = ServiceWorkerFetchJob {
-            request: {
-                let origin = dispatch.network_context.request_origin.clone();
-                moli_fetch::Request::new_browser(
-                    &request.method,
-                    request.url.clone(),
-                    request.body.clone(),
-                    moli_fetch::RequestHeaders::from_byte_strings(&request.headers)
-                        .expect("service worker request headers are ByteStrings"),
-                    origin,
-                )
-                .with_initiator_url(&dispatch.network_context.document_url)
-                .with_request_mode(request.request_mode)
-                .with_credentials_mode(request.credentials_mode)
-                .with_redirect_mode(request.redirect_mode)
-                .with_fetch_priority_hint(request.priority)
-            },
+            request: native_request,
             internal_id: dispatch.internal_id,
             owner: None,
             cors_preflight_request_headers: dispatch.cors_preflight_request_headers,
@@ -287,16 +299,25 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn dispatch_controlled_fetch_job(
         &self,
         mut fetch_job: ServiceWorkerFetchJob,
-        request: ServiceWorkerFetchRequest,
+        mut request: ServiceWorkerFetchRequest,
     ) -> Result<(), Box<ServiceWorkerFetchJob>> {
-        if let Err(error) = fetch_job.request.browser_origin().and_then(|_| {
-            fetch_job
-                .request
-                .validate_request_mode_for_url(&fetch_job.request.url)
-        }) {
+        if let Err(error) = fetch_job
+            .request
+            .browser_origin()
+            .and_then(|_| fetch_job.request.admit_request_url(&fetch_job.request.url))
+        {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
             return Ok(());
         }
+        fetch_job.request.browser_request_metadata = Some(
+            super::fetch_settlement::service_worker_fetch_browser_metadata(
+                fetch_job.network_context.resource_type,
+            ),
+        );
+        fetch_job
+            .request_client
+            .prepare_service_worker_request(&mut fetch_job.request);
+        request.headers = fetch_job.request.request_headers.to_byte_strings();
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
             let (document_url, storage_key) = match state.live_clients.get(&request.client_id) {

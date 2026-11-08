@@ -8,6 +8,10 @@ use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
 impl Page {
+    pub fn start_stop_document_lifecycle(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::StopDocumentLifecycle)
+    }
+
     pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
         self.handle.take_pending_modal_javascript_dialogs()
     }

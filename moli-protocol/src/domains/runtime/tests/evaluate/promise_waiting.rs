@@ -455,10 +455,10 @@ fn runtime_evaluate_await_promise_without_enable_does_not_create_legacy_global_t
             "never-settling inspector await should defer the response: {:?}",
             ctx.sent
         );
-        assert!(
-            ctx.conn.has_pending_inspector_awaits(),
+        ctx.with_fixture(|conn| { assert!(
+            conn.has_pending_inspector_awaits(),
             "runtimeless awaitPromise should use the inspector pending-await registry"
-        );
+        ) });
 
         ctx.process_async(json!({
             "id": 206_764,
@@ -489,9 +489,11 @@ fn runtime_evaluate_await_promise_pending_is_failed_when_page_closes() {
     runtime.block_on(async {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<html><body>ok</body></html>").await;
-        if let Some(bc) = ctx.conn.browser_context.as_mut() {
-            bc.set_active_target_id("TID-1");
-        }
+        ctx.with_fixture(|conn| {
+            if let Some(bc) = conn.browser_context.as_mut() {
+                bc.set_active_target_id("TID-1");
+            }
+        });
         let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 9_001).await;
         ctx.sent.clear();
 
@@ -510,10 +512,12 @@ fn runtime_evaluate_await_promise_pending_is_failed_when_page_closes() {
             "awaitPromise on a never-resolving promise should defer the response, got: {:?}",
             ctx.sent
         );
-        assert!(
-            ctx.conn.has_pending_inspector_awaits(),
-            "deferred awaitPromise must register a pending inspector entry"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.has_pending_inspector_awaits(),
+                "deferred awaitPromise must register a pending inspector entry"
+            )
+        });
 
         ctx.process_async(json!({
             "id": 9_003,
@@ -524,10 +528,12 @@ fn runtime_evaluate_await_promise_pending_is_failed_when_page_closes() {
         let failed = take_response_by_id(&mut ctx, 9_002);
         assert_eq!(failed["error"]["code"], json!(-32000));
         assert_eq!(failed["error"]["message"], json!("Page closed"));
-        assert!(
-            !ctx.conn.has_pending_inspector_awaits(),
-            "all pending inspector awaits should be cleared after Page.close"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn.has_pending_inspector_awaits(),
+                "all pending inspector awaits should be cleared after Page.close"
+            )
+        });
     });
 }
 
@@ -600,16 +606,19 @@ fn runtime_evaluate_await_promise_pending_is_terminated_once_by_navigation_repla
             // whose Document is destroyed during navigation.
             json!("Execution context was destroyed.")
         );
-        assert!(
-            ctx.conn
-                .renderer_runtime_command_cause_for_frontend(Some("SID-1"), 9_012)
-                .is_none(),
-            "terminal replacement response must consume the renderer correlation"
-        );
-        assert!(
-            !ctx.conn.has_pending_inspector_awaits(),
-            "terminal replacement response must consume the pending command owner"
-        );
+        ctx.with_fixture(|conn| {
+            assert!(
+                conn.renderer_runtime_command_cause_for_frontend(Some("SID-1"), 9_012)
+                    .is_none(),
+                "terminal replacement response must consume the renderer correlation"
+            )
+        });
+        ctx.with_fixture(|conn| {
+            assert!(
+                !conn.has_pending_inspector_awaits(),
+                "terminal replacement response must consume the pending command owner"
+            )
+        });
     });
 }
 
@@ -629,12 +638,12 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
             "TID-1",
         )
         .await;
-        let old_attachment = ctx
-            .conn
-            .current_renderer_agent_attachment_id_for_owner(
+        let old_attachment = ctx.with_fixture(|conn| {
+            conn.current_renderer_agent_attachment_id_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
             )
-            .expect("old Page attachment");
+            .expect("old Page attachment")
+        });
         let frontend_id = 9_021;
         let payload = json!({
             "id": frontend_id,
@@ -645,15 +654,15 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
         .to_string();
         let descriptor = crate::conn::RendererCommandDescriptor::from_synthesized_payload(payload)
             .expect("supported replay command");
-        let prepared = ctx
-            .conn
-            .try_register_renderer_call_for_session_owner(
+        let prepared = ctx.with_fixture(|conn| {
+            conn.try_register_renderer_call_for_session_owner(
                 Some("SID-1"),
                 frontend_id,
                 Some(old_attachment),
                 descriptor,
             )
-            .expect("register replay command");
+            .expect("register replay command")
+        });
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
         let response_receiver = response_receiver
             .expect("a synthesized AdapterReply call must allocate a response receiver");
@@ -668,12 +677,12 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
         }))
         .await;
 
-        let new_attachment = ctx
-            .conn
-            .current_renderer_agent_attachment_id_for_owner(
+        let new_attachment = ctx.with_fixture(|conn| {
+            conn.current_renderer_agent_attachment_id_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-1"),
             )
-            .expect("replacement Page attachment");
+            .expect("replacement Page attachment")
+        });
         assert_ne!(new_attachment, old_attachment);
         assert!(
             old_sender
@@ -701,16 +710,16 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
             json!({})
         );
 
-        let resolved = ctx
-            .conn
-            .resolve_runtime_inspector_response_ready(
+        let resolved = ctx.with_fixture(|conn| {
+            conn.resolve_runtime_inspector_response_ready(
                 crate::conn::RuntimeInspectorResponseReady::new(
                     frontend_id,
                     Some("SID-1"),
                     Ok(completion),
                 ),
             )
-            .expect("current replay completion must consume its frontend correlation");
+            .expect("current replay completion must consume its frontend correlation")
+        });
         assert_eq!(resolved.command_id(), frontend_id);
     });
 }

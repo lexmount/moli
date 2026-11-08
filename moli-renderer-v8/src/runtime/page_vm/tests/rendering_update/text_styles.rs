@@ -458,12 +458,15 @@ document.close();
             .eval("document.querySelector('#layout-web-font').remove(); 'removed'")?;
         page_vm
             .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page_vm
+            .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
             .expect("replacement Document should remain layoutable");
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),
             (0, 0, 0),
-            "the next one-shot demand must revoke a removed @font-face without a generation fence"
+            "resource processing must revoke a removed @font-face before the next layout"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -516,6 +519,9 @@ document.body.textContent = 'R中';
 "#
         ))?;
 
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 80, 1.0))?
@@ -584,6 +590,9 @@ document.body.innerHTML = '<div id=normal class=case>中</div><div id=medium cla
 'installed'
 "#
         ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 160, 1.0))?
@@ -946,6 +955,9 @@ html,body{{margin:0;padding:0}}
         );
         assert_eq!(computed["disabled"]["color"], "rgba(16, 16, 16, 0.3)");
 
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 120, 1.0))?
@@ -1024,6 +1036,9 @@ html,body{{margin:0;padding:0;background:white}}
             serde_json::to_string("<div id=emoji>®️⁉️8️⃣</div>")?,
         ))?;
 
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 100, 1.0))?
@@ -1102,6 +1117,9 @@ html,body{{margin:0;padding:0}}
                 serde_json::to_string(&(fixed_css.clone() + case_css))?,
                 serde_json::to_string(body)?,
             ))?;
+            page_vm
+                .vm_mut()
+                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
             page_vm
                 .vm_mut()
                 .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 200, 1.0))?

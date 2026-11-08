@@ -47,9 +47,10 @@ pub use moli_renderer_v8::{
 };
 pub use navigation_engine::{
     BuiltDocumentPage, CommittedDocumentPageReplacement, CommittedDocumentResourceSource,
-    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
-    NavigationRuntimeConfig, PendingBuiltDocumentPage, PreparedDocumentPage,
-    PreparedDocumentPageCommitConfiguration, PreparedDocumentPageCommitPermit,
+    CompletedDocumentPageReplacement, NavigationEngine, NavigationPageStorageHandles,
+    NavigationResourceStorageHandles, NavigationRuntimeConfig, PendingBuiltDocumentPage,
+    PendingDocumentPageReplacement, PreparedDocumentPage, PreparedDocumentPageCommitConfiguration,
+    PreparedDocumentPageCommitPermit,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -162,10 +163,10 @@ impl Drop for BrowserLifetimeOwner {
             drop(js_runtime);
         }
         self.browser_context_owner.shutdown_and_join();
-        if let Err(error) = self.partition.flush() {
+        if let Err(error) = self.partition.shutdown() {
             warn!(
                 error = %error,
-                "failed to flush browser storage partition"
+                "failed to close browser storage partition"
             );
         }
         debug!("browser renderer and resource owners joined");
@@ -291,7 +292,7 @@ impl Browser {
         let browser_context_access = browser_context_owner.owner_access();
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
-            .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
+            .context("browser context resource owner unavailable")?;
         let js_runtime =
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
@@ -1457,11 +1458,23 @@ fn external_raw_document_body_from_streaming_response_with_observer_and_progress
     body_stream
 }
 
-fn streaming_raw_response_from_navigation_response(
-    response: NavigationResponse,
+pub fn streaming_raw_response_from_navigation_response(
+    mut response: NavigationResponse,
 ) -> Result<StreamingRawResponse> {
     let head = response.head();
-    let body = response.clone_body_bytes();
+    let body = response.take_body_bytes();
+    streaming_raw_response_from_raw_response(moli_fetch::RawResponse::from_head_and_body(
+        head, body,
+    ))
+}
+
+pub fn streaming_raw_response_from_raw_response(
+    response: moli_fetch::RawResponse,
+) -> Result<StreamingRawResponse> {
+    let (head, body) = response.into_body();
+    let body = body
+        .try_into_materialized_bytes()
+        .map_err(|_| anyhow!("navigation response body must be materialized"))?;
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
     if !body.is_empty() {
         body_tx

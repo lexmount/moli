@@ -526,8 +526,10 @@ impl DynamicModuleInflightFetch {
         self.request.tree_client()
     }
 
-    pub(crate) fn fetch_metadata(&self) -> &super::ModuleFetchMetadata {
-        self.request.fetch_metadata()
+    pub(crate) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.request.csp_context()
     }
 
     #[cfg(test)]
@@ -700,7 +702,7 @@ fn chromium_module_key(key: &ModuleMapKey) -> module_tree::ModuleMapKey {
             ModuleKind::JavaScript => module_tree::ModuleKind::JavaScript,
             ModuleKind::Json => module_tree::ModuleKind::Json,
             ModuleKind::Css => module_tree::ModuleKind::Css,
-            ModuleKind::ModulePreloadText => module_tree::ModuleKind::JavaScript,
+            ModuleKind::Text => module_tree::ModuleKind::Text,
             ModuleKind::WebAssembly => module_tree::ModuleKind::WebAssembly,
         },
         module_tree::ModuleAttributesKey::from_pairs(key.attributes().pairs().to_vec()),

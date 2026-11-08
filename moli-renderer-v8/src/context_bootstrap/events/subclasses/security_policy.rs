@@ -57,46 +57,15 @@ pub(super) struct SecurityPolicyViolationEventInit {
     violated_directive: webidl::DomString16,
 }
 
-impl Default for SecurityPolicyViolationEventInit {
-    fn default() -> Self {
-        Self {
-            base: EventInit::default(),
-            blocked_uri: String::new(),
-            column_number: 0,
-            disposition: SecurityPolicyViolationEventDisposition::Enforce,
-            document_uri: String::new(),
-            effective_directive: webidl::DomString16(Vec::new()),
-            line_number: 0,
-            original_policy: webidl::DomString16(Vec::new()),
-            referrer: String::new(),
-            sample: webidl::DomString16(Vec::new()),
-            source_file: String::new(),
-            status_code: 0,
-            violated_directive: webidl::DomString16(Vec::new()),
-        }
-    }
-}
-
 pub(super) fn parse_security_policy_violation_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<SecurityPolicyViolationEventInit> {
-    let parsed = webidl::dictionary_arg(
+    crate::context_bootstrap::events::parse_event_dictionary(
+        scope,
         args,
-        1,
-        webidl::Context::argument("SecurityPolicyViolationEvent", 2),
+        "SecurityPolicyViolationEvent",
     )
-    .and_then(|object| match object {
-        Some(object) => webidl::parse_dictionary_object(scope, object),
-        None => Ok(SecurityPolicyViolationEventInit::default()),
-    });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 impl SecurityPolicyViolationEventInit {

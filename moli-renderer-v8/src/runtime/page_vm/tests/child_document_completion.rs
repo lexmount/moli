@@ -292,6 +292,79 @@ async fn failed_child_document_fetch_is_applied_only_to_its_exact_current_reques
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retiring_child_navigation_without_fetch_interception_cancels_transport() {
+    run_page_vm_async_test(async move {
+        for remove in [true, false] {
+            let (base_url, request_seen, disconnected, server) =
+                spawn_request_seen_disconnect_observing_http_server().await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+                .expect("loader");
+            let (mut page_vm, mut queue, mut wake_rx) =
+                owner_attached_page_vm(&loader, Url::parse(&format!("{base_url}/page.html"))?);
+            let (handle, target) = start_external_child_document_load(
+                &mut page_vm,
+                "cancel-child-frame",
+                &format!("{base_url}/held-child"),
+            )
+            .await;
+            tokio::time::timeout(Duration::from_secs(2), request_seen).await??;
+
+            if remove {
+                page_vm
+                    .vm_mut()
+                    .eval("document.getElementById('cancel-child-frame').remove()")?;
+            } else {
+                page_vm.vm_mut().eval(
+                    "document.getElementById('cancel-child-frame').srcdoc = \
+                     '<p id=cancel-replacement>replacement</p>'",
+                )?;
+                run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                    &mut page_vm,
+                    ChildFrameSemanticTurnKind::NavigationCommit,
+                    "cancelled transport replacement",
+                )
+                .await;
+            }
+
+            assert!(
+                disconnected.await?,
+                "retiring a child navigation must close its transport even with Fetch disabled"
+            );
+            assert_ne!(
+                page_vm
+                    .vm()
+                    .current_child_document_navigation_fetch_target(handle),
+                Some(target)
+            );
+            wait_for_page_resource_completion(&mut queue, &mut wake_rx, "cancelled child fetch")
+                .await;
+            let outcome = page_vm
+                .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                .expect("cancelled request retains its exact terminal owner");
+            assert!(matches!(
+                outcome.action.document_effect,
+                PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }
+            ));
+            assert!(page_vm.take_completed_child_document_networks().is_empty());
+            if !remove {
+                assert_eq!(
+                    page_vm.vm_mut().eval(
+                        "document.getElementById('cancel-child-frame').contentDocument\
+                         .getElementById('cancel-replacement').textContent"
+                    )?,
+                    "replacement"
+                );
+            }
+            assert!(!queue.has_ready_completion());
+            server.await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child navigation transport cancellation test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn response_for_replaced_child_document_is_historical_network_only() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -315,6 +388,10 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
             &retired_url,
         )
         .await;
+        // The response has arrived, but its owner turn has not run. Replacing
+        // the navigation must preserve this fact without committing it.
+        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "completed child response")
+            .await;
 
         page_vm.vm_mut().eval(
             "document.getElementById('replacement-child-frame').srcdoc = \
@@ -331,7 +408,7 @@ async fn response_for_replaced_child_document_is_historical_network_only() {
                 .vm()
                 .current_child_document_navigation_fetch_target(handle),
             Some(retired_target),
-            "replacement must retire the exact fetch target before its response arrives"
+            "replacement must retire the exact fetch target before its terminal is applied"
         );
         let _ = page_vm.take_completed_child_frame_navigation_loads();
         while wake_rx.try_recv().is_ok() {}
@@ -421,6 +498,8 @@ async fn stale_same_root_terminal_does_not_settle_newer_exact_navigation() {
             &older_url,
         )
         .await;
+        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "completed older response")
+            .await;
         page_vm.vm_mut().eval(&format!(
             "document.getElementById('same-root-navigation-frame').src = {newer_url:?};"
         ))?;
@@ -558,6 +637,8 @@ document.getElementById("nested-owner-frame").contentDocument.body.appendChild(n
             "nested external navigation start",
         )
         .await;
+        wait_for_page_resource_completion(&mut queue, &mut wake_rx, "completed nested response")
+            .await;
         page_vm.vm_mut().eval(
             r#"
 document.getElementById("nested-owner-frame").contentDocument
@@ -738,6 +819,7 @@ pub(super) fn stale_loaded_completion(
                     encoded_data_length: 0,
                     response_body: None,
                     from_cache: false,
+                    cache_state: Default::default(),
                 }),
             },
         ))),

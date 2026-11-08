@@ -25,6 +25,7 @@ pub(crate) fn merge_cached_not_modified_streaming_response_lookup(
 ) -> Result<CachedStreamingResponseLookup> {
     let headers = merge_not_modified_headers(&cached.headers, not_modified_headers);
     cached.headers = headers.clone();
+    cached.cache_state = crate::ResponseCacheState::Validated;
     cached.metadata.headers = headers.clone();
 
     let final_url = Url::parse(&cached.final_url).with_context(|| {

@@ -14,9 +14,11 @@ use super::super::{
     crypto::install_crypto_template_bindings,
     css_runtime::install_css_typed_om_template_bindings,
     css_stylesheet_runtime::install_css_stylesheet_template_bindings,
+    dom_quad::install_dom_quad_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
     dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
+    exposed_interfaces::TemplateBuildProfile,
     file_api::install_file_api_template_bindings,
     geometry_runtime::install_geometry_template_bindings,
     idle_detection::install_idle_detector_template_bindings,
@@ -54,9 +56,7 @@ use super::super::{
     time_ranges::install_time_ranges_template_bindings,
     touch_runtime::install_touch_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
-    web_audio_runtime::{
-        audio_buffer_get_channel_data_callback, install_web_audio_template_bindings,
-    },
+    web_audio_runtime::install_web_audio_template_bindings,
     webrtc::install_webrtc_template_bindings,
     websocket::{install_websocket_bindings, install_websocket_stream_bindings},
     window_runtime::storage_bucket_caches_getter_callback,
@@ -185,17 +185,6 @@ struct HtmlCanvasElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::AudioBuffer, enumerable)]
-struct AudioBufferTemplateMethodsDeclaration {
-    #[webapi(
-        method = "getChannelData",
-        length = 1,
-        callback = audio_buffer_get_channel_data_callback
-    )]
-    get_channel_data: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Worker, enumerable)]
 struct WorkerTemplateMethodsDeclaration {
     #[webapi(
@@ -214,7 +203,7 @@ struct WorkerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransfer, enumerable, receiver)]
 struct DataTransferTemplateMethodsDeclaration {
     #[webapi(
         method = "getData",
@@ -239,7 +228,7 @@ struct DataTransferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable, receiver)]
 struct DataTransferItemTemplateMethodsDeclaration {
     #[webapi(
         method = "getAsFile",
@@ -264,7 +253,7 @@ struct DataTransferItemTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable, receiver)]
 struct DataTransferItemListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -405,12 +394,14 @@ pub(super) fn install_constructor_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) {
     install_node_mixin_unscopables(scope, template, spec.interface.name());
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
     install_css_style_declaration_template_accessors(scope, template, spec.interface.name());
     install_abort_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
+    install_dom_quad_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
     install_time_ranges_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_list_template_bindings(scope, template, spec.interface.name());
@@ -418,7 +409,12 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
-    install_geometry_template_bindings(scope, template, spec.interface.name());
+    install_geometry_template_bindings(scope, template, spec.interface.name(), profile);
+    if spec.interface.name() == "EncodedVideoChunk" {
+        super::super::encoded_video_chunk::install_encoded_video_chunk_template_bindings(
+            scope, template,
+        );
+    }
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
@@ -629,10 +625,6 @@ pub(super) fn install_constructor_template_bindings<'s>(
         }
         "Navigation" => {
             install_navigation_bindings(scope, template);
-        }
-        "AudioBuffer" => {
-            let proto = template.prototype_template(scope);
-            AudioBufferTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
         "Worker" => {
             let proto = template.prototype_template(scope);

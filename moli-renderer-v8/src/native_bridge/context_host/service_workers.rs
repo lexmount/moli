@@ -273,6 +273,16 @@ impl JsContextHost {
         &mut self,
         dispatch_scope: OwnerDispatchScope,
     ) -> Option<ServiceWorkerWindowRequestContext> {
+        // close() marks the Window closed before its queued document cleanup.
+        // New requests would lose their resolvers when that cleanup runs.
+        if self.browsing_context_is_closed() {
+            return None;
+        }
+        if let OwnerDispatchScope::LightweightPopup(popup_id) = dispatch_scope
+            && !self.lightweight_popup_is_open(popup_id)
+        {
+            return None;
+        }
         let owner = self.service_worker_window_owner_for_dispatch_scope(dispatch_scope)?;
         let (document_url, storage_key) = match dispatch_scope {
             OwnerDispatchScope::Top => (

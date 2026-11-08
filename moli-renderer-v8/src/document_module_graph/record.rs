@@ -15,16 +15,14 @@ pub(crate) enum ModuleSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleGraphFetchedSource {
     final_url: Url,
-    redirected: bool,
     response_referrer_policy: Option<String>,
     source: ModuleSource,
 }
 
 impl ModuleGraphFetchedSource {
-    pub(crate) fn new(final_url: Url, redirected: bool, source: ModuleSource) -> Self {
+    pub(crate) fn new(final_url: Url, source: ModuleSource) -> Self {
         Self {
             final_url,
-            redirected,
             response_referrer_policy: None,
             source,
         }
@@ -40,10 +38,6 @@ impl ModuleGraphFetchedSource {
 
     pub(crate) fn final_url(&self) -> &Url {
         &self.final_url
-    }
-
-    pub(crate) fn redirected(&self) -> bool {
-        self.redirected
     }
 
     pub(crate) fn response_referrer_policy(&self) -> Option<&str> {
@@ -64,9 +58,10 @@ impl ModuleGraphFetchedSource {
                 self.final_url.clone(),
                 request_key.attributes().clone(),
             ),
-            ModuleKind::ModulePreloadText => {
-                ModuleMapKey::modulepreload_text(self.final_url.clone())
-            }
+            ModuleKind::Text => ModuleMapKey::text_with_attributes(
+                self.final_url.clone(),
+                request_key.attributes().clone(),
+            ),
             ModuleKind::WebAssembly => ModuleMapKey::webassembly(self.final_url.clone()),
         }
     }

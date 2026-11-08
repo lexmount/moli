@@ -146,7 +146,15 @@ fn websocket_close_info_validation_matches_web_api_rules() {
     );
 
     assert_eq!(close_info_code_from_number(3000.4), Ok(3000));
-    assert_eq!(close_info_code_from_number(3000.5), Ok(3001));
+    assert_eq!(close_info_code_from_number(3000.5), Ok(3000));
+    assert_eq!(close_info_code_from_number(3001.5), Ok(3001));
+    assert_eq!(close_info_code_from_number(1000.5), Ok(1000));
+    for code in [999.5, 68_536.0, -62_536.0, 4_294_970_296.0] {
+        assert_eq!(
+            close_info_code_from_number(code),
+            Err(WebSocketCloseValidationError::InvalidCode)
+        );
+    }
     assert_eq!(
         close_info_code_from_number(f64::NAN),
         Err(WebSocketCloseValidationError::InvalidCode)
@@ -410,6 +418,35 @@ fn websocket_request_preparation_decodes_percent_encoded_userinfo_for_basic_auth
             .and_then(|value| value.to_str().ok()),
         Some("Basic Zm9vIGJhcjpwQHNz")
     );
+}
+
+#[test]
+fn websocket_basic_auth_preserves_plus_and_forgiving_percent_decoding() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let context = test_websocket_context();
+    for (userinfo, expected) in [
+        ("user+name:p+ss", "user+name:p+ss"),
+        ("user%ZZ:p%4", "user%ZZ:p%4"),
+        ("%FF%80:%E4%B8%AD", "\u{fffd}\u{fffd}:中"),
+        ("user:%E2%82", "user:\u{fffd}"),
+        ("%C0%AF:pass", "\u{fffd}\u{fffd}:pass"),
+        ("%EF%BF%BD:pass", "\u{fffd}:pass"),
+    ] {
+        let request = prepare_websocket_request(
+            &format!("ws://{userinfo}@example.com/socket"),
+            &[],
+            &context,
+        )
+        .expect("websocket request should build");
+        let header = request.headers[http::header::AUTHORIZATION]
+            .to_str()
+            .expect("ASCII Basic authorization");
+        let decoded = STANDARD
+            .decode(header.strip_prefix("Basic ").expect("Basic authorization"))
+            .expect("base64 credentials");
+        assert_eq!(decoded, expected.as_bytes(), "{userinfo}");
+    }
 }
 
 #[tokio::test]

@@ -6,7 +6,6 @@
 use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::ffi::c_void;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{
@@ -51,8 +50,8 @@ use super::{
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
 use crate::context_bootstrap::{
-    WebCryptoRejection, install_simple_event_target_methods,
-    simple_object_event_listeners_snapshot, simple_object_event_set_handler,
+    WebCryptoRejection, initialize_simple_event_target, simple_object_event_listeners_snapshot,
+    simple_object_event_set_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::xhr_has_upload_listeners;
@@ -60,28 +59,25 @@ use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
-    XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT,
-    XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
-    append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
-    apply_xhr_response_body_source, apply_xhr_timeout,
+    XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
+    XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
+    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, begin_xhr_send,
     browser_request_needs_manual_preflight_redirects,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
-    dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
-    enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
-    extract_subresource_auth_challenge,
+    dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
+    error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
-    local_url_response_result, parse_fetch_init, request_input_snapshot,
-    request_object_credentials_mode, reset_xhr_response_for_request_error, resolve_context_url,
-    set_xhr_state_bool, set_xhr_state_number, throw_synchronous_xhr_failure,
+    local_url_response_result, parse_fetch_init, request_object_credentials_mode,
+    resolve_context_url, set_xhr_state_number, throw_synchronous_xhr_failure,
     validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
-    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
+    xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
@@ -154,15 +150,15 @@ use timers::*;
 pub(crate) use xhr::*;
 
 pub(super) use async_tasks::{
-    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, drain_worker_opfs_completion,
-    drain_worker_webcrypto_completion,
+    PendingWorkerWebCryptoTask, WorkerOpfsOwnerState, drain_one_worker_blob_read,
+    drain_worker_opfs_completion, drain_worker_webcrypto_completion,
 };
 pub(crate) use async_tasks::{
     WorkerOpfsCompletion, WorkerWebCryptoCompletion, cancel_worker_opfs_task,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
-    register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
-    register_worker_webcrypto_task, worker_opfs_directory_iterator_registry,
-    worker_opfs_handle_registry,
+    register_worker_blob_read_task, register_worker_opfs_iterator_task,
+    register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
+    worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
 };
 use bootstrap::{
     constructor_prototype, ensure_worker_interface_constructor, set_worker_to_string_tag,
@@ -240,9 +236,9 @@ pub(super) use service_worker_results::{
 };
 use state::worker_close_callback;
 pub(crate) use state::{
-    WORKER_STATE_SLOT, WorkerGlobalState, get_worker_state, worker_current_script_url,
-    worker_exception_report_target, worker_global_is_closed, worker_realm_secure_context_available,
+    WorkerGlobalState, get_worker_state, worker_current_script_url, worker_exception_report_target,
+    worker_global_is_closed, worker_realm_secure_context_available,
     worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
-    worker_termination_requested, worker_uses_shared_worker_agent_cluster,
+    worker_termination_requested,
 };
 pub(super) use timers::{TimerInfo, WorkerIsolateTimerQueues, worker_isolate_timer_queues};

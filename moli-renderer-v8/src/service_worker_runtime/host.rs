@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::{Context as _, Result};
 use std::sync::Arc;
 
 use moli_storage_key::MoliStorageKey;
@@ -139,7 +141,7 @@ impl RendererServiceWorkerHost {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<crate::runtime::RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         let dispatched = {
             let state = self.state.lock();
@@ -147,7 +149,7 @@ impl RendererServiceWorkerHost {
                 handle: Some(handle),
             } = &*state
             else {
-                return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+                return Err(WorkerInspectorError::ServiceUnavailable.into());
             };
             handle.dispatch_runtime_protocol_message(
                 inspector_session_id,
@@ -157,11 +159,11 @@ impl RendererServiceWorkerHost {
             )
         };
         if !dispatched {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         }
         response_rx
             .await
-            .map_err(|_| "ServiceWorkerRuntimeUnavailable".to_owned())?
+            .context(WorkerInspectorError::ServiceUnavailable)?
     }
 
     pub(super) async fn dispatch_worker_runtime_protocol_message_with_deferred_response(
@@ -169,7 +171,7 @@ impl RendererServiceWorkerHost {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: crate::runtime::RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_worker_runtime_protocol_message(
             inspector_session_id,
             raw_json,
@@ -182,7 +184,7 @@ impl RendererServiceWorkerHost {
         &self,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_worker_runtime_protocol_message(inspector_session_id, raw_json, None)
             .await
     }

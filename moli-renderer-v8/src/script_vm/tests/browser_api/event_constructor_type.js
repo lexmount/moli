@@ -52,9 +52,9 @@
     get newURL() { urls.push('newURL'); return 'new\ud800'; },
     get oldURL() { urls.push('oldURL'); return 'old\udc00'; }
   });
-  check('HashChangeEvent URLs convert as USVString in dictionary order',
-    urls.join(',') === 'newURL,oldURL' && hashEvent.newURL === 'new\ufffd' &&
-    hashEvent.oldURL === 'old\ufffd' && hashEvent.type === raw && !hashEvent.isTrusted);
+  check('HashChangeEvent URLs convert as DOMString in dictionary order',
+    urls.join(',') === 'newURL,oldURL' && hashEvent.newURL === 'new\ud800' &&
+    hashEvent.oldURL === 'old\udc00' && hashEvent.type === raw && !hashEvent.isTrusted);
   const emptyHashEvent = new HashChangeEvent('hashchange');
   check('HashChangeEvent URL defaults', emptyHashEvent.oldURL === '' && emptyHashEvent.newURL === '');
   const hashSentinel = new RangeError('URL conversion');

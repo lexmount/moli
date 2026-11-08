@@ -2,18 +2,18 @@ use crate::dom::native::{NativeDom, NativeNodeId};
 use crate::runtime::page_surface::{
     RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
 };
+use moli_html2md::Dom;
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
 
 use super::page_vm::PageVm;
 
+mod live_dom;
+mod visibility;
+
 impl PageVm {
     pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
-        if options.format == RendererPageDumpFormat::Markdown
-            && !options.with_base
-            && !options.with_frames
-            && options.strip == RendererPageDumpStripOptions::default()
-        {
-            return render_markdown_document(self.vm().document_runtime.dom_host().dom());
+        if options.format == RendererPageDumpFormat::Markdown {
+            return self.render_markdown_dump(options.strip);
         }
         let mut dom = self.vm().document_runtime.dom_host().dom().clone();
 
@@ -31,10 +31,73 @@ impl PageVm {
         }
         apply_strip_options(&mut dom, options.strip);
 
-        match options.format {
-            RendererPageDumpFormat::Html => dom.serialize_document(),
-            RendererPageDumpFormat::Markdown => render_markdown_document(&dom),
+        dom.serialize_document()
+    }
+
+    fn render_markdown_dump(&self, strip: RendererPageDumpStripOptions) -> String {
+        let host = self.vm().document_runtime.dom_host();
+        let dom = live_dom::LiveDom::new(host);
+        if dom.has_shadow_roots() {
+            self.render_markdown_source(&dom, strip)
+        } else {
+            self.render_markdown_source(host.dom(), strip)
         }
+    }
+
+    fn render_markdown_source(
+        &self,
+        dom: &impl live_dom::MarkdownSource,
+        strip: RendererPageDumpStripOptions,
+    ) -> String {
+        let base_url = self.vm().document_runtime.dom_host().document_base_url();
+        let native = dom.native();
+        let mut nodes = Vec::new();
+        if let Some(body) = native.body_node_id() {
+            if let Some(html) = native.document_element_node_id() {
+                nodes.push(html);
+            }
+            collect_node_ids(dom, body, &mut nodes);
+        } else {
+            collect_node_ids(dom, native.document_node_id(), &mut nodes);
+        }
+        nodes.retain(|node| matches!(dom.node_kind(*node), moli_html2md::NodeKind::Element(_)));
+        let values = self
+            .vm()
+            .computed_style_export_values_for_document_snapshot(
+                nodes.iter().copied(),
+                &[
+                    "display",
+                    "visibility",
+                    "baseline-shift",
+                    "position",
+                    "float",
+                    "flex-direction",
+                ]
+                .map(str::to_owned),
+            );
+        let styles = nodes
+            .iter()
+            .copied()
+            .zip(values)
+            .map(|(node, style)| {
+                let mut values = style.values.into_iter();
+                (
+                    node,
+                    visibility::ExportStyle {
+                        display: values.next().unwrap_or_default(),
+                        visibility: values.next().unwrap_or_default(),
+                        baseline_shift: values.next().unwrap_or_default(),
+                        position: values.next().unwrap_or_default(),
+                        float: values.next().unwrap_or_default(),
+                        flex_direction: values.next().unwrap_or_default(),
+                        original_display: style.original_display,
+                        own_visibility: style.own_visibility,
+                        hides_contents: style.hides_contents,
+                    },
+                )
+            })
+            .collect();
+        render_markdown_view(dom, styles, base_url.as_ref(), strip)
     }
 
     fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
@@ -125,40 +188,7 @@ fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions)
 
     let mut remove = Vec::new();
     for node_id in node_ids {
-        let Some(node) = dom.node(node_id) else {
-            continue;
-        };
-        let Some(element) = node.as_element() else {
-            continue;
-        };
-        let tag = element.local_name();
-        let should_remove = (strip.js && matches!(tag, "script" | "noscript"))
-            || (strip.css
-                && (tag == "style"
-                    || (tag == "link"
-                        && dom
-                            .get_attribute(node_id, "rel")
-                            .unwrap_or_default()
-                            .split_ascii_whitespace()
-                            .any(|token| token.eq_ignore_ascii_case("stylesheet")))))
-            || (strip.ui
-                && matches!(
-                    tag,
-                    "header"
-                        | "footer"
-                        | "nav"
-                        | "aside"
-                        | "form"
-                        | "input"
-                        | "button"
-                        | "select"
-                        | "textarea"
-                        | "option"
-                        | "dialog"
-                        | "menu"
-                        | "menuitem"
-                ));
-        if should_remove {
+        if should_strip_node(dom, node_id, strip) {
             remove.push(node_id);
         }
     }
@@ -172,23 +202,87 @@ fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions)
     }
 }
 
-fn collect_node_ids(dom: &NativeDom, node_id: NativeNodeId, out: &mut Vec<NativeNodeId>) {
+fn should_strip_node(
+    dom: &NativeDom,
+    node_id: NativeNodeId,
+    strip: RendererPageDumpStripOptions,
+) -> bool {
+    let Some(element) = dom.node(node_id).and_then(|node| node.as_element()) else {
+        return false;
+    };
+    let tag = element.local_name();
+    (strip.js && matches!(tag, "script" | "noscript"))
+        || (strip.css
+            && (tag == "style"
+                || (tag == "link"
+                    && element
+                        .attribute("rel")
+                        .unwrap_or_default()
+                        .split_ascii_whitespace()
+                        .any(|token| token.eq_ignore_ascii_case("stylesheet")))))
+        || (strip.ui
+            && matches!(
+                tag,
+                "header"
+                    | "footer"
+                    | "nav"
+                    | "aside"
+                    | "form"
+                    | "input"
+                    | "button"
+                    | "select"
+                    | "textarea"
+                    | "option"
+                    | "dialog"
+                    | "menu"
+                    | "menuitem"
+            ))
+}
+
+fn collect_node_ids(
+    dom: &impl Dom<NodeId = NativeNodeId>,
+    node_id: NativeNodeId,
+    out: &mut Vec<NativeNodeId>,
+) {
     let mut stack = vec![node_id];
     while let Some(node_id) = stack.pop() {
         out.push(node_id);
-        let child_ids = dom.child_ids(node_id).collect::<Vec<_>>();
+        let child_ids = dom.children(node_id).collect::<Vec<_>>();
         stack.extend(child_ids.into_iter().rev());
     }
 }
 
+#[cfg(test)]
 fn render_markdown_document(dom: &NativeDom) -> String {
-    let root = dom.body_node_id().unwrap_or(dom.document_node_id());
+    render_markdown_document_with_styles(dom, Vec::new(), None)
+}
+
+#[cfg(test)]
+fn render_markdown_document_with_styles(
+    dom: &NativeDom,
+    styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
+    base_url: Option<&url::Url>,
+) -> String {
+    render_markdown_view(dom, styles, base_url, Default::default())
+}
+
+fn render_markdown_view(
+    dom: &impl live_dom::MarkdownSource,
+    styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
+    base_url: Option<&url::Url>,
+    strip: RendererPageDumpStripOptions,
+) -> String {
+    let root = dom
+        .native()
+        .body_node_id()
+        .unwrap_or(dom.native().document_node_id());
+    let visible = visibility::MarkdownDom::new(dom, styles, base_url, strip);
     moli_html2md::Converter::new(moli_html2md::Options {
         max_depth: MAX_DOM_OUTPUT_TREE_DEPTH,
         default_code_language: Some("text".to_owned()),
         ..Default::default()
     })
-    .convert(dom, root)
+    .convert(&visible, root)
 }
 
 #[cfg(test)]
@@ -210,6 +304,48 @@ mod tests {
     fn markdown_from_html(html: &str) -> String {
         let dom = HtmlParser::SCRIPTING_DISABLED.parse(test_url(), html.to_owned());
         render_markdown_document(&dom)
+    }
+
+    #[test]
+    fn markdown_computed_outer_display_preserves_text_boundaries() {
+        for (display, expected) in [
+            ("flow-root list-item", "Before\n\nItem\n\nAfter"),
+            ("inline list-item", "Before Item After"),
+            ("inline flow-root list-item", "Before Item After"),
+            ("inline-block", "BeforeItemAfter"),
+            ("inline flow", "BeforeItemAfter"),
+            ("contents", "BeforeItemAfter"),
+        ] {
+            let mut dom = NativeDom::new_html(test_url());
+            let body = dom.create_element("body");
+            assert!(dom.append_child(dom.document_node_id(), body));
+            append_text(&mut dom, body, "Before");
+            let item = dom.create_element("span");
+            assert!(dom.append_child(body, item));
+            append_text(&mut dom, item, "Item");
+            append_text(&mut dom, body, "After");
+            let styles = vec![
+                (
+                    body,
+                    visibility::ExportStyle {
+                        display: "block".into(),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    item,
+                    visibility::ExportStyle {
+                        display: display.into(),
+                        ..Default::default()
+                    },
+                ),
+            ];
+            assert_eq!(
+                render_markdown_document_with_styles(&dom, styles, None),
+                expected,
+                "{display}"
+            );
+        }
     }
 
     #[test]
@@ -393,9 +529,11 @@ mod tests {
             include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.html").to_owned(),
         );
         let before = dom.serialize_document();
+        let markdown = render_markdown_document(&dom);
         assert_eq!(
-            render_markdown_document(&dom),
-            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md").trim_end()
+            markdown,
+            include_str!("../../../moli-html2md/tests/fixtures/hacker-news-layout.md")
+                .trim_end_matches('\n')
         );
         assert_eq!(dom.serialize_document(), before);
     }
@@ -486,21 +624,70 @@ mod tests {
     }
 
     #[test]
+    fn markdown_renderer_preserves_combined_math_and_formatting_boundaries() {
+        for (source, expected) in [
+            (r"<p>\(\verb|}|\)\(x\)</p>", r"\\(\\verb|}|\\)$x$"),
+            (
+                r"<strong><em>a</em><sub><em>\(b\)</em></sub></strong>",
+                "<strong>*a*<sub>*$b$*</sub></strong>",
+            ),
+            (
+                "<p>Let<span> <math><mi>x</mi></math><span aria-hidden='true'>x</span> </span>be positive.</p>",
+                "Let <math><mi>x</mi></math> be positive.",
+            ),
+            (
+                "<p>Let<span>&nbsp;<math><mi>x</mi></math><span aria-hidden='true'>x</span>&nbsp;</span>be positive.</p>",
+                "Let\u{a0}<math><mi>x</mi></math>\u{a0}be positive.",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn markdown_renderer_normalizes_image_and_link_attribute_newlines() {
         for (html, expected) in [
             (
                 "<a href='/a' title='one\n  two'>link</a>",
-                "[link](/a \"one\ntwo\")",
+                "[link](/a \"one two\")",
             ),
             (
                 "<img src='/i' alt='one\n  two' title='one\n  two'>",
-                "![one\ntwo](/i \"one\ntwo\")",
+                "![one two](/i \"one two\")",
             ),
             (
                 "<h2><a href='/a' title='one\n  two'>link</a></h2>",
-                "## [link](/a \"one&#10;two\")",
+                "## [link](/a \"one two\")",
             ),
-            ("a<img alt='label'>b<img src='' alt='label'>c", "abc"),
+            (
+                "<a href='/feed.atom' title=\"Armin Ronacher's\n            Thoughts and Writings\">atom</a>",
+                "[atom](/feed.atom \"Armin Ronacher's Thoughts and Writings\")",
+            ),
+            (
+                "<a href='/a' title='one&amp;#10;two'>link</a>",
+                "[link](/a \"one&amp;#10;two\")",
+            ),
+        ] {
+            assert_eq!(markdown_from_html(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn markdown_renderer_retains_labels_for_unavailable_images() {
+        for (html, expected) in [
+            (
+                "a<img alt='label'>b<img src='' alt='label'>c",
+                "alabelblabelc",
+            ),
+            (
+                "<a href='mailto:contact@example.test'><img alt='Email'></a>",
+                "[Email](mailto:contact@example.test)",
+            ),
+            (
+                "<img alt='[label](javascript:alert(1))'>",
+                r"\[label\](javascript:alert(1))",
+            ),
+            ("a<img alt=''>b<img src='' alt=''>c", "abc"),
         ] {
             assert_eq!(markdown_from_html(html), expected, "{html}");
         }

@@ -31,8 +31,8 @@ impl AttributeProjection {
             }
             "from" => Self::NavigationEntry,
             "destination" => Self::NavigationDestination,
-            // Arbitrary JS payloads (detail, data, reason, info, error, state)
-            // retain their identity; they are not platform-object projections.
+            // Arbitrary JS payloads have their own value access semantics;
+            // they are separate from platform-object world projection.
             _ => Self::Value,
         }
     }
@@ -153,11 +153,10 @@ pub(crate) fn new_event_wrapper<'s>(
     Some(wrapper)
 }
 
-/// Project DOM and Window listeners of the same live Window through their
-/// existing world caches. The dispatch state stays shared and same-world
-/// identity stays intact. Foreign-Window callbacks retain their existing
-/// behavior: resolving an isolated world of another target Window requires an
-/// alias/world resolver that this path does not yet provide.
+/// Project DOM and Window listeners through their existing world caches. The
+/// Window resolver selects the target Window's Context in the listener's
+/// world; Nodes retain their native ownerDocument checks. Dispatch state stays
+/// shared and same-world identity stays intact.
 pub(crate) fn event_callback_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Value>,
@@ -173,8 +172,50 @@ pub(crate) fn event_callback_values<'s>(
     .or_else(|| super::super::shared_event_targets::node_target_in_realm(scope, target, context)) else {
         return Some((receiver, event));
     };
+    // A Window view determines the target Realm. An adopted Node can keep
+    // a wrapper from its old Window: node_target_in_realm already checked its
+    // native ownerDocument against the listener Realm, so keep that Context.
+    let context = if crate::web_api_interfaces::Node::is_instance(scope, target) {
+        context
+    } else {
+        target.get_creation_context(scope)?
+    };
+    Some((target.into(), event_in_realm(scope, event, context)?))
+}
+
+pub(crate) fn node_event_callback_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Value>,
+    event: v8::Local<'s, v8::Object>,
+    target_context: v8::Local<'s, v8::Context>,
+    listener_context: v8::Local<'s, v8::Context>,
+) -> Option<(v8::Local<'s, v8::Value>, v8::Local<'s, v8::Object>)> {
+    let context = match crate::native_bridge::window_context_in_wrapper_world(
+        scope,
+        target_context,
+        listener_context,
+    ) {
+        Ok(context) => context?,
+        Err(error) => {
+            super::super::throw_error(
+                scope,
+                &format!("Node event world projection failed: {error}"),
+            );
+            return None;
+        }
+    };
+    let target = v8::Local::<v8::Object>::try_from(receiver).ok()?;
+    let receiver = super::super::shared_event_targets::target_in_realm(scope, target, context);
+    Some((receiver.into(), event_in_realm(scope, event, context)?))
+}
+
+fn event_in_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Context>,
+) -> Option<v8::Local<'s, v8::Object>> {
     if world_wrappers::belongs_to_world(scope, event, context) {
-        return Some((target.into(), event));
+        return Some(event);
     }
     let backing = event_backing(scope, event);
     let wrapper = if let Some(wrapper) = world_wrappers::get(scope, backing, context) {
@@ -183,7 +224,7 @@ pub(crate) fn event_callback_values<'s>(
         let scope = &mut v8::ContextScope::new(scope, context);
         new_event_wrapper(scope, backing)?
     };
-    Some((target.into(), wrapper))
+    Some(wrapper)
 }
 
 fn bind_attribute<'s>(
@@ -225,7 +266,9 @@ fn bind_attribute<'s>(
             }
         }?;
         getter.set_name(v8_string(scope, &format!("get {field}"))?);
-        getters.create_data_property(scope, name, getter.into())?;
+        getters
+            .create_data_property(scope, name, getter.into())?
+            .then_some(())?;
         getter
     };
     let mut accessor_attributes = v8::PropertyAttribute::NONE;
@@ -334,4 +377,62 @@ pub(crate) fn set_event_private_value(
 ) {
     let state = event_backing(scope, event);
     set_private_value(scope, state, slot, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_attribute_binding_rejects_failed_getter_cache_writes() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        v8::tc_scope!(let scope, scope);
+        for scenario in ["extensible", "frozen", "readonly"] {
+            let getters = v8::Object::new(scope);
+            let wrapper = v8::Object::new(scope);
+            let property = v8str(scope, "detail");
+            match scenario {
+                "frozen" => assert_eq!(
+                    getters.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+                    Some(true)
+                ),
+                "readonly" => assert_eq!(
+                    getters.define_own_property(
+                        scope,
+                        property.into(),
+                        v8::Integer::new(scope, 1).into(),
+                        v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE,
+                    ),
+                    Some(true)
+                ),
+                _ => {}
+            }
+            let expected = scenario == "extensible";
+            assert_eq!(
+                bind_attribute(
+                    scope,
+                    getters,
+                    wrapper,
+                    property.into(),
+                    v8::PropertyAttribute::NONE,
+                ),
+                expected.then_some(()),
+                "{scenario}: rejected cache writes must stop attribute binding"
+            );
+            assert_eq!(
+                wrapper.has_own_property(scope, property.into()),
+                Some(expected),
+                "{scenario}: only successful cache writes may publish an accessor"
+            );
+            assert!(
+                !scope.has_caught(),
+                "V8 rejection need not throw an exception"
+            );
+        }
+    }
 }

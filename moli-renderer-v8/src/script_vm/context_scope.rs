@@ -5,6 +5,7 @@ use anyhow::Result;
 use super::ScriptVm;
 #[cfg(test)]
 use super::perform_microtask_checkpoint_and_report_pending_promise_rejections;
+use crate::document_runtime::DocumentRuntime;
 use crate::{frame_owner_model::FrameRealmId, native_bridge::JsContextHost};
 
 impl ScriptVm {
@@ -73,7 +74,8 @@ impl ScriptVm {
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
     ) -> Result<T> {
         let context_host = self._context_host.clone();
-        self.renderer_document_isolate
+        let result = self
+            .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -86,7 +88,9 @@ impl ScriptVm {
                 // a RefCell guard here would make callbacks panic on borrow_mut.
                 let runtime_ptr: *mut JsContextHost = (*context_host).as_ptr();
                 op(scope, runtime_ptr)
-            })
+            });
+        let publication = self.publish_prebootstrapped_isolated_window_contexts();
+        result.and_then(|value| publication.map(|()| value))
     }
 
     /// Enters the main Window realm for one synchronous body operation.
@@ -98,8 +102,80 @@ impl ScriptVm {
         &mut self,
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
     ) -> Result<T> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         self.with_context_scope_by_ptr(context_ptr, op)
+    }
+
+    /// Update an already-materialized JavaScript surface without creating one.
+    pub(super) fn with_current_main_world_scope<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        self.with_context_scope_by_ptr(runtime.context_ptr(), op)
+            .map(Some)
+    }
+
+    /// Script/event entry with the live native Document and an entered realm.
+    pub(super) fn with_main_world_document_scope<T>(
+        &mut self,
+        op: impl FnOnce(
+            &mut v8::PinScope<'_, '_>,
+            *mut JsContextHost,
+            &mut DocumentRuntime,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let context_ptr = self.ensure_main_world()?.context_ptr();
+        self.with_document_context_scope_by_ptr(context_ptr, op)
+    }
+
+    pub(super) fn with_current_main_world_document_scope<T>(
+        &mut self,
+        op: impl FnOnce(
+            &mut v8::PinScope<'_, '_>,
+            *mut JsContextHost,
+            &mut DocumentRuntime,
+        ) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        self.with_document_context_scope_by_ptr(runtime.context_ptr(), op)
+            .map(Some)
+    }
+
+    fn with_document_context_scope_by_ptr<T>(
+        &mut self,
+        context_ptr: *const v8::Global<v8::Context>,
+        op: impl FnOnce(
+            &mut v8::PinScope<'_, '_>,
+            *mut JsContextHost,
+            &mut DocumentRuntime,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let context_host = self._context_host.clone();
+        let document_runtime = &mut self.document_runtime;
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                // SAFETY: the caller obtains this pointer from an owned live
+                // realm before borrowing the other ScriptVm fields.
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                op(scope, (*context_host).as_ptr(), document_runtime)
+            })
+    }
+
+    /// Inspect the current realm without completing a task or running reactions.
+    #[cfg(test)]
+    pub(crate) fn with_default_context_scope_for_test<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_default_context_scope(op)
     }
 
     #[cfg(test)]

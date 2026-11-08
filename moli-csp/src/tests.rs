@@ -701,6 +701,36 @@ fn worker_src_none_blocks_shared_worker_script() {
 }
 
 #[test]
+fn document_font_requests_use_font_src_and_default_src() {
+    let kind = ContentSecurityPolicyResourceKind::DocumentFont;
+    assert!(!allowed(
+        "font-src 'none'; connect-src *",
+        kind,
+        "https://app.test/font.woff2"
+    ));
+    assert!(allowed(
+        "font-src 'self'; default-src 'none'; connect-src 'none'",
+        kind,
+        "https://app.test/font.woff2"
+    ));
+    assert!(!allowed(
+        "font-src 'self'; default-src *",
+        kind,
+        "https://cdn.test/font.woff2"
+    ));
+    assert!(!allowed(
+        "default-src 'none'; connect-src *",
+        kind,
+        "https://app.test/font.woff2"
+    ));
+    assert!(allowed(
+        "default-src 'self'; connect-src 'none'",
+        kind,
+        "https://app.test/font.woff2"
+    ));
+}
+
+#[test]
 fn shared_worker_script_uses_script_src_and_default_src_fallbacks() {
     assert!(!allowed(
         "script-src 'none'",
@@ -840,6 +870,49 @@ fn url_violation_redacts_data_and_blob_urls_to_their_schemes() {
 
         assert_eq!(violation.effective_directive, "media-src");
         assert_eq!(violation.blocked_uri, expected);
+    }
+}
+
+#[test]
+fn redirected_typed_url_checks_preserve_nonce_and_report_original_url() {
+    let original_url = request_url("https://app.test/module");
+    let target_url = request_url("https://blocked.test/private?token=SECRET");
+    for (kind, directive) in [
+        (
+            ContentSecurityPolicyResourceKind::DocumentScriptElement,
+            "script-src-elem",
+        ),
+        (
+            ContentSecurityPolicyResourceKind::DocumentStyleElement,
+            "style-src-elem",
+        ),
+    ] {
+        for nonce in [None, Some("trusted")] {
+            let request = if kind == ContentSecurityPolicyResourceKind::DocumentScriptElement {
+                ContentSecurityPolicyUrlRequest::Script(ContentSecurityPolicyScriptElementRequest {
+                    nonce,
+                    integrity: None,
+                    parser_inserted: false,
+                })
+            } else {
+                ContentSecurityPolicyUrlRequest::Style(ContentSecurityPolicyStyleElementRequest {
+                    nonce,
+                })
+            };
+            let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+                &[format!("{directive} 'nonce-trusted'").into()], &protected_url(), &target_url, &original_url,
+                kind, ContentSecurityPolicyRedirectStatus::FollowedRedirect, ContentSecurityPolicyDisposition::Enforce,
+                &ContentSecurityPolicyReportingEndpoints::default(), request,
+            );
+            if nonce.is_some() {
+                assert!(
+                    violation.is_none(),
+                    "valid nonce must survive the redirect check"
+                );
+            } else {
+                assert_eq!(violation.unwrap().blocked_uri, original_url.as_str());
+            }
+        }
     }
 }
 

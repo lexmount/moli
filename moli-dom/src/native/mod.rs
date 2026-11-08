@@ -13,6 +13,7 @@ mod scripts;
 
 use std::sync::Arc;
 
+use document::DocumentKind;
 pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
@@ -22,13 +23,13 @@ pub use element::{
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{
-    ConnectedShadowRootSnapshot, DomAttributeMutation, DomAttributeMutationOutcome,
-    DomChildListMutation, DomHost, DomMutationEffects, DomMutationRecord, DomMutationRecordBatch,
-    DomMutationRecordKind, DomScriptMutationEffects, DomSlotAssignmentChange,
-    DomSlotMutationEffects, DomStyleInvalidationInputs, DomStylesheetOwnerChange,
-    DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes,
-    DomTreeMutationEffects, ScriptPrepareTrigger, ScriptPrepareTriggerKind,
-    StylesheetCandidateTreeScopeSnapshots,
+    ConnectedShadowRootSnapshot, DomAdoptionTarget, DomAssociatedTreeEdgeKind,
+    DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomHost,
+    DomMutationEffects, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
+    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
+    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
+    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTreeMutationEffects,
+    ScriptPrepareTrigger, ScriptPrepareTriggerKind, StylesheetCandidateTreeScopeSnapshots,
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
@@ -215,7 +216,7 @@ impl NativeDom {
     /// Admit a new active Document without reusing any retained node handles.
     pub(crate) fn replace_main_document(&mut self, document: &Document) -> NativeNodeId {
         let handle = self.create_node(
-            NodeData::Document(Box::new(document.clone())),
+            NodeData::Document(Box::new(document.clone_metadata_for_new_arena())),
             None,
             true,
             true,
@@ -352,22 +353,7 @@ impl NativeDom {
     }
 
     pub fn create_element(&mut self, local_name: &str) -> NativeNodeId {
-        let handle = self.create_node(
-            NodeData::Element(Element::new_html(local_name)),
-            Some(self.document_node_id),
-            false,
-            false,
-        );
-        if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment(handle);
-            if let Some(element) = self
-                .node_mut(handle)
-                .and_then(|node| node.data_mut().as_element_mut())
-            {
-                element.set_template_contents(Some(fragment));
-            }
-        }
-        handle
+        self.allocate_element_for_document(self.document_node_id, Element::new_html(local_name))
     }
 
     pub fn create_element_ns(
@@ -385,20 +371,30 @@ impl NativeDom {
         prefix: Option<&str>,
         local_name: &str,
     ) -> NativeNodeId {
-        let namespace = namespace.unwrap_or_default().to_owned();
+        let element = Element::new(
+            local_name.to_owned(),
+            namespace.unwrap_or_default().to_owned(),
+            prefix.map(str::to_owned),
+            Vec::new(),
+        );
+        self.allocate_element_for_document(self.document_node_id, element)
+    }
+
+    fn allocate_element_for_document(
+        &mut self,
+        document_handle: NativeNodeId,
+        element: Element,
+    ) -> NativeNodeId {
+        let is_template = element.is_html_element("template");
         let handle = self.create_node(
-            NodeData::Element(Element::new(
-                local_name.to_owned(),
-                namespace,
-                prefix.map(str::to_owned),
-                Vec::new(),
-            )),
-            Some(self.document_node_id),
+            NodeData::Element(element),
+            Some(document_handle),
             false,
             false,
         );
-        if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment(handle);
+        if is_template {
+            let fragment =
+                self.create_template_contents_fragment_for_document(document_handle, Some(handle));
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -462,9 +458,9 @@ impl NativeDom {
 
     pub fn create_document_type(
         &mut self,
-        name: String,
-        public_id: String,
-        system_id: String,
+        name: impl Into<DomStringValue>,
+        public_id: impl Into<DomStringValue>,
+        system_id: impl Into<DomStringValue>,
     ) -> NativeNodeId {
         self.create_document_type_for_document(self.document_node_id, name, public_id, system_id)
     }
@@ -472,9 +468,9 @@ impl NativeDom {
     pub fn create_document_type_for_document(
         &mut self,
         owner_document: NativeNodeId,
-        name: String,
-        public_id: String,
-        system_id: String,
+        name: impl Into<DomStringValue>,
+        public_id: impl Into<DomStringValue>,
+        system_id: impl Into<DomStringValue>,
     ) -> NativeNodeId {
         self.create_node(
             NodeData::DocumentType(DocumentType::new(name, public_id, system_id)),
@@ -518,23 +514,37 @@ impl NativeDom {
         document_handle: NativeNodeId,
         host: Option<NativeNodeId>,
     ) -> NativeNodeId {
-        let url = self
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .map(|document| document.url().clone())
-            .unwrap_or_else(|| url::Url::parse("about:blank").expect("about:blank is valid"));
-        let owner_document = self.create_node(
-            NodeData::Document(Box::new(Document::new_html(url))),
-            None,
-            false,
-            false,
-        );
+        let owner_document = self.appropriate_template_contents_owner_document(document_handle);
         self.create_node(
             NodeData::DocumentFragment(DocumentFragment::new(host)),
             Some(owner_document),
             false,
             false,
         )
+    }
+
+    pub(crate) fn appropriate_template_contents_owner_document(
+        &mut self,
+        document_handle: NativeNodeId,
+    ) -> NativeNodeId {
+        let document = self.node(document_handle).and_then(Node::as_document);
+        if document.is_some_and(Document::is_inert_template_document) {
+            return document_handle;
+        }
+        if let Some(owner) = document.and_then(Document::associated_inert_template_document) {
+            return owner;
+        }
+        let kind = document.map(Document::kind).unwrap_or(DocumentKind::Html);
+        let document = Document::new_inert_template(kind);
+        let owner_document =
+            self.create_node(NodeData::Document(Box::new(document)), None, false, false);
+        if let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        {
+            document.set_associated_inert_template_document(owner_document);
+        }
+        owner_document
     }
 
     pub fn set_document_fragment_host(
@@ -553,6 +563,17 @@ impl NativeDom {
         }
         fragment.set_host(host);
         true
+    }
+
+    pub(crate) fn template_contents_fragment(
+        &self,
+        template: NativeNodeId,
+    ) -> Option<NativeNodeId> {
+        let contents = self.node(template)?.as_element()?.template_contents()?;
+        // During declarative shadow parsing the parser redirects this slot to
+        // a different host's ShadowRoot, which must keep its own tree scope.
+        (self.node(contents)?.data().as_document_fragment()?.host() == Some(template))
+            .then_some(contents)
     }
 
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {
@@ -1443,6 +1464,192 @@ mod tests {
     }
 
     #[test]
+    fn parser_form_owner_resets_when_the_control_moves_without_its_owner() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let first_form = host.create_element("form");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, first_form));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(parser_form, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(first_form, input));
+        assert_eq!(host.form_control_owner(input), Some(first_form));
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn parser_form_owner_survives_only_while_control_and_owner_move_together() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let subtree = host.create_element("section");
+        let parser_form = host.create_element("form");
+        let control_container = host.create_element("div");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, subtree));
+        assert!(host.append_child(subtree, parser_form));
+        assert!(host.append_child(subtree, control_container));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(control_container, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.remove_child(body, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+        assert!(host.append_child(destination, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, input));
+        assert_eq!(host.form_control_owner(input), None);
+    }
+
+    #[test]
+    fn moving_parser_form_without_its_control_resets_the_external_control() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(body, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, parser_form));
+        assert_eq!(host.form_control_owner(input), None);
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn disconnected_form_attribute_uses_only_a_nearest_ancestor_form() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let form = host.create_element("form");
+        let outside = host.create_element("div");
+        let outside_input = host.create_element("input");
+        let nested_input = host.create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(outside_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", "missing"));
+        assert!(host.append_child(body, form));
+        assert!(host.append_child(body, outside));
+        assert!(host.append_child(outside, outside_input));
+        assert!(host.append_child(form, nested_input));
+        assert_eq!(host.form_control_owner(outside_input), Some(form));
+
+        assert!(host.remove_child(body, outside));
+        assert!(!host.is_connected_to_document(outside_input));
+        assert_eq!(host.form_control_owner(outside_input), None);
+        assert!(host.remove_child(body, form));
+        assert!(!host.is_connected_to_document(nested_input));
+        assert_eq!(host.form_control_owner(nested_input), Some(form));
+    }
+
+    #[test]
+    fn image_form_owner_tracks_parser_and_ancestor_without_becoming_listed() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let parser_form = host.create_element("form");
+        let ancestor_form = host.create_element("form");
+        let image = host.create_parser_element_without_attributes(
+            "img".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.set_attribute(ancestor_form, "id", "attribute-owner"));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.append_child(body, ancestor_form));
+        assert!(host.associate_parser_form_owner(image, parser_form));
+        assert!(host.append_child(body, image));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+        assert_eq!(host.form_control_owner(image), None);
+        assert!(host.form_control_elements(parser_form).is_empty());
+
+        assert!(host.set_attribute(image, "form", "attribute-owner"));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+
+        assert!(host.append_child(ancestor_form, image));
+        assert_eq!(
+            host.builtin_form_associated_owner(image),
+            Some(ancestor_form)
+        );
+        assert_eq!(
+            host.node(image)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+        assert!(host.form_control_elements(ancestor_form).is_empty());
+    }
+
+    #[test]
+    fn secondary_document_form_attribute_remains_authoritative() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.create_detached_html_document();
+        let mut create_element = |local_name: &str| {
+            host.create_parser_element_without_attributes_for_document(
+                document,
+                local_name.to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            )
+        };
+        let root = create_element("html");
+        let form = create_element("form");
+        let external_input = create_element("input");
+        let nested_input = create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(external_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", ""));
+        assert!(host.append_child(document, root));
+        assert!(host.append_child(root, form));
+        assert!(host.append_child(root, external_input));
+        assert!(host.append_child(form, nested_input));
+
+        assert!(host.is_connected_to_document(external_input));
+        assert_eq!(host.form_control_owner(external_input), Some(form));
+        assert_eq!(host.form_control_owner(nested_input), None);
+    }
+
+    #[test]
     fn native_dom_select_queries_use_effective_selectedness() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();
@@ -2091,6 +2298,31 @@ mod tests {
             new_version_before_move + 1,
             "the insertion must invalidate the destination Document",
         );
+    }
+
+    #[test]
+    fn containing_shadow_root_follows_light_and_shadow_tree_moves() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let light = host.create_element("main");
+        assert!(host.append_child(host.document_handle(), light));
+        let child = host.create_element("section");
+        assert!(host.append_child(light, child));
+        assert_eq!(host.containing_shadow_root(child), None);
+
+        let shadow_host = host.create_element("div");
+        assert!(host.append_child(light, shadow_host));
+        let root = host.attach_shadow_root(shadow_host, "closed").unwrap();
+        for _ in 0..2 {
+            assert_eq!(host.containing_shadow_root(child), None);
+            assert!(host.append_child(root, child));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.remove_child(light, shadow_host));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.append_child(light, shadow_host));
+            assert_eq!(host.containing_shadow_root(child), Some(root));
+            assert!(host.append_child(light, child));
+        }
+        assert_eq!(host.containing_shadow_root(child), None);
     }
 
     #[test]

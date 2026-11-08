@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::{Context as _, Result};
 use tokio::sync::oneshot;
 
 use super::host::RendererSharedWorkerHost;
@@ -8,7 +10,7 @@ impl RendererSharedWorkerHost {
         &self,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_runtime_protocol_message_with_optional_deferred_response(
             inspector_session_id,
             raw_json,
@@ -22,7 +24,7 @@ impl RendererSharedWorkerHost {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_runtime_protocol_message_with_optional_deferred_response(
             inspector_session_id,
             raw_json,
@@ -36,9 +38,9 @@ impl RendererSharedWorkerHost {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(handle) = self.running_devtools_handle() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::SharedUnavailable.into());
         };
         let (response_tx, response_rx) = oneshot::channel();
         if !handle.dispatch_runtime_protocol_message(
@@ -47,11 +49,11 @@ impl RendererSharedWorkerHost {
             deferred_response,
             response_tx,
         ) {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::SharedUnavailable.into());
         }
         response_rx
             .await
-            .map_err(|_| "SharedWorkerRuntimeUnavailable".to_owned())?
+            .context(WorkerInspectorError::SharedUnavailable)?
     }
 
     pub(super) fn detach_runtime_inspector_session(

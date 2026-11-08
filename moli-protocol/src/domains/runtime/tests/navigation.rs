@@ -7,14 +7,13 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     let (background_tx, _) = tokio::sync::mpsc::unbounded_channel();
     let (completion_tx, _) =
         tokio::sync::mpsc::unbounded_channel::<BackgroundNavigationCompletion>();
-    ctx.conn.set_background_event_sender(background_tx);
-    ctx.conn
-        .set_background_navigation_completion_sender(completion_tx);
+    ctx.with_fixture(|conn| conn.set_background_event_sender(background_tx));
+    ctx.with_fixture(|conn| conn.set_background_navigation_completion_sender(completion_tx));
 
     ctx.process_async(json!({
         "id": 21,
@@ -40,21 +39,22 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
         .as_str()
         .unwrap_or_else(|| panic!("Target.createTarget should return target id: {create_response}"))
         .to_owned();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .has_loaded_page(),
-        "Target.createTarget should install the initial about:blank page before Runtime.enable"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context")
+                .has_loaded_page(),
+            "Target.createTarget should install the initial about:blank page before Runtime.enable"
+        )
+    });
 
     let raw = json!({
         "id": 21_001,
         "method": "Runtime.enable"
     })
     .to_string();
-    let step = ctx.conn.start_command_dispatch(&raw);
+    let step = ctx.with_fixture(|conn| conn.start_command_dispatch(&raw));
     let (messages, scheduler_events) = ctx
         .complete_command_task_step_with_events_for_test(step)
         .await;
@@ -78,16 +78,17 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
         }),
         "Runtime.enable should replay the existing about:blank default context: {messages:?}"
     );
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
-        "Runtime.enable should observe the already-installed about:blank page"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .active_page_target()
+                .runtime_slot
+                .has_loaded_page(),
+            "Runtime.enable should observe the already-installed about:blank page"
+        )
+    });
 }
 
 #[tokio::test]
@@ -97,7 +98,7 @@ async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 21_002,
@@ -107,13 +108,15 @@ async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     .await;
 
     ctx.expect_error(21_002, -32000, "NoDocumentLoaded");
-    assert!(
-        !ctx.conn
-            .target_runtime_session_state_for_session(Some("SID-1"))
-            .expect("target runtime session state")
-            .runtime_frontend_enabled,
-        "failed Runtime.enable must not mark the frontend as enabled"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn
+                .target_runtime_session_state_for_session(Some("SID-1"))
+                .expect("target runtime session state")
+                .runtime_frontend_enabled,
+            "failed Runtime.enable must not mark the frontend as enabled"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -136,11 +139,12 @@ async fn evaluate_hash_navigation_emits_navigated_within_document() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 12).await;
     ctx.sent.clear();
@@ -176,14 +180,15 @@ async fn evaluate_hash_navigation_emits_navigated_within_document() {
         "same-document navigation must not be reported as a full frame navigation: {:?}",
         ctx.sent
     );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .target_url(),
-        format!("{page_url}#puppeteer-hash")
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .target_url(),
+            format!("{page_url}#puppeteer-hash")
+        )
+    });
 
     server.abort();
 }
@@ -207,11 +212,12 @@ async fn call_function_on_hash_navigation_emits_navigated_within_document() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 14).await;
     ctx.sent.clear();
@@ -280,11 +286,12 @@ async fn call_function_on_default_context_hash_navigation_emits_navigated_within
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let default_context_id = enable_runtime_and_take_execution_context_id_async(&mut ctx, 30).await;
     ctx.sent.clear();
@@ -338,11 +345,12 @@ async fn evaluate_history_api_navigation_emits_navigated_within_document() {
     let replaced_url = format!("{page_url}?state=replace");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 32).await;
     ctx.sent.clear();
@@ -419,14 +427,15 @@ async fn evaluate_history_api_navigation_emits_navigated_within_document() {
     assert_eq!(history["result"]["entries"].as_array().unwrap().len(), 2);
     assert_eq!(history["result"]["entries"][1]["url"], json!(replaced_url));
 
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .target_url(),
-        replaced_url
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .expect("browser context should exist")
+                .target_url(),
+            replaced_url
+        )
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -546,11 +555,12 @@ async fn isolated_context_hash_navigation_emits_navigated_within_document() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 17).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 18, "utility").await;
@@ -605,11 +615,12 @@ async fn isolated_object_call_hash_navigation_emits_navigated_within_document() 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
 
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20).await;
     let utility_context_id = create_isolated_world_async(&mut ctx, 21, "utility").await;
@@ -729,11 +740,12 @@ async fn runtime_timer_publication_emits_history_api_navigation_without_followup
     let timer_url = format!("{page_url}?timer=history");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_target_url(page_url.clone());
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .expect("browser context should exist")
+            .set_target_url(page_url.clone())
+    });
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_687).await;
     ctx.sent.clear();
 

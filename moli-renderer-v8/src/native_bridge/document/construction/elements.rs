@@ -68,12 +68,13 @@ pub(in crate::native_bridge) fn node_create_element_callback<'s>(
         );
         return;
     }
+    let local_name = parsed.local_name.to_ascii_lowercase();
     match create_element_wrapper_for_document(
         scope,
         args.this(),
         runtime_ptr,
         handle,
-        &parsed.local_name,
+        &local_name,
         options.is_name.as_deref(),
         options.registry_association,
         None,

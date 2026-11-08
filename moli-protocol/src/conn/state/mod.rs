@@ -5,7 +5,6 @@ mod browser_identity;
 mod dedicated_worker_target;
 mod devtools_renderer_channel;
 mod devtools_session;
-mod document_lifecycle_observer;
 mod emulation;
 mod fetch;
 mod identity;
@@ -37,6 +36,7 @@ pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::DevToolsDocumentResidenceIdentity;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
+pub use identity::WebDriverNodeReference;
 pub(crate) use identity::{
     RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,
     TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,
@@ -53,11 +53,8 @@ pub(crate) use dedicated_worker_target::{
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
-    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
-    SessionRendererCallTermination,
-};
-pub(crate) use document_lifecycle_observer::{
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    DevToolsSessionLifecycle, DevToolsSessionState, PreparedRendererCallReplacements,
+    SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use page_residence_token::{TargetPageResidenceObservation, TargetPageResidenceToken};
 
@@ -68,7 +65,8 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
     BackgroundNavigationClaimError, CommittedRendererDocumentBinding, DocumentNavigationToken,
-    InitialDocumentPageBuildWaiter, RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
+    InitialDocumentPageBuildWaiter, LoadPublicationState, RendererDocumentLifecycleWaiterId,
+    TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
 
@@ -78,11 +76,10 @@ pub use fetch::TargetFetchConfig;
 pub(crate) use fetch::{TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot};
 
 pub(crate) use inspector::InspectorCommandDispatch;
-#[cfg(test)]
-pub(crate) use javascript_dialog::TargetJavaScriptDialog;
 pub(crate) use javascript_dialog::{
-    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
-    TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+    TargetJavaScriptDialog, TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
+    TargetJavaScriptDialogState, TargetPreparedJavaScriptDialog,
+    TargetPreparedJavaScriptDialogRoute,
 };
 pub(crate) use pending_renderer_command::{
     DuplicatePendingRendererCommand, PendingRendererCommandKey, PreparedRendererCallDispatch,
@@ -129,6 +126,7 @@ pub use emulation::{
     EmulatedMediaOverrides,
 };
 pub use page_target_host::PageTargetHost;
+pub(crate) use page_target_host::PageTargetHostIdentity;
 pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, PendingPopupNavigation,
     TargetInitialEmptyDocumentCreator, TargetOwnerState, TargetWindowSurfaceState,

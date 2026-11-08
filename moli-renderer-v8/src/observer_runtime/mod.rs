@@ -3,7 +3,10 @@
 mod callback;
 mod dom_access;
 mod intersection;
+mod mutation_record;
 mod schedule;
+
+pub(crate) use mutation_record::install_template_bindings as install_mutation_record_template_bindings;
 
 pub(crate) use dom_access::{
     ObserverStoreAccessToken, coalesce_child_list_replacement_records, flush_slotchange_microtask,
@@ -31,18 +34,15 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 use super::{
     context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
-    native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
-    native_bridge::{
-        JsContextHost, build_static_handle_node_list_wrapper, callback_value_dom_handle,
-        wrapped_handle_value,
-    },
+    native_bridge::document::detached_native_handle_for_runtime,
+    native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
     native_bridge::{
         compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
     },
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        get_private_object, get_private_value, serialize_v8_array, serialize_v8_iter_array,
-        set_private_value, throw_range_error, throw_type_error, v8_string, v8str,
+        get_private_value, serialize_v8_array, serialize_v8_iter_array, set_private_value,
+        throw_range_error, throw_type_error, v8_string, v8str,
     },
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
 };
@@ -78,21 +78,6 @@ const ROOTLESS_IO_VERTICAL_GEOMETRY_PROPERTIES: [&str; 18] = [
     "transform",
     "translate",
 ];
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::MutationRecord, data_properties, enumerable)]
-struct MutationRecordDeclaration<'scope> {
-    target: v8::Local<'scope, v8::Value>,
-    #[webapi(data_property = "type")]
-    record_type: v8::Local<'scope, v8::Value>,
-    attribute_name: v8::Local<'scope, v8::Value>,
-    attribute_namespace: v8::Local<'scope, v8::Value>,
-    old_value: v8::Local<'scope, v8::Value>,
-    added_nodes: v8::Local<'scope, v8::Value>,
-    removed_nodes: v8::Local<'scope, v8::Value>,
-    previous_sibling: v8::Local<'scope, v8::Value>,
-    next_sibling: v8::Local<'scope, v8::Value>,
-}
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::IntersectionObserverEntry)]
@@ -312,6 +297,54 @@ pub(super) struct MutationObserverOptions {
     attribute_filter: Option<HashSet<String>>,
 }
 
+impl TryFrom<MutationObserverInit> for MutationObserverOptions {
+    type Error = &'static str;
+
+    fn try_from(init: MutationObserverInit) -> Result<Self, Self::Error> {
+        let attributes = init
+            .attributes
+            .unwrap_or(init.attribute_old_value.is_some() || init.attribute_filter.is_some());
+        let character_data = init
+            .character_data
+            .unwrap_or(init.character_data_old_value.is_some());
+        let attribute_old_value = init.attribute_old_value.unwrap_or(false);
+        let character_data_old_value = init.character_data_old_value.unwrap_or(false);
+
+        if !init.child_list && !attributes && !character_data {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': at least one of childList, attributes, or characterData must be true.",
+            );
+        }
+        if !attributes && (attribute_old_value || init.attribute_filter.is_some()) {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': attributeOldValue and attributeFilter require attributes to be true.",
+            );
+        }
+        if !character_data && character_data_old_value {
+            return Err(
+                "Failed to execute 'observe' on 'MutationObserver': characterDataOldValue requires characterData to be true.",
+            );
+        }
+
+        Ok(Self {
+            child_list: init.child_list,
+            attributes,
+            character_data,
+            subtree: init.subtree,
+            attribute_old_value,
+            character_data_old_value,
+            // Native mutation local names are UTF-8. Ill-formed UTF-16 entries
+            // cannot match them; retain the filter even if no entries can match.
+            attribute_filter: init.attribute_filter.map(|names| {
+                names
+                    .into_iter()
+                    .filter_map(|name| String::from_utf16(&name.0).ok())
+                    .collect()
+            }),
+        })
+    }
+}
+
 #[derive(Clone)]
 struct QueuedMutationRecord {
     target: NativeNodeId,
@@ -400,10 +433,34 @@ struct MutationObserverConstructorArgs {
     callback: webidl::WebIdlCallbackFunction,
 }
 
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "MutationObserverInit")]
+struct MutationObserverInit {
+    #[webidl(sequence, converter = "raw")]
+    attribute_filter: Option<Vec<webidl::DomString16>>,
+    attribute_old_value: Option<bool>,
+    attributes: Option<bool>,
+    character_data: Option<bool>,
+    character_data_old_value: Option<bool>,
+    #[webidl(default = false)]
+    child_list: bool,
+    #[webidl(default = false)]
+    subtree: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "MutationObserver.observe")]
+struct MutationObserverObserveArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Node)]
+    target: v8::Local<'s, v8::Object>,
+    #[webidl(dictionary, default = MutationObserverInit::default())]
+    options: MutationObserverInit,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "IntersectionObserverInit")]
 struct IntersectionObserverInitMembers {
-    // The derive converts members in declaration order; WebIDL requires lexical order.
+    // The derive converts members in lexical order of their final JavaScript names.
     #[webidl(default = 0)]
     delay: i32,
     #[webidl(with = intersection_observer_root_member)]
@@ -852,7 +909,11 @@ fn invoke_mutation_deliveries<'s>(
         if !delivery.callback.is_current(scope) {
             continue;
         }
-        let records_array = build_mutation_records_array(scope, host_ptr, &delivery.records);
+        let callback_context = delivery.callback.relevant_context(scope);
+        let records_array = {
+            let scope = &mut v8::ContextScope::new(scope, callback_context);
+            build_mutation_records_array(scope, host_ptr, &delivery.records)
+        };
         let observer_value: v8::Local<'_, v8::Value> = delivery.observer.into();
         delivery.callback.invoke_and_report(
             scope,
@@ -987,8 +1048,7 @@ impl MutationObserverRegistration {
                     return false;
                 }
                 self.options.attribute_filter.as_ref().is_none_or(|filter| {
-                    filter.contains(mutation.local_name())
-                        || filter.contains(&mutation.local_name().to_ascii_lowercase())
+                    mutation.namespace().is_none() && filter.contains(mutation.local_name())
                 })
             }
             DomMutationRecordKind::CharacterData { .. } => self.options.character_data,
@@ -1058,34 +1118,31 @@ pub(super) fn mutation_observer_observe_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let raw_target = args.get(0);
+    let Some(parsed) = webidl::parse_args::<MutationObserverObserveArgs>(scope, &args) else {
+        return;
+    };
+    let options = match MutationObserverOptions::try_from(parsed.options) {
+        Ok(options) => options,
+        Err(message) => {
+            throw_type_error(scope, message);
+            return;
+        }
+    };
+    let raw_target = moli_webapi_declare::web_api_object_target(scope, parsed.target)
+        .unwrap_or(parsed.target)
+        .into();
     let Some(target) = callback_value_dom_handle(scope, raw_target)
         .or_else(|| detached_native_target_handle(scope, raw_target))
     else {
         if is_detached_node_value(scope, raw_target) {
-            match parse_mutation_observer_options(scope, args.get(1)) {
-                Ok(_) => {
-                    rv.set_undefined();
-                    return;
-                }
-                Err(message) => {
-                    throw_type_error(scope, message);
-                    return;
-                }
-            }
+            rv.set_undefined();
+            return;
         }
         throw_type_error(
             scope,
             "Failed to execute 'observe' on 'MutationObserver': parameter 1 is not of type 'Node'.",
         );
         return;
-    };
-    let options = match parse_mutation_observer_options(scope, args.get(1)) {
-        Ok(options) => options,
-        Err(message) => {
-            throw_type_error(scope, message);
-            return;
-        }
     };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
@@ -1113,7 +1170,7 @@ fn is_detached_node_value<'s>(
     };
     let object = v8::Global::new(scope, object);
     let object = v8::Local::new(scope, object);
-    get_private_object(scope, object, DETACHED_STATE_SLOT).is_some()
+    crate::native_bridge::receiver_has_detached_state(scope, object)
 }
 
 pub(super) fn mutation_observer_disconnect_callback(
@@ -1284,117 +1341,12 @@ fn build_mutation_records_array<'s>(
     let values = records
         .iter()
         .map(|record| {
-            build_mutation_record_object(scope, host_ptr, record)
+            mutation_record::build_object(scope, host_ptr, record)
                 .map(v8::Local::<v8::Value>::from)
                 .unwrap_or_else(|| v8::null(scope).into())
         })
         .collect::<Vec<_>>();
     serialize_v8_iter_array(scope, values).unwrap_or_else(|| v8::Array::new(scope, 0))
-}
-
-fn build_mutation_record_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    record: &QueuedMutationRecord,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let target = wrap_node_handle(scope, host_ptr, record.target)?;
-    let (
-        record_type,
-        attribute_name,
-        attribute_namespace,
-        old_value,
-        added_nodes,
-        removed_nodes,
-        previous_sibling,
-        next_sibling,
-    ) = match &record.kind {
-        QueuedMutationRecordKind::Attributes {
-            attribute_name,
-            attribute_namespace,
-            old_value,
-        } => {
-            let attribute_namespace_value = attribute_namespace
-                .as_ref()
-                .and_then(|namespace| v8_string(scope, namespace))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            (
-                v8str(scope, "attributes").into(),
-                v8_string(scope, attribute_name)?.into(),
-                attribute_namespace_value,
-                old_value
-                    .as_ref()
-                    .and_then(|value| v8_string(scope, value))
-                    .map(v8::Local::<v8::Value>::from)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-                added_nodes.into(),
-                removed_nodes.into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-            )
-        }
-        QueuedMutationRecordKind::CharacterData { old_value } => {
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
-            (
-                v8str(scope, "characterData").into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                old_value
-                    .as_ref()
-                    .and_then(|value| v8_string(scope, value))
-                    .map(v8::Local::<v8::Value>::from)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-                added_nodes.into(),
-                removed_nodes.into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-            )
-        }
-        QueuedMutationRecordKind::ChildList {
-            added_nodes,
-            removed_nodes,
-            previous_sibling,
-            next_sibling,
-        } => {
-            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, added_nodes);
-            let removed_nodes =
-                build_static_handle_node_list_wrapper(scope, host_ptr, removed_nodes);
-            let previous_sibling = previous_sibling
-                .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            let next_sibling = next_sibling
-                .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into());
-            (
-                v8str(scope, "childList").into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                v8::null(scope).into(),
-                added_nodes.into(),
-                removed_nodes.into(),
-                previous_sibling,
-                next_sibling,
-            )
-        }
-    };
-    MutationRecordDeclaration {
-        target: target.into(),
-        record_type,
-        attribute_name,
-        attribute_namespace,
-        old_value,
-        added_nodes,
-        removed_nodes,
-        previous_sibling,
-        next_sibling,
-    }
-    .bind(scope)
-    .ok()
 }
 
 fn build_intersection_entries_array<'s>(
@@ -1498,67 +1450,6 @@ fn wrap_node_handle<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn parse_mutation_observer_options(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Result<MutationObserverOptions, &'static str> {
-    let object = v8::Local::<v8::Object>::try_from(value).map_err(
-        |_| "Failed to execute 'observe' on 'MutationObserver': parameter 2 is not an object.",
-    )?;
-    let attributes_specified = has_property(scope, object, "attributes");
-    let attributes_enabled = bool_option(scope, object, "attributes");
-    let character_data_specified = has_property(scope, object, "characterData");
-    let character_data_enabled = bool_option(scope, object, "characterData");
-    let mut options = MutationObserverOptions {
-        child_list: bool_option(scope, object, "childList"),
-        attributes: attributes_enabled,
-        character_data: character_data_enabled,
-        subtree: bool_option(scope, object, "subtree"),
-        attribute_old_value: bool_option(scope, object, "attributeOldValue"),
-        character_data_old_value: bool_option(scope, object, "characterDataOldValue"),
-        attribute_filter: string_set_option(scope, object, "attributeFilter"),
-    };
-
-    if attributes_specified
-        && !attributes_enabled
-        && (options.attribute_old_value || options.attribute_filter.is_some())
-    {
-        return Err(
-            "Failed to execute 'observe' on 'MutationObserver': attributeOldValue and attributeFilter require attributes to be true.",
-        );
-    }
-    if character_data_specified && !character_data_enabled && options.character_data_old_value {
-        return Err(
-            "Failed to execute 'observe' on 'MutationObserver': characterDataOldValue requires characterData to be true.",
-        );
-    }
-
-    if !attributes_specified && (options.attribute_old_value || options.attribute_filter.is_some())
-    {
-        options.attributes = true;
-    }
-    if !character_data_specified && options.character_data_old_value {
-        options.character_data = true;
-    }
-    if !options.child_list && !options.attributes && !options.character_data {
-        return Err(
-            "Failed to execute 'observe' on 'MutationObserver': at least one of childList, attributes, or characterData must be true.",
-        );
-    }
-    Ok(options)
-}
-
-fn has_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> bool {
-    let Some(key) = v8_string(scope, key) else {
-        return false;
-    };
-    object.has(scope, key.into()).unwrap_or(false)
-}
-
 enum IntersectionObserverOptionsError {
     Syntax(&'static str),
     WebIdl(webidl::WebIdlError),
@@ -1642,19 +1533,6 @@ fn parse_intersection_observer_options<'s>(
     Ok(options)
 }
 
-fn bool_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> bool {
-    let Some(key) = v8_string(scope, key) else {
-        return false;
-    };
-    object
-        .get(scope, key.into())
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
 fn intersection_observer_threshold_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1696,23 +1574,6 @@ fn normalize_intersection_thresholds(
         thresholds.push(0.0);
     }
     Ok(thresholds)
-}
-
-fn string_set_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<HashSet<String>> {
-    let key = v8_string(scope, key)?;
-    let value = object.get(scope, key.into())?;
-    let array = v8::Local::<v8::Array>::try_from(value).ok()?;
-    let mut result = HashSet::new();
-    for index in 0..array.length() {
-        let entry = array.get_index(scope, index)?;
-        let text = entry.to_string(scope)?.to_rust_string_lossy(scope);
-        result.insert(text);
-    }
-    Some(result)
 }
 
 fn define_intersection_observer_slots(
@@ -2420,6 +2281,8 @@ fn mutation_observer_id_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<u32> {
+    let object = v8::Local::new(scope, object);
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     observer_id_from_private_slot(scope, object, MUTATION_OBSERVER_ID_SLOT)
 }
 

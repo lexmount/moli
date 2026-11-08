@@ -58,18 +58,21 @@ pub(crate) type ScriptVmBootstrapError = Box<(anyhow::Error, DomHost)>;
 /// WindowProxy have already been checked. The navigation task must enter its
 /// committed typestate before consuming this token.
 pub(crate) struct MainWindowProxyNavigationCommit {
-    context: v8::Global<v8::Context>,
+    context: Option<v8::Global<v8::Context>>,
     renderer_document_isolate: RendererDocumentIsolateHandle,
     page_id: u64,
 }
 
 impl MainWindowProxyNavigationCommit {
     pub(crate) fn detach(self) {
+        let Some(context) = self.context else {
+            return;
+        };
         self.renderer_document_isolate
             .with_renderer_document_isolate_mut(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.context);
+                let context = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 // Preserve the outgoing global's cached Document while the
                 // WindowProxy still forwards private properties to it.
@@ -727,11 +730,11 @@ mod dedicated_worker_client_event_body;
 mod dedicated_worker_client_event_test_support;
 mod dedicated_worker_error_dispatch;
 mod devtools_resource_load;
-mod directory_reader_callback;
 mod document_content;
 mod document_isolate;
 mod dom_debugger;
 mod dom_inspector;
+mod file_reading;
 mod related_page;
 pub(crate) use dom_inspector::{DomInspectorEdit, DomInspectorEditOutcome};
 mod drop_cleanup;
@@ -747,6 +750,9 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod main_world;
+use main_world::MainWorld;
+mod native_drag_data;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
 mod initial_window_document;
@@ -791,6 +797,7 @@ pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
 mod execution_contexts;
+mod font_resources;
 mod layout;
 mod prepared_scripts;
 mod rendering_update;
@@ -868,7 +875,9 @@ pub(crate) use shared_worker_client_event_body::{
 };
 pub(crate) use worker_host_bridge_body::WorkerHostBridgeBodyEffect;
 
-pub(crate) use post_parse::bootstrap_child_default_context_in_scope;
+pub(crate) use post_parse::{
+    bootstrap_child_default_context_in_scope, bootstrap_isolated_window_context_in_scope,
+};
 
 fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
@@ -876,6 +885,7 @@ fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -924,6 +934,7 @@ pub(crate) use window_realm_runtime::{WindowRealmRuntime, WindowRealmRuntimeStat
 #[cfg(any(test, feature = "test-support"))]
 type ScriptGlobalsBaseline = Vec<String>;
 #[cfg(not(any(test, feature = "test-support")))]
+#[derive(Default)]
 struct ScriptGlobalsBaseline;
 
 fn recover_bootstrap_dom_host_from_holder(
@@ -1005,13 +1016,12 @@ pub(super) struct ScriptVm {
     page_inspector: DocumentInspectorBinding,
     renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     renderer_page_script_environment: Option<RendererPageScriptEnvironment>,
-    page_default_runtime: WindowRealmRuntime,
+    main_world: MainWorld,
     page_isolated_world_contexts: PageIsolatedWorldRegistry,
     child_frame_realm_store: child_frame_realm::ChildFrameRealmStore,
     prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     child_document_modulator_store: ChildDocumentModulatorStore,
     root_frame_id: Option<String>,
-    baseline_globals: ScriptGlobalsBaseline,
     // `JsContextHost` stores a non-owning pointer into `document_runtime`, so it
     // must be dropped before the runtime field during normal Rust field teardown.
     _context_host: Rc<RefCell<JsContextHost>>,
@@ -1042,6 +1052,7 @@ pub(super) struct ScriptVm {
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
     active_drag_session: Option<ActiveDragSession>,
+    pending_drag_gesture: Option<PendingDragGesture>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
     next_internal_frontend_inspector_call_id: i32,
@@ -1111,8 +1122,31 @@ pub(super) struct ActiveTouchPoint {
 }
 
 pub(super) struct ActiveDragSession {
-    pub data_transfer: v8::Global<v8::Object>,
+    pub data_store: crate::context_bootstrap::NativeDragDataStore,
+    /// Chromium retains the source view for dragend, without restoring data access.
+    pub source_transfer: Option<v8::Global<v8::Object>>,
+    pub drop_effect: String,
     pub drop_allowed: bool,
+    /// Element that received `dragstart`; `dragend` is dispatched here.
+    /// `None` for sessions created from externally supplied drag data.
+    pub source: Option<DomHandle>,
+    /// The DevTools client asked to take over the drag, so mouse events no
+    /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
+    pub intercepted: bool,
+    pub target: Option<DomHandle>,
+    /// An enter update already emitted source `drag`; its following over
+    /// update must not emit it twice (Blink EventHandler's corresponding bit).
+    pub only_drag_over_next: bool,
+    pub coordinates: crate::native_bridge::element::InputEventCoordinates,
+    pub modifiers: u8,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingDragGesture {
+    pub handle: DomHandle,
+    pub x: f64,
+    pub y: f64,
+    pub root_to_frame: moli_layout::LayoutTransform2D,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1200,7 +1234,10 @@ impl ScriptVm {
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        context_ptrs.push(&self.page_default_runtime.context as *const _);
+        context_ptrs.extend(
+            self.current_main_world()
+                .map(WindowRealmRuntime::context_ptr),
+        );
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -1239,7 +1276,10 @@ impl ScriptVm {
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        context_ptrs.push(&self.page_default_runtime.context as *const _);
+        context_ptrs.extend(
+            self.current_main_world()
+                .map(WindowRealmRuntime::context_ptr),
+        );
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -1323,7 +1363,7 @@ impl ScriptVm {
         inspector_session_id: Option<&str>,
         object_id: &str,
     ) -> Result<Option<DomHandle>> {
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let context_host = self._context_host.clone();
         let page_inspector = &self.page_inspector;
         let renderer_document_isolate = self.renderer_document_isolate.clone();
@@ -1559,7 +1599,7 @@ impl ScriptVm {
                 }))?,
             ));
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let runtime_binding_replay_context_ptrs = self.runtime_binding_replay_context_ptrs();
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         let page_inspector = &mut self.page_inspector;
@@ -1612,8 +1652,7 @@ impl ScriptVm {
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
                                     dispatch_with_runtime_defaults(session, raw_json, &outbound)
-                                })
-                                .map_err(anyhow::Error::msg)?;
+                                })?;
                             }
                             let response = outbound
                                 .take_response_for_call_id_after(
@@ -1704,6 +1743,7 @@ impl ScriptVm {
         command_output: Option<crate::runtime::RendererRuntimeCommandOutputRecorder>,
         internal_dispatch_call_id: Option<i32>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+        let context_ptr = self.ensure_main_world()?.context_ptr();
         let user_gesture = runtime_protocol_message_user_gesture(raw_json);
         let file_prompt_handler = runtime_protocol_message_file_prompt_handler(raw_json);
         if user_gesture {
@@ -1728,6 +1768,7 @@ impl ScriptVm {
             .borrow_mut()
             .replace_active_inspector_dispatch(true);
         let result = self.dispatch_inspector_protocol_message_with_current_activation(
+            context_ptr,
             target,
             raw_json,
             deferred_response,
@@ -1765,6 +1806,7 @@ impl ScriptVm {
 
     fn dispatch_inspector_protocol_message_with_current_activation(
         &mut self,
+        context_ptr: *const v8::Global<v8::Context>,
         target: PageInspectorSessionTarget<'_>,
         raw_json: &str,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
@@ -1772,7 +1814,6 @@ impl ScriptVm {
         internal_dispatch_call_id: Option<i32>,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let inspector_window_dispatch_scope =
             runtime_protocol_message_window_dispatch_target(raw_json)
                 .and_then(|target| self.inspector_window_dispatch_scope_for_target(target));
@@ -1841,7 +1882,7 @@ impl ScriptVm {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
                             outbound.discard_messages_after(snap);
-                            return Err(anyhow::Error::msg(error));
+                            return Err(error);
                         }
                         if let (Some(total_started), Some(started)) =
                             (timing_started, dispatch_started)
@@ -1913,6 +1954,7 @@ impl ScriptVm {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
+        self.publish_prebootstrapped_isolated_window_contexts()?;
         let record_sync_started = timing_started.map(|_| Instant::now());
         self.sync_child_browsing_context_records();
         if let (Some(total_started), Some(started)) = (timing_started, record_sync_started) {
@@ -1943,6 +1985,7 @@ impl ScriptVm {
 
 pub(crate) struct ScriptVmInitialDocumentEnvironment {
     security_token: Option<v8::Global<v8::Value>>,
+    opaque_origin: Option<std::sync::Arc<crate::structured_clone::RuntimeMessageOpaqueOrigin>>,
     document_domain_override: Rc<RefCell<Option<String>>>,
     origin: String,
     pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
@@ -1967,7 +2010,10 @@ impl ScriptVmPageRealmBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2019,6 +2065,13 @@ impl ScriptVmPageRealmBootstrap {
         let main_document_owner = frame_owner_store
             .current_main_document_task_owner()
             .expect("main frame admission must produce a Document owner");
+        frame_owner_store
+            .local_windows
+            .get_mut(&main_document_owner.local_window_id)
+            .expect("main Document must own a LocalWindow")
+            .inherited_opaque_origin = initial_environment
+            .as_ref()
+            .and_then(|environment| environment.opaque_origin.clone());
         let post_domcontentloaded_page_task_tx = page_task_tx.page_task_sender();
         let page_runtime_wake_tx = page_task_tx.page_runtime_wake_sender();
         let top_level_navigation_handoff_tx = page_task_tx.top_level_navigation_handoff_sender();
@@ -2056,8 +2109,12 @@ impl ScriptVmPageRealmBootstrap {
             renderer_document_isolate_teardown,
             page_inspector,
             renderer_page_script_environment,
-            reuse_main_window_proxy,
         } = renderer_document_isolate_bootstrap;
+        // Reservation can precede script activation in the outgoing Document.
+        // Decide against the live Page identity only when installing this one.
+        let reuse_main_window_proxy = renderer_page_script_environment
+            .as_ref()
+            .is_some_and(RendererPageScriptEnvironment::has_main_window_proxy);
         page_inspector.configure_debugger(document_settings.debugger_enabled);
         if !runtime_inspector_session_restore_snapshots.is_empty() {
             renderer_document_isolate.with_renderer_document_isolate_and_inspector_mut(
@@ -2069,8 +2126,8 @@ impl ScriptVmPageRealmBootstrap {
         }
         let browsing_context_group = main_document_commit
             .as_ref()
-            .and_then(|commit| commit.browsing_context_group.clone());
-        if let (Some(environment), Some(commit)) = (
+            .and_then(|(_, commit)| commit.browsing_context_group.clone());
+        if let (Some(environment), Some((source_document, commit))) = (
             renderer_page_script_environment.as_ref(),
             main_document_commit,
         ) {
@@ -2081,7 +2138,10 @@ impl ScriptVmPageRealmBootstrap {
             environment.output_journal().append(
                 crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document,
+                        commit,
+                    },
                 ),
             );
         }
@@ -2167,7 +2227,7 @@ impl ScriptVmPageRealmBootstrap {
             );
         }
         let promise_reject_dispatch = promise_reject_dispatch_slot(context_host.clone());
-        let prebootstrapped_child_default_contexts = Rc::new(RefCell::new(HashMap::new()));
+        let prebootstrapped_child_default_contexts = Rc::new(RefCell::new(Default::default()));
         context_host
             .borrow_mut()
             .install_child_default_context_bootstrap(
@@ -2177,7 +2237,11 @@ impl ScriptVmPageRealmBootstrap {
                 promise_reject_dispatch.clone(),
             );
 
+        let initialize_main_world = renderer_page_script_environment.is_none()
+            || reuse_main_window_proxy
+            || !runtime_inspector_session_restore_snapshots.is_empty();
         Ok(Self {
+            initialize_main_world,
             inherited_security_token,
             resource_owner_id,
             promise_reject_dispatch,
@@ -2200,7 +2264,8 @@ impl ScriptVmPageRealmBootstrap {
     fn bootstrap_default_world(
         self,
     ) -> std::result::Result<ScriptVmDefaultWorldBootstrap, ScriptVmBootstrapError> {
-        let ScriptVmPageRealmBootstrap {
+        let Self {
+            initialize_main_world,
             inherited_security_token,
             resource_owner_id,
             promise_reject_dispatch,
@@ -2218,128 +2283,51 @@ impl ScriptVmPageRealmBootstrap {
             renderer_page_script_environment,
             reuse_main_window_proxy,
         } = self;
-        let context_bootstrap = match renderer_document_isolate
-            .with_entered_renderer_document_isolate_and_bootstrap(|isolate, isolate_bootstrap| {
-                ScriptVmContextBootstrap::new_main_default(
-                    isolate,
-                    isolate_bootstrap,
-                    context_host.clone(),
-                    resource_owner_id,
-                    &promise_reject_dispatch,
-                    None,
-                    Some(storage_bucket_store.clone()),
-                    renderer_page_script_environment.clone(),
-                    reuse_main_window_proxy,
-                )
-            }) {
-            Ok(context) => context,
-            Err(error) => {
-                return Err(Box::new((
-                    error,
-                    recover_bootstrap_dom_host_from_holder(
-                        renderer_document_isolate,
-                        renderer_document_isolate_teardown,
-                        context_host,
-                        document_runtime,
-                    ),
-                )));
-            }
-        };
-        let runtime = context_bootstrap.into_runtime();
-        if let Err(error) =
-            renderer_document_isolate.with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &runtime.context);
-                context_host
-                    .borrow_mut()
-                    .install_page_default_context(scope, local_context);
-                if let Some(token) = inherited_security_token.as_ref() {
-                    local_context.set_security_token(v8::Local::new(scope, token));
+        let pending = Box::new(main_world::PendingMainWorld {
+            inherited_security_token,
+            reuse_main_window_proxy,
+            ..Default::default()
+        });
+        let main_world = if initialize_main_world {
+            match main_world::initialize(
+                &renderer_document_isolate,
+                &context_host,
+                resource_owner_id,
+                &promise_reject_dispatch,
+                storage_bucket_store.clone(),
+                None,
+                renderer_page_script_environment.clone(),
+                root_frame_id.as_deref(),
+                &mut page_inspector,
+                &pending,
+            ) {
+                Ok((runtime, baseline_globals)) => MainWorld::Ready {
+                    runtime,
+                    _baseline_globals: baseline_globals,
+                },
+                Err(error) => {
+                    drop(page_inspector);
+                    return Err(Box::new((
+                        error,
+                        recover_bootstrap_dom_host_from_holder(
+                            renderer_document_isolate,
+                            renderer_document_isolate_teardown,
+                            context_host,
+                            document_runtime,
+                        ),
+                    )));
                 }
-                let scope = &mut v8::ContextScope::new(scope, local_context);
-                let origin = context_host
-                    .borrow()
-                    .current_main_document_resource_loader()
-                    .expect("bootstrap has a Document resource authority")
-                    .fetch_context()
-                    .origin()
-                    .to_owned();
-                let global = local_context.global(scope);
-                super::context_bootstrap::set_window_origin_runtime_state(scope, global, &origin)?;
-                super::context_bootstrap::initialize_main_session_history(scope);
-                // Initial frames must be discovered independently of Window
-                // property enumeration during bootstrap.
-                let host = unsafe { &mut *context_host.as_ptr() };
-                host.sync_child_browsing_context_subtree(scope, host.document_handle());
-                Ok(())
-            })
-        {
-            drop(runtime);
-            return Err(Box::new((
-                error,
-                recover_bootstrap_dom_host_from_holder(
-                    renderer_document_isolate,
-                    renderer_document_isolate_teardown,
-                    context_host,
-                    document_runtime,
-                ),
-            )));
-        }
-        let inspector_document_isolate = renderer_document_isolate.clone();
-        let baseline_globals = match renderer_document_isolate
-            .with_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
-                ScriptVmDefaultWorldBootstrap::attach_context_and_capture_baseline_globals(
-                    inspector_document_isolate,
-                    isolate,
-                    inspector,
-                    &mut page_inspector,
-                    &runtime.context,
-                    document_runtime.document_url(),
-                    root_frame_id.as_deref(),
-                )
-            }) {
-            Ok(baseline_globals) => baseline_globals,
-            Err(error) => {
-                drop(page_inspector);
-                drop(runtime);
-                return Err(Box::new((
-                    error,
-                    recover_bootstrap_dom_host_from_holder(
-                        renderer_document_isolate,
-                        renderer_document_isolate_teardown,
-                        context_host,
-                        document_runtime,
-                    ),
-                )));
             }
+        } else {
+            MainWorld::Pending(pending)
         };
-        if let Err(error) = register_main_window_execution_context_for_bootstrap(
-            &renderer_document_isolate,
-            &context_host,
-            &runtime.context,
-        ) {
-            drop(page_inspector);
-            drop(runtime);
-            drop(promise_reject_dispatch);
-            return Err(Box::new((
-                error,
-                recover_bootstrap_dom_host_from_holder(
-                    renderer_document_isolate,
-                    renderer_document_isolate_teardown,
-                    context_host,
-                    document_runtime,
-                ),
-            )));
-        }
         Ok(ScriptVmDefaultWorldBootstrap {
+            main_world,
             resource_owner_id,
             promise_reject_dispatch,
             page_inspector,
             renderer_document_isolate,
             renderer_document_isolate_teardown,
-            page_default_runtime: runtime,
-            baseline_globals,
             document_runtime,
             root_frame_id,
             context_host,
@@ -2403,7 +2391,10 @@ impl ScriptVmDefaultWorldBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2494,8 +2485,7 @@ impl ScriptVmDefaultWorldBootstrap {
             renderer_document_isolate,
             renderer_document_isolate_teardown,
             renderer_page_script_environment,
-            page_default_runtime,
-            baseline_globals,
+            main_world,
             document_runtime,
             context_host,
             prebootstrapped_child_default_contexts,
@@ -2514,13 +2504,12 @@ impl ScriptVmDefaultWorldBootstrap {
             renderer_document_isolate,
             renderer_document_isolate_teardown,
             renderer_page_script_environment,
-            page_default_runtime,
+            main_world,
             page_isolated_world_contexts: PageIsolatedWorldRegistry::new(),
             child_frame_realm_store: child_frame_realm::ChildFrameRealmStore::default(),
             prebootstrapped_child_default_contexts,
             child_document_modulator_store: ChildDocumentModulatorStore::default(),
             root_frame_id,
-            baseline_globals,
             document_runtime: ScriptVmDocumentRuntimeOwner::new(document_runtime),
             _context_host: context_host,
             page_context_cancel_tx,
@@ -2543,6 +2532,7 @@ impl ScriptVmDefaultWorldBootstrap {
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,
             active_drag_session: None,
+            pending_drag_gesture: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
             next_internal_frontend_inspector_call_id: -1,
@@ -2573,26 +2563,34 @@ impl ScriptVmDefaultWorldBootstrap {
 
     pub fn finish(self) -> std::result::Result<ScriptVm, ScriptVmBootstrapError> {
         let vm = self.finish_ownership();
-        vm.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                vm.retain_native_hosts_in_scope(scope);
-            });
+        if let Some(runtime) = vm.current_main_world() {
+            vm.renderer_document_isolate
+                .with_renderer_document_isolate_mut(|isolate| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    let scope = &mut scope.init();
+                    vm.retain_native_hosts_in_scope(scope, runtime);
+                });
+        }
         Ok(vm)
     }
 
     fn finish_in_scope(self, scope: &mut v8::PinScope<'_, '_>) -> ScriptVm {
         let vm = self.finish_ownership();
-        vm.retain_native_hosts_in_scope(scope);
+        if let Some(runtime) = vm.current_main_world() {
+            vm.retain_native_hosts_in_scope(scope, runtime);
+        }
         vm
     }
 }
 
 impl ScriptVm {
-    fn retain_native_hosts_in_scope(&self, scope: &mut v8::PinScope<'_, '_, ()>) {
+    fn retain_native_hosts_in_scope(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        runtime: &WindowRealmRuntime,
+    ) {
         crate::util::retain_context_host_for_document_realm(
-            v8::Local::new(scope, &self.page_default_runtime.context),
+            v8::Local::new(scope, &runtime.context),
             self._context_host.clone(),
             self.renderer_document_isolate
                 .deferred_context_host_release_queue(),
@@ -2666,12 +2664,15 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .disable_subframe_loading_for_document_subtree(self.document_runtime.document_handle());
-        let mut prebootstrapped_contexts = self.clear_context_wrapper_caches_for_context_teardown();
+        let (mut prebootstrapped_contexts, mut pending_isolated) =
+            self.clear_context_wrapper_caches_for_context_teardown();
         clear_promise_rejection_dispatch_state(&self.promise_reject_dispatch);
         self._context_host
             .borrow_mut()
             .close_page_context_resources_for_teardown();
-        self.page_default_runtime.mark_closed();
+        if let Some(runtime) = self.main_world.current_mut() {
+            runtime.mark_closed();
+        }
         for world in self.page_isolated_world_contexts.contexts_mut() {
             world.runtime.mark_closed();
         }
@@ -2681,22 +2682,33 @@ impl ScriptVm {
         for child in prebootstrapped_contexts.values_mut() {
             child.runtime.mark_closed();
         }
+        for world in &mut pending_isolated {
+            world.runtime.mark_closed();
+        }
     }
 
     fn clear_context_wrapper_caches_for_context_teardown(
         &mut self,
-    ) -> HashMap<DomHandle, crate::native_bridge::PrebootstrappedChildDefaultContext> {
+    ) -> (
+        crate::native_bridge::PrebootstrappedWindowContexts,
+        Vec<crate::native_bridge::PrebootstrappedIsolatedWindowContext>,
+    ) {
         // A contentWindow can be exposed before its owner turn promotes the
         // realm into child_frame_realm_store. Keep its runtime record until
         // wrapper preservation and execution-resource shutdown both finish.
-        let prebootstrapped_contexts =
+        let mut prebootstrapped_contexts =
             std::mem::take(&mut *self.prebootstrapped_child_default_contexts.borrow_mut());
+        let pending_isolated = prebootstrapped_contexts.take_pending_isolated();
         let mut context_ptrs: Vec<*const v8::Global<v8::Context>> = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len()
                 + self.child_frame_realm_store.len()
-                + prebootstrapped_contexts.len(),
+                + prebootstrapped_contexts.len()
+                + pending_isolated.len(),
         );
-        context_ptrs.push(&self.page_default_runtime.context as *const _);
+        context_ptrs.extend(
+            self.current_main_world()
+                .map(WindowRealmRuntime::context_ptr),
+        );
         context_ptrs.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -2712,11 +2724,16 @@ impl ScriptVm {
                 .values()
                 .map(|world| &world.context as *const _),
         );
+        context_ptrs.extend(
+            pending_isolated
+                .iter()
+                .map(|world| &world.runtime.context as *const _),
+        );
 
         for (index, context_ptr) in context_ptrs.into_iter().enumerate() {
             self.clear_context_wrapper_cache_for_context_ptr(context_ptr, index == 0);
         }
-        prebootstrapped_contexts
+        (prebootstrapped_contexts, pending_isolated)
     }
 
     fn clear_context_wrapper_cache_for_context_ptr(
@@ -2767,7 +2784,14 @@ impl ScriptVm {
                 "main navigation crossed page script environment ownership"
             ));
         }
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(MainWindowProxyNavigationCommit {
+                context: None,
+                renderer_document_isolate: self.renderer_document_isolate.clone(),
+                page_id,
+            });
+        };
+        let context_ptr = runtime.context_ptr();
         let context = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
@@ -2786,7 +2810,7 @@ impl ScriptVm {
                 Ok(v8::Global::new(scope, context))
             })?;
         Ok(MainWindowProxyNavigationCommit {
-            context,
+            context: Some(context),
             renderer_document_isolate: self.renderer_document_isolate.clone(),
             page_id,
         })

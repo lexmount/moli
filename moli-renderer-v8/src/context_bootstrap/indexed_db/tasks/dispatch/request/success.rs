@@ -1,5 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
+use crate::context_bootstrap::indexed_db::{
+    dispatch_idb_named_event_with_result, finish_transaction_abort,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -12,37 +15,65 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_success_task<'s>(
         abort::finish_request_with_abort_error(scope, request, error);
         return;
     }
+    if let Some(lease) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_connection_request(scope, request)
+    {
+        crate::context_bootstrap::microtask_checkpoint::defer_indexed_db_connection_request(
+            scope, lease,
+        );
+    }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
     }
     refresh_pending_cursor_surface(scope, request);
     if let Some(result) = object_hidden_value(scope, request, INDEXED_DB_PENDING_RESULT_SLOT) {
-        set_indexed_db_request_surface_value(
-            scope,
-            request,
-            INDEXED_DB_REQUEST_RESULT_SLOT,
-            "result",
-            result,
-        );
+        set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_RESULT_SLOT, result);
     }
     let null = v8::null(scope).into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_ERROR_SLOT,
-        "error",
-        null,
-    );
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, null);
     let done = v8str(scope, "done").into();
-    set_indexed_db_request_surface_value(
-        scope,
-        request,
-        INDEXED_DB_REQUEST_READY_STATE_SLOT,
-        "readyState",
-        done,
-    );
-    let _ = dispatch_idb_named_event(scope, request, "success", |_, _| {});
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
+    let cancel =
+        crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
+            scope, request,
+        )
+        .map(|_| {
+            crate::context_bootstrap::indexed_db::typed_state::sql::sql_transaction_event_cancellation(
+                scope, request,
+            )
+        });
+    let outcome = if let Some(old_version) =
+        crate::context_bootstrap::indexed_db::take_indexed_db_delete_old_version(scope, request)
+    {
+        let _ = dispatch_version_change_event(scope, request, "success", old_version, None);
+        None
+    } else {
+        Some(dispatch_idb_named_event_with_result(
+            scope,
+            request,
+            "success",
+            |_, _| {},
+        ))
+    };
+    if scope.is_execution_terminating() {
+        if let Some(cancel) = cancel {
+            cancel();
+        }
+        return;
+    }
+    if let Some(transaction) = transaction
+        && outcome.is_some_and(|outcome| outcome.did_listeners_throw)
+        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+            .unwrap_or(false)
+    {
+        let error = dom_exception_value(
+            scope,
+            "An IndexedDB success listener threw an exception.",
+            "AbortError",
+        );
+        finish_transaction_abort(scope, transaction, error);
+    }
     finish::finish_request_dispatch(scope, request);
     if let Some(transaction) = transaction {
         schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
@@ -61,22 +92,8 @@ fn refresh_pending_cursor_surface<'s>(
     let position = object_number_property(scope, request, INDEXED_DB_PENDING_CURSOR_POSITION_SLOT)
         .unwrap_or(-1.0);
     let position = (position >= 0.0).then_some(position as usize);
-    let _ = refresh_cursor_surface(scope, cursor, position);
-}
-
-fn set_transaction_active_for_request_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, true).into(),
+    crate::context_bootstrap::indexed_db::publish_indexed_db_sql_cursor_page(
+        scope, request, cursor,
     );
+    let _ = refresh_cursor_surface(scope, cursor, position);
 }

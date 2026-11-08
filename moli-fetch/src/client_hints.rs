@@ -342,8 +342,8 @@ mod tests {
         assert!(second.request.request_headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("sec-ch-ua-full-version-list")
                 && value
-                    .windows(b"145.0.0.0".len())
-                    .any(|part| part == b"145.0.0.0")
+                    .windows(b"156.0.8078.74".len())
+                    .any(|part| part == b"156.0.8078.74")
         }));
         assert_eq!(
             second

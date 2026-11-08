@@ -50,25 +50,7 @@ pub(super) fn parse_message_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<MessageEventInit<'s>> {
-    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument("MessageEvent", 2))
-        .and_then(|object| match object {
-            Some(object) => webidl::parse_dictionary_object(scope, object),
-            None => Ok(MessageEventInit {
-                base: EventInit::default(),
-                data: None,
-                last_event_id: webidl::DomString16(Vec::new()),
-                origin: String::new(),
-                ports: Vec::new(),
-                source: None,
-            }),
-        });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
+    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "MessageEvent")
 }
 
 #[derive(webidl::WebIdlArgs)]

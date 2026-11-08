@@ -1,0 +1,225 @@
+use anyhow::Result;
+
+use super::ProtocolWorkflowState;
+use crate::conn::{
+    BackgroundProtocolEvent, CommandOwnerScope, CompletedSessionPageUpdates,
+    CompletedSessionScriptCleanup, CompletedSessionWorkerCleanup, SessionPageUpdateResult,
+};
+use crate::domains::target::session_disposal::{
+    FailedSessionPageRetirement, SessionDisposalIdentity,
+};
+#[cfg(test)]
+use crate::{conn::SessionDisposalPlan, domains::session::PreparedSessionHandlers};
+
+impl ProtocolWorkflowState<'_> {
+    pub(crate) fn prepare_removed_shared_worker_attachment(
+        self,
+        attachment: crate::domains::target::RemovedSharedWorkerAttachment,
+    ) -> Result<()> {
+        attachment.prepare_captured(self.connection)
+    }
+
+    pub(crate) fn finish_removed_shared_worker_attachment(
+        self,
+        cleanup: Option<crate::domains::target::session_disposal::PreparedRemovedWorkerSession>,
+        retirement: crate::conn::TargetSharedWorkerProtocolAttachmentRetirement,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let events = cleanup
+            .map(|cleanup| cleanup.finish(self.connection).into_background_events())
+            .unwrap_or_default();
+        if retirement.is_current() {
+            retirement.retire();
+        }
+        events
+    }
+
+    pub(crate) fn finish_removed_worker_target(
+        self,
+        delta: crate::conn::PreparedTargetHostDelta,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.connection
+            .prepared_target_host_delta_event_plan(delta)
+            .into_background_events()
+    }
+
+    pub(crate) fn finish_dedicated_worker_session_retirement(
+        self,
+        worker: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        identity: SessionDisposalIdentity,
+        detachment: crate::conn::TargetSessionDetachCleanupPlan,
+        failed: bool,
+    ) -> (Vec<BackgroundProtocolEvent>, Option<anyhow::Error>) {
+        worker.finish_session(self.connection, identity, detachment, failed)
+    }
+
+    pub(crate) fn finish_dedicated_worker_retirement(
+        self,
+        identity: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        destroyed_delta: Option<crate::conn::PreparedTargetHostDelta>,
+        uncommitted: Vec<crate::domains::target::CapturedWorkerAttachment>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        identity.finish(self.connection, destroyed_delta, uncommitted)
+    }
+
+    pub(crate) fn recover_dedicated_worker_session_retirement(
+        self,
+        worker: crate::domains::target::DedicatedWorkerRetirementIdentity,
+        identity: SessionDisposalIdentity,
+        detachment: crate::conn::TargetSessionDetachCleanupPlan,
+        owns_cleanup: bool,
+    ) -> (Vec<BackgroundProtocolEvent>, Option<anyhow::Error>) {
+        worker.recover_session(self.connection, identity, detachment, owns_cleanup)
+    }
+
+    pub(crate) fn prepare_target_termination(
+        self,
+        action: crate::domains::page::PageTargetTerminationOwnerAction,
+    ) -> Option<crate::domains::page::TargetTermination> {
+        crate::domains::page::TargetTermination::prepare(self.connection, action)
+    }
+
+    pub(crate) fn prepare_target_termination_activation(
+        self,
+        selection: crate::domains::page::TargetTerminationSelection,
+    ) -> Option<crate::domains::target::activation::PreparedTargetActivation> {
+        selection.prepare_activation(self.connection)
+    }
+
+    pub(crate) fn start_restore_browser_focus_after_removal(
+        self,
+    ) -> Result<Vec<crate::conn::TargetSurfaceUpdate>> {
+        self.connection.start_restore_browser_focus_after_removal()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_page_target_close(
+        self,
+        target_id: &str,
+        events: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
+    ) -> Option<crate::conn::PendingPageTargetClose> {
+        self.connection
+            .start_page_target_close(target_id, events, reason)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_page_target_close(
+        self,
+        completed: crate::conn::CompletedPageTargetClose,
+    ) -> crate::conn::ClosedPageTarget {
+        completed.finish(self.connection)
+    }
+
+    pub(crate) fn prepare_closed_target_sessions(
+        self,
+        plan: crate::conn::TargetClosureCleanupPlan,
+        parent_session_id: Option<String>,
+    ) -> crate::domains::session::PreparedClosedTargetSessions {
+        crate::domains::session::PreparedClosedTargetSessions::prepare(
+            self.connection,
+            plan,
+            parent_session_id,
+        )
+    }
+
+    pub(crate) fn finish_closed_target_sessions(
+        self,
+        completed: crate::domains::session::CompletedClosedTargetSessions,
+    ) -> crate::conn::TargetEventPlan {
+        completed.finish(self.connection)
+    }
+
+    pub(crate) fn finish_default_target_close(
+        self,
+        completed: Option<crate::domains::session::CompletedClosedTargetSessions>,
+        mut events: crate::conn::TargetEventPlan,
+        destroyed: Vec<crate::conn::PreparedTargetHostDelta>,
+    ) -> crate::conn::TargetEventPlan {
+        if let Some(completed) = completed {
+            events.extend(
+                ProtocolWorkflowState::new(self.connection)
+                    .finish_closed_target_sessions(completed),
+            );
+        }
+        events.extend(
+            self.connection
+                .prepared_target_host_deltas_event_plan(destroyed),
+        );
+        events
+    }
+
+    pub(crate) fn prepare_failed_session_page_retirement(
+        self,
+        disposal: &SessionDisposalIdentity,
+    ) -> FailedSessionPageRetirement {
+        disposal.prepare_failed_page_retirement(self.connection)
+    }
+
+    pub(crate) fn finish_failed_session_page_retirement(
+        self,
+        disposal: &SessionDisposalIdentity,
+        retired: FailedSessionPageRetirement,
+    ) -> Vec<BackgroundProtocolEvent> {
+        disposal.finish_failed_page_retirement(self.connection, retired)
+    }
+
+    pub(crate) fn detach_disposed_session_inspector(
+        self,
+        identity: &SessionDisposalIdentity,
+    ) -> Result<()> {
+        identity.detach_inspector(self.connection)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_session_handlers(
+        self,
+        plan: &SessionDisposalPlan,
+    ) -> PreparedSessionHandlers {
+        PreparedSessionHandlers::prepare(self.connection, plan)
+    }
+
+    pub(crate) fn finish_session_page_updates(
+        self,
+        identity: &SessionDisposalIdentity,
+        owner: &CommandOwnerScope,
+        completed: CompletedSessionPageUpdates,
+    ) -> SessionPageUpdateResult {
+        let page = if identity.binding_is_current(self.connection) {
+            self.connection.loaded_page_mut_for_owner(owner)
+        } else {
+            None
+        };
+        completed.finish(page)
+    }
+
+    pub(crate) fn finish_session_script_cleanup(
+        self,
+        identity: &SessionDisposalIdentity,
+        completed: CompletedSessionScriptCleanup,
+    ) -> SessionPageUpdateResult {
+        let current = identity.binding_is_current(self.connection);
+        completed.finish(current.then_some(self.connection))
+    }
+
+    pub(crate) fn finish_session_runtime_cleanup(
+        self,
+        identity: &SessionDisposalIdentity,
+        completed: Option<CompletedSessionWorkerCleanup>,
+    ) -> (Vec<BackgroundProtocolEvent>, Vec<BackgroundProtocolEvent>) {
+        if !identity.binding_is_current(self.connection) {
+            return (Vec::new(), Vec::new());
+        }
+        if let Some(completed) = completed {
+            completed.finish(self.connection);
+        }
+        let mut background_events = Vec::new();
+        let mut protocol_events = Vec::new();
+        crate::domains::runtime::fail_pending_session_calls(
+            self.connection,
+            &mut background_events,
+            &mut protocol_events,
+            identity.plan().session_id(),
+        );
+        (background_events, protocol_events)
+    }
+}

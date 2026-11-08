@@ -306,7 +306,7 @@ fn surround_new_parent_type_is_invalid<'s>(
     new_parent: v8::Local<'s, v8::Object>,
 ) -> bool {
     matches!(
-        object_number_property(scope, new_parent, "nodeType").map(|value| value as u32),
+        super::super::range::range_node_type(scope, new_parent),
         Some(2 | 9 | 10 | 11)
     )
 }

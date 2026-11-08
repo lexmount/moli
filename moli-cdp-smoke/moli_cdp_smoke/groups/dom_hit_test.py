@@ -4,7 +4,8 @@ import asyncio
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
-from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
+from ..navigation import navigate as navigate_document
+from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_browser_version
 
 
 async def _response_for_id(
@@ -44,30 +45,6 @@ async def _success(
     return result, seen
 
 
-async def _wait_for_load(
-    client: RawCdpClient,
-    session_id: str,
-    seen: list[dict[str, Any]],
-) -> None:
-    if any(
-        message.get("sessionId") == session_id
-        and message.get("method") == "Page.loadEventFired"
-        for message in seen
-    ):
-        return
-    deadline = asyncio.get_running_loop().time() + 5.0
-    while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError("timed out waiting for raw Page.loadEventFired")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        if (
-            message.get("sessionId") == session_id
-            and message.get("method") == "Page.loadEventFired"
-        ):
-            return
-
-
 def _attribute_map(node: dict[str, Any]) -> dict[str, str]:
     attributes = node.get("attributes") or []
     return {
@@ -81,8 +58,8 @@ async def run_dom_hit_test_group(
     fixture: str,
     results: list[dict[str, Any]],
 ) -> None:
-    websocket_url = await discover_websocket_url(endpoint)
-    is_moli = websocket_url.endswith("/devtools/browser/moli-browser")
+    version = await discover_browser_version(endpoint)
+    is_moli = isinstance(version.get("Moli-Version"), str)
     client = await connect_raw_cdp(endpoint)
     target_id: str | None = None
     try:
@@ -101,15 +78,8 @@ async def run_dom_hit_test_group(
             raise SmokeError(f"Target.attachToTarget returned no sessionId: {attached!r}")
 
         await _success(client, "Page.enable", session_id=session_id)
-        navigation, seen = await _success(
-            client,
-            "Page.navigate",
-            {"url": f"{fixture}/chromium-cdp-hit-test-page"},
-            session_id=session_id,
-        )
-        if navigation.get("errorText"):
-            raise SmokeError(f"Page.navigate failed: {navigation!r}")
-        await _wait_for_load(client, session_id, seen)
+        await navigate_document(client, session_id,
+                                {"url": f"{fixture}/chromium-cdp-hit-test-page"})
         await _success(client, "Page.captureScreenshot", session_id=session_id)
 
         command_id = await client.send(

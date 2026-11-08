@@ -13,43 +13,12 @@ pub(in crate::context_bootstrap::indexed_db) fn queue_transaction_request(
         INDEXED_DB_TRANSACTION_PENDING_SLOT,
         v8::Number::new(scope, pending + 1.0).into(),
     );
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
         transaction.into(),
     );
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn enqueue_transaction_operation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: v8::Local<'s, v8::Object>,
-    source: v8::Local<'s, v8::Object>,
-    request: v8::Local<'s, v8::Object>,
-    store_name: &str,
-    input: IndexedDbTransactionOperation,
-) {
-    let transaction_context = transaction
-        .get_creation_context(scope)
-        .expect("registered IndexedDB transactions retain their creation context");
-    let source_context = source
-        .get_creation_context(scope)
-        .expect("registered IndexedDB operation sources retain their creation context");
-    let request_context = request
-        .get_creation_context(scope)
-        .expect("registered IndexedDB requests retain their creation context");
-    assert!(
-        transaction_context == source_context && transaction_context == request_context,
-        "IndexedDB transaction operations must remain in the receiver's relevant realm"
-    );
-
-    let owner = indexed_db_typed_owner_scope(scope, request)
-        .expect("IDB transaction operation requests should have typed owner state");
-    let operation =
-        IndexedDbPendingTransactionOperation::new(scope, owner, source, request, store_name, input);
-    push_indexed_db_operation_waiting_for_start(scope, transaction, operation)
-        .expect("IDB transaction operation should bind to its transaction state");
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn abort_queued_transaction_requests<'s>(
@@ -57,8 +26,9 @@ pub(in crate::context_bootstrap::indexed_db) fn abort_queued_transaction_request
     transaction: v8::Local<'s, v8::Object>,
     error: v8::Local<'s, v8::Value>,
 ) {
-    for operation in take_indexed_db_operations_waiting_for_start(scope, transaction) {
-        let request = operation.request(scope);
-        store_request_error(scope, request, error);
+    for operation in take_indexed_db_transaction_operations(scope, transaction) {
+        if let Some(request) = operation.request(scope) {
+            store_request_error(scope, request, error);
+        }
     }
 }

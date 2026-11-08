@@ -20,7 +20,9 @@ pub(in crate::context_bootstrap) fn bind_file_world_wrapper<'s>(
         get_private_value(scope, source, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
     initialize_file_metadata(scope, wrapper, &name, modified);
     let prototype = super::super::ensure_intrinsic_interface_prototype(scope, "File").ok()?;
-    wrapper.set_prototype(scope, prototype.into())?;
+    wrapper
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(())
 }
 
@@ -114,12 +116,17 @@ fn file_last_modified_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
-        .expect("File receiver validated by WebIDL");
-    let last_modified = get_private_value(scope, receiver, FILE_LAST_MODIFIED_SLOT)
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or_else(unix_epoch_millis);
+    let last_modified =
+        file_last_modified_from_object(scope, args.this()).unwrap_or_else(unix_epoch_millis);
     rv.set(v8::Number::new(scope, last_modified).into());
+}
+
+pub(in crate::context_bootstrap) fn file_last_modified_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<f64> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object)?;
+    get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)
 }
 
 fn private_string_value<'s>(
@@ -174,7 +181,7 @@ pub(in crate::context_bootstrap) fn file_constructor_callback<'s>(
     };
     let bytes = match parsed
         .file_bits
-        .into_bytes(scope, parsed.options.base.line_endings())
+        .into_data(scope, parsed.options.base.line_endings())
     {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -183,7 +190,7 @@ pub(in crate::context_bootstrap) fn file_constructor_callback<'s>(
         }
     };
     let mime_type = moli_file_api::normalize_blob_mime_type(&parsed.options.base.r#type);
-    blob::init_blob_object(scope, args.this(), bytes, mime_type);
+    blob::init_blob_object_from_data(scope, args.this(), bytes, mime_type);
 
     let last_modified = parsed
         .options
@@ -198,9 +205,49 @@ pub(crate) fn build_file_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     file: &SelectedFile,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = file_object_with_metadata(scope, &file.name, file.last_modified)?;
-    blob::init_blob_object(scope, object, file.bytes.clone(), file.mime_type.clone());
-    Some(object)
+    build_file_object_from_shared_parts(
+        scope,
+        std::sync::Arc::from(file.bytes.as_slice()),
+        file.mime_type.clone(),
+        &file.name,
+        file.last_modified,
+    )
+}
+
+pub(crate) fn build_file_object_from_shared_parts<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: std::sync::Arc<[u8]>,
+    mime_type: String,
+    name: &str,
+    last_modified: f64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    build_file_object_unpublished(scope, bytes.into(), mime_type, name, last_modified)
+        .map(|(object, _)| object)
+}
+
+pub(crate) fn build_file_object_unpublished<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: moli_file_api::BlobData,
+    mime_type: String,
+    name: &str,
+    last_modified: f64,
+) -> Option<(v8::Local<'s, v8::Object>, moli_file_api::BlobId)> {
+    let object = file_object_with_metadata(scope, name, last_modified)?;
+    let id = blob::try_init_blob_object_from_data(scope, object, bytes, mime_type)?;
+    Some((object, id))
+}
+
+pub(crate) fn file_clone_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(String, f64)> {
+    if !web_api_interfaces::File::is_instance(scope, object) {
+        return None;
+    }
+    let name = file_name_from_object(scope, object)?;
+    let modified =
+        get_private_value(scope, object, FILE_LAST_MODIFIED_SLOT)?.number_value(scope)?;
+    Some((name, modified))
 }
 
 pub(crate) fn selected_file_from_object<'s>(

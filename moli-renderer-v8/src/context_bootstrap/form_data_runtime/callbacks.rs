@@ -5,6 +5,7 @@ use super::storage::{
     normalize_form_data_value, push_form_data_entry, set_form_data_entries,
 };
 use super::*;
+use crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor;
 use crate::{
     callback_invocation::invoke_synchronous_webidl_callback_function,
     native_bridge::{
@@ -213,10 +214,7 @@ fn dispatch_form_data_event_with_entries<'s>(
 fn new_empty_form_data_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "FormData").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let constructor = ensure_intrinsic_interface_constructor(scope, "FormData").ok()?;
     constructor.new_instance(scope, &[])
 }
 
@@ -246,10 +244,7 @@ fn new_form_data_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     form_data: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "FormDataEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let constructor = ensure_intrinsic_interface_constructor(scope, "FormDataEvent").ok()?;
     let init = FormDataEventInitDeclaration::new(form_data, true, false)
         .bind(scope)
         .expect("FormDataEvent init declaration should bind");

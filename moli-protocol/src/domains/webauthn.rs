@@ -24,8 +24,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-webauthn".to_owned());
         browser_context.set_active_target_id("TID-webauthn".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
 
         ctx.process_async(json!({
             "id": 1,

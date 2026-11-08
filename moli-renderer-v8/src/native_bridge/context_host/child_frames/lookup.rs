@@ -59,6 +59,11 @@ impl JsContextHost {
         document: DomHandle,
         out: &mut Vec<DomHandle>,
     ) {
+        // This query projects existing contexts. An empty context registry
+        // cannot contribute a handle, so avoid walking the document.
+        if self.child_browsing_contexts.is_empty() {
+            return;
+        }
         let mut visited_documents = HashSet::new();
         let mut visited_handles = HashSet::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document_inner(
@@ -390,15 +395,6 @@ impl JsContextHost {
         self.child_browsing_context_host_for_document_handle(document_handle)
             .and_then(|child_handle| self.child_browsing_contexts.get(&child_handle))
             .and_then(|entry| entry.document_referrer_policy())
-    }
-
-    pub(crate) fn child_browsing_context_response_referrer_policy(
-        &self,
-        handle: DomHandle,
-    ) -> Option<String> {
-        self.child_browsing_contexts
-            .get(&handle)
-            .and_then(|entry| entry.document_referrer_policy().map(ToOwned::to_owned))
     }
 
     pub(crate) fn child_browsing_context_policy_container_snapshot(

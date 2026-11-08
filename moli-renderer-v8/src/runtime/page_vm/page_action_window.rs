@@ -111,6 +111,7 @@ impl PageVm {
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
+            intercepted_drag: None,
         })
     }
 
@@ -214,6 +215,7 @@ impl PageVm {
                     event.delta_y,
                     event.pointer,
                     event.modifiers,
+                    false,
                 );
             if let Err(error) = result
                 && first_error.is_none()

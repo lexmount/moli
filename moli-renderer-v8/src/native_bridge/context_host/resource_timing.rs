@@ -21,6 +21,7 @@ impl ResourceTimingBufferId {
 struct ResourceTimingBufferState {
     size_limit: u32,
     current_size: u32,
+    dropped_entries_count: u64,
     secondary: VecDeque<v8::Global<v8::Object>>,
     full_task_pending: bool,
 }
@@ -30,6 +31,7 @@ impl ResourceTimingBufferState {
         Self {
             size_limit,
             current_size: 0,
+            dropped_entries_count: 0,
             secondary: VecDeque::new(),
             full_task_pending: false,
         }
@@ -72,6 +74,22 @@ impl ResourceTimingBufferRegistry {
 pub(crate) struct SharedResourceTimingBufferRegistry(Rc<RefCell<ResourceTimingBufferRegistry>>);
 
 impl SharedResourceTimingBufferRegistry {
+    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
+        if let Some(state) = self.0.borrow_mut().buffers.get_mut(&id)
+            && !state.can_add_to_primary()
+        {
+            state.dropped_entries_count = state.dropped_entries_count.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn resource_timing_dropped_entries_count(&self, id: ResourceTimingBufferId) -> u64 {
+        self.0
+            .borrow()
+            .buffers
+            .get(&id)
+            .map_or(0, |state| state.dropped_entries_count)
+    }
+
     pub(crate) fn new() -> Self {
         Self(Rc::new(RefCell::new(
             ResourceTimingBufferRegistry::default(),
@@ -125,6 +143,11 @@ impl SharedResourceTimingBufferRegistry {
 impl JsContextHost {
     pub(crate) fn resource_timing_buffer_registry(&self) -> SharedResourceTimingBufferRegistry {
         self.resource_timing_buffers.clone()
+    }
+
+    pub(crate) fn note_resource_timing_entry_queued(&self, id: ResourceTimingBufferId) {
+        self.resource_timing_buffers
+            .note_resource_timing_entry_queued(id);
     }
 
     pub(crate) fn resource_timing_buffer_can_add_immediately(
@@ -250,6 +273,84 @@ impl JsContextHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_entries_count_capacity_overflow_without_counting_pending_tasks_or_copies() {
+        let registry = SharedResourceTimingBufferRegistry::new();
+        let (id, finalizer) = registry.create_resource_timing_buffer(1);
+        registry.note_resource_timing_entry_queued(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 0);
+
+        registry.note_resource_timing_entry_queued(id);
+        {
+            let mut buffers = registry.0.borrow_mut();
+            let state = buffers.buffers.get_mut(&id).unwrap();
+            assert!(!state.full_task_pending);
+            state.full_task_pending = true;
+        }
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+
+        // A full-event handler can make room while its task remains pending.
+        // New entries still use secondary, but that alone is not a drop.
+        registry.set_resource_timing_buffer_size_limit(id, 3);
+        registry.note_resource_timing_entry_queued(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .current_size += 1;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+        registry.clear_resource_timing_primary_buffer(id);
+        registry
+            .0
+            .borrow_mut()
+            .buffers
+            .get_mut(&id)
+            .unwrap()
+            .full_task_pending = false;
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 1);
+
+        registry.set_resource_timing_buffer_size_limit(id, 0);
+        registry.note_resource_timing_entry_queued(id);
+        assert_eq!(registry.resource_timing_dropped_entries_count(id), 2);
+        finalizer.finalize();
+    }
+
+    #[test]
+    fn dropped_counts_stay_with_each_performance_buffer_and_its_registry() {
+        let first = SharedResourceTimingBufferRegistry::new();
+        let second = SharedResourceTimingBufferRegistry::new();
+        let (first_id, first_finalizer) = first.create_resource_timing_buffer(0);
+        let (other_id, other_finalizer) = first.create_resource_timing_buffer(0);
+        let (second_id, second_finalizer) = second.create_resource_timing_buffer(0);
+        assert_eq!(first_id, second_id);
+        for _ in 0..3 {
+            first.note_resource_timing_entry_queued(first_id);
+        }
+        assert_eq!(first.resource_timing_dropped_entries_count(first_id), 3);
+        assert_eq!(first.resource_timing_dropped_entries_count(other_id), 0);
+        assert_eq!(second.resource_timing_dropped_entries_count(second_id), 0);
+        first_finalizer.finalize();
+        assert_eq!(first.resource_timing_dropped_entries_count(first_id), 0);
+        other_finalizer.finalize();
+        second_finalizer.finalize();
+    }
 
     #[test]
     fn scalar_buffer_state_keeps_pending_and_capacity_orthogonal() {

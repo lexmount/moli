@@ -86,8 +86,7 @@ mod tests {
         browser_context.set_active_target_id("TID-audits".to_owned());
         browser_context.set_target_url("data:text/html,audits-test".to_owned());
         browser_context.attach_active_session("SID-audits".to_owned());
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
+        ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-audits"),
@@ -224,13 +223,14 @@ mod tests {
             "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'\"><body></body>",
         )
         .await;
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("Audits fixture should retain its browser context")
-                .assign_attached_session_to_target("TID-audits", "SID-audits-peer".to_owned())
-        );
+        ctx.with_fixture(|conn| {
+            assert!({
+                conn.browser_context
+                    .as_mut()
+                    .expect("Audits fixture should retain its browser context")
+                    .assign_attached_session_to_target("TID-audits", "SID-audits-peer".to_owned())
+            })
+        });
 
         for (id, session_id) in [(1, "SID-audits"), (2, "SID-audits-peer")] {
             ctx.process_async(json!({

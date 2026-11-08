@@ -19,10 +19,12 @@ const MODIFIER_KEYS: [&str; 14] = [
     "Shift",
 ];
 
-/// EventModifierInit members, in Web IDL dictionary order.
+/// The UIEventInit ancestor is converted before the modifier members.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "EventModifierInit")]
-pub(super) struct EventModifierInitMembers {
+pub(super) struct EventModifierInit<'s> {
+    #[webidl(inherit)]
+    ui: super::ui::UiEventInit<'s>,
     #[webidl(default = false)]
     alt_key: bool,
     #[webidl(default = false)]
@@ -62,8 +64,32 @@ struct EventModifierProperties {
     shift_key: bool,
 }
 
-impl EventModifierInitMembers {
-    pub(super) fn initialize<'s>(
+impl<'s> EventModifierInit<'s> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        self.ui.event_flags()
+    }
+
+    pub(super) fn initialize(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) {
+        self.ui.initialize(scope, event);
+        self.initialize_modifiers(scope, event);
+    }
+
+    // TouchEvent keeps its key accessors in private state. Installing the own
+    // modifier properties used by Mouse/Keyboard events would change its shape.
+    pub(super) fn initialize_touch_event_base(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        event: v8::Local<'s, v8::Object>,
+    ) -> (bool, bool, bool, bool) {
+        self.ui.initialize(scope, event);
+        (self.alt_key, self.meta_key, self.ctrl_key, self.shift_key)
+    }
+
+    fn initialize_modifiers(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         event: v8::Local<'s, v8::Object>,
@@ -111,14 +137,14 @@ pub(in crate::context_bootstrap) fn initialize_legacy_event_modifiers<'s>(
     shift_key: bool,
     meta_key: bool,
 ) {
-    EventModifierInitMembers {
+    EventModifierInit {
         ctrl_key,
         alt_key,
         shift_key,
         meta_key,
         ..Default::default()
     }
-    .initialize(scope, event);
+    .initialize_modifiers(scope, event);
 }
 
 #[derive(webidl::WebIdlArgs)]

@@ -347,7 +347,7 @@ fn assert_success(output: &Output, server: &DisableCssBoundaryServer, scenario: 
 
 #[test]
 fn resource_mode_fetches_dom_resources_without_fetching_css_derived_resources() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssBoundaryServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/resource-boundary.html"),
@@ -377,7 +377,7 @@ fn resource_mode_fetches_dom_resources_without_fetching_css_derived_resources() 
 
 #[test]
 fn css_module_fetch_is_blocked_but_explicit_fetch_of_css_remains_available() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssBoundaryServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/css-module-boundary.html"),
@@ -400,7 +400,7 @@ fn css_module_fetch_is_blocked_but_explicit_fetch_of_css_remains_available() -> 
 
 #[test]
 fn cached_fetch_response_cannot_bypass_css_module_blocking() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssBoundaryServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/cache-warmed-css-module-boundary.html"),
@@ -425,7 +425,7 @@ fn cached_fetch_response_cannot_bypass_css_module_blocking() -> Result<()> {
 
 #[test]
 fn service_worker_cannot_intercept_a_policy_blocked_stylesheet() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableCssBoundaryServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/service-worker-boundary.html"),

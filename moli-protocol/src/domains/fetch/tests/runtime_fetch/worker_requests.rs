@@ -722,13 +722,14 @@ globalThis.__lm_popup_csp_report_result = "pending";
     ctx.expect_result(37_055, json!({}), Some(&popup_session_id));
     ctx.sent.clear();
 
-    assert_eq!(
-        ctx.conn
-            .target_owner_identity_for_session(Some(&popup_session_id))
-            .and_then(|(_, target_id)| target_id),
-        Some(popup_target_id.clone()),
-        "the popup session must remain bound to its own target before navigation"
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.target_owner_identity_for_session(Some(&popup_session_id))
+                .and_then(|(_, target_id)| target_id),
+            Some(popup_target_id.clone()),
+            "the popup session must remain bound to its own target before navigation"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 37_056,
@@ -1492,13 +1493,14 @@ xhr.send();
     let api_url = format!("http://{addr}/worker-api?aux-worker-xhr=1");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({

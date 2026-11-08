@@ -1,5 +1,4 @@
 use super::*;
-use crate::blob;
 use crate::context_bootstrap::sandbox_blocks_ancestor_or_top_navigation_from_source;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
 use crate::native_bridge::element::activation::{
@@ -129,6 +128,7 @@ fn perform_implicit_form_submission(
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -403,17 +403,11 @@ fn dispatch_form_reset_event<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
     let Some(context) = receiver.get_creation_context(scope) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
+        return NodePublicEventDispatchOutcome::canceled_before_dispatch();
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let Some(event) = construct_simple_event(scope, "reset", true, true, false) else {
-        return NodePublicEventDispatchOutcome {
-            default_prevented: true,
-            had_exception: false,
-        };
+        return NodePublicEventDispatchOutcome::canceled_before_dispatch();
     };
     align_event_constructor_function_realm_with_target(scope, event, receiver);
     dispatch_public_event(scope, runtime_ptr, form_handle, event)
@@ -1166,7 +1160,7 @@ fn build_form_submission_request(
         });
     }
     if method == "post" {
-        let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding);
+        let encoded = serialize_submission_body(scope, &entries, enctype?, submission_encoding)?;
         return Some(FormSubmissionMethod::Post {
             resolved_url,
             body: encoded.body.into(),
@@ -1310,15 +1304,16 @@ fn serialize_submission_body(
     entries: &[(String, v8::Global<v8::Value>)],
     enctype: &str,
     submission_encoding: &'static encoding_rs::Encoding,
-) -> EncodedSubmissionBody {
-    match enctype {
+) -> Option<EncodedSubmissionBody> {
+    Some(match enctype {
         "multipart/form-data" => {
-            let entries = normalize_form_submission_entries(scope, entries);
-            let (body, content_type) = form_data_entries_multipart_body_with_prefix(
+            let (body, content_type) = form_data_entries_multipart_body(
                 scope,
-                &entries,
+                entries,
                 FORM_SUBMISSION_MULTIPART_BOUNDARY_PREFIX,
-            );
+                submission_encoding,
+            )
+            .ok()?;
             EncodedSubmissionBody { body, content_type }
         }
         "text/plain" => {
@@ -1343,7 +1338,7 @@ fn serialize_submission_body(
             .into_bytes(),
             content_type: "application/x-www-form-urlencoded".to_owned(),
         },
-    }
+    })
 }
 
 fn normalize_form_submission_pairs(entries: Vec<(String, String)>) -> Vec<(String, String)> {
@@ -1354,35 +1349,6 @@ fn normalize_form_submission_pairs(entries: Vec<(String, String)>) -> Vec<(Strin
                 normalize_form_submission_newlines(&name),
                 normalize_form_submission_newlines(&value),
             )
-        })
-        .collect()
-}
-
-fn normalize_form_submission_entries(
-    scope: &mut v8::PinScope<'_, '_>,
-    entries: &[(String, v8::Global<v8::Value>)],
-) -> Vec<(String, v8::Global<v8::Value>)> {
-    entries
-        .iter()
-        .map(|(name, value)| {
-            let value = v8::Local::new(scope, value);
-            let value = if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
-                && blob::blob_bytes_from_object(scope, object).is_some()
-            {
-                v8::Global::new(scope, value)
-            } else {
-                let normalized = value
-                    .to_string(scope)
-                    .map(|value| {
-                        normalize_form_submission_newlines(&value.to_rust_string_lossy(scope))
-                    })
-                    .unwrap_or_default();
-                let value: v8::Local<'_, v8::Value> = v8_string(scope, &normalized)
-                    .map(|value| value.into())
-                    .unwrap_or_else(|| v8::undefined(scope).into());
-                v8::Global::new(scope, value)
-            };
-            (normalize_form_submission_newlines(name), value)
         })
         .collect()
 }

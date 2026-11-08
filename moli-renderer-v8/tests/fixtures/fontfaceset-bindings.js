@@ -102,7 +102,7 @@ async function fontFaceSetBindingsProbe(realm, fonts) {
   controller.abort();
   const event = new realm.Event('loading', {cancelable: true});
   check(methods.dispatchEvent.call(fonts, event) === false, 'event cancellation');
-  check(calls.join() === 'capture,listener,handler,once', 'event handler order: ' + calls);
+  check(calls.join() === 'listener,handler,once,capture', 'event handler order: ' + calls);
   check(event.currentTarget === null && event.eventPhase === 0, 'dispatch cleanup');
   methods.removeEventListener.call(fonts, 'loading', listener);
   fonts.onloading = null;

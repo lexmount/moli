@@ -121,9 +121,12 @@ mod computed_size;
 mod cssom_zoom;
 mod dedicated_worker_client_event;
 mod document_script_completion;
+mod dom_publication;
 mod element_toggle_event;
+mod fetch_blob_reading;
 mod fetch_xhr;
 mod file_entry_file_callback;
+mod file_reader;
 mod file_system_directory_reader;
 mod grid_item_box_generation;
 mod grid_item_paint_order;
@@ -147,6 +150,7 @@ mod main_parser_module_completion;
 mod main_parser_owned_module_completion;
 mod main_runtime_module_completion;
 mod main_runtime_script_completion;
+mod markdown_dump;
 mod media_element_event;
 mod message_port_delivery;
 mod misc_platform_api;
@@ -412,7 +416,6 @@ fn test_child_modulepreload_start_task_for_target(
             crate::dom::native::NativeNodeId::new(997),
         ),
         NativeModuleSingleFetchRequest::new(
-            source_url.clone(),
             source_url.clone(),
             source_url.clone(),
             ModuleMapKey::java_script(source_url),
@@ -1045,7 +1048,6 @@ fn enqueue_parser_owned_module_script_fetch_completion_for_target_for_test(
             target,
             Ok(ModuleGraphFetchedSource::new(
                 module_url.clone(),
-                false,
                 ModuleSource::text(source.to_owned()),
             )),
             None,
@@ -2262,3 +2264,11 @@ mod extracted;
 
 mod blob_constructor;
 mod blob_text;
+
+mod blob_reading;
+
+mod blob_support;
+
+mod request_body_transfer;
+
+mod response_body_clone;

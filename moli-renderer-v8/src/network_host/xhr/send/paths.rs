@@ -27,6 +27,7 @@ pub(super) fn record_intercepted_xhr(
         prepared.execution_context,
         v8::Global::new(scope, xhr),
         prepared.use_cors_preflight,
+        String::new(),
         prepared.credentials_mode,
         prepared.network_partition_key,
         prepared.policy_context,
@@ -84,6 +85,7 @@ pub(super) fn dispatch_service_worker_xhr(
         prepared.execution_context.duplicate(scope),
         v8::Global::new(scope, xhr),
         prepared.use_cors_preflight,
+        String::new(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),
@@ -168,7 +170,7 @@ pub(super) fn record_offline_xhr_failure(
         SubresourceResourceType::Xhr,
         "Network emulation offline".to_owned(),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_blocked_xhr_failure(
@@ -187,7 +189,7 @@ pub(super) fn record_blocked_xhr_failure(
         SubresourceResourceType::Xhr,
         BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_csp_xhr_failure(
@@ -207,7 +209,7 @@ pub(super) fn record_csp_xhr_failure(
         SubresourceResourceType::Xhr,
         message,
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_url_policy_xhr_failure(
@@ -227,7 +229,7 @@ pub(super) fn record_url_policy_xhr_failure(
         SubresourceResourceType::Xhr,
         message,
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn record_bad_port_xhr_failure(
@@ -249,7 +251,7 @@ pub(super) fn record_bad_port_xhr_failure(
         SubresourceResourceType::Xhr,
         format!("xhr: blocked bad port for `{}`", prepared.resolved_url),
     ));
-    queue_xhr_failure_delivery(scope, host, xhr);
+    queue_xhr_failure_delivery(scope, xhr);
 }
 
 pub(super) fn queue_local_xhr_response(
@@ -260,7 +262,7 @@ pub(super) fn queue_local_xhr_response(
     response: Response,
 ) {
     record_xhr_response_success(host, &prepared, &response);
-    queue_xhr_response_delivery(scope, host, xhr, response);
+    queue_xhr_response_delivery(scope, xhr, response);
 }
 
 pub(super) fn record_xhr_response_success(
@@ -310,6 +312,10 @@ pub(super) fn spawn_network_xhr_fetch(
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)
+    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+        document_referrer_policy: prepared.document_referrer_policy.clone(),
+        ..Default::default()
+    })
     .with_request_origin(prepared.request_origin.clone())
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
@@ -337,6 +343,7 @@ pub(super) fn spawn_network_xhr_fetch(
         prepared.execution_context,
         v8::Global::new(scope, xhr),
         prepared.use_cors_preflight,
+        prepared.initiator_url.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.network_partition_key.clone(),

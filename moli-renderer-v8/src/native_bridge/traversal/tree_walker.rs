@@ -39,9 +39,9 @@ fn tree_walker_end(snapshot: &TraversalSnapshot<TreeWalkerSnapshot>) {
         .tree_walker_end(snapshot.id);
 }
 
-pub(super) fn tree_walker_root_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_root_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -58,9 +58,9 @@ pub(super) fn tree_walker_root_getter(
     );
 }
 
-pub(super) fn tree_walker_what_to_show_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_what_to_show_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -71,9 +71,9 @@ pub(super) fn tree_walker_what_to_show_getter(
     rv.set(v8::Number::new(scope, snapshot.state.what_to_show as f64).into());
 }
 
-pub(super) fn tree_walker_filter_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_filter_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -88,9 +88,9 @@ pub(super) fn tree_walker_filter_getter(
     rv.set(filter.value(scope));
 }
 
-pub(super) fn tree_walker_current_node_getter(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_current_node_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -131,9 +131,9 @@ pub(super) fn tree_walker_current_node_setter<'s>(
         .set_tree_walker_current_node(traversal_id, handle);
 }
 
-pub(super) fn tree_walker_parent_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_parent_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -163,9 +163,9 @@ pub(super) fn tree_walker_parent_node_callback(
     );
 }
 
-pub(super) fn tree_walker_first_child_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_first_child_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -201,9 +201,9 @@ pub(super) fn tree_walker_first_child_callback(
     );
 }
 
-pub(super) fn tree_walker_last_child_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_last_child_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -239,9 +239,9 @@ pub(super) fn tree_walker_last_child_callback(
     );
 }
 
-pub(super) fn tree_walker_next_sibling_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_next_sibling_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -271,9 +271,9 @@ pub(super) fn tree_walker_next_sibling_callback(
     );
 }
 
-pub(super) fn tree_walker_previous_sibling_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_previous_sibling_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -304,9 +304,9 @@ pub(super) fn tree_walker_previous_sibling_callback(
     );
 }
 
-pub(super) fn tree_walker_next_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_next_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();
@@ -336,9 +336,9 @@ pub(super) fn tree_walker_next_node_callback(
     );
 }
 
-pub(super) fn tree_walker_previous_node_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn tree_walker_previous_node_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let holder = args.this();

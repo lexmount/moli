@@ -1,7 +1,7 @@
 use moli_cookie_jar::{
-    CookiePriority, StoredCookie, StoredCookieEffectiveSameSite, StoredCookiePartitionKey,
-    StoredCookieSameSite, StoredCookieSetRejectionReason, StoredCookieSetReport,
-    StoredCookieSetStatus, StoredCookieSourceScheme,
+    CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
+    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
+    StoredCookieSourceScheme,
 };
 use url::Url;
 
@@ -55,7 +55,6 @@ pub(super) fn normalize_cookie_param(
     // semantic issues become structured cookie reports instead of aborting the
     // whole batch.
     let same_site = stored_cookie_same_site_from_cdp(param.same_site.as_deref());
-    let effective_same_site = Some(effective_same_site_from_stored_same_site(same_site));
     let mut rejection_reasons = Vec::new();
 
     // Blink's Cookie Store API rejects several structured-name/value edge
@@ -166,10 +165,7 @@ pub(super) fn normalize_cookie_param(
     });
 
     if !rejection_reasons.is_empty() {
-        return NormalizedCdpCookieParam::Rejected(rejected_cookie_param_report(
-            rejection_reasons,
-            effective_same_site,
-        ));
+        return NormalizedCdpCookieParam::Rejected(rejected_cookie_param_report(rejection_reasons));
     }
 
     NormalizedCdpCookieParam::Ready(
@@ -188,6 +184,7 @@ pub(super) fn normalize_cookie_param(
             source_scheme,
             source_port,
             creation_index: 0,
+            creation_time: Some(time::OffsetDateTime::now_utc()),
             last_access_index: 0,
         }),
         parsed_url,
@@ -214,7 +211,9 @@ pub(crate) fn normalize_partition_key(
         .ok_or(StoredCookieSetRejectionReason::InvalidPartitionKey)?;
     let url = Url::parse(top_level_site)
         .map_err(|_| StoredCookieSetRejectionReason::InvalidPartitionKey)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+    if !(url.scheme() == "file"
+        || matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+    {
         return Err(StoredCookieSetRejectionReason::InvalidPartitionKey);
     }
     Ok(Some(StoredCookiePartitionKey::site(
@@ -225,7 +224,6 @@ pub(crate) fn normalize_partition_key(
 
 fn rejected_cookie_param_report(
     rejection_reasons: Vec<StoredCookieSetRejectionReason>,
-    effective_same_site: Option<StoredCookieEffectiveSameSite>,
 ) -> StoredCookieSetReport {
     let primary_reason = rejection_reasons
         .first()
@@ -235,19 +233,7 @@ fn rejected_cookie_param_report(
         status: StoredCookieSetStatus::Rejected(primary_reason),
         rejection_reasons,
         warning_reasons: Vec::new(),
-        effective_same_site,
-    }
-}
-
-fn effective_same_site_from_stored_same_site(
-    same_site: StoredCookieSameSite,
-) -> StoredCookieEffectiveSameSite {
-    match same_site {
-        StoredCookieSameSite::Strict => StoredCookieEffectiveSameSite::Strict,
-        StoredCookieSameSite::Lax => StoredCookieEffectiveSameSite::Lax,
-        StoredCookieSameSite::None | StoredCookieSameSite::Unspecified => {
-            StoredCookieEffectiveSameSite::NoRestriction
-        }
+        effective_same_site: None,
     }
 }
 
@@ -257,10 +243,18 @@ fn offset_datetime_from_cdp_timestamp(value: f64) -> Option<time::OffsetDateTime
     }
 
     let seconds = value.trunc() as i64;
+    // Chromium caps persistent cookies at 400 days. Clamp before converting
+    // the timestamp so large, valid protocol values cannot silently become
+    // session cookies when they exceed OffsetDateTime's supported range.
+    let latest_expiry = time::OffsetDateTime::now_utc() + time::Duration::days(400);
+    if seconds > latest_expiry.unix_timestamp() {
+        return Some(latest_expiry);
+    }
     let nanos = ((value.fract()) * 1_000_000_000.0).round() as i64;
     time::OffsetDateTime::from_unix_timestamp(seconds)
         .ok()
         .and_then(|dt| dt.checked_add(time::Duration::nanoseconds(nanos)))
+        .map(|dt| dt.min(latest_expiry))
 }
 
 #[cfg(test)]
@@ -271,6 +265,35 @@ mod tests {
         CdpCookieSameSite, CdpCookieSourceScheme, stored_cookie_same_site_from_cdp,
         stored_cookie_source_scheme_from_cdp,
     };
+
+    #[test]
+    fn cdp_cookie_expiry_preserves_persistence_and_caps_the_lifetime() {
+        use super::offset_datetime_from_cdp_timestamp;
+        use time::{Duration, OffsetDateTime};
+
+        let start = OffsetDateTime::now_utc();
+        let near_expiry = start.unix_timestamp() + Duration::days(1).whole_seconds();
+        assert_eq!(
+            offset_datetime_from_cdp_timestamp(near_expiry as f64)
+                .expect("near expiry")
+                .unix_timestamp(),
+            near_expiry
+        );
+        for timestamp in [9_007_199_254_740_991.0, f64::MAX] {
+            let expiry = offset_datetime_from_cdp_timestamp(timestamp).expect("persistent expiry");
+            assert!(expiry >= start + Duration::days(400));
+            assert!(expiry <= OffsetDateTime::now_utc() + Duration::days(400));
+        }
+        assert_eq!(
+            offset_datetime_from_cdp_timestamp(0.0)
+                .expect("expired persistent cookie")
+                .unix_timestamp(),
+            0
+        );
+        for timestamp in [-1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(offset_datetime_from_cdp_timestamp(timestamp), None);
+        }
+    }
 
     #[test]
     fn cdp_cookie_same_site_tokens_are_derived_and_case_sensitive() {

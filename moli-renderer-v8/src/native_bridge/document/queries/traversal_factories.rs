@@ -53,9 +53,12 @@ pub(in crate::native_bridge) fn node_create_node_iterator_callback<'s>(
         rv.set_null();
         return;
     };
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
     let runtime = unsafe { &mut *runtime_ptr };
     let iterator = traversal::build_node_iterator_wrapper(
-        scope,
+        target_scope,
         runtime_ptr,
         runtime.native_bridge_mut(),
         root,
@@ -93,9 +96,12 @@ pub(in crate::native_bridge) fn node_create_tree_walker_callback<'s>(
         rv.set_null();
         return;
     };
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
     let runtime = unsafe { &mut *runtime_ptr };
     let walker = traversal::build_tree_walker_wrapper(
-        scope,
+        target_scope,
         runtime_ptr,
         runtime.native_bridge_mut(),
         root,

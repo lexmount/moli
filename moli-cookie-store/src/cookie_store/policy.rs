@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use cookie::SameSite;
 use url::Url;
 
 use crate::cookie::{Cookie, CookieSourceScheme};
@@ -14,18 +13,17 @@ pub(super) fn source_scheme_mismatch(cookie: &Cookie<'_>, url: &Url) -> bool {
 }
 
 pub(super) fn effective_same_site(cookie: &Cookie<'_>) -> CookieEffectiveSameSite {
-    match cookie.same_site() {
-        Some(SameSite::Strict) => CookieEffectiveSameSite::Strict,
-        Some(SameSite::Lax) => CookieEffectiveSameSite::Lax,
-        _ => CookieEffectiveSameSite::NoRestriction,
-    }
+    CookieEffectiveSameSite::for_cookie(
+        cookie.same_site(),
+        cookie.creation_time(),
+        time::OffsetDateTime::now_utc(),
+    )
 }
 
 pub(super) fn access_semantics(cookie: &Cookie<'_>) -> CookieAccessSemantics {
     match cookie.same_site() {
-        // The fork currently enforces the modern model for cookies with an
-        // explicit SameSite attribute. Cookies without an attribute remain
-        // `Unknown` until lax-by-default/legacy compatibility is modeled.
+        // No legacy access delegate is configured. Unknown access semantics
+        // therefore use the same modern default as Chromium's UNKNOWN value.
         Some(_) => CookieAccessSemantics::NonLegacy,
         None => CookieAccessSemantics::Unknown,
     }
@@ -75,6 +73,16 @@ pub(super) fn cookie_matches_delete_filter(
     if filter.domain.is_some_and(|wanted| cookie_domain != wanted) {
         return false;
     }
+    if let Some(wanted) = filter.serialized_domain {
+        let matches = if matches!(cookie.domain, crate::CookieDomain::Suffix(_)) {
+            wanted.strip_prefix('.') == Some(cookie_domain.as_str())
+        } else {
+            wanted == cookie_domain
+        };
+        if !matches {
+            return false;
+        }
+    }
 
     if filter
         .path
@@ -93,14 +101,25 @@ pub(super) fn cookie_matches_delete_filter(
         return false;
     }
 
-    if filter
-        .partition_key
-        .is_some_and(|wanted| cookie.partition_key() != Some(wanted))
-    {
-        return false;
+    match filter.partition {
+        CookiePartitionMatch::Any => true,
+        CookiePartitionMatch::Unpartitioned => cookie.partition_key().is_none(),
+        CookiePartitionMatch::Exact(wanted) => cookie.partition_key() == Some(wanted),
+        CookiePartitionMatch::Serialized {
+            top_level_site,
+            has_cross_site_ancestor,
+        } => {
+            let Some(crate::CookiePartitionKey::Site {
+                top_level_site: actual_site,
+                has_cross_site_ancestor: actual_ancestor,
+            }) = cookie.partition_key()
+            else {
+                return false;
+            };
+            top_level_site.is_none_or(|wanted| wanted == actual_site)
+                && has_cross_site_ancestor.is_none_or(|wanted| wanted == *actual_ancestor)
+        }
     }
-
-    true
 }
 
 pub(super) fn delete_filter_domain_matches_host(
@@ -269,19 +288,12 @@ pub(super) fn path_overlap(left: &str, right: &str) -> bool {
 /// that behavior for callers that still use those helpers, while new code
 /// should prefer explicit `InsertContext` constructors.
 pub(super) fn inferred_insert_context(url: &Url) -> InsertContext<'_> {
-    if is_http_scheme(url) {
-        InsertContext {
-            url,
-            source: CookieAccessSource::Http,
-            browser_context: BrowserSiteContext::empty(),
-            enforce_browser_policy: false,
-        }
-    } else {
-        InsertContext {
-            url,
-            source: CookieAccessSource::Document,
-            browser_context: BrowserSiteContext::empty(),
-            enforce_browser_policy: false,
+    InsertContext {
+        enforce_browser_policy: false,
+        ..if is_http_scheme(url) {
+            InsertContext::http(url)
+        } else {
+            InsertContext::document(url)
         }
     }
 }

@@ -11,14 +11,6 @@ use moli_layout::{
 
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
-pub(crate) fn current_native_stylesheet_resources(
-    runtime: &JsContextHost,
-    root: DomHandle,
-) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
-    let mut reads = crate::native_bridge::element::StyleObservation::new(runtime);
-    reads.read(root).stylesheet_resource_snapshot()
-}
-
 pub(crate) fn build_native_layout_pass(
     runtime: &JsContextHost,
     root: DomHandle,
@@ -83,13 +75,15 @@ fn build_native_layout_pass_recursive(
         };
         if services.has_stylesheet_web_fonts() {
             if let Some(resources) = styles.stylesheet_resources(root) {
-                let active = resources
-                    .web_fonts()
-                    .iter()
-                    .filter_map(|resource| resource.web_font().map(|font| font.slot()))
-                    .collect::<std::collections::HashSet<_>>();
-                services.with_active_stylesheet_fonts(
-                    |slot| active.contains(slot),
+                services.with_stylesheet_font_declarations(
+                    resources.web_fonts().iter().filter_map(|resource| {
+                        let font = resource.web_font()?;
+                        Some(moli_layout::WebFontDeclaration {
+                            slot: font.registration_slot(),
+                            source_key: font.resource_key(),
+                            face: font.face(),
+                        })
+                    }),
                     |services| {
                         build_layout_pass_with_embedded_frames(
                             &source,

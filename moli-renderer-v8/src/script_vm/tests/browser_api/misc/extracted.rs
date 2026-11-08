@@ -17,6 +17,7 @@ mod service_worker_events;
 mod service_worker_popup;
 mod service_worker_registration;
 mod service_worker_surface;
+mod shared_worker_isolation;
 mod storage;
 mod trusted_types;
 mod webidl_surface;

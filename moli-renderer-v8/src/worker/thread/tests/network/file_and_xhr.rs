@@ -521,17 +521,24 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
         .await
         .expect("bind slow sync worker xhr server");
     let addr = listener.local_addr().expect("slow sync worker xhr addr");
+    let (finish_server, mut finished) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept slow sync worker xhr request");
-        read_http_request_head(&mut stream)
-            .await
-            .expect("read slow sync worker xhr request");
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nslow";
-        let _ = stream.write_all(response.as_bytes()).await;
+        // Hold any connection without responding until the worker reports its
+        // timeout. Under load the 30ms deadline can also expire before connect,
+        // so fixture cleanup must not depend on an HTTP request arriving.
+        let connection = tokio::select! {
+            accepted = listener.accept() => {
+                Some(accepted.expect("accept slow sync worker xhr request"))
+            }
+            result = &mut finished => {
+                result.expect("release slow sync worker xhr server");
+                None
+            }
+        };
+        if let Some((stream, _)) = connection {
+            finished.await.expect("release slow sync worker xhr server");
+            drop(stream);
+        }
     });
     let base_url = format!("http://{addr}");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader");
@@ -608,6 +615,9 @@ async fn worker_sync_xhr_timeout_cancels_fetch_and_throws_without_progress_event
             r#"{{"error":{{"name":"TimeoutError","message":"Failed to execute 'send' on 'XMLHttpRequest': Failed to load '{base_url}/worker/slow.txt'.","isDomException":true}},"readyState":4,"status":0,"responseText":"","events":["readystatechange:1"]}}"#
         )
     );
+    finish_server
+        .send(())
+        .expect("slow sync worker xhr server should remain available until timeout");
     timeout(TIMEOUT, server)
         .await
         .expect("slow sync worker xhr server should finish within test timeout")
@@ -1814,19 +1824,11 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
             const xhr = new XMLHttpRequest();
             const events = [];
             const violations = [];
-            addEventListener("securitypolicyviolation", event => {{
-                violations.push({{
-                    blockedURI: event.blockedURI,
-                    effectiveDirective: event.effectiveDirective,
-                    disposition: event.disposition,
-                }});
-            }});
-            xhr.addEventListener('readystatechange', () => events.push('readystatechange:' + xhr.readyState));
-            xhr.addEventListener('loadstart', () => events.push('loadstart'));
-            xhr.addEventListener('error', () => events.push('error'));
-            xhr.addEventListener('load', () => events.push('load'));
-            xhr.addEventListener('loadend', () => {{
-                events.push('loadend');
+            let loadEnded = false;
+            // Chromium may dispatch the violation after loadend. Keep the
+            // worker alive until both tasks have delivered their results.
+            function reportAfterLoadAndViolation() {{
+                if (!loadEnded || violations.length === 0) return;
                 postMessage({{
                     readyState: xhr.readyState,
                     status: xhr.status,
@@ -1839,6 +1841,23 @@ async fn worker_xmlhttprequest_cross_origin_redirect_final_url_obeys_connect_src
                     violations,
                 }});
                 close();
+            }}
+            addEventListener("securitypolicyviolation", event => {{
+                violations.push({{
+                    blockedURI: event.blockedURI,
+                    effectiveDirective: event.effectiveDirective,
+                    disposition: event.disposition,
+                }});
+                reportAfterLoadAndViolation();
+            }});
+            xhr.addEventListener('readystatechange', () => events.push('readystatechange:' + xhr.readyState));
+            xhr.addEventListener('loadstart', () => events.push('loadstart'));
+            xhr.addEventListener('error', () => events.push('error'));
+            xhr.addEventListener('load', () => events.push('load'));
+            xhr.addEventListener('loadend', () => {{
+                events.push('loadend');
+                loadEnded = true;
+                reportAfterLoadAndViolation();
             }});
             xhr.open('GET', {url_literal});
             xhr.send();
@@ -1915,4 +1934,93 @@ async fn worker_termination_releases_native_websocket_transport() {
     server
         .await
         .expect("terminating Worker releases its native socket");
+}
+
+#[tokio::test]
+async fn worker_file_reading_replenishment_does_not_starve_timers() {
+    ensure_v8();
+    for kind in ["reader", "blob"] {
+        let source = format!(
+            r#"
+        let reads = 0, stopped = false;
+        const limit = 512, blob = new Blob(['fairness']), kind = {kind:?};
+        const reader = new FileReader();
+        function next() {{
+            if (stopped || reads >= limit) return;
+            if (kind === 'reader') reader.readAsText(blob);
+            else blob.text().then(complete);
+        }}
+        function complete() {{ ++reads; next(); }}
+        reader.onloadend = complete;
+        setTimeout(() => {{ stopped = true; postMessage(reads < limit); close(); }}, 0);
+        next();
+        "#
+        );
+        let mut handle = spawn_worker(
+            source,
+            "https://file-reading-fairness.test/worker.js".into(),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timer must progress during FileReading")
+            .expect("worker should report timer result");
+        assert_eq!(
+            expect_post_json(message),
+            "true",
+            "replenishing {kind} queue must yield before exhaustion"
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_file_reading_replenishment_does_not_starve_messages() {
+    ensure_v8();
+    let stop = serialize_test_string("stop");
+    let mut handle = spawn_worker(
+        r#"
+        let stopped = false;
+        const reader = new FileReader(), blob = new Blob(['messages']);
+        reader.onloadend = () => { if (!stopped) reader.readAsText(blob); };
+        onmessage = event => { stopped = true; postMessage(event.data); close(); };
+        postMessage('ready');
+        reader.readAsText(blob);
+    "#
+        .into(),
+        "https://file-reading-fairness.test/worker.js".into(),
+    );
+    let ready = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(ready),
+        serde_json::json!("ready").to_string()
+    );
+    handle.post_message(stop);
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("message must progress during FileReading")
+        .expect("worker should echo stop");
+    assert_eq!(
+        expect_post_json(message),
+        serde_json::json!("stop").to_string()
+    );
+}
+
+#[tokio::test]
+async fn worker_file_reading_keeps_event_and_microtask_order() {
+    ensure_v8();
+    let mut handle = spawn_worker(r#"
+        const order = [], reader = new FileReader();
+        for (const type of ['loadstart','progress','load','loadend']) reader.addEventListener(type, () => {
+            order.push(type);
+            queueMicrotask(() => {
+                order.push('micro:' + type);
+                if (type === 'loadend') { postMessage(order); close(); }
+            });
+        });
+        reader.readAsText(new Blob(['microtask order']));
+    "#.into(), "https://file-reading-fairness.test/worker.js".into());
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    assert_eq!(
+        expect_post_json(message),
+        r#"["loadstart","micro:loadstart","progress","micro:progress","load","micro:load","loadend","micro:loadend"]"#
+    );
 }

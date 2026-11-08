@@ -23,12 +23,20 @@ use tokio::{
     time::{Duration, sleep},
 };
 
+mod cdp;
+pub use cdp::discover_browser_websocket_url;
+
 #[derive(Clone, Default)]
 struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,
     dynamic_stylesheet_script_executed: Arc<FixtureEvent>,
     runtime_inline_module_executed: Arc<FixtureEvent>,
+    runtime_stylesheet_snapshot_applied: Arc<FixtureEvent>,
     alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
+    runtime_owned_async_script_executed: Arc<FixtureEvent>,
+    parse_time_async_task_first_executed: Arc<FixtureEvent>,
+    parse_time_async_task_visibility_first_executed: Arc<FixtureEvent>,
+    dynamic_preparation_context_replaced: Arc<FixtureEvent>,
 }
 
 #[derive(Default)]
@@ -1333,9 +1341,19 @@ const RUNTIME_OWNED_DEFAULT_ASYNC_MODULE_SIDE_EFFECT_MJS: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/runtime_owned_default_async_module_side_effect.mjs"
 );
 const PARSE_TIME_ASYNC_SLOW_JS: &str = "window.parseTimeAsyncSlowSawTail = !!document.getElementById('late'); window.parseTimeAsyncSlowSawDcl = window.parseTimeDclFired === true;";
-const PARSE_TIME_ASYNC_TASK_FIRST_JS: &str = "window.asyncTaskOrder.push('first-script'); Promise.resolve().then(() => window.asyncTaskOrder.push('first-microtask'));";
+const PARSE_TIME_ASYNC_TASK_FIRST_JS: &str = concat!(
+    "window.asyncTaskOrder.push('first-script');",
+    "Promise.resolve().then(() => window.asyncTaskOrder.push('first-microtask'));",
+    "fetch('/assets/parse_time_async_task_first_executed');",
+);
 const PARSE_TIME_ASYNC_TASK_SECOND_JS: &str = "window.asyncTaskOrder.push('second-script'); window.asyncTaskOrderResult = window.asyncTaskOrder.join(',');";
-const PARSE_TIME_ASYNC_TASK_VISIBILITY_FIRST_JS: &str = "window.asyncTaskVisibilityOrder.push('first-script'); window.asyncTaskVisibilityFirstSawTail = !!document.getElementById('late'); window.asyncTaskVisibilityFirstSawDcl = window.parseTimeVisibilityDclFired === true; Promise.resolve().then(() => window.asyncTaskVisibilityOrder.push('first-microtask'));";
+const PARSE_TIME_ASYNC_TASK_VISIBILITY_FIRST_JS: &str = concat!(
+    "window.asyncTaskVisibilityOrder.push('first-script');",
+    "window.asyncTaskVisibilityFirstSawTail = !!document.getElementById('late');",
+    "window.asyncTaskVisibilityFirstSawDcl = window.parseTimeVisibilityDclFired === true;",
+    "Promise.resolve().then(() => window.asyncTaskVisibilityOrder.push('first-microtask'));",
+    "fetch('/assets/parse_time_async_task_visibility_first_executed');",
+);
 const PARSE_TIME_ASYNC_TASK_VISIBILITY_SECOND_JS: &str = "window.asyncTaskVisibilityOrder.push('second-script'); window.asyncTaskVisibilityOrderResult = window.asyncTaskVisibilityOrder.join(',');";
 const PARSE_TIME_ASYNC_POST_PARSE_FIRST_JS: &str = "window.postParseAsyncTaskOrder.push('first-script'); Promise.resolve().then(() => window.postParseAsyncTaskOrder.push('first-microtask'));";
 const PARSE_TIME_ASYNC_POST_PARSE_SECOND_JS: &str = "window.postParseAsyncTaskOrder.push('second-script'); window.postParseAsyncTaskOrder.push(window.postParseDclSeen ? 'second-after-dcl' : 'second-before-dcl');";
@@ -1425,7 +1443,7 @@ const DYNAMIC_TAXONOMY_ASYNC_FAST_JS: &str = "window.dynamicScriptTaxonomyOrder.
 const DYNAMIC_TAXONOMY_IN_ORDER_SLOW_JS: &str = "if (window.dynamicScriptTaxonomyOrder) { window.dynamicScriptTaxonomyOrder.push('in-order-slow'); window.dynamicScriptTaxonomyOrderResult = window.dynamicScriptTaxonomyOrder.join(','); } if (window.dynamicInOrderScriptOrder) { window.dynamicInOrderScriptOrder.push('in-order-slow'); window.dynamicInOrderScriptOrderResult = window.dynamicInOrderScriptOrder.join(','); }";
 const DYNAMIC_TAXONOMY_IN_ORDER_FAST_JS: &str = "window.dynamicInOrderScriptOrder.push('in-order-fast'); window.dynamicInOrderScriptOrderResult = window.dynamicInOrderScriptOrder.join(',');";
 const DYNAMIC_PREPARATION_CONTEXT_STALE_JS: &str = "window.staleDynamicRan = true; window.dynamicPreparationContextOrder = window.dynamicPreparationContextOrder || []; window.dynamicPreparationContextOrder.push('stale'); window.dynamicPreparationContextResult = window.dynamicPreparationContextOrder.join(',');";
-const DYNAMIC_PREPARATION_CONTEXT_OPEN_JS: &str = r#"document.open(); document.write(`<!doctype html><html><body><script>window.documentOpenAsyncRan = true; window.dynamicPreparationContextOrder = ['replacement']; window.dynamicPreparationContextResult = 'pending'; setTimeout(() => { window.dynamicPreparationContextResult = window.staleDynamicRan ? 'stale-ran' : 'replacement-only'; }, 0);</script></body></html>`); document.close();"#;
+const DYNAMIC_PREPARATION_CONTEXT_OPEN_JS: &str = r#"document.open(); document.write(`<!doctype html><html><body><script>window.documentOpenAsyncRan = true; fetch('/assets/dynamic_preparation_context_replaced'); window.dynamicPreparationContextOrder = ['replacement']; window.dynamicPreparationContextResult = 'pending'; setTimeout(() => { window.dynamicPreparationContextResult = window.staleDynamicRan ? 'stale-ran' : 'replacement-only'; }, 0);</script></body></html>`); document.close();"#;
 const DOCUMENT_WRITE_IMPLICIT_REPLACE_ASYNC_JS: &str = r#"window.documentWriteImplicitOrder.push('dynamic'); document.write(`<!doctype html><html><body><main id="new">new</main><script>window.documentWriteImplicitOrder.push('replacement'); window.documentWriteImplicitReplaceRan = true; window.documentWriteImplicitResult = 'pending'; window.documentWriteImplicitOrderResult = window.documentWriteImplicitOrder.join(','); setTimeout(() => { window.documentWriteImplicitResult = window.documentWriteImplicitStaleDeferRan ? 'stale-ran' : 'replacement-only'; window.documentWriteImplicitOrderResult = window.documentWriteImplicitOrder.join(','); }, 0);</script></body></html>`);"#;
 const DOCUMENT_WRITE_IMPLICIT_REPLACE_ASYNC_MODULE_JS: &str = r#"window.documentWriteImplicitModuleOrder.push('dynamic'); document.write(`<!doctype html><html><body><main id="new">new</main><script>window.documentWriteImplicitModuleOrder.push('replacement'); window.documentWriteImplicitModuleReplaceRan = true; window.documentWriteImplicitModuleResult = 'pending'; window.documentWriteImplicitModuleOrderResult = window.documentWriteImplicitModuleOrder.join(','); setTimeout(() => { window.documentWriteImplicitModuleResult = window.documentWriteImplicitStaleModuleRan ? 'stale-ran' : 'replacement-only'; window.documentWriteImplicitModuleOrderResult = window.documentWriteImplicitModuleOrder.join(','); }, 0);</script></body></html>`);"#;
 const DOCUMENT_WRITE_IMPLICIT_REPLACE_STALE_DEFER_JS: &str = "window.documentWriteImplicitOrder.push('stale-defer'); window.documentWriteImplicitStaleDeferRan = true; window.documentWriteImplicitOrderResult = window.documentWriteImplicitOrder.join(',');";

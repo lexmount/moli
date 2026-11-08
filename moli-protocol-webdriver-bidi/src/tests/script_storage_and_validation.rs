@@ -33,8 +33,50 @@ fn rejects_chromium_wpt_invalid_emulation_set_locale_override_params() {
         json!({"contexts": ["TARGET-1"], "locale": "en--US"}),
         json!({"contexts": ["TARGET-1"], "locale": "en-US-!"}),
         json!({"contexts": ["TARGET-1"], "locale": "x-private"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-x-"}),
+        json!({"contexts": ["TARGET-1"], "locale": "de-1901-1901"}),
+        json!({"contexts": ["TARGET-1"], "locale": "de-1901-1901-x-extra"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-a-abc-A-def"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-u-nu-latn"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-00"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-a0"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-t-en-1901-1901"}),
+        json!({"contexts": ["TARGET-1"], "locale": "abcd"}),
+        json!({"contexts": ["TARGET-1"], "locale": "abcdefghi"}),
+        json!({"contexts": ["TARGET-1"], "locale": "abcde-1901-1901"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-t-abcd"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-t-abcde-1901-1901"}),
+        json!({"contexts": ["TARGET-1"], "locale": "sl-rozaj-ROZAJ"}),
+        json!({"contexts": ["TARGET-1"], "locale": "de-1901-1902-1903-1904-1905-1906-1907-1908-1901"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-a"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-00"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-00-hc-00"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-00-u-nu-latn"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-00-0a-00"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-!"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-abcdefghi"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca--00"}),
+        json!({"contexts": ["TARGET-1"], "locale": "en-u-ca-gregory-ca-"}),
     ] {
         assert_bidi_adapter_invalid("emulation.setLocaleOverride", params);
+    }
+}
+
+#[test]
+fn locale_override_uses_icu_parser_support_without_chromium_compatibility_rewrites() {
+    for locale in [
+        "abcde",
+        "abcdefgh-Latn-US-1901",
+        "en-t-abcde",
+        "abcde-t-abcdefgh-Latn-US",
+        "en-u-ca-gregory-ca-00",
+    ] {
+        assert_bidi_adapter_invalid(
+            "emulation.setLocaleOverride",
+            json!({"contexts": ["TARGET-1"], "locale": locale}),
+        );
     }
 }
 
@@ -1759,6 +1801,78 @@ fn rejects_chromium_wpt_invalid_preload_target_params() {
         ("script.removePreloadScript", json!({"script": []})),
     ] {
         assert_bidi_adapter_invalid(method, params);
+    }
+}
+
+#[test]
+fn storage_cookie_numeric_fields_reject_values_outside_js_uint() {
+    for value in [
+        Value::Null,
+        json!(true),
+        json!(-1),
+        json!(0.5),
+        json!(9_007_199_254_740_992_u64),
+        json!(9_223_372_036_854_775_808_u64),
+        json!(u64::MAX),
+    ] {
+        for field in ["expiry", "size"] {
+            for method in ["storage.getCookies", "storage.deleteCookies"] {
+                assert_bidi_adapter_invalid(method, json!({"filter": {field: value}}));
+            }
+        }
+        assert_bidi_adapter_invalid(
+            "storage.setCookie",
+            json!({"cookie": {
+                "name": "sid", "value": {"type": "string", "value": "keep"},
+                "domain": "example.test", "expiry": value,
+            }}),
+        );
+    }
+}
+
+#[test]
+fn storage_cookie_numeric_fields_preserve_valid_js_uint_values() {
+    use moli_protocol::automation::AutomationCommand;
+
+    let context = super::super::BidiDevToolsCommandContext::new("bidi-cookie-numeric");
+    for (value, expected) in [
+        (json!(0), 0),
+        (json!(-0.0), 0),
+        (json!(1.0), 1),
+        (json!(9_007_199_254_740_991_u64), 9_007_199_254_740_991),
+    ] {
+        for method in [
+            "storage.getCookies",
+            "storage.deleteCookies",
+            "storage.setCookie",
+        ] {
+            let command = super::super::parse_bidi_command(json!({
+                "id": 304, "method": method, "params": {
+                    "filter": {"size": value, "expiry": value},
+                    "cookie": {"name": "sid", "value": {"type": "string", "value": "keep"}, "domain": "example.test", "expiry": value},
+                },
+            })).expect("numeric storage command");
+            let shared = super::super::automation_command_from_bidi_command(&command, &context)
+                .expect("valid js-uint");
+            let filter = match shared {
+                AutomationCommand::GetCookies(command) => command.filter.expect("cookie filter"),
+                AutomationCommand::DeleteCookies(command) => {
+                    let moli_protocol::automation::DevToolsCookieDeleteFilter::Properties(filter) =
+                        command.filter
+                    else {
+                        panic!("BiDi property filter");
+                    };
+                    filter
+                }
+                AutomationCommand::SetCookies(command) => {
+                    assert_eq!(command.cookies[0].expires, Some(expected as f64));
+                    continue;
+                }
+                _ => panic!("storage command"),
+            };
+            assert_eq!(filter.size, Some(expected as u64));
+            assert_eq!(filter.expires, Some(expected));
+        }
     }
 }
 

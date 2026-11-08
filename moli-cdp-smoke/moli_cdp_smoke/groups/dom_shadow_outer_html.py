@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+
 from typing import Any
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal
 
@@ -53,7 +55,7 @@ async def run_dom_shadow_outer_html_group(state: SmokeState) -> None:
             wait_until="load",
             timeout=10_000,
         )
-        session = await state.context.new_cdp_session(page)
+        session = await new_cdp_session(state.context, page)
         mutation_events: list[str] = []
         for method in (
             "DOM.childNodeInserted",

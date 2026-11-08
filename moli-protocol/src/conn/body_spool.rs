@@ -35,12 +35,50 @@ enum CapturedBodyInner {
 impl Drop for CapturedBodyInner {
     fn drop(&mut self) {
         if let Self::File { path, .. } = self {
-            let _ = fs::remove_file(path);
+            release_spool_file(std::mem::take(path), None);
         }
     }
 }
 
+struct SpoolFileCleanup {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl Drop for SpoolFileCleanup {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn release_spool_file(path: PathBuf, file: Option<File>) {
+    let cleanup = SpoolFileCleanup { path, file };
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        // The job owns only storage. Dropping an owner or evicting a body must
+        // not perform filesystem work in its synchronous state operation.
+        // The cleanup guard also unlinks if shutdown discards an unstarted job.
+        drop(runtime.spawn_blocking(move || drop(cleanup)));
+    } else {
+        drop(cleanup);
+    }
+}
+
 impl CapturedBody {
+    /// Run body storage I/O and encoding away from the protocol LocalSet.
+    /// Cancelling the waiter also aborts a job which has not started yet. An
+    /// already running job owns only its immutable body, never protocol state.
+    pub(crate) async fn process_in_worker<T: Send + 'static>(
+        self,
+        operation: impl FnOnce(Self) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        run_body_storage_work(move || operation(self)).await
+    }
+
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn from_string(body: String) -> Self {
         Self::from_bytes(body.into_bytes())
     }
@@ -195,6 +233,21 @@ impl CapturedBody {
     }
 }
 
+struct BodyWorkerTask<T>(tokio::task::JoinHandle<T>);
+
+pub(crate) async fn run_body_storage_work<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let mut task = BodyWorkerTask(tokio::task::spawn_blocking(operation));
+    (&mut task.0).await?
+}
+
+impl<T> Drop for BodyWorkerTask<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub(crate) struct CapturedBodyChunkReader {
     source: CapturedBodyChunkReaderSource,
     chunk_size: usize,
@@ -285,6 +338,36 @@ impl Default for CapturedBodyWriter {
 }
 
 impl CapturedBodyWriter {
+    pub(crate) async fn append_async(&mut self, chunk: Vec<u8>) -> Result<Vec<u8>> {
+        if self.file.is_none() && self.len.saturating_add(chunk.len()) <= self.memory_limit {
+            self.append(&chunk)?;
+            return Ok(chunk);
+        }
+        let mut writer = std::mem::take(self);
+        let (writer, chunk, result) = run_body_storage_work(move || {
+            let result = writer.append(&chunk);
+            Ok((writer, chunk, result))
+        })
+        .await?;
+        *self = writer;
+        result?;
+        Ok(chunk)
+    }
+
+    pub(crate) async fn finish_in_place_async(&mut self) -> Result<CapturedBody> {
+        if self.file.is_none() {
+            return self.finish_in_place();
+        }
+        let mut writer = std::mem::take(self);
+        let (writer, result) = run_body_storage_work(move || {
+            let result = writer.finish_in_place();
+            Ok((writer, result))
+        })
+        .await?;
+        *self = writer;
+        result
+    }
+
     pub(crate) fn new(memory_limit: usize) -> Self {
         Self {
             memory_limit,
@@ -369,9 +452,8 @@ impl CapturedBodyWriter {
 
 impl Drop for CapturedBodyWriter {
     fn drop(&mut self) {
-        let _ = self.file.take();
         if let Some(path) = self.path.take() {
-            let _ = fs::remove_file(path);
+            release_spool_file(path, self.file.take());
         }
     }
 }
@@ -595,5 +677,124 @@ mod tests {
             vec![b"hello".to_vec(), b" worl".to_vec(), b"d".to_vec()]
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod worker_progress_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn asynchronous_spool_write_keeps_its_prefix_and_typed_io_failure() -> Result<()> {
+        let mut writer = CapturedBodyWriter::new(4);
+        assert_eq!(writer.append_async(b"hello".to_vec()).await?, b"hello");
+        let path = writer.path.clone().expect("the body was spooled");
+        writer.file = Some(File::open(&path)?);
+
+        let error = writer.append_async(b" lost".to_vec()).await.unwrap_err();
+        assert!(error.downcast_ref::<io::Error>().is_some());
+        assert_eq!(
+            writer.len, 5,
+            "a failed write must retain the captured prefix"
+        );
+        assert_eq!(writer.path.as_ref(), Some(&path));
+
+        writer.file = Some(OpenOptions::new().append(true).open(&path)?);
+        writer.append_async(b" world".to_vec()).await?;
+        let body = writer.finish_in_place_async().await?;
+        assert_eq!(body.len(), 11);
+        assert_eq!(
+            body.process_in_worker(|body| body.materialize_bytes())
+                .await?,
+            b"hello world"
+        );
+        Ok(())
+    }
+
+    struct ReleaseWorker(std::sync::Arc<(parking_lot::Mutex<bool>, parking_lot::Condvar)>);
+    impl Drop for ReleaseWorker {
+        fn drop(&mut self) {
+            let (lock, changed) = &*self.0;
+            *lock.lock() = true;
+            changed.notify_all();
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_body_worker_does_not_hold_protocol_state_through_cancel_or_owner_exit() {
+        tokio::task::LocalSet::new()
+            .run_until(Box::pin(async {
+                let body = CapturedBody::from_bytes_spooled(vec![b'x'; 1_100_000]);
+                let weak_body = std::sync::Arc::downgrade(&body.inner);
+                let path = match body.inner.as_ref() {
+                    CapturedBodyInner::File { path, .. } => path.clone(),
+                    _ => panic!("real body spool"),
+                };
+                let gate = std::sync::Arc::new((
+                    parking_lot::Mutex::new(false),
+                    parking_lot::Condvar::new(),
+                ));
+                let release = ReleaseWorker(gate.clone());
+                let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                let (exited_tx, exited_rx) = tokio::sync::oneshot::channel();
+                let task = tokio::task::spawn_local(body.process_in_worker(move |body| {
+                    entered_tx.send(()).unwrap();
+                    let (lock, changed) = &*gate;
+                    let mut released = lock.lock();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while !*released {
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
+                        assert!(!remaining.is_zero(), "body gate was not released");
+                        changed.wait_for(&mut released, remaining);
+                    }
+                    let result = body
+                        .materialize_bytes_limited(1_100_000)
+                        .map(|bytes| bytes.len());
+                    drop(body);
+                    let _ = exited_tx.send(());
+                    result
+                }));
+                entered_rx.await.unwrap();
+                assert!(!task.is_finished());
+                let owner = crate::conn::ProtocolStateOwner::new(crate::conn::CdpConnection::new());
+                let handle = owner.handle();
+                let command = moli_protocol_cdp::ParsedCdpCommand::from_serializable(
+                    serde_json::json!({"id":55,"method":"Browser.getVersion"}),
+                )
+                .unwrap();
+                let result = handle
+                    .with_state(move |state| {
+                        state.start_parsed_command_dispatch_with_context(
+                            &command,
+                            &mut crate::conn::CommandDispatchContext::default(),
+                        )
+                    })
+                    .unwrap();
+                let crate::conn::CdpCommandTaskStep::Complete(output) = result else {
+                    panic!("independent browser query completes while the body worker is held")
+                };
+                let (messages, _) = output.into_parts();
+                assert_eq!(messages[0]["id"], 55);
+                assert!(messages[0]["result"]["product"].as_str().is_some());
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+                drop(owner);
+                assert!(handle.with_state(|_| ()).is_err());
+                // The independent worker has no protocol owner and can release its
+                // original file even after the command and actor have exited.
+                drop(release);
+                exited_rx.await.unwrap();
+                assert!(weak_body.upgrade().is_none());
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    while path.exists() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("the storage cleanup must finish after its original worker exits");
+                assert!(!path.exists());
+            }))
+            .await;
     }
 }

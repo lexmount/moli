@@ -9,6 +9,15 @@ use crate::{
     dom::native::Node, native_bridge::node_runtime_and_handle_from_object_or_detached, webidl,
 };
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ViewTransitionOptions")]
+struct ViewTransitionOptionsMembers {
+    #[webidl(sequence, legacy_nullish, default = Vec::new())]
+    types: Vec<String>,
+    #[webidl(nullable, converter = "callback_function")]
+    update: Option<webidl::WebIdlCallbackFunction>,
+}
+
 struct StartViewTransitionOptions {
     callback: Option<webidl::WebIdlCallbackFunction>,
     types: Vec<String>,
@@ -114,40 +123,18 @@ fn parse_start_view_transition_options<'s>(
         return None;
     };
 
-    let types = options.get(scope, v8str(scope, "types").into())?;
-    let types = if types.is_null_or_undefined() {
-        Vec::new()
-    } else {
-        match webidl::convert::<webidl::Sequence<webidl::DomString>>(
-            scope,
-            types,
-            webidl::Context::member("ViewTransitionOptions", "types"),
-        ) {
-            Ok(types) => types.0.into_iter().map(|value| value.0).collect(),
+    let options =
+        match webidl::parse_dictionary_object::<ViewTransitionOptionsMembers>(scope, options) {
+            Ok(options) => options,
             Err(error) => {
                 webidl::throw_error(scope, &error);
                 return None;
             }
-        }
-    };
-
-    let update = options.get(scope, v8str(scope, "update").into())?;
-    let callback = if update.is_null_or_undefined() {
-        None
-    } else {
-        match webidl::convert::<webidl::WebIdlCallbackFunction>(
-            scope,
-            update,
-            webidl::Context::member("ViewTransitionOptions", "update"),
-        ) {
-            Ok(callback) => Some(callback),
-            Err(error) => {
-                webidl::throw_error(scope, &error);
-                return None;
-            }
-        }
-    };
-    Some(StartViewTransitionOptions { callback, types })
+        };
+    Some(StartViewTransitionOptions {
+        callback: options.update,
+        types: options.types,
+    })
 }
 
 pub(super) fn document_active_view_transition_getter<'s>(

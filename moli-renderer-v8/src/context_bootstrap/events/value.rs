@@ -2,7 +2,7 @@
 
 use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
-    initialize_event_wrapper, new_event_state,
+    initialize_event_wrapper, new_event_state, set_event_private_value,
 };
 use crate::context_bootstrap::events::EventInit;
 use crate::{
@@ -14,6 +14,7 @@ use webidl::WebIdlDictionarySerialize;
 
 const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
+const ANIMATION_SLOT: &str = "__moliValueEventAnimation";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
@@ -24,6 +25,9 @@ const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow"
 
 const PAYMENT_METHOD_NAME_SLOT: &str = "__moliPaymentMethodChangeEventMethodName";
 const PAYMENT_METHOD_DETAILS_SLOT: &str = "__moliPaymentMethodChangeEventMethodDetails";
+
+const MIDI_DATA_SLOT: &str = "__moliMIDIMessageEventData";
+const MIDI_PORT_SLOT: &str = "__moliMIDIConnectionEventPort";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -37,6 +41,8 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     PictureInPicture,
     PaymentRequestUpdate,
     PaymentMethodChange,
+    MidiMessage = 10,
+    MidiConnection = 11,
 }
 
 impl ValueEventKind {
@@ -52,6 +58,8 @@ impl ValueEventKind {
             Self::PictureInPicture => "PictureInPictureEvent",
             Self::PaymentRequestUpdate => "PaymentRequestUpdateEvent",
             Self::PaymentMethodChange => "PaymentMethodChangeEvent",
+            Self::MidiMessage => "MIDIMessageEvent",
+            Self::MidiConnection => "MIDIConnectionEvent",
         }
     }
 
@@ -66,6 +74,8 @@ impl ValueEventKind {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::AnimationEvent, enumerable, receiver)]
 struct AnimationEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "animationName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     animation_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -77,6 +87,8 @@ struct AnimationEventPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::TransitionEvent, enumerable, receiver)]
 struct TransitionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, ANIMATION_SLOT))]
+    animation: (),
     #[webapi(accessor_property = "propertyName", getter = payload_getter, data = v8str(scope, NAME_SLOT))]
     property_name: (),
     #[webapi(accessor_property = "elapsedTime", getter = payload_getter, data = v8str(scope, ELAPSED_TIME_SLOT))]
@@ -142,6 +154,9 @@ struct WebGlContextEventInit<'s> {
 struct AnimationEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSAnimation)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "animationName", with = string_member)]
     #[webidl(snapshot_slot = NAME_SLOT)]
     animation_name: v8::Local<'s, v8::String>,
@@ -158,6 +173,9 @@ struct AnimationEventInit<'s> {
 struct TransitionEventInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
+    #[webidl(nullable, interface = web_api_interfaces::CSSTransition)]
+    #[webidl(snapshot_slot = ANIMATION_SLOT)]
+    animation: Option<v8::Local<'s, v8::Object>>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     #[webidl(snapshot_slot = ELAPSED_TIME_SLOT)]
     elapsed_time: f64,
@@ -179,12 +197,8 @@ struct GamepadEventPrototypeDeclaration {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "GamepadEventInit", snapshot)]
 struct GamepadEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = gamepad_member)]
     #[webidl(snapshot_slot = GAMEPAD_SLOT, snapshot_default = v8::null(scope).into())]
     gamepad: Option<v8::Local<'s, v8::Object>>,
@@ -309,6 +323,45 @@ fn string_member<'s>(
     }
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIMessageEvent, enumerable, receiver)]
+struct MidiMessageEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_DATA_SLOT))]
+    data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::MIDIConnectionEvent, enumerable, receiver)]
+struct MidiConnectionEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, MIDI_PORT_SLOT))]
+    port: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIMessageEventInit")]
+struct MidiMessageEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    data: Option<v8::Local<'s, v8::Uint8Array>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "MIDIConnectionEventInit")]
+struct MidiConnectionEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(interface = web_api_interfaces::MIDIPort)]
+    port: Option<v8::Local<'s, v8::Object>>,
+}
+
 pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -349,6 +402,12 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
             PaymentMethodChangeEventPrototypeDeclaration::initialize_prototype_template(
                 scope, prototype,
             )
+        }
+        "MIDIMessageEvent" => {
+            MidiMessageEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "MIDIConnectionEvent" => {
+            MidiConnectionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
         _ => {}
     }
@@ -393,6 +452,8 @@ fn value_event_constructor<'s>(
         Some(7) => ValueEventKind::PictureInPicture,
         Some(8) => ValueEventKind::PaymentRequestUpdate,
         Some(9) => ValueEventKind::PaymentMethodChange,
+        Some(10) => ValueEventKind::MidiMessage,
+        Some(11) => ValueEventKind::MidiConnection,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -512,6 +573,30 @@ fn value_event_constructor<'s>(
                 parsed
                     .initialize_snapshot(scope, state)
                     .expect("value event state");
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::MidiMessage => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiMessageEventInit>(scope, dictionary)?;
+                let data = parsed
+                    .data
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_DATA_SLOT, data);
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::MidiConnection => {
+                let parsed =
+                    webidl::parse_dictionary_object::<MidiConnectionEventInit>(scope, dictionary)?;
+                let port = parsed
+                    .port
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, MIDI_PORT_SLOT, port);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };

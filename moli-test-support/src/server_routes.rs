@@ -1318,6 +1318,14 @@ pub(super) fn build_router() -> Router {
             get(runtime_inserted_stylesheet_load_syncs_parser_snapshot_page),
         )
         .route(
+            "/assets/runtime_stylesheet_snapshot_applied",
+            get(runtime_stylesheet_snapshot_applied),
+        )
+        .route(
+            "/assets/runtime_stylesheet_snapshot_gated.css",
+            get(asset_runtime_stylesheet_snapshot_gated_css),
+        )
+        .route(
             "/compat/runtime-inserted-stylesheet-load-triggers-location-replace",
             get(runtime_inserted_stylesheet_load_triggers_location_replace_page),
         )
@@ -2199,12 +2207,20 @@ pub(super) fn build_router() -> Router {
             get(asset_parse_time_async_task_first_script),
         )
         .route(
+            "/assets/parse_time_async_task_first_executed",
+            get(asset_parse_time_async_task_first_executed),
+        )
+        .route(
             "/assets/parse_time_async_task_second.js",
             get(asset_parse_time_async_task_second_script),
         )
         .route(
             "/assets/parse_time_async_task_visibility_first.js",
             get(asset_parse_time_async_task_visibility_first_script),
+        )
+        .route(
+            "/assets/parse_time_async_task_visibility_first_executed",
+            get(asset_parse_time_async_task_visibility_first_executed),
         )
         .route(
             "/assets/parse_time_async_task_visibility_second.js",
@@ -2313,6 +2329,14 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/dynamic_preparation_context_open.js",
             get(asset_dynamic_preparation_context_open_script),
+        )
+        .route(
+            "/assets/dynamic_preparation_context_replaced",
+            get(asset_dynamic_preparation_context_replaced),
+        )
+        .route(
+            "/assets/runtime_owned_async_fast_executed",
+            get(asset_runtime_owned_async_fast_executed),
         )
         .route(
             "/assets/document_write_implicit_replace_async.js",

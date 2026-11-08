@@ -43,7 +43,7 @@ fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
     );
     target.attach_session(session_id.to_owned());
     bc.insert_shared_worker_target(target);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     let browser_context_id = "BID-dedicated".to_owned();
@@ -58,17 +58,18 @@ fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     );
     target.attach_session(session_id.to_owned());
     bc.insert_dedicated_worker_target(target);
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 }
 fn record_shared_worker_console(ctx: &mut TestContext, session_id: &str, message: &str) {
-    ctx.conn
-        .shared_worker_target_for_session_mut(Some(session_id))
-        .expect("shared worker target session should exist")
-        .record_console_message(RendererSharedWorkerConsoleMessage {
-            message: message.to_owned(),
-            args: Vec::new(),
-            stack: None,
-        });
+    ctx.with_fixture(|conn| {
+        conn.shared_worker_target_for_session_mut(Some(session_id))
+            .expect("shared worker target session should exist")
+            .record_console_message(RendererSharedWorkerConsoleMessage {
+                message: message.to_owned(),
+                args: Vec::new(),
+                stack: None,
+            })
+    });
 }
 async fn start_attached_shared_worker_session(
     ctx: &mut TestContext,
@@ -141,8 +142,7 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
     html: &str,
 ) {
     let page = ctx
-        .conn
-        .load_page_via_runtime_async(&format!("data:text/html,{html}"))
+        .build_fixture_page(&format!("data:text/html,{html}"))
         .await
         .expect("test background page should load");
     let mut background_context = crate::conn::BrowserContext::new(browser_context_id.to_owned());
@@ -157,8 +157,9 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(background_context);
+    ctx.with_fixture(|conn| {
+        conn.push_inactive_browser_context_fixture_for_test(background_context)
+    });
 }
 async fn with_loaded_runtime_frontend_enabled_background_target_async(
     ctx: &mut TestContext,
@@ -186,8 +187,7 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
             .runtime_session_state
             .runtime_frontend_enabled = true;
     }
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx.install_navigation_fixture_for_session_owner(
         &format!("data:text/html,{html}"),
         Some(background_session_id),

@@ -58,6 +58,7 @@ pub(super) fn dispatch_service_worker_fetch(
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
+        prepared.cache_mode(),
         prepared.request_origin.clone(),
         prepared.network_partition_key.clone(),
         prepared.policy_context,

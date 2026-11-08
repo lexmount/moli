@@ -10,11 +10,12 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 104194936,
@@ -55,26 +56,31 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
     take_staged_about_blank_runtime_context(&mut ctx, &second_session_id, &second_target_id);
 
     {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert!(
-            !active.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled
-        );
-        let staged = active
-            .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(
-            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled
-        );
+        ctx.with_fixture(|conn| {
+            let staged = {
+                let active = {
+                    conn.browser_context
+                        .as_ref()
+                        .expect("active browser context")
+                };
+                assert!(
+                    !active.active_page_target().devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .runtime_session_state
+                        .runtime_frontend_enabled
+                );
+
+                active
+                    .background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .expect("second target should have staged background page session state")
+            };
+            assert!(
+                staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_session_state
+                    .runtime_frontend_enabled
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -176,11 +182,12 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
         "<title>active</title><div id='ok'>active target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
 
     ctx.process_async(json!({
         "id": 1041949310,
@@ -241,13 +248,15 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
     ctx.take_all();
 
     {
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(bc.active_target_id(), Some("TID-000000000RDA"));
-        assert!(
-            bc.background_target(&second_target_id)
-                .is_some_and(|target| target.has_loaded_page()),
-            "second target should be background with a loaded page before Runtime.enable"
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(bc.active_target_id(), Some("TID-000000000RDA"));
+            assert!(
+                bc.background_target(&second_target_id)
+                    .is_some_and(|target| target.has_loaded_page()),
+                "second target should be background with a loaded page before Runtime.enable"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -283,26 +292,28 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
     );
 
     {
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(
-            bc.active_target_id(),
-            Some("TID-000000000RDA"),
-            "direct Runtime.enable should not activate the loaded background target"
-        );
-        assert!(
-            bc.background_target(&second_target_id)
-                .filter(|target| target.has_non_default_session_state())
-                .is_some_and(|state| state.devtools_sessions
-                    [moli_page_types::DevToolsSessionKey::Primary]
-                    .runtime_session_state
-                    .runtime_frontend_enabled),
-            "Runtime.enable should be staged on the background target owner"
-        );
-        assert!(
-            bc.background_target(&second_target_id)
-                .is_some_and(|target| target.has_loaded_page()),
-            "direct Runtime.enable should leave the loaded page background"
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(
+                bc.active_target_id(),
+                Some("TID-000000000RDA"),
+                "direct Runtime.enable should not activate the loaded background target"
+            );
+            assert!(
+                bc.background_target(&second_target_id)
+                    .filter(|target| target.has_non_default_session_state())
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
+                        .runtime_session_state
+                        .runtime_frontend_enabled),
+                "Runtime.enable should be staged on the background target owner"
+            );
+            assert!(
+                bc.background_target(&second_target_id)
+                    .is_some_and(|target| target.has_loaded_page()),
+                "direct Runtime.enable should leave the loaded page background"
+            );
+        });
     }
 }
 
@@ -352,17 +363,19 @@ async fn same_context_loaded_background_session_runtime_evaluate_reads_owner_pag
     assert_eq!(response["sessionId"], json!(owner.session_id));
     assert_eq!(response["result"]["result"]["subtype"], json!("node"));
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.active_target_id(),
-        Some("TID-000000000REA"),
-        "direct Runtime.evaluate should not activate the loaded background target"
-    );
-    assert!(
-        bc.background_target(&owner.target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime.evaluate should leave the owner page background"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.active_target_id(),
+            Some("TID-000000000REA"),
+            "direct Runtime.evaluate should not activate the loaded background target"
+        );
+        assert!(
+            bc.background_target(&owner.target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "direct Runtime.evaluate should leave the owner page background"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -399,7 +412,10 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
             .as_ref()
             .and_then(|browser_context| browser_context.background_target(&owner.target_id))
             .is_some_and(|target| {
-                target.target_url() == "data:text/html,<title>self</title><main>self target</main>"
+                target.loaded_page().is_some_and(|page| {
+                    page.final_url().as_str()
+                        == "data:text/html,<title>self</title><main>self target</main>"
+                })
             })
     })
     .await;
@@ -412,23 +428,28 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
     );
 
     {
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(
-            browser_context.active_target_id(),
-            Some("TID-000000000PSA"),
-            "background _self navigation must not activate the background target"
-        );
-        let background_target = browser_context
-            .background_target(&owner.target_id)
-            .expect("background target should remain background");
-        assert_eq!(
-            background_target.target_url(),
-            "data:text/html,<title>self</title><main>self target</main>"
-        );
-        assert!(
-            background_target.has_loaded_page(),
-            "background _self navigation should replace the owner loaded page"
-        );
+        ctx.with_fixture(|conn| {
+            let background_target = {
+                let browser_context = conn.browser_context.as_ref().expect("browser context");
+                assert_eq!(
+                    browser_context.active_target_id(),
+                    Some("TID-000000000PSA"),
+                    "background _self navigation must not activate the background target"
+                );
+
+                browser_context
+                    .background_target(&owner.target_id)
+                    .expect("background target should remain background")
+            };
+            assert_eq!(
+                background_target.target_url(),
+                "data:text/html,<title>self</title><main>self target</main>"
+            );
+            assert!(
+                background_target.has_loaded_page(),
+                "background _self navigation should replace the owner loaded page"
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -453,7 +474,7 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
         &mut ctx, "BID-9-NAMED-POPUP", "TID-000000000NPA",
         "<title>active</title><main>active target</main>",
     ).await;
-    ctx.conn.browser_context.as_mut().unwrap().attach_active_session("SID-active");
+    ctx.with_fixture(|conn| conn.browser_context.as_mut().unwrap().attach_active_session("SID-active"));
     ctx.process_async(json!({
         "id": 1041949440, "method": "Target.setAutoAttach",
         "params": {"autoAttach": true, "waitForDebuggerOnStart": false}
@@ -542,7 +563,8 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     );
 
     {
-        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+        ctx.with_fixture(|conn| {
+let browser_context = conn.browser_context.as_ref().expect("browser context");
         assert_eq!(
             browser_context.active_target_id(),
             Some(owner.target_id.as_str()),
@@ -562,6 +584,7 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
                 .is_some(),
             "foreground named-target reuse should deactivate the previous active target"
         );
+});
     }
 
     ctx.process_async(json!({
@@ -626,17 +649,19 @@ async fn same_context_loaded_background_session_runtime_call_function_on_uses_ow
         json!("second target")
     );
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.active_target_id(),
-        Some("TID-000000000RCA"),
-        "direct Runtime.callFunctionOn should not activate the loaded background target"
-    );
-    assert!(
-        bc.background_target(&owner.target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime.callFunctionOn should leave the owner page background"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.active_target_id(),
+            Some("TID-000000000RCA"),
+            "direct Runtime.callFunctionOn should not activate the loaded background target"
+        );
+        assert!(
+            bc.background_target(&owner.target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "direct Runtime.callFunctionOn should leave the owner page background"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -702,17 +727,19 @@ async fn same_context_loaded_background_session_runtime_await_promise_uses_owner
         json!("second target")
     );
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.active_target_id(),
-        Some("TID-000000000RWA"),
-        "direct Runtime awaitPromise should not activate the loaded background target"
-    );
-    assert!(
-        bc.background_target(&owner.target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime awaitPromise should leave the owner page background"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.active_target_id(),
+            Some("TID-000000000RWA"),
+            "direct Runtime awaitPromise should not activate the loaded background target"
+        );
+        assert!(
+            bc.background_target(&owner.target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "direct Runtime awaitPromise should leave the owner page background"
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -752,11 +779,12 @@ async fn same_context_background_pending_await_survives_active_target_switch() {
         "timer-backed background awaitPromise should still be pending before active target switch: {:?}",
         ctx.sent
     );
-    assert!(
-        ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(Some(&owner.session_id)),
-        "background awaitPromise should register against the background target session"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_inspector_awaits_for_session_owner(Some(&owner.session_id)),
+            "background awaitPromise should register against the background target session"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1041949657,
@@ -820,11 +848,12 @@ async fn same_context_background_pending_await_survives_active_target_switch() {
         response["result"]["result"]["value"],
         json!("second:second")
     );
-    assert!(
-        !ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(Some(&owner.session_id)),
-        "settled background awaitPromise should clear the background target pending-await entry"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            !conn.has_pending_inspector_awaits_for_session_owner(Some(&owner.session_id)),
+            "settled background awaitPromise should clear the background target pending-await entry"
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1041949659,
@@ -841,15 +870,17 @@ async fn same_context_background_pending_await_survives_active_target_switch() {
         json!("undefined")
     );
 
-    let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert_eq!(
-        bc.active_target_id(),
-        Some("TID-000000000RAS"),
-        "pending background awaitPromise completion must not activate the owner target"
-    );
-    assert!(
-        bc.background_target(&owner.target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "pending background awaitPromise completion should leave the owner page background"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            bc.active_target_id(),
+            Some("TID-000000000RAS"),
+            "pending background awaitPromise completion must not activate the owner target"
+        );
+        assert!(
+            bc.background_target(&owner.target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "pending background awaitPromise completion should leave the owner page background"
+        );
+    });
 }

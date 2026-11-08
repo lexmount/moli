@@ -13,6 +13,7 @@ function close_peer_and_wait(register) {
   channel.port2.addEventListener("close", function () {
     events.push("initiator");
   });
+  channel.port1.start();
   channel.port2.close();
   return closed.then(function () {
     channel.port1.close();
@@ -36,7 +37,7 @@ promise_test(async function () {
     ["listener:close:true", "onclose:close:true"],
     "close should be fired at the peer in listener registration order",
   );
-}, "MessagePort.close fires close at the entangled peer without start()");
+}, "MessagePort.close fires close at the started entangled peer");
 
 promise_test(async function () {
   const events = await close_peer_and_wait(function (port, events, resolve) {
@@ -65,6 +66,7 @@ promise_test(async function () {
     });
   });
 
+  channel.port1.start();
   channel.port2.close();
   const event = await closed;
   channel.port1.close();

@@ -1,10 +1,11 @@
+use crate::module_runtime::module_request_attributes;
 use std::pin::pin;
 
 use anyhow::Result;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
-use super::ScriptVm;
+use super::{ScriptVm, WindowRealmRuntime};
 use crate::context_bootstrap::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_LINK_ERROR_CONSTRUCTOR_SLOT,
@@ -515,7 +516,7 @@ fn chromium_module_key(key: &ModuleMapKey) -> moli_module_script_tree::ModuleMap
             ModuleKind::JavaScript => moli_module_script_tree::ModuleKind::JavaScript,
             ModuleKind::Json => moli_module_script_tree::ModuleKind::Json,
             ModuleKind::Css => moli_module_script_tree::ModuleKind::Css,
-            ModuleKind::ModulePreloadText => moli_module_script_tree::ModuleKind::JavaScript,
+            ModuleKind::Text => moli_module_script_tree::ModuleKind::Text,
             ModuleKind::WebAssembly => moli_module_script_tree::ModuleKind::WebAssembly,
         },
         moli_module_script_tree::ModuleAttributesKey::from_pairs(key.attributes().pairs().to_vec()),
@@ -867,6 +868,10 @@ fn synthetic_text_module_evaluation_steps<'s>(
     let source = record.source();
     match record.key().kind() {
         ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
+        ModuleKind::Text => {
+            let value = v8_string(scope, source)?;
+            set_synthetic_default_export(scope, module, value.into())
+        }
         ModuleKind::Css => {
             evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
         }
@@ -1187,16 +1192,6 @@ fn captured_webassembly_error_constructor<'s>(
     get_private_value(scope, global, slot)
 }
 
-fn module_fetch_csp_request(
-    fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
-) -> crate::content_security_policy::ContentSecurityPolicyScriptElementRequest<'_> {
-    crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
-        nonce: fetch_metadata.nonce(),
-        integrity: fetch_metadata.integrity(),
-        parser_inserted: fetch_metadata.parser_inserted,
-    }
-}
-
 fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
@@ -1251,30 +1246,6 @@ fn collect_module_requests(
         ));
     }
     Ok(records)
-}
-
-fn module_request_attributes(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::ModuleRequest>,
-) -> ModuleAttributesKey {
-    let attributes = request.get_import_attributes();
-    let mut pairs = Vec::with_capacity(attributes.length() / 3);
-    let mut index = 0;
-    while index + 1 < attributes.length() {
-        let key = attributes
-            .get(scope, index)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let value = attributes
-            .get(scope, index + 1)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        if let (Some(key), Some(value)) = (key, value) {
-            pairs.push((key, value));
-        }
-        index += 3;
-    }
-    ModuleAttributesKey::from_pairs(pairs)
 }
 
 fn module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {

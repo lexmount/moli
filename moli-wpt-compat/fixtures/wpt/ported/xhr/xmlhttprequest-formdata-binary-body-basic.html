@@ -90,8 +90,8 @@ promise_test(async function () {
   const boundary = multipartBoundary(result);
   const expectedHex =
     asciiHex(`--${boundary}\r\n`) +
-    asciiHex('Content-Disposition: form-data; name="carriage%0Dname"\r\n\r\n') +
-    asciiHex("carriage\rvalue\r\n") +
+    asciiHex('Content-Disposition: form-data; name="carriage%0D%0Aname"\r\n\r\n') +
+    asciiHex("carriage\r\nvalue\r\n") +
     asciiHex(`--${boundary}\r\n`) +
     utf8Hex('Content-Disposition: form-data; name="cafe-é"\r\n\r\n') +
     utf8Hex("值-😀\r\n") +

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+
 import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..config import is_moli_browser
@@ -497,7 +499,7 @@ async def run_core_group(state: SmokeState) -> None:
     await wait_until(lambda: cdp_popup.url == f"{fixture}/plain?popup=cdp", "popup CDPSession URL")
     await cdp_popup.wait_for_load_state("load", timeout=10_000)
     assert_equal(await cdp_popup.text_content("main", timeout=5_000), "plain ok", "popup CDPSession initial text")
-    popup_cdp = await context.new_cdp_session(cdp_popup)
+    popup_cdp = await new_cdp_session(context, cdp_popup)
     popup_network_events = attach_cdp_event_collector(
         popup_cdp,
         [

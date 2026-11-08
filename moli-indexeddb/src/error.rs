@@ -3,11 +3,13 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexedDbError {
     Constraint(String),
+    Data(String),
     InvalidAccess(String),
     InvalidState(String),
     NotFound(String),
     QuotaExceeded { quota: u64, requested: u64 },
     ReadOnly(String),
+    Resource(String),
     TransactionInactive(String),
     Version(String),
     Io(String),
@@ -19,11 +21,13 @@ pub enum IndexedDbError {
 impl fmt::Display for IndexedDbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Constraint(message)
+            Self::Data(message)
+            | Self::Constraint(message)
             | Self::InvalidAccess(message)
             | Self::InvalidState(message)
             | Self::NotFound(message)
             | Self::ReadOnly(message)
+            | Self::Resource(message)
             | Self::TransactionInactive(message)
             | Self::Version(message)
             | Self::Io(message)

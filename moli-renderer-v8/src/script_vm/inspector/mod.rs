@@ -117,6 +117,8 @@ impl DocumentInspectorBinding {
         self,
         output_journal: crate::runtime::RendererTurnOutputJournal,
     ) -> Self {
+        self.isolate_backend_handle()
+            .bind_native_output_journal(output_journal.clone());
         self.agent.bind_output_journal(output_journal);
         self
     }

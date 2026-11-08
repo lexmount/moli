@@ -1,6 +1,7 @@
+use anyhow::{Context as _, Result};
+
 use std::{
     collections::{HashMap, hash_map::Entry},
-    fmt,
     num::NonZeroI32,
 };
 
@@ -82,9 +83,10 @@ impl RendererCommandDescriptor {
     ///
     /// This is deliberately named as a fallback: a frontend command reaching
     /// this constructor would reintroduce method-policy reconstruction.
-    pub(crate) fn from_synthesized_payload(frontend_payload: String) -> Result<Self, String> {
+    #[cfg(test)]
+    pub(crate) fn from_synthesized_payload(frontend_payload: String) -> Result<Self> {
         let command = ParsedCdpCommand::parse_str(&frontend_payload)
-            .map_err(|error| format!("invalid renderer Inspector command JSON: {error}"))?;
+            .context("invalid renderer Inspector command JSON")?;
         let policy = command.renderer_policy();
         Ok(Self {
             replacement: policy.replacement(),
@@ -92,6 +94,19 @@ impl RendererCommandDescriptor {
             // Internal Classic/BiDi adapters own their reply channel. A
             // method being eligible for frontend session output must never
             // redirect a synthesized adapter command implicitly.
+            response_delivery: RendererInspectorResponseDelivery::AdapterReply,
+            frontend_payload,
+        })
+    }
+
+    /// Internal work tied to an exact Document must not replay an object or
+    /// context operation in a replacement runtime.
+    pub(crate) fn for_document_helper(frontend_payload: String) -> Result<Self> {
+        let command = ParsedCdpCommand::parse_str(&frontend_payload)
+            .context("invalid internal renderer Inspector command")?;
+        Ok(Self {
+            replacement: CdpRendererCommandReplacement::Terminate,
+            replay: RendererCommandReplay::Inspector(command.renderer_policy().replay_dispatch()),
             response_delivery: RendererInspectorResponseDelivery::AdapterReply,
             frontend_payload,
         })
@@ -114,7 +129,8 @@ impl RendererCommandDescriptor {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("Duplicate `id` in protocol request")]
 pub(crate) struct DuplicatePendingRendererCommand {
     frontend_command_id: FrontendCommandId,
 }
@@ -125,14 +141,6 @@ impl DuplicatePendingRendererCommand {
         self.frontend_command_id
     }
 }
-
-impl fmt::Display for DuplicatePendingRendererCommand {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Duplicate `id` in protocol request")
-    }
-}
-
-impl std::error::Error for DuplicatePendingRendererCommand {}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PendingRendererCommandKey {
@@ -149,33 +157,17 @@ impl PendingRendererCommandKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("renderer Inspector call-id space exhausted")]
 pub(crate) struct RendererCallIdExhausted;
 
-impl fmt::Display for RendererCallIdExhausted {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("renderer Inspector call-id space exhausted")
-    }
-}
-
-impl std::error::Error for RendererCallIdExhausted {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum RegisterRendererCallError {
-    Duplicate(DuplicatePendingRendererCommand),
-    Exhausted(RendererCallIdExhausted),
+    #[error(transparent)]
+    Duplicate(#[from] DuplicatePendingRendererCommand),
+    #[error(transparent)]
+    Exhausted(#[from] RendererCallIdExhausted),
 }
-
-impl fmt::Display for RegisterRendererCallError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Duplicate(error) => error.fmt(formatter),
-            Self::Exhausted(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for RegisterRendererCallError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererCommandCorrelation {

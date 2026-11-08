@@ -845,9 +845,12 @@ pub(in crate::native_bridge::document) fn detached_document_implementation_gette
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let document = args.this();
-    let global = scope.get_current_context().global(scope);
-    let _ = crate::context_bootstrap::ensure_dom_implementation_singleton(scope, global);
-    match ensure_detached_document_implementation(scope, document) {
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let global = relevant_context.global(target_scope);
+    let _ = crate::context_bootstrap::ensure_dom_implementation_singleton(target_scope, global);
+    match ensure_detached_document_implementation(target_scope, document) {
         Some(implementation) => rv.set(implementation.into()),
         None => rv.set_null(),
     }
@@ -857,7 +860,9 @@ pub(crate) fn ensure_detached_document_implementation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if let Some(cached) = get_private_object(scope, document, DETACHED_DOCUMENT_IMPLEMENTATION_SLOT)
+    let document = canonical_detached_node_object(scope, document)?;
+    let backing = crate::native_bridge::node::node_backing_object(scope, document)?;
+    if let Some(cached) = get_private_object(scope, backing, DETACHED_DOCUMENT_IMPLEMENTATION_SLOT)
     {
         return Some(cached);
     }
@@ -870,11 +875,13 @@ pub(crate) fn ensure_detached_document_implementation<'s>(
         .bind(scope)
         .ok()?;
     if let Some(prototype) = singleton.get_prototype(scope) {
-        let _ = implementation.set_prototype(scope, prototype);
+        implementation
+            .set_prototype(scope, prototype)?
+            .then_some(())?;
     }
     set_private_value(
         scope,
-        document,
+        backing,
         DETACHED_DOCUMENT_IMPLEMENTATION_SLOT,
         implementation.into(),
     );

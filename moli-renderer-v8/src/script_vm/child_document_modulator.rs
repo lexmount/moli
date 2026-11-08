@@ -284,6 +284,28 @@ impl ScriptVm {
                 );
                 return;
             }
+            let needs_isolated_proxy_restore = self
+                ._context_host
+                .borrow()
+                .child_has_isolated_window_proxies(child_handle);
+            if needs_isolated_proxy_restore {
+                let restored = self.with_default_context_scope(|scope, host_ptr| {
+                    crate::native_bridge::JsContextHost::restore_child_isolated_window_proxies(
+                        scope,
+                        host_ptr,
+                        child_handle,
+                        current_owner,
+                    )
+                });
+                if let Err(error) = restored {
+                    tracing::warn!(
+                        %error,
+                        ?child_handle,
+                        ?current_owner,
+                        "failed to restore isolated WindowProxies for the committed child Document"
+                    );
+                }
+            }
             let should_materialize_default_realm = {
                 let host = self._context_host.borrow();
                 host.child_window_proxy_shell_is_exposed(child_handle)
@@ -635,6 +657,14 @@ impl ScriptVm {
         result: FrameDocumentModuleFetchTerminalResult,
     ) -> FrameDocumentModuleTerminalQueueFollowup {
         let owner = task.owner().document_owner();
+        let is_current = self
+            ._context_host
+            .borrow()
+            .current_child_module_route_task_owner(owner, realm_id)
+            .is_some();
+        if is_current {
+            self.dispatch_module_fetch_csp_violations(task.fetch_request().csp_context());
+        }
         let tasks = self
             .child_document_modulator_store
             .finish_parser_module_dependency_fetch(owner, realm_id, task, result);

@@ -14,7 +14,7 @@ pub use identity::{
 };
 pub use moli_cookie_cache::{load_cookie_cache, save_cookie_cache};
 pub use profile::{BrowserProfile, BrowserProfilePartition};
-pub use profile_file::write_profile_file;
+pub use profile_file::{DurableProfileFileError, write_profile_file, write_profile_file_durable};
 pub use profile_lock::{BrowserProfileLock, acquire_profile_lock};
 pub use profile_manifest::{
     BrowserProfileManifest, BrowserProfilePartitionManifest, PROFILE_MANIFEST_VERSION,
@@ -23,7 +23,10 @@ pub use profile_manifest::{
 pub use profile_partition_id::{
     DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId, ProfilePartitionIdError,
 };
-pub use profile_paths::{BrowserProfilePartitionPaths, BrowserProfilePaths};
+pub use profile_paths::{
+    BrowserProfilePartitionPaths, BrowserProfilePaths, COOKIE_DATABASE_RELATIVE_PATH,
+    LOCAL_STORAGE_DATABASE_RELATIVE_PATH,
+};
 pub use user_agent_override::UserAgentOverride;
 pub use window_surface::{
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_CDP_PRODUCT, DEFAULT_CONNECTION_DOWNLINK,

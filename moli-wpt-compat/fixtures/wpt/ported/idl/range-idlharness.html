@@ -17,11 +17,11 @@ interface AbstractRange {
   readonly attribute Node endContainer;
   readonly attribute unsigned long endOffset;
   readonly attribute boolean collapsed;
-  readonly attribute Node commonAncestorContainer;
 };
 
 interface Range : AbstractRange {
   constructor();
+  readonly attribute Node commonAncestorContainer;
   undefined setStart(Node node, unsigned long offset);
   undefined setEnd(Node node, unsigned long offset);
   undefined setStartBefore(Node node);

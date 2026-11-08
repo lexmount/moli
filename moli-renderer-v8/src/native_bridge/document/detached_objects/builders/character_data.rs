@@ -6,8 +6,9 @@ pub(in crate::native_bridge::document) fn build_detached_text_object<'s>(
     owner_document: v8::Local<'s, v8::Object>,
     data: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object =
-        new_detached_object_with_prototype(scope, "__detachedTextPrototype", Some("Text"))?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = new_detached_node_object(scope, "Text")?;
     let state = new_detached_state_object(scope, "text", 3, "#text")?;
     let _ = state.set(
         scope,
@@ -38,8 +39,9 @@ pub(in crate::native_bridge::document) fn build_detached_comment_object<'s>(
     owner_document: v8::Local<'s, v8::Object>,
     data: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object =
-        new_detached_object_with_prototype(scope, "__detachedCommentPrototype", Some("Comment"))?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = new_detached_node_object(scope, "Comment")?;
     let state = new_detached_state_object(scope, "comment", 8, "#comment")?;
     let _ = state.set(
         scope,
@@ -70,11 +72,9 @@ pub(crate) fn build_detached_cdata_section_object<'s>(
     owner_document: v8::Local<'s, v8::Object>,
     data: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = new_detached_object_with_prototype(
-        scope,
-        "__detachedCDATASectionPrototype",
-        Some("CDATASection"),
-    )?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = new_detached_node_object(scope, "CDATASection")?;
     let state = new_detached_state_object(scope, "cdataSection", 4, "#cdata-section")?;
     let _ = state.set(
         scope,
@@ -106,11 +106,9 @@ pub(in crate::native_bridge::document) fn build_detached_processing_instruction_
     target: &str,
     data: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let object = new_detached_object_with_prototype(
-        scope,
-        "__detachedProcessingInstructionPrototype",
-        Some("ProcessingInstruction"),
-    )?;
+    let context = owner_document.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = new_detached_node_object(scope, "ProcessingInstruction")?;
     let state = new_detached_state_object(scope, "processingInstruction", 7, target)?;
     let _ = state.set(
         scope,

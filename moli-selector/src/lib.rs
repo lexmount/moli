@@ -613,6 +613,42 @@ mod tests {
     }
 
     #[test]
+    fn stylo_inheritance_crosses_shadow_roots_without_changing_selector_parents() {
+        for mode in ["open", "closed"] {
+            for connected in [false, true] {
+                let url = url::Url::parse("https://example.test/").unwrap();
+                let mut host = DomHost::from_dom(NativeDom::new_html(url));
+                host.reset_html_document_shell();
+                let body = host.document_body_handle().unwrap();
+                let shadow_host = host.create_element("div");
+                if connected {
+                    assert!(host.append_child(body, shadow_host));
+                }
+                let root = host.attach_shadow_root(shadow_host, mode).unwrap();
+                let child = host.create_element("span");
+                let descendant = host.create_element("em");
+                assert!(host.append_child(root, child));
+                assert!(host.append_child(child, descendant));
+
+                let adapter = StyloDomStyleAdapter::new();
+                adapter.with_bound_host(&host, |adapter| {
+                    let host_element = adapter.element(&host, shadow_host).unwrap();
+                    let child = adapter.element(&host, child).unwrap();
+                    let descendant = adapter.element(&host, descendant).unwrap();
+                    assert!(selectors::Element::parent_element(&child).is_none());
+                    assert_eq!(child.inheritance_parent(), Some(host_element));
+                    assert_eq!(descendant.inheritance_parent(), Some(child));
+                    assert_eq!(selectors::Element::parent_element(&descendant), Some(child));
+                    assert_eq!(
+                        host_element.inheritance_parent(),
+                        connected.then(|| adapter.element(&host, body).unwrap()),
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
     fn stylo_style_adapter_exposes_dom_traits_and_document_bucketed_element_data() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));

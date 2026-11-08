@@ -1,6 +1,135 @@
 use super::service_worker_drain::drain_service_worker_test_turn;
 use super::*;
 
+async fn assert_opaque_origin_wasm_message_port_delivery(shared_origin: bool, attachments: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://opaque-wasm-message.test/",
+        &loader,
+    );
+    let registry = vm._context_host.borrow().message_port_registry();
+    vm.eval(&format!("globalThis.sharedOpaqueOrigin = {shared_origin}; globalThis.transferAttachments = {attachments};"))
+        .unwrap();
+    vm.eval(
+        r#"
+globalThis.opaqueWasmResult = null;
+const frames = [];
+const count = sharedOpaqueOrigin ? 1 : 2;
+const childScript = `
+  let sendingPort = null;
+  const retainedPorts = [];
+  onmessage = event => {
+    if (event.data.kind === 'close') {
+      sendingPort.close();
+      for (const port of retainedPorts) port.close();
+    } else if (event.data.kind === 'send') {
+      sendingPort = event.data.port;
+      const module = new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0]));
+      if (event.data.attachments) {
+        const extra = new MessageChannel(), nested = new MessageChannel();
+        retainedPorts.push(extra.port1, nested.port1);
+        // The transferred endpoint also owns a queued transferred attachment.
+        extra.port1.postMessage(nested.port2, [nested.port2]);
+        sendingPort.postMessage({module, extra: extra.port2}, [extra.port2]);
+      } else {
+        sendingPort.postMessage(module);
+      }
+    } else if (event.data.kind === 'receive') {
+      const port = event.data.port;
+      port.onmessage = event => {
+        const module = event.data instanceof WebAssembly.Module ? event.data : event.data.module;
+        parent.postMessage({result: ['message',
+          module instanceof WebAssembly.Module,
+          Object.keys(new WebAssembly.Instance(module).exports).length === 0]}, '*');
+        for (const attachment of event.ports) attachment.close();
+        port.close();
+      };
+      port.onmessageerror = event => {
+        parent.postMessage({result: ['messageerror', event instanceof MessageEvent]}, '*');
+        port.close();
+      };
+      port.start();
+    }
+  };
+  parent.postMessage({ready: true}, '*');
+`;
+let ready = 0;
+addEventListener('message', event => {
+  if (event.data.ready && ++ready === count) {
+    const channel = new MessageChannel();
+    frames[0].contentWindow.postMessage({kind: 'send', port: channel.port1, attachments: transferAttachments}, '*', [channel.port1]);
+    frames[count - 1].contentWindow.postMessage({kind: 'receive', port: channel.port2}, '*', [channel.port2]);
+  } else if (event.data.result) {
+    opaqueWasmResult = event.data.result;
+    frames[0].contentWindow.postMessage({kind: 'close'}, '*');
+  }
+});
+for (let index = 0; index < count; index++) {
+  const frame = document.createElement('iframe');
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.srcdoc = '<!doctype html><script>' + childScript + '<\/script>';
+  frames.push(frame);
+  (document.body || document.documentElement || document).appendChild(frame);
+}
+"#,
+    )
+    .unwrap();
+    let expected = if shared_origin {
+        r#"["message",true,true]"#
+    } else {
+        r#"["messageerror",true]"#
+    };
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "JSON.stringify(opaqueWasmResult)",
+        expected,
+        "Wasm delivery must compare the native opaque origin, not its serialization",
+    )
+    .await;
+    for _ in 0..32 {
+        if registry.endpoint_count() == 0
+            && vm
+                ._context_host
+                .borrow()
+                .message_port_execution_context_owners_for_test()
+                .is_empty()
+        {
+            break;
+        }
+        vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap();
+    }
+    assert_eq!(registry.endpoint_count(), 0);
+    assert!(
+        vm._context_host
+            .borrow()
+            .message_port_execution_context_owners_for_test()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn message_ports_reject_wasm_between_independent_opaque_origins() {
+    assert_opaque_origin_wasm_message_port_delivery(false, false).await;
+}
+
+#[tokio::test]
+async fn message_ports_allow_wasm_within_the_same_opaque_origin() {
+    assert_opaque_origin_wasm_message_port_delivery(true, false).await;
+}
+
+#[tokio::test]
+async fn rejected_opaque_wasm_messages_release_transferred_ports_and_nested_attachments() {
+    assert_opaque_origin_wasm_message_port_delivery(false, true).await;
+}
+
+#[tokio::test]
+async fn accepted_opaque_wasm_messages_keep_transferred_attachments_closable() {
+    assert_opaque_origin_wasm_message_port_delivery(true, true).await;
+}
+
 const RECEIVER_PROBE: &str = r#"
 function messageChannelReceiverProbe(realms = [globalThis]) {
   const failures = [], records = [];

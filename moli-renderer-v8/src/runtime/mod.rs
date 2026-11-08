@@ -86,6 +86,8 @@ mod page_screenshot;
 mod page_settings;
 mod page_state;
 mod page_surface;
+mod worker_inspector_error;
+pub use worker_inspector_error::WorkerInspectorError;
 mod page_turn_scheduler;
 mod page_vm;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
@@ -310,11 +312,13 @@ pub use self::owner::{
 pub use self::owner_local::RendererPageReplacementCommit;
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererDocumentCommandTarget, RendererPageAccessError, RendererPageCommandPending,
+    RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
-    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument, RendererDocumentOptions,
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PendingRendererPageReplacement,
+    PreparedRendererDocument, RendererDocumentOptions,
 };
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
@@ -366,13 +370,13 @@ pub use self::page_surface::{
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererGeometryQuad,
     RendererInputDispatchOutcome, RendererInspectorProtocolConfiguration,
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
-    RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
-    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
-    RendererNavigationInitiator, RendererPageCommand, RendererPageCommandPostResponseContinuation,
-    RendererPageCookieFacadeSnapshotReply, RendererPageCreationDiagnostics,
-    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
+    RendererInterceptedDrag, RendererJavaScriptDialogId, RendererJavaScriptDialogSource,
+    RendererLayoutMetrics, RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics,
+    RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
+    RendererMoliRuntimeMemoryDiagnostics, RendererNavigationInitiator, RendererPageCommand,
+    RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
+    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
+    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
@@ -700,10 +704,6 @@ impl PageVmPendingPhaseOneNavigation {
 
     pub(super) const fn phase_one_restore_requirement(&self) -> PhaseOneRestoreRequirement {
         self.residence.restore_requirement()
-    }
-
-    pub(super) fn has_ready_streaming_input(&mut self) -> bool {
-        self.residence.has_ready_streaming_input()
     }
 
     pub(super) fn attach_committed_response(&mut self) {

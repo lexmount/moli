@@ -398,6 +398,27 @@ fn cdp_print_to_pdf_builds_protocol_neutral_command() {
 }
 
 #[test]
+fn cdp_print_to_pdf_accepts_tagged_pdf_preference_but_rejects_document_outline() {
+    let conn = CdpConnection::new();
+    let build = |params: Value| {
+        let cmd = Cmd::for_test(
+            Some(131),
+            "Page.printToPDF",
+            &params,
+            Some("SID-page"),
+            r#"{"id":131,"method":"Page.printToPDF"}"#,
+        );
+        build_cdp_print_to_pdf_command(&conn, &cmd)
+    };
+
+    // Puppeteer's page.pdf() always sends generateTaggedPDF: true.
+    assert!(build(json!({ "generateTaggedPDF": true })).is_ok());
+    assert!(build(json!({ "generateTaggedPDF": false })).is_ok());
+    // An explicit outline request still cannot be honored.
+    assert!(build(json!({ "generateDocumentOutline": true })).is_err());
+}
+
+#[test]
 fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
     let mut conn = CdpConnection::new();
     let params = Value::Null;

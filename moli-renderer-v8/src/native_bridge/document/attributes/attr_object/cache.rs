@@ -24,7 +24,8 @@ pub(in crate::native_bridge::document) fn live_attr_cache_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    ensure_object_cache(scope, element, ATTR_OBJECT_CACHE_SLOT)
+    let backing = crate::native_bridge::node::node_backing_object(scope, element)?;
+    ensure_object_cache(scope, backing, ATTR_OBJECT_CACHE_SLOT)
 }
 
 pub(in crate::native_bridge::document) fn namespace_attr_cache_key(
@@ -59,6 +60,9 @@ pub(in crate::native_bridge) fn clear_live_attr_cache_entry<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) {
+    let Some(element) = crate::native_bridge::node::node_backing_object(scope, element) else {
+        return;
+    };
     let Some(cache) = get_private_value(scope, element, ATTR_OBJECT_CACHE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -73,6 +77,9 @@ pub(in crate::native_bridge) fn clear_live_attr_cache_entry_ns<'s>(
     namespace_uri: Option<&str>,
     local_name: &str,
 ) {
+    let Some(element) = crate::native_bridge::node::node_backing_object(scope, element) else {
+        return;
+    };
     let Some(cache) = get_private_value(scope, element, ATTR_OBJECT_CACHE_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {

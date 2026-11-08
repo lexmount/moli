@@ -173,13 +173,15 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
           <div id="wheel-target"><div id="wheel-content"></div></div>
         `;
         frame.contentWindow.__inputEvents = [];
-        for (const type of ['pointerover', 'mouseover', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+        for (const type of ['pointerover', 'pointerenter', 'pointerrawupdate', 'pointermove', 'pointerdown', 'pointerup', 'mouseover', 'mouseenter', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
           child.addEventListener(type, event => {
             frame.contentWindow.__inputEvents.push({
               type,
               target: event.target.id,
               clientX: event.clientX,
               clientY: event.clientY,
+              screenX: event.screenX,
+              screenY: event.screenY,
               deltaY: event.deltaY || 0
             });
           }, true);
@@ -258,7 +260,20 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     let events = result["events"]
         .as_array()
         .expect("child events should be an array");
-    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+    for event_type in [
+        "pointerover",
+        "pointerenter",
+        "pointerrawupdate",
+        "pointermove",
+        "pointerdown",
+        "pointerup",
+        "mouseover",
+        "mouseenter",
+        "mousemove",
+        "mousedown",
+        "mouseup",
+        "click",
+    ] {
         let event = events
             .iter()
             .find(|event| event["type"] == event_type)
@@ -266,6 +281,14 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         assert_eq!(event["target"], "hover-target");
         assert!((event["clientX"].as_f64().unwrap() - 240.0).abs() < 0.1);
         assert!((event["clientY"].as_f64().unwrap() - 90.0).abs() < 0.1);
+        assert!(
+            (event["screenX"].as_f64().unwrap() - 287.2).abs() < 0.001,
+            "{event}"
+        );
+        assert!(
+            (event["screenY"].as_f64().unwrap() - 190.2).abs() < 0.001,
+            "{event}"
+        );
     }
     let wheel = events
         .iter()
@@ -274,6 +297,14 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     assert_eq!(wheel["target"], "wheel-content");
     assert!((wheel["clientX"].as_f64().unwrap() - 560.0).abs() < 0.1);
     assert!((wheel["clientY"].as_f64().unwrap() - 240.0).abs() < 0.1);
+    assert!(
+        (wheel["screenX"].as_f64().unwrap() - 536.8).abs() < 0.001,
+        "{wheel}"
+    );
+    assert!(
+        (wheel["screenY"].as_f64().unwrap() - 307.2).abs() < 0.001,
+        "{wheel}"
+    );
 
     vm.eval("document.getElementById('input-frame-clip').style.width='624px'")
         .unwrap();
@@ -290,6 +321,82 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
         .expect("resized iframe viewport should evaluate"),
         "800|800"
     );
+}
+#[test]
+fn iframe_native_drag_preserves_screen_coordinates_with_offset_and_scale() {
+    for scale in [1.0, 0.5] {
+        let mut vm = new_parsed_test_vm(
+            "https://iframe-drag-coordinates.test/",
+            "<!doctype html><body style='margin:0'><iframe id=frame style='position:absolute;left:100px;top:120px;width:300px;height:300px;border:0;transform-origin:0 0'></iframe>",
+        );
+        vm.eval(&format!("frame.style.transform = 'scale({scale})'"))
+            .unwrap();
+        vm.eval(
+            r#"
+            const child = frame.contentDocument;
+            child.body.style.margin = '0';
+            child.body.innerHTML = `
+              <div id="source" draggable="true" style="position:absolute;left:0;top:0;width:100px;height:40px"></div>
+              <div id="target" style="position:absolute;left:0;top:100px;width:100px;height:60px"></div>
+            `;
+            window.__dragCoordinates = [];
+            for (const type of ['dragstart', 'dragover', 'drop']) {
+              child.addEventListener(type, event => {
+                __dragCoordinates.push({type, target: event.target.id,
+                  clientX: event.clientX, clientY: event.clientY,
+                  screenX: event.screenX, screenY: event.screenY});
+                if (type === 'dragstart') {
+                  event.dataTransfer.setData('text/plain', 'payload');
+                  event.dataTransfer.effectAllowed = 'copy';
+                } else {
+                  event.preventDefault();
+                }
+              }, true);
+            }
+            "#,
+        )
+        .unwrap();
+        publish_layout_for_test(&mut vm);
+        for (event_name, client_y, buttons) in [
+            ("mousedown", 20.0, 1),
+            ("mousemove", 120.0, 1),
+            ("mouseup", 130.0, 0),
+        ] {
+            vm.dispatch_mouse_event_at_point(
+                100.0 + 20.0 * scale,
+                120.0 + client_y * scale,
+                event_name,
+                0,
+                Some(buttons),
+                0.0,
+                0.0,
+            )
+            .unwrap();
+        }
+        let events: Vec<serde_json::Value> =
+            serde_json::from_str(&vm.eval("JSON.stringify(__dragCoordinates)").unwrap()).unwrap();
+        assert_eq!(events.len(), 3, "scale {scale}: {events:?}");
+        // Chromium's dragstart retains the press position. The first move
+        // enters the target; release revalidates it with a final dragover.
+        for (event, (event_type, target, client_y)) in events.iter().zip([
+            ("dragstart", "source", 20.0),
+            ("dragover", "target", 130.0),
+            ("drop", "target", 130.0),
+        ]) {
+            assert_eq!(event["type"], event_type);
+            assert_eq!(event["target"], target);
+            assert!(
+                (event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
+            assert!(
+                (event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
+            assert_eq!(event["screenX"], 100.0 + 20.0 * scale);
+            assert_eq!(event["screenY"], 120.0 + client_y * scale);
+        }
+    }
 }
 #[test]
 fn iframe_line_height_uses_its_own_document_quirks_mode() {
@@ -662,6 +769,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
             delta_y,
             crate::runtime::RendererPointerEventProperties::default(),
             0,
+            false,
         )
         .expect("batched child wheel step should dispatch");
     }
@@ -865,13 +973,15 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
           </div>
         `;
         nestedFrame.contentWindow.__nestedEvents = [];
-        for (const type of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
+        for (const type of ['pointerover', 'pointerenter', 'pointerout', 'pointerleave', 'pointerrawupdate', 'pointermove', 'pointerdown', 'pointerup', 'mouseover', 'mouseenter', 'mouseout', 'mouseleave', 'mousemove', 'mousedown', 'mouseup', 'click', 'wheel']) {
           nested.addEventListener(type, event => {
             nestedFrame.contentWindow.__nestedEvents.push({
               type,
               target: event.target.id,
               clientX: event.clientX,
-              clientY: event.clientY
+              clientY: event.clientY,
+              screenX: event.screenX,
+              screenY: event.screenY
             });
           }, true);
         }
@@ -980,13 +1090,34 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
     let events = result["events"]
         .as_array()
         .expect("nested events should be an array");
-    for event_type in ["mousemove", "mousedown", "mouseup", "click"] {
+    for event_type in [
+        "pointerover",
+        "pointerenter",
+        "pointerrawupdate",
+        "pointermove",
+        "pointerdown",
+        "pointerup",
+        "mouseover",
+        "mouseenter",
+        "mousemove",
+        "mousedown",
+        "mouseup",
+        "click",
+    ] {
         let event = events
             .iter()
             .find(|event| event["type"] == event_type && event["target"] == "nested-target")
             .unwrap_or_else(|| panic!("missing nested {event_type}: {events:?}"));
         assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
         assert!((event["clientY"].as_f64().unwrap() - 20.0).abs() < 0.1);
+        assert!(
+            (event["screenX"].as_f64().unwrap() - 136.875).abs() < 0.001,
+            "{event}"
+        );
+        assert!(
+            (event["screenY"].as_f64().unwrap() - 109.375).abs() < 0.001,
+            "{event}"
+        );
     }
     let wheel = events
         .iter()
@@ -995,14 +1126,25 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
     assert_eq!(wheel["target"], "nested-scroll-content");
     assert!((wheel["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
     assert!((wheel["clientY"].as_f64().unwrap() - 35.0).abs() < 0.1);
-    let mouseout = events
-        .iter()
-        .rev()
-        .find(|event| event["type"] == "mouseout")
-        .unwrap_or_else(|| panic!("missing nested mouseout: {events:?}"));
-    assert_eq!(mouseout["target"], "nested-target");
-    assert!((mouseout["clientX"].as_f64().unwrap() + 318.333).abs() < 0.2);
-    assert!((mouseout["clientY"].as_f64().unwrap() + 245.0).abs() < 0.2);
+    assert!(
+        (wheel["screenX"].as_f64().unwrap() - 136.875).abs() < 0.001,
+        "{wheel}"
+    );
+    assert!(
+        (wheel["screenY"].as_f64().unwrap() - 115.0).abs() < 0.001,
+        "{wheel}"
+    );
+    for event_type in ["pointerout", "pointerleave", "mouseout", "mouseleave"] {
+        let event = events
+            .iter()
+            .rev()
+            .find(|event| event["type"] == event_type && event["target"] == "nested-target")
+            .unwrap_or_else(|| panic!("missing nested {event_type}: {events:?}"));
+        assert!((event["clientX"].as_f64().unwrap() + 318.333).abs() < 0.2);
+        assert!((event["clientY"].as_f64().unwrap() + 245.0).abs() < 0.2);
+        assert_eq!(event["screenX"], 10.0);
+        assert_eq!(event["screenY"], 10.0);
+    }
 }
 #[test]
 fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
@@ -1111,4 +1253,141 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
         "root vertical thumb drag should advance scrollY: {result}"
     );
     assert_eq!(result[2], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn iframe_native_and_replayed_drag_events_use_the_receiving_window_realm() {
+    for native in [false, true] {
+        let mut vm = new_rendered_test_vm(
+            "https://iframe-drag-realm.test/",
+            "<!doctype html><body style='margin:0'>",
+        );
+        vm.eval(
+            r#"
+window.__constructorReads=0;
+Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+  __constructorReads++;throw Error('parent public constructor');
+}});
+const frame=document.createElement('iframe');frame.id='frame';
+frame.style='position:absolute;left:100px;top:120px;width:300px;height:300px;border:0';
+frame.srcdoc=`<!doctype html><style>
+body{margin:0}#source,#target{position:absolute;left:0;width:100px;height:80px}
+#source{top:0}#target{top:100px}
+</style><div id=source draggable=true>source</div><div id=target>target</div><script>
+window.__records=[];window.__views=[];window.__constructorReads=0;
+const IntrinsicDragEvent=DragEvent;
+Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+  __constructorReads++;throw Error('child public constructor');
+}});
+for(const type of ['dragstart','drag','dragenter','dragover','dragleave','drop','dragend']){
+  document.addEventListener(type,event=>{
+    const dt=event.dataTransfer;
+    if(type==='dragstart'){
+      dt.setData('text/plain','child-payload');dt.effectAllowed='copy';
+      dt.items.add(new File(['file-payload'],'payload.txt',{type:'text/plain'}));
+    }
+    if(type==='dragover'||type==='drop')event.preventDefault();
+    const file=dt.files[0];
+    __records.push({type,event:event instanceof IntrinsicDragEvent,
+      transfer:dt instanceof DataTransfer,items:dt.items instanceof DataTransferItemList,
+      item:dt.items[0] instanceof DataTransferItem,files:dt.files instanceof FileList,
+      view:event.view===window,types:dt.types instanceof Array&&Object.isFrozen(dt.types),
+      stable:dt===event.dataTransfer,
+      text:dt.getData('text/plain'),file:file?[file instanceof File,file.name,file.size,dt.items[1].getAsFile() instanceof File]:null});
+    __views.push(dt);
+  });
+}
+</`+`script>`;
+document.body.append(frame);
+"#,
+        )
+        .expect("queue listeners created by the child Window's own script");
+        run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+            &mut vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "commit the drag iframe",
+        )
+        .await;
+        run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+            &mut vm,
+            ChildFrameSemanticTurnKind::DocumentScriptReady,
+            "install the iframe's own drag listeners",
+        )
+        .await;
+        run_child_document_lifecycle_and_host_load_for_test(&mut vm, "drag iframe ready").await;
+        publish_layout_for_test(&mut vm);
+        if native {
+            for (event, y, buttons) in [
+                ("mousedown", 140.0, 1),
+                ("mousemove", 240.0, 1),
+                ("mousemove", 245.0, 1),
+                ("mouseup", 245.0, 0),
+            ] {
+                vm.dispatch_mouse_event_at_point(120.0, y, event, 0, Some(buttons), 0.0, 0.0)
+                    .expect("dispatch native input inside the child");
+            }
+        } else {
+            let data = crate::runtime::RendererDragData {
+                items: vec![crate::runtime::RendererDragDataItem {
+                    mime_type: "text/plain".to_owned(),
+                    data: "external-payload".to_owned(),
+                    title: None,
+                    base_url: None,
+                }],
+                files: vec![crate::runtime::RendererDraggedFile {
+                    name: "payload.txt".to_owned(),
+                    mime_type: "text/plain".to_owned(),
+                    bytes: b"file-payload".to_vec(),
+                    last_modified: 123.0,
+                }],
+                directories: Vec::new(),
+                drag_operations_mask: 1,
+            };
+            for event in ["dragenter", "dragover", "drop"] {
+                vm.dispatch_drag_event_at_point(120.0, 245.0, event, data.clone(), 0)
+                    .expect("replay an external drag into the child");
+            }
+        }
+        let observed: serde_json::Value = serde_json::from_str(
+            &vm.eval(
+                r#"JSON.stringify({events:frame.contentWindow.__records,
+reads:[__constructorReads,frame.contentWindow.__constructorReads],
+closed:frame.contentWindow.__views.every(dt=>dt.types.length===0&&dt.items.length===0&&dt.files.length===0&&dt.getData('text/plain')==='')})"#,
+            )
+            .expect("read iframe drag observations"),
+        )
+        .expect("iframe drag observations are JSON");
+        let events = observed["events"].as_array().expect("drag records");
+        assert!(!events.is_empty(), "native={native}: {observed}");
+        for event in events {
+            for field in [
+                "event", "transfer", "items", "item", "files", "view", "types", "stable",
+            ] {
+                assert_eq!(event[field], true, "native={native}, {field}: {event}");
+            }
+        }
+        let drop = events
+            .iter()
+            .find(|event| event["type"] == "drop")
+            .expect("the iframe received its drop");
+        assert_eq!(
+            drop["text"],
+            if native {
+                "child-payload"
+            } else {
+                "external-payload"
+            }
+        );
+        assert_eq!(
+            drop["file"],
+            serde_json::json!([true, "payload.txt", 12, true])
+        );
+        assert_eq!(observed["reads"], serde_json::json!([0, 0]));
+        assert_eq!(observed["closed"], true);
+        assert!(vm.active_drag_session.is_none());
+        if native {
+            assert_eq!(events.first().unwrap()["type"], "dragstart");
+            assert_eq!(events.last().unwrap()["type"], "dragend");
+        }
+    }
 }

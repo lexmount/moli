@@ -388,7 +388,7 @@ root.appendChild(frame);
         // Use the production retirement path, pausing before a successor Realm
         // materializes, so the saved Location really belongs to a facade.
         vm.destroy_child_default_context(context_id);
-        let context = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
+        let context = &vm.current_main_world().unwrap().context as *const v8::Global<v8::Context>;
         vm.with_context_scope_by_ptr(context, |scope, _| {
             let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope).unwrap();
             let host = unsafe { &mut *host_ptr };

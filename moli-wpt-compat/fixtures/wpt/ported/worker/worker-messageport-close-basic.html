@@ -54,12 +54,17 @@ promise_test(async function () {
         "      messages.push(messageEvent.data);",
         "      if (messageEvent.data === 'first') {",
         "        port.close();",
-        "      }",
-        "      if (messageEvent.data === 'second') {",
-        "        postMessage({ kind: 'done', messages });",
+        "        setTimeout(() => postMessage({ kind: 'done', messages }), 150);",
         "      }",
         "    };",
         "    postMessage({ kind: 'ready' });",
+        "    return;",
+        "  }",
+        "  if (event.data && event.data.kind === 'closed') {",
+        "    postMessage({kind: 'closed-ready', portsLength: event.ports.length,",
+        "      isMessagePort: event.ports[0] instanceof MessagePort,",
+        "      alias: event.data.port === event.ports[0]});",
+        "    event.ports[0].close();",
         "    return;",
         "  }",
         "  if (event.data === 'peer') {",
@@ -92,12 +97,20 @@ promise_test(async function () {
 
     await with_timeout(ready, "worker-owned MessagePort ready");
     const result = await with_timeout(done, "worker-owned MessagePort close result");
-    assert_array_equals(result.messages, ["first", "second"]);
+    assert_array_equals(result.messages, ["first"]);
 
     closedPair.port1.close();
+    const closedReady = next_worker_message(worker, function (data) {
+      return data && data.kind === "closed-ready";
+    });
+    worker.postMessage({kind: "closed", port: closedPair.port1}, [closedPair.port1]);
     assert_throws_name("DataCloneError", function () {
-      worker.postMessage("closed", [closedPair.port1]);
-    }, "closed MessagePort endpoint should be detached before worker transfer");
+      worker.postMessage("neutered", [closedPair.port1]);
+    }, "successful worker transfer neuters the original closed port");
+    const closedResult = await with_timeout(closedReady, "closed connection transfer result");
+    assert_equals(closedResult.portsLength, 1);
+    assert_true(closedResult.isMessagePort);
+    assert_true(closedResult.alias);
 
     const peerReady = next_worker_message(worker, function (data) {
       return data && data.kind === "peer-ready";
@@ -111,5 +124,5 @@ promise_test(async function () {
     channel.port1.close();
     worker.terminate();
   }
-}, "Worker MessagePort.close preserves queued messages and peer transfer");
+}, "Worker receiver close cancels queued messages and preserves closed-port transfer");
 </script>

@@ -636,6 +636,9 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId { .. } => {
                 Some("DocumentNodeSnapshotForObjectId")
             }
+            RendererInspectorPageCommand::RequestDocumentNodeForObjectId { .. } => {
+                Some("RequestDocumentNodeForObjectId")
+            }
             RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { .. } => {
                 Some("AccessibilityTreePayloadsForObjectId")
             }

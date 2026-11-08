@@ -15,6 +15,18 @@ impl std::fmt::Display for FetchCancelled {
 
 impl std::error::Error for FetchCancelled {}
 
+/// A cache-only Fetch request cannot be satisfied without network access.
+#[derive(Debug, Clone, Copy)]
+pub struct FetchCacheMiss;
+
+impl std::fmt::Display for FetchCacheMiss {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("net::ERR_CACHE_MISS")
+    }
+}
+
+impl std::error::Error for FetchCacheMiss {}
+
 /// Recognizes cancellation through typed causes, including shared body errors.
 pub fn is_fetch_cancelled(error: &anyhow::Error) -> bool {
     error.is::<FetchCancelled>()
@@ -29,6 +41,10 @@ pub fn is_fetch_cancelled(error: &anyhow::Error) -> bool {
 pub(crate) fn browser_network_error_text(error: &anyhow::Error) -> &'static str {
     if is_fetch_cancelled(error) {
         return NET_ERR_ABORTED_ERROR_TEXT;
+    }
+
+    if error.is::<FetchCacheMiss>() {
+        return "net::ERR_CACHE_MISS";
     }
 
     let Some(error) = error.downcast_ref::<curl::Error>() else {

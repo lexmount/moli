@@ -20,6 +20,9 @@ impl ScriptVmDefaultWorldBootstrap {
         let global_template = isolate_bootstrap
             .bridge_bindings
             .window_global_template(scope);
+        let opaque_origin = (!env.document_policy_container.sandbox.forces_opaque_origin)
+            .then(|| crate::context_bootstrap::RuntimeMessageSourceSecurity::current(scope))
+            .and_then(|security| security.opaque_origin());
         let bootstrap = ScriptVmPageRealmBootstrap::new_from_dom_host(
             dom_host,
             &env.document_settings,
@@ -38,6 +41,7 @@ impl ScriptVmDefaultWorldBootstrap {
             None,
             Some(ScriptVmInitialDocumentEnvironment {
                 security_token: None,
+                opaque_origin,
                 document_domain_override: Rc::default(),
                 fallback_base_url: None,
                 storage_key: None,
@@ -58,8 +62,8 @@ impl ScriptVmDefaultWorldBootstrap {
                 .borrow_mut()
                 .mark_main_document_initial_empty();
         }
-        let bootstrap = bootstrap.default_world_in_entered_scope(scope, global_template)?;
-        let context = v8::Local::new(scope, &bootstrap.page_default_runtime.context);
+        let (bootstrap, context) =
+            bootstrap.default_world_in_entered_scope(scope, global_template)?;
         // A propagated origin sandbox gives the popup a fresh opaque origin.
         // Keep its unique token; copying the opener's token would bypass SOP.
         if !env.document_policy_container.sandbox.forces_opaque_origin {
@@ -82,7 +86,7 @@ impl ScriptVmDefaultWorldBootstrap {
         }
         let mut vm = bootstrap.finish_in_scope(scope);
         vm.set_initial_storage_backends_in_scope(
-            scope,
+            context,
             env.indexed_db_manager.clone(),
             env.storage_bucket_store.clone(),
         );
@@ -95,9 +99,13 @@ impl ScriptVmPageRealmBootstrap {
         self,
         scope: &mut v8::PinScope<'s, '_, ()>,
         global_template: v8::Local<'s, v8::ObjectTemplate>,
-    ) -> std::result::Result<ScriptVmDefaultWorldBootstrap, ScriptVmBootstrapError> {
+    ) -> std::result::Result<
+        (ScriptVmDefaultWorldBootstrap, v8::Local<'s, v8::Context>),
+        ScriptVmBootstrapError,
+    > {
         let Self {
             inherited_security_token: _,
+            initialize_main_world: _,
             resource_owner_id,
             promise_reject_dispatch,
             page_inspector,
@@ -151,6 +159,9 @@ impl ScriptVmPageRealmBootstrap {
         let scope = &mut v8::ContextScope::new(scope, local_context);
         crate::context_bootstrap::initialize_main_session_history(scope);
         let baseline = (|| {
+            let global = local_context.global(scope);
+            let timing = context_host.borrow().document_timing_snapshot();
+            crate::context_bootstrap::bind_document_performance(scope, global, timing)?;
             let baseline = ScriptVmDefaultWorldBootstrap::capture_baseline_globals_in_scope(scope)?;
             let mut host = context_host.borrow_mut();
             let binding = host
@@ -181,35 +192,39 @@ impl ScriptVmPageRealmBootstrap {
                 )));
             }
         };
-        Ok(ScriptVmDefaultWorldBootstrap {
-            resource_owner_id,
-            promise_reject_dispatch,
-            page_inspector,
-            renderer_document_isolate,
-            renderer_document_isolate_teardown,
-            page_default_runtime: runtime,
-            baseline_globals,
-            document_runtime,
-            root_frame_id,
-            context_host,
-            prebootstrapped_child_default_contexts,
-            page_context_cancel_tx,
-            post_domcontentloaded_page_task_tx,
-            page_runtime_wake_tx,
-            storage_bucket_store,
-            renderer_page_script_environment,
-        })
+        Ok((
+            ScriptVmDefaultWorldBootstrap {
+                main_world: MainWorld::Ready {
+                    runtime,
+                    _baseline_globals: baseline_globals,
+                },
+                resource_owner_id,
+                promise_reject_dispatch,
+                page_inspector,
+                renderer_document_isolate,
+                renderer_document_isolate_teardown,
+                document_runtime,
+                root_frame_id,
+                context_host,
+                prebootstrapped_child_default_contexts,
+                page_context_cancel_tx,
+                post_domcontentloaded_page_task_tx,
+                page_runtime_wake_tx,
+                storage_bucket_store,
+                renderer_page_script_environment,
+            },
+            local_context,
+        ))
     }
 }
 
 impl ScriptVm {
     fn set_initial_storage_backends_in_scope(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
         manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
         storage: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     ) {
-        let context = v8::Local::new(scope, &self.page_default_runtime.context);
         self.indexed_db_manager = manager.clone();
         self._context_host
             .borrow_mut()
@@ -248,16 +263,29 @@ impl ScriptVm {
         self.root_frame_id = root_frame_id;
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_runtime.context;
+        let context = &self
+            .main_world
+            .current()
+            .ok_or_else(|| anyhow!("related Page adoption requires its initialized Window realm"))?
+            .context;
         let document_url = self.document_runtime.document_url().clone();
         let root_frame_id = self.root_frame_id.as_deref();
+        let source_document = self
+            ._context_host
+            .borrow()
+            .root_document_lifecycle_identity();
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
             page_inspector.reattach_v8_sessions(backend, restores);
             if let Some(commit) = main_document_commit {
                 journal.append(crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document: source_document.expect(
+                            "a committed related Page retains its native Document identity",
+                        ),
+                        commit,
+                    },
                 ));
             }
             let scope = pin!(v8::HandleScope::new(isolate));

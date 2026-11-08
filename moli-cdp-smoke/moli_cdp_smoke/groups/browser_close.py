@@ -5,12 +5,18 @@ import json
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, wait_until
-from ..process import wait_for_process_exit
+from ..process import process_exit_diagnostics, wait_for_process_exit
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, connect_raw_cdp_websocket
 from ..serve import browser_identity, start_browser, stop_browser, wait_for_browser_endpoint
 
 
 _OMITTED = object()
+
+
+class BrowserCloseError(SmokeError):
+    def __init__(self, message: str, observed: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.observed = observed
 
 
 async def _command(
@@ -134,6 +140,8 @@ async def browser_close_instance_lifecycle(endpoint: str, fixture: str) -> dict[
         serving = await start_browser()
         clients: list[RawCdpClient] = []
         stage = "startup"
+        child_endpoint = None
+        response = None
         try:
             child_endpoint = await wait_for_browser_endpoint(serving)
             await browser_identity(child_endpoint, identity["engine"])
@@ -168,7 +176,32 @@ async def browser_close_instance_lifecycle(endpoint: str, fixture: str) -> dict[
             assert_equal(code, 0, "natural process exit")
             observed.append({"case": name, "response": response, "exitCode": code, "rejected": rejected})
         except Exception as error:
-            raise SmokeError(f"{name} ({stage}): {type(error).__name__}: {error}") from error
+            # Keep the pre-cleanup state: closing the clients or sending SIGTERM
+            # first would conceal whether the browser itself was still alive.
+            diagnostics = process_exit_diagnostics(serving.process)
+            observed_failure = {
+                "browser": identity,
+                "completedCases": observed,
+                "failedCase": {
+                    "case": name, "scope": scope, "stage": stage,
+                    "endpoint": child_endpoint, "closeResponse": response,
+                    "process": diagnostics,
+                    "connections": [
+                        {"state": client.websocket.state.name,
+                         "closeCode": client.websocket.close_code,
+                         "closeReason": client.websocket.close_reason}
+                        for client in clients
+                    ],
+                    "browserLogTail": serving.logs[-80:],
+                },
+            }
+            process_state = diagnostics.get("process", {})
+            raise BrowserCloseError(
+                f"{name} ({stage}): {type(error).__name__}: {error}; "
+                f"pid={serving.process.pid} returncode={diagnostics['returncode']} "
+                f"state={process_state.get('State')} wchan={process_state.get('wchan')}",
+                observed_failure,
+            ) from error
         finally:
             await asyncio.gather(
                 *(client.websocket.close() for client in clients), return_exceptions=True,

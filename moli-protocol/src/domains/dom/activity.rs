@@ -24,7 +24,7 @@ pub(crate) struct DomPreparedOutputSlot {
 pub(in crate::domains) const SLOT_DOM_MUTATIONS: ProtocolOutputSlot =
     ProtocolOutputSlot::DomMutations;
 
-pub(in crate::domains) async fn project_dom_mutations_async(
+pub(in crate::domains) fn project_dom_mutations(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: &mut ProtocolOutputPayloads,

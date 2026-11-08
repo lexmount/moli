@@ -1,3 +1,4 @@
+use anyhow::Result;
 use url::Url;
 
 use crate::document_runtime::DocumentPolicyContainer;
@@ -8,6 +9,21 @@ pub(crate) type BroadcastChannelId = moli_broadcast_channel::BroadcastChannelId;
 pub(crate) type NetworkBodySourceId = u64;
 pub(crate) type SharedNavigationResponseResult =
     std::sync::Arc<std::result::Result<NavigationResponse, String>>;
+
+#[derive(Clone)]
+pub(crate) enum SubresourceFetchRegistration {
+    Intercepted,
+    Direct(moli_fetch::FetchCancelHandle),
+}
+
+impl SubresourceFetchRegistration {
+    pub(crate) fn cancel_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match self {
+            Self::Intercepted => None,
+            Self::Direct(cancel_handle) => Some(cancel_handle.clone()),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DedicatedWorkerId(u64);
@@ -84,16 +100,19 @@ pub(super) enum PendingSubresourceContinuation {
         track_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
     },
+    FontFace(v8::Global<v8::Object>),
     StylesheetSubresource {
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-        web_font: Option<crate::css_resource_urls::StylesheetWebFont>,
-        css_image: Option<crate::native_bridge::CssImageResourceRequestIdentity>,
+        target: crate::css_resource_urls::StylesheetSubresourceTarget,
     },
     Xhr {
         xhr: v8::Global<v8::Object>,
         use_cors_preflight: bool,
+        initiator_url: String,
     },
     WebSocket(PendingWebSocketConnection),
+    /// A child frame navigation held before its request leaves the renderer.
+    ChildDocument(Box<crate::native_bridge::ChildDocumentFetch>),
     WorkerFetch {
         worker_id: DedicatedWorkerId,
         fetch_id: u32,
@@ -228,6 +247,7 @@ impl PendingSubresourceContinuation {
 pub(super) struct PendingWindowFetchContinuation {
     promise: PendingWindowFetchPromise,
     keepalive: bool,
+    cache_mode: moli_fetch::RequestCacheMode,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
 }
@@ -241,15 +261,21 @@ impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
         keepalive: bool,
+        cache_mode: moli_fetch::RequestCacheMode,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
+            cache_mode,
             connect_policy,
             csp_report_context,
         }
+    }
+
+    pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
+        self.cache_mode
     }
 
     pub(super) fn keepalive(&self) -> bool {
@@ -518,6 +544,9 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    // Element and CSS loads retain the original request and SW client across
+    // interception; resuming must not reconstruct them from the current Page.
+    pub(super) dispatch: Option<Box<crate::network_host::SubresourceRequestDispatch>>,
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
@@ -566,6 +595,10 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct PendingSubresourceAuthState {
@@ -577,6 +610,10 @@ pub(super) struct PendingSubresourceAuthState {
     pub(super) intercept_response: bool,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct RunningSubresourceFetchState {
@@ -606,6 +643,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response_status_text: Option<String>,
+    /// Successful SW responses are already validated; network fallback keeps this false.
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) network_error_text: Option<String>,
@@ -646,6 +684,7 @@ impl AsyncSubresourceFetchResult {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
@@ -1224,14 +1263,22 @@ pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
+    pub(super) load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
     pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
+    pub(super) import_graph:
+        Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
     pub(super) fn successful(&self) -> bool {
-        self.network_results
-            .iter()
-            .all(|result| result.terminal.is_ready())
+        self.import_graph.as_ref().map_or_else(
+            || {
+                self.network_results
+                    .iter()
+                    .all(|result| result.terminal.is_ready())
+            },
+            |graph| graph.successful(),
+        )
     }
 }
 
@@ -1297,6 +1344,7 @@ pub(super) struct ChildParserModuleRootFetchCompletion {
     result: std::result::Result<crate::module_runtime::ModuleGraphFetchedSource, String>,
     network_result: Option<SharedNavigationResponseResult>,
     network_attribution: ChildModuleFetchNetworkAttribution,
+    csp_context: Option<crate::content_security_policy::ModuleFetchCspContext>,
 }
 
 impl ChildParserModuleRootFetchCompletion {
@@ -1315,7 +1363,22 @@ impl ChildParserModuleRootFetchCompletion {
             result,
             network_result,
             network_attribution,
+            csp_context: None,
         }
+    }
+
+    pub(super) fn with_csp_context(
+        mut self,
+        context: Option<crate::content_security_policy::ModuleFetchCspContext>,
+    ) -> Self {
+        self.csp_context = context;
+        self
+    }
+
+    pub(super) fn csp_context(
+        &self,
+    ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {
+        self.csp_context.as_ref()
     }
 
     pub(super) fn target(&self) -> crate::frame_owner_model::ChildDocumentModuleFetchTarget {
@@ -1528,7 +1591,8 @@ pub(super) struct LoadedChildDocument {
 #[derive(Debug)]
 pub(super) enum ChildDocumentLoadOutcome {
     Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
+    IgnoredNavigation(Box<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>),
+    Redirect(Box<crate::native_bridge::ChildDocumentFetch>),
 }
 
 /// Immutable frame/protocol attribution captured before a child-document
@@ -1575,6 +1639,7 @@ pub(super) struct ChildDocumentLoadCompletion {
     target: crate::frame_owner_model::ChildDocumentNavigationFetchTarget,
     network_attribution: ChildDocumentLoadNetworkAttribution,
     result: std::result::Result<ChildDocumentLoadOutcome, String>,
+    network_failure: Option<SubresourceNetworkRecord>,
 }
 
 impl ChildDocumentLoadCompletion {
@@ -1587,6 +1652,23 @@ impl ChildDocumentLoadCompletion {
             target,
             network_attribution,
             result,
+            network_failure: None,
+        }
+    }
+
+    pub(super) fn with_network_failure(mut self, record: Option<SubresourceNetworkRecord>) -> Self {
+        self.network_failure = record;
+        self
+    }
+
+    pub(super) fn network_failure(&self) -> Option<&SubresourceNetworkRecord> {
+        self.network_failure.as_ref()
+    }
+
+    pub(super) fn redirected_fetch(&self) -> Option<&crate::native_bridge::ChildDocumentFetch> {
+        match &self.result {
+            Ok(ChildDocumentLoadOutcome::Redirect(fetch)) => Some(fetch),
+            _ => None,
         }
     }
 
@@ -1608,7 +1690,8 @@ impl ChildDocumentLoadCompletion {
     ) -> Option<&crate::protocol_types::ChildFrameDocumentNetworkSnapshot> {
         match &self.result {
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => loaded.document_network.as_ref(),
-            Ok(ChildDocumentLoadOutcome::IgnoredNavigation) | Err(_) => None,
+            Ok(ChildDocumentLoadOutcome::IgnoredNavigation(network)) => Some(network),
+            Ok(ChildDocumentLoadOutcome::Redirect(_)) | Err(_) => None,
         }
     }
 
@@ -1658,13 +1741,13 @@ impl ChildDocumentLoadCompletion {
 #[derive(Debug)]
 pub(super) struct PopupDocumentLoadCompletion {
     target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-    pub(super) result: std::result::Result<PopupDocumentLoadOutcome, String>,
+    pub(super) result: Result<PopupDocumentLoadOutcome>,
 }
 
 impl PopupDocumentLoadCompletion {
     pub(crate) fn new(
         target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-        result: std::result::Result<PopupDocumentLoadOutcome, String>,
+        result: Result<PopupDocumentLoadOutcome>,
     ) -> Self {
         Self { target, result }
     }
@@ -1795,8 +1878,7 @@ mod tests {
                 ),
                 load_delay_token: None,
             },
-            web_font: None,
-            css_image: None,
+            target: crate::css_resource_urls::StylesheetSubresourceTarget::Image(None),
         };
 
         assert!(image.delays_document_load_event());

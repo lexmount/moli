@@ -1180,7 +1180,11 @@ impl LiveStylesheet {
             *self.stylesheet.contents.write_with(&mut guard) = replacement_contents;
         }
         self.reconcile_import_edges();
-        self.font_face_rule_identities.borrow_mut().clear();
+        self.derived_state
+            .font_face_rule_identities
+            .lock()
+            .entries
+            .clear();
         self.note_contents_mutation();
     }
 

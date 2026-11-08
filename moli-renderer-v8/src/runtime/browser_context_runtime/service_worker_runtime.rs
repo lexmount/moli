@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::Result;
 use std::collections::{HashMap, hash_map::Entry};
 
 use parking_lot::Mutex;
@@ -382,9 +384,9 @@ impl RendererBrowserContextRuntime {
         version_id: u64,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         runtime
             .dispatch_runtime_protocol_message(
@@ -401,9 +403,9 @@ impl RendererBrowserContextRuntime {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         runtime
             .dispatch_runtime_protocol_message_with_deferred_response(
@@ -421,9 +423,9 @@ impl RendererBrowserContextRuntime {
         inspector_session_id: String,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch> {
         let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
-            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::ServiceUnavailable.into());
         };
         runtime
             .dispatch_runtime_protocol_message_with_devtools_session_response(

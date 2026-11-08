@@ -111,21 +111,17 @@ pub(crate) fn subresource_api_base_url(
 }
 
 pub(in crate::network_host) fn effective_subresource_referrer_policy(
-    scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<String> {
-    match owner {
-        crate::native_bridge::OwnerDispatchScope::Top => {
-            host.response_referrer_policy().map(ToOwned::to_owned)
-        }
+    let document = match owner {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_handle()),
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-            host.child_browsing_context_response_referrer_policy(handle)
+            host.child_browsing_context_document_handle(handle)
         }
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let _ = scope;
-            host.lightweight_popup_referrer_policy(popup_id)
-                .map(ToOwned::to_owned)
+            host.lightweight_popup_document_handle(popup_id)
         }
-    }
+    }?;
+    crate::context_bootstrap::document_referrer_policy_for_native_document(host, document)
 }

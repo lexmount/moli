@@ -73,14 +73,15 @@ fn apply_xhr_response_body_source_with_mode(
     // requested responseType so byte consumers do not pay for an inaccessible
     // lossy text view.
     match xhr_response_type(scope, xhr) {
-        XmlHttpRequestResponseType::ArrayBuffer | XmlHttpRequestResponseType::Blob => {
+        XmlHttpRequestResponseType::Json
+        | XmlHttpRequestResponseType::ArrayBuffer
+        | XmlHttpRequestResponseType::Blob => {
             let body_bytes = body
                 .try_into_materialized_bytes()
                 .expect("XHR response body should remain materialized at the V8 boundary");
             apply_xhr_response_bytes(scope, xhr, head, body_bytes, status_text, mode);
         }
-        XmlHttpRequestResponseType::Json
-        | XmlHttpRequestResponseType::Document
+        XmlHttpRequestResponseType::Document
         | XmlHttpRequestResponseType::Default
         | XmlHttpRequestResponseType::Text => {
             let (body_text, body_bytes) = body
@@ -204,21 +205,19 @@ fn apply_xhr_response_body(
         return;
     };
     let body_text = match response_type {
-        XmlHttpRequestResponseType::Json
-        | XmlHttpRequestResponseType::Document
+        XmlHttpRequestResponseType::Document
         | XmlHttpRequestResponseType::Default
         | XmlHttpRequestResponseType::Text => {
             Some(body_text.unwrap_or_else(|| String::from_utf8_lossy(&body_bytes).into_owned()))
         }
-        XmlHttpRequestResponseType::ArrayBuffer | XmlHttpRequestResponseType::Blob => None,
+        XmlHttpRequestResponseType::Json
+        | XmlHttpRequestResponseType::ArrayBuffer
+        | XmlHttpRequestResponseType::Blob => None,
     };
     let loaded = body_bytes.len() as f64;
     let progress = xhr_response_progress(&head, loaded);
     let response_val: v8::Local<'_, v8::Value> = match response_type {
-        XmlHttpRequestResponseType::Json => {
-            v8_json_parse(scope, body_text.as_deref().unwrap_or(""))
-                .unwrap_or_else(|| v8::null(scope).into())
-        }
+        XmlHttpRequestResponseType::Json => parse_xhr_json_response(scope, &body_bytes),
         XmlHttpRequestResponseType::Document => {
             let document = parse_xhr_response_document(
                 scope,
@@ -280,9 +279,7 @@ fn apply_xhr_response_text(
     };
     let progress = xhr_response_progress(&head, loaded as f64);
     let response_val: v8::Local<'_, v8::Value> = match response_type {
-        XmlHttpRequestResponseType::Json => {
-            v8_json_parse(scope, &body_text).unwrap_or_else(|| v8::null(scope).into())
-        }
+        XmlHttpRequestResponseType::Json => parse_xhr_json_response(scope, body_text.as_bytes()),
         XmlHttpRequestResponseType::Document => {
             let document =
                 parse_xhr_response_document(scope, xhr, &body_text, &head.headers, response_type);
@@ -319,6 +316,19 @@ fn apply_xhr_response_text(
     );
 }
 
+fn parse_xhr_json_response<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+) -> v8::Local<'s, v8::Value> {
+    // XHR JSON uses UTF-8 regardless of MIME overrides and consumes exactly
+    // one leading UTF-8 BOM. Parse failures produce null, not a script error.
+    let text = moli_encoding::decode_utf8(bytes);
+    v8::tc_scope!(let scope, scope);
+    v8_string(scope, &text)
+        .and_then(|text| v8::json::parse(scope, text))
+        .unwrap_or_else(|| v8::null(scope).into())
+}
+
 fn apply_xhr_response_prebuilt_value(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -346,7 +356,7 @@ pub(crate) fn apply_xhr_streaming_response_head(
         return false;
     }
     set_xhr_response_head(scope, xhr, head, None);
-    super::super::events::xhr_fire_readystatechange(scope, xhr, 2);
+    super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::HeadersReceived);
     !scope.is_execution_terminating()
         && super::progress::xhr_stream_is_current(scope, xhr, internal_id)
 }
@@ -399,8 +409,7 @@ fn prepare_xhr_response(
     }
     super::cancel_xhr_timeout(scope, xhr);
     super::clear_xhr_timeout_start(scope, xhr);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
+    clear_xhr_active_request(scope, xhr);
     if xhr_is_aborted(scope, xhr) {
         return None;
     }
@@ -457,7 +466,7 @@ fn finish_xhr_response(
     let dispatch_intermediate_events =
         matches!(mode, XhrResponseDeliveryMode::Buffered) && xhr_is_async(scope, xhr);
     if dispatch_intermediate_events {
-        super::super::events::xhr_fire_readystatechange(scope, xhr, 2);
+        super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::HeadersReceived);
         if scope.is_execution_terminating() {
             return;
         }
@@ -468,7 +477,7 @@ fn finish_xhr_response(
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_TEXT_SLOT, response_text);
     set_xhr_state_value(scope, xhr, XHR_RESPONSE_SLOT, response_val);
     if dispatch_intermediate_events {
-        super::super::events::xhr_fire_readystatechange(scope, xhr, 3);
+        super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::Loading);
         if scope.is_execution_terminating() {
             return;
         }
@@ -492,7 +501,7 @@ fn finish_xhr_response(
             return;
         }
     }
-    super::super::events::xhr_fire_readystatechange(scope, xhr, 4);
+    super::super::events::xhr_fire_readystatechange(scope, xhr, XhrReadyState::Done);
     if scope.is_execution_terminating() {
         return;
     }

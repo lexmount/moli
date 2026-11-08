@@ -973,7 +973,8 @@ fn session_subscribe_filters_protocol_browsing_context_context_created_events() 
                 "type": "page",
                 "url": "about:blank",
                 "browserContextId": "BID-1",
-                "openerId": "TID-opener"
+                "openerId": "TID-opener",
+                "openerFrameId": "FRAME-opener"
             }
         }
     });
@@ -1012,7 +1013,7 @@ fn session_subscribe_filters_protocol_browsing_context_context_created_events() 
     assert_eq!(events[0]["params"]["url"], json!("about:blank"));
     assert_eq!(events[0]["params"]["children"], Value::Null);
     assert_eq!(events[0]["params"]["clientWindow"], json!("TID-1"));
-    assert_eq!(events[0]["params"]["originalOpener"], json!("TID-opener"));
+    assert_eq!(events[0]["params"]["originalOpener"], json!("FRAME-opener"));
     assert_eq!(events[0]["params"]["userContext"], json!("default"));
     assert_eq!(events[0]["params"]["parent"], Value::Null);
 }

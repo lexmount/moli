@@ -7,6 +7,15 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
+#[path = "document_referrer_dispatch.rs"]
+mod document_referrer_dispatch;
+
+#[path = "child_stylesheet_integrity.rs"]
+mod child_stylesheet_integrity;
+
+#[path = "module_csp.rs"]
+mod module_csp;
+
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
@@ -14,15 +23,18 @@ struct IntegrityServers {
     origin: String,
     cross_origin: String,
     requests: Arc<Mutex<Vec<IntegrityRequest>>>,
+    requests_changed: Arc<tokio::sync::Notify>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 #[derive(Debug)]
 struct IntegrityRequest {
+    body: String,
     method: String,
     path: String,
     origin: Option<String>,
     cookie: Option<String>,
+    referer: Option<String>,
     sec_fetch_dest: Option<String>,
     sec_fetch_mode: Option<String>,
     sec_fetch_site: Option<String>,
@@ -43,12 +55,14 @@ impl IntegrityServers {
         let origin = format!("http://{}", main.local_addr()?);
         let cross_origin = format!("http://{}", cross.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_changed = Arc::new(tokio::sync::Notify::new());
         let tasks = [main, cross]
             .into_iter()
             .map(|listener| {
                 let origin = origin.clone();
                 let cross_origin = cross_origin.clone();
                 let requests = Arc::clone(&requests);
+                let requests_changed = Arc::clone(&requests_changed);
                 tokio::spawn(async move {
                     let mut connections = JoinSet::new();
                     loop {
@@ -58,6 +72,7 @@ impl IntegrityServers {
                                 let origin = origin.clone();
                                 let cross_origin = cross_origin.clone();
                                 let requests = Arc::clone(&requests);
+                                let requests_changed = Arc::clone(&requests_changed);
                                 connections.spawn(async move {
                                     let mut request = Vec::new();
                                     while !request.ends_with(b"\r\n\r\n") && request.len() < 16384 {
@@ -69,15 +84,21 @@ impl IntegrityServers {
                                     let header = |name: &str| request.lines().filter_map(|line| line.split_once(':'))
                                         .find(|(key, _)| key.eq_ignore_ascii_case(name))
                                         .map(|(_, value)| value.trim().to_owned());
+                                    let body_len = header("Content-Length").and_then(|value| value.parse().ok()).unwrap_or(0);
+                                    let mut body = vec![0; body_len];
+                                    if stream.read_exact(&mut body).await.is_err() { return; }
                                     let incoming = IntegrityRequest {
+                                        body: String::from_utf8_lossy(&body).into_owned(),
                                         method: request.split_whitespace().next().unwrap_or("GET").to_owned(),
                                         path: path.to_owned(), origin: header("Origin"), cookie: header("Cookie"),
+                                        referer: header("Referer"),
                                         sec_fetch_dest: header("Sec-Fetch-Dest"),
                                         sec_fetch_mode: header("Sec-Fetch-Mode"),
                                         sec_fetch_site: header("Sec-Fetch-Site"),
                                     };
                                     let (status, headers, body) = fixture_response(&incoming, &origin, &cross_origin);
                                     requests.lock().push(incoming);
+                                    requests_changed.notify_one();
                                     let response = format!(
                                         "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                                         body.len(),
@@ -95,6 +116,7 @@ impl IntegrityServers {
             origin,
             cross_origin,
             requests,
+            requests_changed,
             tasks,
         })
     }
@@ -138,6 +160,26 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/module-csp.html" | "/module-csp-privacy.html" | "/module-csp-report-uri" | "/module-csp-report-to" | "/module-csp-hash-preload.html" | "/module-csp-hash-tampered.js" | "/module-csp.text" | "/module-csp.json" | "/module-csp.css" | "/module-csp.js" | "/module-csp.wasm" => {
+            module_csp::fixture_response(path, query, origin, cross)
+        }
+        "/child-sri-frame.html"
+        | "/child-sri-rejected.css"
+        | "/child-sri-accepted.css"
+        | "/child-sri-forbidden.css" => child_stylesheet_integrity::fixture_response(path, query),
+        "/text-module.txt" => (
+            "200 OK",
+            "Content-Type: application/octet-stream\r\nCache-Control: no-store\r\n".to_owned(),
+            SCRIPT.to_owned(),
+        ),
+        "/text-module-preload.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            text_modules::preload_markup(),
+        ),
+        "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
+            document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
+        }
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"
@@ -340,6 +382,14 @@ fn fixture_response(
             "Content-Type: text/html\r\n".to_owned(),
             "<!doctype html><body><script>globalThis.sriExecutions=0</script><script src='/sw-default.js?parser'></script>".to_owned(),
         ),
+        "/module-destination" => {
+            let (mime, body) = if request.sec_fetch_dest.as_deref() == Some("script") {
+                ("application/javascript", "globalThis.destinationExecutions = (globalThis.destinationExecutions || 0) + 1; export default 'script value';")
+            } else {
+                ("text/plain", "text module body")
+            };
+            ("200 OK", format!("Content-Type: {mime}\r\nCache-Control: max-age=600\r\nVary: Sec-Fetch-Dest\r\n"), body.to_owned())
+        }
         "/page.html" | "/parser.html" | "/cookie-page.html" | "/csp-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
             if path == "/csp-page.html" {
@@ -1159,3 +1209,9 @@ async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()
     assert_integrity_results(result, &cases);
     Ok(())
 }
+
+#[path = "text_network.rs"]
+mod text_modules;
+
+#[path = "module_cache.rs"]
+mod module_cache;

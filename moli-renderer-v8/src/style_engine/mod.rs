@@ -31,6 +31,8 @@ mod cache;
 mod cause;
 mod cleanup;
 mod computed;
+#[cfg(test)]
+pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
 mod drain;
 mod eligibility;
@@ -1050,6 +1052,16 @@ impl MoliStyleEngine {
         )
     }
 
+    pub(crate) fn prepare_style_observation_targets(
+        &self,
+        host: &DomHost,
+        document_url: &url::Url,
+        document: DomHandle,
+        handles: &[DomHandle],
+    ) {
+        computed::prepare_style_observation_targets(self, host, document_url, document, handles);
+    }
+
     pub(crate) fn computed_style_snapshot_from_current_observation(
         &self,
         host: &DomHost,
@@ -1152,6 +1164,7 @@ pub(crate) fn ensure_stylo_browser_compat_prefs() {
         stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
         stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
         stylo_static_prefs::set_pref!("layout.grid.enabled", true);
+        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
         // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
         // form behind a Servo pref. Chromium 147 rejects that function for
         // width/height while still accepting the bare `fit-content` keyword

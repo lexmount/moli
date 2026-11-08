@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     css_resource_urls::{
-        CompletedStylesheetWebFont, StylesheetLoadBlockingResource,
+        BoundStylesheetWebFont, CompletedStylesheetWebFont, StylesheetLoadBlockingResource,
+        StylesheetSubresourceRequest, StylesheetSubresourceTarget,
         stylesheet_load_blocking_font_resources,
     },
     protocol_types::OptionalResourceFetchMask,
@@ -19,10 +20,16 @@ fn font_resource() -> StylesheetLoadBlockingResource {
     .unwrap()
 }
 
-fn font_response(resource: &StylesheetLoadBlockingResource) -> CompletedStylesheetWebFont {
-    let (_, request) = resource.clone().into_parts();
+fn font_request(resource: &StylesheetSubresourceRequest) -> &BoundStylesheetWebFont {
+    let StylesheetSubresourceTarget::Font(request) = resource.target() else {
+        panic!("fixture must prepare a font request");
+    };
+    request
+}
+
+fn font_response(resource: &StylesheetSubresourceRequest) -> CompletedStylesheetWebFont {
     CompletedStylesheetWebFont::response(
-        request.unwrap(),
+        font_request(resource).clone(),
         include_bytes!("../../../../moli-layout/tests/fixtures/moli-ahem.woff2").to_vec(),
     )
 }
@@ -102,8 +109,8 @@ fn child_web_font_document_open_retires_registrations_and_rejects_old_owner() {
         (binding, resource)
     };
     assert_eq!(
-        resource.web_font().unwrap().request_id(),
-        replacement_resource.web_font().unwrap().request_id()
+        font_request(&resource).request_id(),
+        font_request(&replacement_resource).request_id()
     );
     let before = vm.layout_pass_observability_for_test().1;
     vm.complete_document_web_font(binding, font_response(&resource));
@@ -142,20 +149,23 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
         child.document.open();
-        child.document.write('<!doctype html><style>@font-face{{font-family:ChildReady;src:url({font_url})}}</style><span id=target style="display:inline-block;font:20px ChildReady,serif">iiii</span>');
+        child.document.write('<!doctype html><style>@font-face{{font-family:ChildReady;src:url(data:font/woff2;base64,YmFk),url({font_url})}}</style><span id=target style="display:inline-block;font:20px ChildReady,serif">iiii</span>');
         child.document.close();
         globalThis.childTarget=child.document.getElementById('target');
         globalThis.rootReady=false;globalThis.childReady=false;
         document.fonts.ready.then(fonts=>rootReady=fonts===document.fonts);
         globalThis.childPromise=child.document.fonts.ready;
         childPromise.then(fonts=>childReady=fonts===child.document.fonts);
+        globalThis.childFace=[...child.document.fonts][0];
+        globalThis.childFaceLoaded=false;
+        childFace.loaded.then(face=>childFaceLoaded=face===childFace);
         'installed'
     "#)).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), request_rx)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,document.fonts.status,child.document.fonts.status,childPromise===child.document.fonts.ready])").unwrap(), r#"[true,false,"loaded","loading",true]"#);
+    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,document.fonts.status,child.document.fonts.status,childPromise===child.document.fonts.ready,childFace.status,childFaceLoaded])").unwrap(), r#"[true,false,"loaded","loading",true,"loading",false]"#);
     refresh_child_geometry_without_paint(&vm);
     let fallback = vm.eval("String(childTarget.offsetWidth)").unwrap();
     assert_ne!(fallback, "48");
@@ -176,7 +186,9 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         .unwrap();
     vm.perform_owner_lane_task_microtask_checkpoints().unwrap();
     refresh_child_geometry_without_paint(&vm);
-    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth])").unwrap(), r#"[true,true,"loaded",48]"#);
+    assert_eq!(vm.eval("childReady").unwrap(), "false");
+    run_font_tasks(&mut vm);
+    assert_eq!(vm.eval("JSON.stringify([rootReady,childReady,child.document.fonts.status,childTarget.offsetWidth,childFace.status,childFaceLoaded])").unwrap(), r#"[true,true,"loaded",48,"loaded",true]"#);
     assert_eq!(vm.eval("String(parentTarget.offsetWidth)").unwrap(), parent);
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     assert_eq!(
@@ -216,7 +228,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
                 child.document.close();
                 globalThis.childTarget=child.document.getElementById('target');
             "#)).unwrap();
-            vm.reconcile_document_web_fonts_for_layout();
+            vm.reconcile_document_font_resources();
             let fonts_enabled = mask == OptionalResourceFetchMask::FONT;
             {
                 let host = vm._context_host.borrow();

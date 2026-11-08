@@ -14,7 +14,7 @@ fn picture_in_picture_interfaces_validate_descriptors_receivers_and_required_dic
 }
 
 fn install_closed_window(vm: &mut ScriptVm) {
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let window = crate::context_bootstrap::closed_picture_in_picture_window_for_test(scope);
@@ -107,7 +107,7 @@ fn picture_in_picture_native_event_proxies_read_the_original_private_payload() {
         new_storage_page_task_executor_test_vm("https://picture-in-picture-event-proxy.test/");
     install_closed_window(&mut vm);
     vm.eval("globalThis.nativeEvent = new PictureInPictureEvent('enterpictureinpicture', {pictureInPictureWindow:nativeWindow})").unwrap();
-    let context_ptr = &vm.page_default_runtime.context as *const _;
+    let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
         let key = crate::util::v8str(scope, "nativeEvent");

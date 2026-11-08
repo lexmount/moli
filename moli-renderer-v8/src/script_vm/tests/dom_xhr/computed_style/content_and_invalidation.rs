@@ -492,6 +492,50 @@ fn modal_dialog_top_layer_adjusts_non_absolute_positions() {
 }
 
 #[test]
+fn links_use_user_agent_colors_and_underline_with_author_overrides() {
+    let mut vm = new_parsed_test_vm(
+        "https://link-defaults.test/",
+        r#"<!doctype html>
+<style>
+  #overridden { color: rgb(1, 2, 3); text-decoration: none; }
+  #dark { color-scheme: dark; }
+</style>
+<a id="link" href="/target">link</a>
+<a id="empty" href="">empty href</a>
+<a id="plain">no href</a>
+<a id="overridden" href="/target">overridden</a>
+<a id="dark" href="/target">dark</a>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const read = id => {
+    const style = getComputedStyle(document.getElementById(id));
+    return `${style.color}:${style.textDecorationLine}`;
+  };
+  const values = ['link', 'empty', 'plain', 'overridden', 'dark'].map(read);
+  const plain = document.getElementById('plain');
+  plain.href = '/target';
+  values.push(read('plain'));
+  plain.removeAttribute('href');
+  values.push(read('plain'));
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("link defaults and href changes should evaluate");
+
+    assert_eq!(
+        result,
+        "rgb(0, 0, 238):underline|rgb(0, 0, 238):underline|rgb(0, 0, 0):none|\
+         rgb(1, 2, 3):none|rgb(158, 158, 255):underline|\
+         rgb(0, 0, 238):underline|rgb(0, 0, 0):none"
+    );
+}
+
+#[test]
 fn semantic_text_decoration_uses_user_agent_defaults() {
     let mut vm = new_parsed_test_vm(
         "https://semantic-text-decoration.test/",
@@ -1046,14 +1090,17 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
         .document_element_handle()
         .expect("fixture should retain a document element");
 
-    let first = crate::layout_renderer::current_native_stylesheet_resources(
+    let first = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )
     .expect("the first observation should publish a resource manifest");
     assert_eq!(first.web_fonts().len(), 1);
     assert_eq!(
-        first.web_fonts()[0].request_url().as_str(),
+        first.web_fonts()[0]
+            .request_url()
+            .expect("URL-backed font fixture")
+            .as_str(),
         "https://style-resource-manifest.test/font-a.woff2"
     );
     let update_materializations_after_first = vm
@@ -1061,7 +1108,7 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
         .borrow()
         .style_world_update_materializations_for_test();
 
-    let clean = crate::layout_renderer::current_native_stylesheet_resources(
+    let clean = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )
@@ -1080,7 +1127,7 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
          '@font-face { font-family: Second; src: url(font-b.woff2); }'",
     )
     .expect("resource stylesheet should mutate");
-    let revised = crate::layout_renderer::current_native_stylesheet_resources(
+    let revised = crate::document_runtime::DocumentRuntime::current_stylesheet_resources(
         &vm._context_host.borrow(),
         root,
     )
@@ -1088,7 +1135,10 @@ style.textContent = '@font-face { font-family: First; src: url(font-a.woff2); }'
     assert_ne!(revised.generation(), first.generation());
     assert_eq!(revised.web_fonts().len(), 1);
     assert_eq!(
-        revised.web_fonts()[0].request_url().as_str(),
+        revised.web_fonts()[0]
+            .request_url()
+            .expect("URL-backed font fixture")
+            .as_str(),
         "https://style-resource-manifest.test/font-b.woff2"
     );
     assert_eq!(

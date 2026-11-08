@@ -165,11 +165,11 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let (result, network_request_headers) = if let Err(message) =
+        let (result, network_request_headers) = if let Err(error) =
             moli_fetch::FetchUrlList::new(&resolved_url, &[])
                 .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
         {
-            (Err(message), None)
+            (Err(error.to_string()), None)
         } else if let Some(result) = local_url_response_result(&resolved_url, &method) {
             (
                 result
@@ -185,8 +185,14 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 body,
                 headers.clone(),
                 moli_url::WebOrigin::from_url(&document_url),
-            ) {
+            )
+            .and_then(|request| request.with_fetch_referrer(&request_metadata.referrer))
+            {
                 Ok(request) => {
+                    let cache_mode = request_metadata
+                        .cache
+                        .parse::<moli_fetch::RequestCacheMode>()
+                        .unwrap_or_default();
                     let mut request = request
                         .with_redirect_headers(redirect_headers)
                         .with_redirect_chain(redirect_chain)
@@ -194,13 +200,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_request_mode(request_mode)
                         .with_credentials_mode(credentials_mode)
                         .with_redirect_mode(redirect_mode)
-                        .with_cache_mode(worker_fetch_cache_mode(&request_metadata.cache))
+                        .with_cache_mode(cache_mode)
                         .with_fetch_priority_hint(priority)
                         .with_network_partition_key(network_partition_key.clone())
                         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
-                    if request_metadata.referrer.is_empty() {
-                        request = request.without_inferred_referrer();
-                    }
                     if let Some(metadata) =
                         worker_fetch_script_metadata(referrer_policy, &request_metadata)
                     {
@@ -338,13 +341,6 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
             },
         )));
     });
-}
-
-fn worker_fetch_cache_mode(cache: &str) -> moli_fetch::RequestCacheMode {
-    match cache {
-        "no-cache" | "no-store" | "reload" => moli_fetch::RequestCacheMode::Validate,
-        _ => moli_fetch::RequestCacheMode::Default,
-    }
 }
 
 fn worker_fetch_script_metadata(
@@ -1492,6 +1488,21 @@ pub(crate) fn send_worker_websocket_binary(
     Some(connection.send_binary(bytes).is_ok())
 }
 
+pub(crate) fn send_worker_websocket_blob(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+    data: moli_file_api::BlobData,
+) -> Option<bool> {
+    let state = get_worker_state(scope)?;
+    let connection = state
+        .borrow()
+        .websockets
+        .get(&socket_id)?
+        .connection
+        .clone();
+    Some(connection.send_blob(data).is_ok())
+}
+
 pub(crate) fn close_worker_websocket(
     scope: &mut v8::PinScope<'_, '_>,
     socket_id: u64,
@@ -1744,7 +1755,19 @@ pub(in crate::worker) fn store_worker_websocket_response_cookies(
     }
     let response_cookie_url = websocket_cookie_url(socket_url);
     let cookie_store = request_client.request_client().cookie_store();
-    let mut store = cookie_store.lock();
+    let mut store = match cookie_store.lock() {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::warn!(%error, "WebSocket response cookies could not access storage");
+            return response_headers
+                .iter()
+                .filter(|(name, _)| {
+                    response_header_name_is(name, &HeaderName::from_static("set-cookie"))
+                })
+                .map(|_| StoredCookieSetReport::store_unavailable())
+                .collect();
+        }
+    };
     store.store_response_headers_with_reports(&response_cookie_url, response_headers)
 }
 
@@ -1781,66 +1804,6 @@ pub(in crate::worker) fn make_rejected_promise_with_value<'s>(
     promise
 }
 
-pub(in crate::worker) fn validate_worker_fetch_signal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    if value.is_null_or_undefined() {
-        return Ok(None);
-    }
-    let Ok(signal) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(webidl::WebIdlError::custom_message(
-            "Failed to execute 'fetch' on 'DedicatedWorkerGlobalScope': signal must be an AbortSignal.",
-        ));
-    };
-    if worker_abort_signal_id(scope, signal).is_none() {
-        return Err(webidl::WebIdlError::custom_message(
-            "Failed to execute 'fetch' on 'DedicatedWorkerGlobalScope': signal must be an AbortSignal.",
-        ));
-    }
-    Ok(Some(signal))
-}
-
-pub(in crate::worker) fn worker_fetch_signal_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    request_like: Option<v8::Local<'s, v8::Object>>,
-) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
-    let signal_key = v8str(scope, "signal");
-    if args.length() > 1 {
-        let init_arg = args.get(1);
-        if !init_arg.is_null_or_undefined()
-            && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-            && init.has(scope, signal_key.into()).ok_or_else(|| {
-                webidl::WebIdlError::pending_exception(webidl::Context::member(
-                    "RequestInit",
-                    "signal",
-                ))
-            })?
-        {
-            let signal = webidl::property_result(
-                scope,
-                init,
-                "signal",
-                webidl::Context::member("RequestInit", "signal"),
-            )?
-            .unwrap_or_else(|| v8::undefined(scope).into());
-            return validate_worker_fetch_signal(scope, signal);
-        }
-    }
-    if let Some(request_like) = request_like
-        && let Some(signal) = webidl::property_result(
-            scope,
-            request_like,
-            "signal",
-            webidl::Context::member("Request", "signal"),
-        )?
-    {
-        return validate_worker_fetch_signal(scope, signal);
-    }
-    Ok(None)
-}
-
 pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     resolved_url: Url,
     method: String,
@@ -1864,10 +1827,12 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             webidl::WebIdlError::missing_required(webidl::Context::argument("fetch", 1)).into(),
         );
     }
-    let arg0 = args.get(0);
+    let args = webidl::try_parse_args::<crate::network_host::FetchArgs>(scope, args)?;
+    let inherit_body = !args.init.body_is_present();
+    let (url, inherited, source) = args.input.materialize_for_fetch(scope, inherit_body)?;
     let mut request_like = None;
     let mut consumes_request_body = false;
-    let inherited = request_input_snapshot(scope, arg0)?;
+    let signal;
     let (
         url_input,
         method,
@@ -1879,10 +1844,13 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         priority,
         metadata,
     ) = if let Some(inherited) = inherited {
-        let req_obj = v8::Local::<v8::Object>::try_from(arg0).expect("request-like object");
+        let req_obj = source.expect("request input source");
         request_like = Some(req_obj);
-        let url = inherited.url.clone();
-        let init = parse_fetch_init(scope, args, 1)?;
+        let init = parse_fetch_init(scope, args.init)?;
+        if inherited.body_unusable && !init.body_present {
+            return Err(crate::network_host::request_body_already_used_error().into());
+        }
+        signal = init.signal.unwrap_or(inherited.signal);
         consumes_request_body = !init.body_present && inherited.body.is_some();
         let method = if init.method_present {
             init.method.clone()
@@ -1908,10 +1876,11 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             .or_else(|| moli_fetch::RequestMode::from_str(&inherited.mode).ok())
             .unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &method)?;
+        crate::network_host::validate_request_method_body(&method, body.as_ref())?;
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&headers, HeadersGuard::RequestNoCors)
         } else {
-            headers
+            filter_headers_for_guard(&headers, HeadersGuard::Request)
         };
         let credentials_mode = init
             .credentials_mode
@@ -1933,6 +1902,15 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
             use_cors_preflight: false,
         };
+        // Validate the merged signal without rereading the legacy input getter.
+        if let Some(signal) = signal.as_ref() {
+            let signal = v8::Local::new(scope, signal);
+            webidl::convert::<crate::abort_signal_route::ResolvedAbortSignal>(
+                scope,
+                signal.into(),
+                webidl::Context::member("Request", "signal"),
+            )?;
+        }
         (
             url,
             method,
@@ -1945,19 +1923,15 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             metadata,
         )
     } else {
-        let url = webidl::convert::<webidl::UsvString>(
-            scope,
-            arg0,
-            webidl::Context::argument("fetch", 1),
-        )
-        .map(String::from)?;
-        let init = parse_fetch_init(scope, args, 1)?;
+        let init = parse_fetch_init(scope, args.init)?;
+        signal = init.signal.flatten();
         let request_mode = init.request_mode.unwrap_or(moli_fetch::RequestMode::Cors);
         validate_worker_no_cors_method(request_mode, &init.method)?;
+        crate::network_host::validate_request_method_body(&init.method, init.body.as_ref())?;
         let headers = if request_mode == moli_fetch::RequestMode::NoCors {
             filter_headers_for_guard(&init.headers, HeadersGuard::RequestNoCors)
         } else {
-            init.headers
+            filter_headers_for_guard(&init.headers, HeadersGuard::Request)
         };
         let credentials_mode = init
             .credentials_mode
@@ -1984,7 +1958,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
         )
     };
     let resolved_url = resolve_context_url(base_url, &url_input, None)?;
-    let signal = worker_fetch_signal_option(scope, args, request_like)?;
+    let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
     }
@@ -2153,10 +2127,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    if let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
+    if let Err(error) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
         .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
     {
-        rv.set(make_rejected_promise(scope, &message).into());
+        rv.set(make_rejected_promise(scope, &error.to_string()).into());
         return;
     }
 
@@ -2518,6 +2492,7 @@ pub(in crate::worker) fn worker_response_from_body(
         redirected: false,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     })
 }
@@ -2893,6 +2868,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         response_headers: response_head.headers.clone(),
                         response_body,
                         response_from_cache: response_head.from_cache,
+                        response_cache_state: response_head.cache_state,
                     })
                 } else {
                     None
@@ -2927,6 +2903,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         response_headers: response_head.headers.clone(),
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,
+                        cache_state: response_head.cache_state,
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head,

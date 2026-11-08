@@ -76,6 +76,7 @@ async fn assert_joint_history_traversal_info(caller_first: bool) {
     });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({"id":9346,"method":"Page.navigate","sessionId":"SID-1","params":{"url":format!("http://{addr}/top")}})).await;
     assert!(take_response_by_id(&mut ctx, 9346)["error"].is_null());
     wait_until_message(
@@ -166,6 +167,7 @@ async fn assert_queued_history_same_then_cross_document(forward: bool) {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
         "id": 9350, "method": "Page.navigate", "sessionId": "SID-1",
         "params": {"url": format!("http://{addr}/top")}
@@ -289,6 +291,7 @@ async fn assert_joint_history_late_response(update_state: bool) {
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({"id":9343,"method":"Page.navigate","sessionId":"SID-1","params":{"url":format!("http://{addr}/top")}})).await;
     assert!(take_response_by_id(&mut ctx, 9343)["error"].is_null());
     wait_until_message(
@@ -428,6 +431,7 @@ async fn assert_joint_history_precommit(mode: &str) {
     });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({"id":9339,"method":"Page.navigate","sessionId":"SID-1","params":{"url":format!("http://{addr}/top")}})).await;
     assert!(take_response_by_id(&mut ctx, 9339)["error"].is_null());
     wait_until_message(
@@ -590,6 +594,7 @@ async fn assert_joint_history_multi_frame_traversal(cross: &str, both_cross: boo
     });
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({"id":9290,"method":"Page.navigate","sessionId":"SID-1","params":{"url":format!("http://{addr}/top")}})).await;
     assert!(take_response_by_id(&mut ctx, 9290)["error"].is_null());
     wait_until_message(
@@ -768,6 +773,7 @@ async fn assert_handler_navigation_renderer_lifecycle(
     let source_url = format!("http://{addr}/source");
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.process_async(json!({
         "id": 253,
         "method": "Page.setLifecycleEventsEnabled",

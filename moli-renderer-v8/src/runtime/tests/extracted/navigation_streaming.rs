@@ -818,68 +818,68 @@ globalThis.__preparedCommitObserved = JSON.stringify([
     producer
         .await
         .expect("prepared body producer should finish");
-    prepared
-        .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
-            web_mcp_invocation: None,
-            document_start_scripts: vec![
-                crate::DocumentStartScript {
-                    registry_key: None,
-                    devtools_session: None,
-                    source: r#"globalThis.__latestPreload = "ready";"#.to_owned(),
-                    world_name: None,
-                    has_bidi_channel_argument: false,
-                    bidi_channel_handoffs: Vec::new(),
-                },
-                crate::DocumentStartScript {
-                    registry_key: None,
-                    devtools_session: None,
-                    source: r#"globalThis.__latestWorld = "ready";"#.to_owned(),
-                    world_name: Some("latest-world".to_owned()),
-                    has_bidi_channel_argument: false,
-                    bidi_channel_handoffs: Vec::new(),
-                },
-            ],
-            runtime_bindings: vec![crate::protocol_types::RuntimeBindingRegistration {
+    let configuration = RendererPreparedDocumentCommitConfiguration {
+        web_mcp_invocation: None,
+        document_start_scripts: vec![
+            crate::DocumentStartScript {
+                registry_key: None,
                 devtools_session: None,
-                name: "latestBinding".to_owned(),
-                execution_context_name: None,
-            }],
-            runtime_inspector_session_restore_snapshots: vec![
-                RendererInspectorSessionRestoreSnapshot {
-                    protocol_configuration: RendererInspectorProtocolConfiguration {
-                        runtime_frontend_enabled: true,
-                        ..Default::default()
-                    },
+                source: r#"globalThis.__latestPreload = "ready";"#.to_owned(),
+                world_name: None,
+                has_bidi_channel_argument: false,
+                bidi_channel_handoffs: Vec::new(),
+            },
+            crate::DocumentStartScript {
+                registry_key: None,
+                devtools_session: None,
+                source: r#"globalThis.__latestWorld = "ready";"#.to_owned(),
+                world_name: Some("latest-world".to_owned()),
+                has_bidi_channel_argument: false,
+                bidi_channel_handoffs: Vec::new(),
+            },
+        ],
+        runtime_bindings: vec![crate::protocol_types::RuntimeBindingRegistration {
+            devtools_session: None,
+            name: "latestBinding".to_owned(),
+            execution_context_name: None,
+        }],
+        runtime_inspector_session_restore_snapshots: vec![
+            RendererInspectorSessionRestoreSnapshot {
+                protocol_configuration: RendererInspectorProtocolConfiguration {
+                    runtime_frontend_enabled: true,
                     ..Default::default()
                 },
-            ],
-            runtime_isolated_worlds: vec![crate::protocol_types::RuntimeIsolatedWorldDefinition {
-                name: "latest-world".to_owned(),
-                grant_universal_access: false,
-            }],
-            permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
-                permission: serde_json::Value::String("notifications".to_owned()),
-                setting: "granted".to_owned(),
-                origin: None,
-                embedded_origin: None,
-            }],
-            extra_http_headers: Default::default(),
-            document_settings: Default::default(),
-            browser_resource_runtime: loader.browser_resource_runtime(),
-            navigator_identity: loader.browser_identity().clone(),
-            network_offline: false,
-            bypass_service_worker: false,
-            cache_disabled: false,
-            blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
-        })
-        .await
-        .expect("prepared document should accept the latest commit configuration");
+                ..Default::default()
+            },
+        ],
+        runtime_isolated_worlds: vec![crate::protocol_types::RuntimeIsolatedWorldDefinition {
+            name: "latest-world".to_owned(),
+            grant_universal_access: false,
+        }],
+        permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
+            permission: serde_json::Value::String("notifications".to_owned()),
+            setting: "granted".to_owned(),
+            origin: None,
+            embedded_origin: None,
+        }],
+        extra_http_headers: Default::default(),
+        document_settings: Default::default(),
+        browser_resource_runtime: loader.browser_resource_runtime(),
+        navigator_identity: loader.browser_identity().clone(),
+        network_offline: false,
+        bypass_service_worker: false,
+        cache_disabled: false,
+        blocked_url_patterns: Vec::new(),
+        fetch_subresource_interception_enabled: false,
+        fetch_subresource_interception_resource_type: None,
+    };
 
     let permit = prepared.issue_commit_permit();
-    let (mut page, _, diagnostics, _, pending_download) =
-        prepared.commit(permit).await.expect("permit should commit");
+    let (mut page, _, diagnostics, _, pending_download) = prepared
+        .start_commit(permit, Some(configuration))
+        .expect("configured commit should be admitted synchronously")
+        .await
+        .expect("permit should commit with the latest configuration");
     assert!(pending_download.is_none());
     assert!(
         diagnostics.renderer_output_predecessor.is_some(),
@@ -2389,6 +2389,76 @@ async fn completed_raw_body_for_replacement_test(source: &[u8]) -> ExternalRawDo
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn lazy_navigation_reservation_observes_first_script_before_commit() {
+    for activate_source in [false, true] {
+        let runtime = JsRuntime::initialize();
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut page = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/replacement/lazy-source").unwrap(),
+            "<!doctype html><p>source</p>",
+        )
+        .await;
+        let before = runtime_heap_usage_for_test(&page).await;
+        assert_eq!(
+            before["moli"]["runtime"]["inspectorContextRegistrationCount"],
+            0
+        );
+        let body =
+            completed_raw_body_for_replacement_test(b"<!doctype html><p>replacement</p>").await;
+        let prepared = prepare_live_response_for_test(
+            &runtime,
+            &page,
+            &loader,
+            url::Url::parse("https://example.test/replacement/lazy-destination").unwrap(),
+            "text/html",
+            body,
+        )
+        .await;
+        let source_proxy = if activate_source {
+            page.run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "globalThis.sourceOnly = true".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+            runtime_heap_usage_for_test(&page).await["moli"]["runtime"]["mainWindowProxyIdentityHash"].clone()
+        } else {
+            serde_json::Value::Null
+        };
+        let permit = prepared.issue_commit_permit();
+        let replacement = prepared.commit_page_replacement(permit).await.unwrap();
+        page.adopt_document_replacement(replacement).unwrap();
+        if let Some(continuation) = page.take_committed_document_post_response_continuation() {
+            continuation.release();
+        }
+        let after = runtime_heap_usage_for_test(&page).await;
+        assert_eq!(
+            after["moli"]["runtime"]["inspectorContextRegistrationCount"],
+            u64::from(activate_source),
+            "{after}"
+        );
+        assert_eq!(
+            after["moli"]["runtime"]["mainWindowProxyIdentityHash"],
+            source_proxy
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "typeof sourceOnly".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!("undefined"))
+        );
+        page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
     let runtime = JsRuntime::initialize();
     let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
@@ -2398,7 +2468,7 @@ async fn live_page_replacement_commits_into_the_same_page_and_window_proxy() {
         &runtime,
         &loader,
         url::Url::parse("https://example.test/replacement/initial").unwrap(),
-        "<!doctype html><p>original</p>",
+        "<!doctype html><p>original</p><script>void 0</script>",
     )
     .await;
     let testing = RendererPageTestingHandle::new_for_testing(&page);
@@ -2752,6 +2822,52 @@ async fn live_page_replacement_cannot_adopt_a_superseded_commit_reply() {
         serialize_html_for_renderer_page(&page)
             .await
             .contains("second")
+    );
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn live_page_replacement_is_enqueued_before_the_owned_wait_is_polled() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/replacement/before-admission").unwrap(),
+        "<p>original</p>",
+    )
+    .await;
+    let body = completed_raw_body_for_replacement_test(b"<p>admitted</p>").await;
+    let prepared = prepare_live_response_for_test(
+        &runtime,
+        &page,
+        &loader,
+        url::Url::parse("https://example.test/replacement/admitted").unwrap(),
+        "text/html",
+        body,
+    )
+    .await;
+    let (entered, release) = runtime.install_owner_command_dispatch_gate_for_testing();
+    let permit = prepared.issue_commit_permit();
+    let pending = prepared
+        .start_commit_page_replacement(permit, None)
+        .unwrap();
+    // No task has polled pending.wait(). A renderer-side signal proves the
+    // commit was already enqueued by synchronous protocol admission.
+    tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("renderer must receive the commit before its reply wait is polled");
+    release.send(()).unwrap();
+    page.adopt_document_replacement(pending.wait().await.unwrap())
+        .unwrap();
+    page.take_committed_document_post_response_continuation()
+        .unwrap()
+        .release();
+    assert!(
+        serialize_html_for_renderer_page(&page)
+            .await
+            .contains("admitted")
     );
     page.close_async().await.unwrap();
 }

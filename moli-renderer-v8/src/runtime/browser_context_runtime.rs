@@ -304,6 +304,7 @@ impl DetachedParserScriptFetchContinuation {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             ResponseBody::materialized_text(text, response_body),
@@ -865,7 +866,8 @@ impl RendererBrowserContextRuntime {
             .fetch_add(1, Ordering::Relaxed)
             .checked_add(1)
             .expect("browser-context child Document loader id space exhausted");
-        format!("LID-CHILD-{next_id:010}")
+        // Collectors share a connection-wide request namespace across BrowserContexts.
+        format!("LID-CHILD-{}-{next_id:010}", self.id().as_u64())
     }
 
     pub(crate) fn prepare_detached_parser_script_fetch(
@@ -935,10 +937,11 @@ impl RendererBrowserContextRuntimeOwner {
     pub fn replace_browser_resource_runtime(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, String> {
-        self.owner_access()
-            .replace_owned(registration)
-            .map_err(str::to_owned)
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
+        self.owner_access().replace_owned(registration)
     }
 
     /// Close renderer-producer admission and stop context-owned workers while
@@ -989,28 +992,34 @@ impl RendererBrowserContextRuntimeOwnerAccess {
 
     pub fn current_browser_resource_runtime(
         &self,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.current_registered()
     }
 
     pub fn replace_owned(
         &self,
         registration: crate::network::BrowserResourceRuntimeOwnerRegistration,
-    ) -> Result<crate::network::BrowserResourceRuntime, &'static str> {
+    ) -> Result<
+        crate::network::BrowserResourceRuntime,
+        crate::network::BrowserResourceRuntimeOwnerError,
+    > {
         self.resource_runtime_registrar.replace_owned(registration)
     }
 
     pub fn adopt_registered(
         &self,
         runtime: crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.adopt_registered(runtime)
     }
 
     pub fn validate_registered(
         &self,
         runtime: &crate::network::BrowserResourceRuntime,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::network::BrowserResourceRuntimeOwnerError> {
         self.resource_runtime_registrar.validate_registered(runtime)
     }
 
@@ -1251,12 +1260,29 @@ mod tests {
 
         assert_eq!(
             runtime.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000001"
+            format!("LID-CHILD-{}-0000000001", runtime.id().as_u64())
         );
         assert_eq!(
             clone.allocate_child_document_loader_id(),
-            "LID-CHILD-0000000002"
+            format!("LID-CHILD-{}-0000000002", runtime.id().as_u64())
         );
+    }
+
+    #[test]
+    fn child_document_loader_ids_are_unique_across_browser_contexts() {
+        let left = RendererBrowserContextRuntime::new();
+        let right = RendererBrowserContextRuntime::new();
+        let clone = left.clone();
+        let ids = [&left, &right, &clone]
+            .into_iter()
+            .flat_map(|runtime| {
+                [
+                    runtime.allocate_child_document_loader_id(),
+                    runtime.allocate_child_document_loader_id(),
+                ]
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 6, "protocol request IDs share one namespace");
     }
 
     #[test]

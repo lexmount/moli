@@ -1,3 +1,7 @@
+use crate::context_bootstrap::{
+    WebTransportErrorClonePayload, WebTransportErrorSource,
+    build_web_transport_error_from_clone_payload, web_transport_error_clone_payload_from_object,
+};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -8,26 +12,29 @@ use std::{
 
 use crate::{
     context_bootstrap::{
-        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
-        FileSystemHandleClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
-        attach_file_system_file_snapshot_clone_payload, build_dom_rect_clone_object,
-        build_file_object, build_file_system_handle_from_clone_payload,
-        build_image_data_object_from_clone_payload, build_readable_stream_clone_shell,
-        build_transform_stream_clone_shell, build_writable_stream_clone_shell,
-        crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
-        detach_message_port_owner_for_transfer, detach_transferred_message_port,
-        dom_exception_clone_fields, dom_rect_clone_data, ensure_message_port_wrapper_for_id,
+        CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, EncodedVideoChunkClonePayload,
+        EncodedVideoChunkType, FileSystemFileSnapshotClonePayload, FileSystemHandleClonePayload,
+        GeometryClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
+        TransferredMessagePort, TransformStreamClonePayload, WritableStreamClonePayload,
+        attach_file_system_file_snapshot_clone_payload, build_dom_exception_object,
+        build_encoded_video_chunk_from_clone_payload, build_file_system_handle_from_clone_payload,
+        build_geometry_object_from_clone_payload, build_geometry_quad_from_cloned_points,
+        build_image_data_object_from_clone_payload, build_quota_exceeded_error_object,
+        build_readable_stream_clone_shell, build_transform_stream_clone_shell,
+        build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
+        crypto_key_object_from_clone_payload, detach_message_port_owner_for_transfer,
+        detach_transferred_message_port, discard_message_port_channel, dom_exception_clone_fields,
+        encoded_video_chunk_clone_payload_from_object, ensure_message_port_wrapper_for_id,
         file_system_file_snapshot_clone_payload_from_object,
-        file_system_handle_clone_payload_from_object, image_data_clone_payload_from_object,
+        file_system_handle_clone_payload_from_object, geometry_clone_payload_from_object,
+        geometry_quad_clone_points, image_data_clone_payload_from_object,
         initialize_readable_stream_clone_shell, initialize_transform_stream_clone_shell,
-        initialize_writable_stream_clone_shell, message_port_id_from_object,
-        new_dom_exception_value, new_quota_exceeded_error_value, prepare_readable_stream_transfer,
-        prepare_transform_stream_transfer, prepare_writable_stream_transfer,
-        quota_exceeded_error_clone_fields, require_internal_stream_value,
-        selected_file_from_object,
+        initialize_writable_stream_clone_shell, message_port_transfer_from_object,
+        new_disconnected_message_port_object, new_dom_exception_value,
+        prepare_readable_stream_transfer, prepare_transform_stream_transfer,
+        prepare_writable_stream_transfer, quota_exceeded_error_clone_fields,
+        require_internal_stream_value,
     },
-    dom::native::SelectedFile,
     types::MessagePortId,
 };
 pub(crate) use moli_structured_clone::{
@@ -40,19 +47,31 @@ pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
-const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
+pub(crate) const HOST_OBJECT_TAG_DOM_EXCEPTION: u32 = 6;
 pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
-const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
+pub(crate) const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
-const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+const HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK: u32 = 13;
+pub(crate) const HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR: u32 = 14;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 const HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT: u32 = 22;
+const HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME: u32 = 16;
+const HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME: u32 = 17;
+
+const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
+const GEOMETRY_KIND_DOM_POINT: u32 = 1;
 const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
 const GEOMETRY_KIND_DOM_RECT: u32 = 3;
+const GEOMETRY_KIND_DOM_QUAD: u32 = 4;
+const GEOMETRY_KIND_DOM_MATRIX_READONLY: u32 = 5;
+const GEOMETRY_KIND_DOM_MATRIX: u32 = 6;
+// Kind 4 remains readable for existing numeric Quad payloads.
+const GEOMETRY_KIND_DOM_QUAD_REFERENCES: u32 = 7;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
-    pub(crate) base: StructuredCloneWireBytes<MessagePortId>,
+    pub(crate) base: StructuredCloneWireBytes<TransferredMessagePort>,
     wasm_modules: Vec<ClonedWasmModule>,
     readable_streams: Vec<ClonedReadableStream>,
     writable_streams: Vec<ClonedWritableStream>,
@@ -63,8 +82,88 @@ pub(crate) struct V8StructuredClonePayload {
 }
 
 impl V8StructuredClonePayload {
-    pub(crate) fn transferred_message_ports(&self) -> &[MessagePortId] {
-        &self.base.transferred_message_ports
+    pub(crate) fn transferred_message_port_ids(&self) -> impl Iterator<Item = MessagePortId> + '_ {
+        self.base
+            .transferred_message_ports
+            .iter()
+            .filter_map(|port| match port {
+                TransferredMessagePort::Endpoint(id) => Some(*id),
+                TransferredMessagePort::Closed => None,
+            })
+    }
+
+    pub(crate) fn transferred_stream_port_ids(&self) -> impl Iterator<Item = MessagePortId> + '_ {
+        self.readable_streams
+            .iter()
+            .map(|stream| stream.payload.port_id())
+            .chain(
+                self.writable_streams
+                    .iter()
+                    .map(|stream| stream.payload.port_id()),
+            )
+            .chain(
+                self.transform_streams
+                    .iter()
+                    .flat_map(|stream| stream.payload.port_ids()),
+            )
+    }
+}
+
+/// Only closed-port attachments need a per-deserialization identity cache.
+/// Ordinary endpoints continue to use their existing native wrapper registry.
+#[derive(Clone, Default)]
+struct ClosedMessagePortObjects(Rc<RefCell<HashMap<u32, ClosedPortObject>>>);
+
+struct ClosedPortObject {
+    id: MessagePortId,
+    object: v8::Global<v8::Object>,
+}
+
+impl ClosedMessagePortObjects {
+    fn discard(&self, scope: &mut v8::PinScope<'_, '_>) {
+        for (_, port) in self.0.borrow_mut().drain() {
+            discard_message_port_channel(scope, port.id);
+        }
+    }
+
+    fn for_payload(payload: &V8StructuredClonePayload) -> Option<Self> {
+        payload
+            .base
+            .transferred_message_ports
+            .iter()
+            .any(|port| matches!(port, TransferredMessagePort::Closed))
+            .then(Self::default)
+    }
+
+    fn get<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        index: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if let Some(port) = self.0.borrow().get(&index) {
+            return Some(v8::Local::new(scope, &port.object));
+        }
+        let (id, object) = new_disconnected_message_port_object(scope)?;
+        self.0.borrow_mut().insert(
+            index,
+            ClosedPortObject {
+                id,
+                object: v8::Global::new(scope, object),
+            },
+        );
+        Some(object)
+    }
+}
+
+fn transferred_message_port_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    port: TransferredMessagePort,
+    index: u32,
+    closed: Option<&ClosedMessagePortObjects>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    match port {
+        TransferredMessagePort::Endpoint(id) => ensure_message_port_wrapper_for_id(scope, id),
+        TransferredMessagePort::Closed => closed?.get(scope, index),
     }
 }
 
@@ -240,11 +339,14 @@ struct ClonedFileSystemHandle {
 #[derive(Clone, Debug)]
 pub(crate) enum BlobClonePayload {
     Blob {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
     },
     File {
-        file: SelectedFile,
+        bytes: moli_file_api::BlobData,
+        mime_type: String,
+        name: String,
+        last_modified: f64,
         opfs_snapshot: Option<FileSystemFileSnapshotClonePayload>,
     },
 }
@@ -286,6 +388,7 @@ impl StructuredClonePolicy {
             locked_to_sender_agent_cluster: contains_wasm_module && self == Self::RuntimeMessage,
             sender_agent_cluster: None,
             sender_origin: None,
+            sender_opaque_origin: None,
         }
     }
 }
@@ -297,6 +400,39 @@ pub(crate) enum RuntimeMessageAgentCluster {
     ServiceWorker,
 }
 
+/// Native opaque security-origin identity, independent of storage partitions
+/// and their nonces. Window ids are owner-local, so include the host identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeMessageOpaqueOrigin {
+    owner: RuntimeOpaqueOriginOwner,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeOpaqueOriginOwner {
+    Window {
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
+    },
+    Worker(crate::resource_owner::ResourceOwnerId),
+}
+
+impl RuntimeMessageOpaqueOrigin {
+    pub(crate) fn window(
+        host: crate::resource_owner::ResourceOwnerId,
+        window: crate::native_bridge::WindowExecutionContextOwner,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Window { host, window },
+        })
+    }
+
+    pub(crate) fn worker(owner: crate::resource_owner::ResourceOwnerId) -> Arc<Self> {
+        Arc::new(Self {
+            owner: RuntimeOpaqueOriginOwner::Worker(owner),
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StructuredCloneMetadata {
     pub(crate) contains_wasm_module: bool,
@@ -304,6 +440,7 @@ pub(crate) struct StructuredCloneMetadata {
     pub(crate) locked_to_sender_agent_cluster: bool,
     pub(crate) sender_agent_cluster: Option<RuntimeMessageAgentCluster>,
     pub(crate) sender_origin: Option<String>,
+    pub(crate) sender_opaque_origin: Option<Arc<RuntimeMessageOpaqueOrigin>>,
 }
 
 struct WireSerializer {
@@ -359,6 +496,13 @@ impl v8::ValueSerializerImpl for WireSerializer {
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
         match moli_webapi_declare::web_api_object_type(scope, object).map(|kind| kind.name()) {
+            Some("WebTransportError") => {
+                if let Some(payload) = web_transport_error_clone_payload_from_object(scope, object)
+                {
+                    write_web_transport_error_payload(serializer, &payload);
+                    return Some(true);
+                }
+            }
             Some("MessagePort") => {
                 let target = moli_webapi_declare::web_api_object_target(scope, object)?;
                 let Some(index) = self
@@ -376,25 +520,42 @@ impl v8::ValueSerializerImpl for WireSerializer {
                 serializer.write_uint32(index as u32);
                 return Some(true);
             }
-            Some("DOMRect" | "DOMRectReadOnly") => {
-                if let Some((mutable, values)) = dom_rect_clone_data(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
-                    serializer.write_uint32(if mutable {
-                        GEOMETRY_KIND_DOM_RECT
-                    } else {
-                        GEOMETRY_KIND_DOM_RECT_READONLY
-                    });
-                    for value in values {
-                        serializer.write_double(value);
-                    }
-                    return Some(true);
-                }
+            Some(
+                "DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad"
+                | "DOMMatrix" | "DOMMatrixReadOnly",
+            ) => {
+                return write_geometry_clone_object(scope, object, serializer);
             }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
                     write_image_data_payload(serializer, payload);
                     return Some(true);
                 }
+            }
+            Some("EncodedVideoChunk") => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "EncodedVideoChunk cannot be stored.");
+                    return None;
+                }
+                if let Some(payload) = encoded_video_chunk_clone_payload_from_object(scope, object)
+                {
+                    write_encoded_video_chunk_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some(name @ ("RTCEncodedAudioFrame" | "RTCEncodedVideoFrame")) => {
+                if self.policy == StructuredClonePolicy::Storage {
+                    throw_data_clone_exception(scope, "RTC encoded frames cannot be stored.");
+                    return None;
+                }
+                use crate::context_bootstrap::encoded_frames::{FrameKind, write_clone};
+                let (tag, kind) = if name == "RTCEncodedAudioFrame" {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME, FrameKind::Audio)
+                } else {
+                    (HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME, FrameKind::Video)
+                };
+                serializer.write_uint32(tag);
+                return write_clone(scope, object, serializer, kind);
             }
             Some("CryptoKey") => {
                 if write_crypto_key_payload(scope, object, serializer).is_some() {
@@ -501,24 +662,15 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
-            Some("QuotaExceededError") => {
-                if let Some((message, quota, requested)) =
-                    quota_exceeded_error_clone_fields(scope, object)
-                {
-                    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
-                    write_string(serializer, &message);
-                    write_optional_double(serializer, quota);
-                    write_optional_double(serializer, requested);
-                    return Some(true);
-                }
+            Some("QuotaExceededError")
+                if write_quota_exceeded_error_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
-            Some("DOMException") => {
-                if let Some((message, name)) = dom_exception_clone_fields(scope, object) {
-                    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
-                    write_string(serializer, &message);
-                    write_string(serializer, &name);
-                    return Some(true);
-                }
+            Some("DOMException")
+                if write_dom_exception_payload(scope, object, serializer).is_some() =>
+            {
+                return Some(true);
             }
             _ => {}
         }
@@ -570,7 +722,8 @@ impl v8::ValueSerializerImpl for WireSerializer {
 }
 
 struct WireDeserializer {
-    transferred_message_ports: Vec<MessagePortId>,
+    transferred_message_ports: Vec<TransferredMessagePort>,
+    closed_message_ports: Option<ClosedMessagePortObjects>,
     wasm_modules: HashMap<u32, ClonedWasmModule>,
     readable_streams: HashMap<u32, ReadableStreamClonePayload>,
     writable_streams: HashMap<u32, WritableStreamClonePayload>,
@@ -595,11 +748,22 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR => {
+                let payload = read_web_transport_error_payload(deserializer)?;
+                build_web_transport_error_from_clone_payload(scope, &payload)
+            }
             HOST_OBJECT_TAG_TRANSFERRED_MESSAGE_PORT => {
-                let port_id = read_u32(deserializer)
-                    .and_then(|index| self.transferred_message_ports.get(index as usize).copied());
-                port_id
-                    .and_then(|id| ensure_message_port_wrapper_for_id(scope, id))
+                let index = read_u32(deserializer);
+                index
+                    .and_then(|index| {
+                        let port = *self.transferred_message_ports.get(index as usize)?;
+                        transferred_message_port_object(
+                            scope,
+                            port,
+                            index,
+                            self.closed_message_ports.as_ref(),
+                        )
+                    })
                     .or_else(|| {
                         throw_data_clone_exception(
                             scope,
@@ -619,31 +783,39 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                 }
                 ensure_message_port_wrapper_for_id(scope, port_id)
             }
-            HOST_OBJECT_TAG_GEOMETRY => {
-                let kind = read_u32(deserializer)?;
-                let mutable = match kind {
-                    GEOMETRY_KIND_DOM_RECT_READONLY => false,
-                    GEOMETRY_KIND_DOM_RECT => true,
-                    _ => {
-                        throw_data_clone_exception(scope, "Unsupported geometry clone kind.");
-                        return None;
-                    }
-                };
-                let mut values = [0.0; 4];
-                for value in &mut values {
-                    if !deserializer.read_double(value) {
-                        throw_data_clone_exception(scope, "Invalid DOMRect clone payload.");
-                        return None;
-                    }
-                }
-                Some(build_dom_rect_clone_object(scope, mutable, values))
-            }
             HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
+            HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK => read_encoded_video_chunk_payload(deserializer)
+                .and_then(|payload| build_encoded_video_chunk_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize EncodedVideoChunk.");
+                    None
+                }),
+            HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME | HOST_OBJECT_TAG_RTC_ENCODED_VIDEO_FRAME => {
+                use crate::context_bootstrap::encoded_frames::{FrameKind, read_clone};
+                let kind = if tag == HOST_OBJECT_TAG_RTC_ENCODED_AUDIO_FRAME {
+                    FrameKind::Audio
+                } else {
+                    FrameKind::Video
+                };
+                read_clone(scope, deserializer, kind).or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize RTC encoded frame.");
+                    None
+                })
+            }
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     throw_data_clone_exception(
                         scope,
                         "Failed to deserialize structured clone CryptoKey.",
+                    );
+                    None
+                })
+            }
+            HOST_OBJECT_TAG_GEOMETRY => {
+                read_geometry_clone_object(scope, deserializer).or_else(|| {
+                    throw_data_clone_exception(
+                        scope,
+                        "Failed to deserialize structured clone Geometry object.",
                     );
                     None
                 })
@@ -734,20 +906,9 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     None
                 })
             }
-            HOST_OBJECT_TAG_DOM_EXCEPTION => {
-                let message = read_string(deserializer)?;
-                let name = read_string(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_dom_exception_value(scope, &message, &name))
-                    .ok()
-            }
+            HOST_OBJECT_TAG_DOM_EXCEPTION => read_dom_exception_payload(scope, deserializer),
             HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR => {
-                let message = read_string(deserializer)?;
-                let quota = read_optional_double(deserializer)?;
-                let requested = read_optional_double(deserializer)?;
-                v8::Local::<v8::Object>::try_from(new_quota_exceeded_error_value(
-                    scope, &message, quota, requested,
-                ))
-                .ok()
+                read_quota_exceeded_error_payload(scope, deserializer)
             }
             _ => {
                 throw_data_clone_exception(scope, "Unsupported structured clone host object.");
@@ -808,14 +969,19 @@ pub(crate) fn blob_clone_payload_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobClonePayload> {
-    if let Some(file) = selected_file_from_object(scope, object) {
+    let bytes = crate::blob::blob_data_from_object(scope, object)?;
+    let mime_type = crate::blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
+    if let Some((name, last_modified)) =
+        crate::context_bootstrap::file_clone_metadata(scope, object)
+    {
         return Some(BlobClonePayload::File {
-            file,
+            bytes,
+            mime_type,
+            name,
+            last_modified,
             opfs_snapshot: file_system_file_snapshot_clone_payload_from_object(scope, object),
         });
     }
-    let bytes = crate::blob::blob_bytes_from_object(scope, object)?;
-    let mime_type = crate::blob::blob_mime_type_from_object(scope, object).unwrap_or_default();
     Some(BlobClonePayload::Blob { bytes, mime_type })
 }
 
@@ -825,13 +991,22 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     match payload {
         BlobClonePayload::Blob { bytes, mime_type } => {
-            crate::blob::build_blob_object(scope, bytes.clone(), mime_type.clone())
+            crate::blob::build_blob_object_from_data(scope, bytes.clone(), mime_type.clone())
         }
         BlobClonePayload::File {
-            file,
+            bytes,
+            mime_type,
+            name,
+            last_modified,
             opfs_snapshot,
         } => {
-            let object = build_file_object(scope, file)?;
+            let (object, _) = crate::context_bootstrap::build_file_object_unpublished(
+                scope,
+                bytes.clone(),
+                mime_type.clone(),
+                name,
+                *last_modified,
+            )?;
             if let Some(snapshot) = opfs_snapshot {
                 attach_file_system_file_snapshot_clone_payload(scope, object, snapshot)?;
             }
@@ -877,6 +1052,125 @@ pub(crate) fn read_image_data_payload<'s>(
             bytes,
         },
     )
+}
+
+fn write_geometry_clone_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: GeometryClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+    match payload {
+        GeometryClonePayload::Point { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_POINT
+            } else {
+                GEOMETRY_KIND_DOM_POINT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Rect { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_RECT
+            } else {
+                GEOMETRY_KIND_DOM_RECT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Quad { points } => {
+            serializer.write_uint32(GEOMETRY_KIND_DOM_QUAD);
+            for point in points {
+                write_doubles(serializer, &point);
+            }
+        }
+        GeometryClonePayload::Matrix {
+            mutable,
+            is_2d,
+            values,
+        } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_MATRIX
+            } else {
+                GEOMETRY_KIND_DOM_MATRIX_READONLY
+            });
+            serializer.write_uint32(u32::from(is_2d));
+            if is_2d {
+                write_doubles(
+                    serializer,
+                    &[
+                        values[0], values[1], values[4], values[5], values[12], values[13],
+                    ],
+                );
+            } else {
+                write_doubles(serializer, &values);
+            }
+        }
+    }
+}
+
+fn read_geometry_clone_payload(
+    kind: u32,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<GeometryClonePayload> {
+    match kind {
+        GEOMETRY_KIND_DOM_POINT_READONLY | GEOMETRY_KIND_DOM_POINT => {
+            Some(GeometryClonePayload::Point {
+                mutable: kind == GEOMETRY_KIND_DOM_POINT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_RECT_READONLY | GEOMETRY_KIND_DOM_RECT => {
+            Some(GeometryClonePayload::Rect {
+                mutable: kind == GEOMETRY_KIND_DOM_RECT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_QUAD => {
+            let mut points = [[0.0; 4]; 4];
+            for point in &mut points {
+                *point = read_doubles(deserializer)?;
+            }
+            Some(GeometryClonePayload::Quad { points })
+        }
+        GEOMETRY_KIND_DOM_MATRIX_READONLY | GEOMETRY_KIND_DOM_MATRIX => {
+            let is_2d = match read_u32(deserializer)? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            };
+            let values = if is_2d {
+                let [m11, m12, m21, m22, m41, m42] = read_doubles(deserializer)?;
+                [
+                    m11, m12, 0.0, 0.0, m21, m22, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, m41, m42, 0.0, 1.0,
+                ]
+            } else {
+                read_doubles(deserializer)?
+            };
+            Some(GeometryClonePayload::Matrix {
+                mutable: kind == GEOMETRY_KIND_DOM_MATRIX,
+                is_2d,
+                values,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn write_doubles(serializer: &dyn v8::ValueSerializerHelper, values: &[f64]) {
+    for value in values {
+        serializer.write_double(*value);
+    }
+}
+
+fn read_doubles<const N: usize>(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<[f64; N]> {
+    let mut values = [0.0; N];
+    for value in &mut values {
+        if !deserializer.read_double(value) {
+            return None;
+        }
+    }
+    Some(values)
 }
 
 pub(crate) fn write_crypto_key_payload<'s>(
@@ -940,6 +1234,52 @@ pub(crate) fn read_crypto_key_payload<'s>(
             key_bytes,
         },
     )
+}
+
+pub(crate) fn write_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, name) = dom_exception_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_DOM_EXCEPTION);
+    write_string(serializer, &message);
+    write_string(serializer, &name);
+    Some(())
+}
+
+pub(crate) fn read_dom_exception_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let name = read_string(deserializer)?;
+    Some(build_dom_exception_object(scope, &message, &name))
+}
+
+pub(crate) fn write_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<()> {
+    let (message, quota, requested) = quota_exceeded_error_clone_fields(scope, object)?;
+    serializer.write_uint32(HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR);
+    write_string(serializer, &message);
+    write_optional_double(serializer, quota);
+    write_optional_double(serializer, requested);
+    Some(())
+}
+
+pub(crate) fn read_quota_exceeded_error_payload<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let message = read_string(deserializer)?;
+    let quota = read_optional_double(deserializer)?;
+    let requested = read_optional_double(deserializer)?;
+    Some(build_quota_exceeded_error_object(
+        scope, &message, quota, requested,
+    ))
 }
 
 fn write_string(serializer: &dyn v8::ValueSerializerHelper, value: &str) {
@@ -1040,6 +1380,54 @@ fn read_optional_raw_vec(
     }
 }
 
+fn write_encoded_video_chunk_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: EncodedVideoChunkClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_ENCODED_VIDEO_CHUNK);
+    serializer.write_uint32(match payload.kind {
+        EncodedVideoChunkType::Key => 0,
+        EncodedVideoChunkType::Delta => 1,
+    });
+    serializer.write_uint64(payload.timestamp as u64);
+    serializer.write_uint32(u32::from(payload.duration.is_some()));
+    if let Some(duration) = payload.duration {
+        serializer.write_uint64(duration);
+    }
+    write_raw_vec(serializer, &payload.bytes);
+}
+
+fn read_encoded_video_chunk_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<EncodedVideoChunkClonePayload> {
+    let kind = match read_u32(deserializer)? {
+        0 => EncodedVideoChunkType::Key,
+        1 => EncodedVideoChunkType::Delta,
+        _ => return None,
+    };
+    let mut timestamp = 0;
+    if !deserializer.read_uint64(&mut timestamp) {
+        return None;
+    }
+    let duration = match read_u32(deserializer)? {
+        0 => None,
+        1 => {
+            let mut duration = 0;
+            if !deserializer.read_uint64(&mut duration) {
+                return None;
+            }
+            Some(duration)
+        }
+        _ => return None,
+    };
+    Some(EncodedVideoChunkClonePayload {
+        kind,
+        timestamp: timestamp as i64,
+        duration,
+        bytes: read_raw_vec(deserializer)?,
+    })
+}
+
 fn write_raw_vec(serializer: &dyn v8::ValueSerializerHelper, bytes: &[u8]) {
     serializer.write_uint32(bytes.len() as u32);
     serializer.write_raw_bytes(bytes);
@@ -1072,7 +1460,8 @@ fn copy_array_buffer_bytes(buffer: v8::Local<'_, v8::ArrayBuffer>) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
-/// Transfer steps retain the observable order of the author's transfer list.
+/// Transfer steps retain author order within each transfer phase. MessagePorts
+/// move together after all other transfers and any Window target checks.
 #[derive(Clone, Copy)]
 pub(crate) enum WireTransfer<'s> {
     ArrayBuffer(v8::Local<'s, v8::ArrayBuffer>),
@@ -1085,6 +1474,110 @@ pub(crate) enum WireTransfer<'s> {
 #[derive(Default)]
 pub(crate) struct WireTransfers<'a, 's> {
     pub entries: &'a [WireTransfer<'s>],
+}
+
+/// Serialized data whose MessagePorts have not yet been disentangled.
+/// Rejecting a prepared message must release its private stream channels.
+#[must_use]
+pub(crate) struct PreparedStructuredClone<'s> {
+    payload: V8StructuredClonePayload,
+    message_ports: Vec<v8::Local<'s, v8::Object>>,
+}
+
+impl<'s> PreparedStructuredClone<'s> {
+    pub(crate) fn metadata_mut(&mut self) -> &mut StructuredCloneMetadata {
+        &mut self.payload.metadata
+    }
+
+    pub(crate) fn commit_message_ports(
+        mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<V8StructuredClonePayload> {
+        // Validate the entire list before moving any endpoint. A later invalid
+        // port must not detach an earlier valid one.
+        for port in self.message_ports.iter().copied() {
+            let Some(transfer) = message_port_transfer_from_object(scope, port) else {
+                self.discard(scope);
+                throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
+                return None;
+            };
+            self.payload.base.transferred_message_ports.push(transfer);
+        }
+        for (port, transfer) in self
+            .message_ports
+            .iter()
+            .copied()
+            .zip(self.payload.base.transferred_message_ports.iter().copied())
+        {
+            if let TransferredMessagePort::Endpoint(port_id) = transfer {
+                detach_message_port_owner_for_transfer(scope, port_id);
+            }
+            detach_transferred_message_port(scope, port);
+        }
+        Some(self.payload)
+    }
+
+    pub(crate) fn discard(self, scope: &mut v8::PinScope<'_, '_>) {
+        // Port ids accumulated during validation still belong to the author.
+        // Only private stream-transfer channels have been committed here.
+        discard_all_transferred_stream_channels(scope, &self.payload);
+    }
+
+    fn apply_transfer_steps(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        transfers: &WireTransfers<'_, 's>,
+    ) -> Option<()> {
+        let mut array_buffer_index = 0;
+        for transfer in transfers.entries {
+            match *transfer {
+                WireTransfer::ArrayBuffer(buffer) => {
+                    array_buffer_index += 1;
+                    if buffer.was_detached() {
+                        throw_data_clone_exception(scope, "A transferred ArrayBuffer is detached.");
+                        return None;
+                    }
+                    // Payload getters may have changed the backing bytes.
+                    if !buffer.get_backing_store().is_resizable_by_user_javascript() {
+                        self.payload
+                            .base
+                            .transferred_array_buffers
+                            .push(TransferredArrayBuffer {
+                                transfer_id: array_buffer_index,
+                                bytes: copy_array_buffer_bytes(buffer),
+                            });
+                    }
+                    if buffer.detach(None) != Some(true) {
+                        throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
+                        return None;
+                    }
+                }
+                WireTransfer::MessagePort(_) => {}
+                WireTransfer::ReadableStream(stream) => {
+                    let prepared = prepare_readable_stream_transfer(scope, stream)?;
+                    self.payload.readable_streams.push(ClonedReadableStream {
+                        clone_id: self.payload.readable_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+                WireTransfer::WritableStream(stream) => {
+                    let prepared = prepare_writable_stream_transfer(scope, stream)?;
+                    self.payload.writable_streams.push(ClonedWritableStream {
+                        clone_id: self.payload.writable_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+                WireTransfer::TransformStream(stream) => {
+                    let prepared = prepare_transform_stream_transfer(scope, stream)?;
+                    self.payload.transform_streams.push(ClonedTransformStream {
+                        clone_id: self.payload.transform_streams.len() as u32,
+                        payload: prepared.commit(scope),
+                    });
+                }
+            }
+        }
+        Some(())
+    }
 }
 
 pub(crate) fn serialize_for_wire_for_runtime<'s>(
@@ -1138,6 +1631,28 @@ fn serialize_for_wire_with_policy<'s>(
     transfers: &WireTransfers<'_, 's>,
     policy: StructuredClonePolicy,
 ) -> Option<V8StructuredClonePayload> {
+    prepare_for_wire_with_policy(scope, value, transfers, policy)?.commit_message_ports(scope)
+}
+
+pub(crate) fn prepare_for_window_post_message<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    transfers: &WireTransfers<'_, 's>,
+) -> Option<PreparedStructuredClone<'s>> {
+    prepare_for_wire_with_policy(
+        scope,
+        value,
+        transfers,
+        StructuredClonePolicy::RuntimeMessage,
+    )
+}
+
+fn prepare_for_wire_with_policy<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    transfers: &WireTransfers<'_, 's>,
+    policy: StructuredClonePolicy,
+) -> Option<PreparedStructuredClone<'s>> {
     let mut array_buffer_transfers = Vec::new();
     let mut message_port_transfers = Vec::new();
     let mut readable_stream_transfers = Vec::new();
@@ -1195,89 +1710,46 @@ fn serialize_for_wire_with_policy<'s>(
     let Some(true) = serializer.write_value(context, value) else {
         return None;
     };
-    let mut transferred_array_buffers = Vec::with_capacity(array_buffer_transfers.len());
-    let mut transferred_message_ports = Vec::with_capacity(message_port_transfers.len());
-    let mut readable_streams = Vec::with_capacity(readable_stream_transfers.len());
-    let mut writable_streams = Vec::with_capacity(writable_stream_transfers.len());
-    let mut transform_streams = Vec::with_capacity(transform_stream_transfers.len());
-    let mut array_buffer_index = 0;
-    for transfer in transfers.entries {
-        match *transfer {
-            WireTransfer::ArrayBuffer(buffer) => {
-                array_buffer_index += 1;
-                if buffer.was_detached() {
-                    throw_data_clone_exception(scope, "A transferred ArrayBuffer is detached.");
-                    return None;
-                }
-                // Getters in the message may have changed the backing bytes.
-                if !buffer.get_backing_store().is_resizable_by_user_javascript() {
-                    transferred_array_buffers.push(TransferredArrayBuffer {
-                        transfer_id: array_buffer_index,
-                        bytes: copy_array_buffer_bytes(buffer),
-                    });
-                }
-                if buffer.detach(None) != Some(true) {
-                    throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
-                    return None;
-                }
-            }
-            WireTransfer::MessagePort(port) => {
-                let Some(port_id) = message_port_id_from_object(scope, port) else {
-                    throw_data_clone_exception(scope, "A transferred MessagePort is detached.");
-                    return None;
-                };
-                detach_message_port_owner_for_transfer(scope, port_id);
-                detach_transferred_message_port(scope, port);
-                transferred_message_ports.push(port_id);
-            }
-            WireTransfer::ReadableStream(stream) => {
-                let prepared = prepare_readable_stream_transfer(scope, stream)?;
-                readable_streams.push(ClonedReadableStream {
-                    clone_id: readable_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-            WireTransfer::WritableStream(stream) => {
-                let prepared = prepare_writable_stream_transfer(scope, stream)?;
-                writable_streams.push(ClonedWritableStream {
-                    clone_id: writable_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-            WireTransfer::TransformStream(stream) => {
-                let prepared = prepare_transform_stream_transfer(scope, stream)?;
-                transform_streams.push(ClonedTransformStream {
-                    clone_id: transform_streams.len() as u32,
-                    payload: prepared.commit(scope),
-                });
-            }
-        }
-    }
     let wasm_modules = wasm_modules.borrow().modules.clone();
     let blobs = blobs.borrow().blobs.clone();
     let file_system_handles = file_system_handles.borrow().handles.clone();
     let metadata = policy.metadata_for_wasm_modules(!wasm_modules.is_empty());
-    Some(V8StructuredClonePayload {
-        base: StructuredCloneWireBytes {
-            wire_bytes: serializer.release(),
-            transferred_array_buffers,
-            transferred_message_ports,
+    let mut prepared = PreparedStructuredClone {
+        payload: V8StructuredClonePayload {
+            base: StructuredCloneWireBytes {
+                wire_bytes: serializer.release(),
+                transferred_array_buffers: Vec::with_capacity(array_buffer_transfers.len()),
+                transferred_message_ports: Vec::with_capacity(message_port_transfers.len()),
+            },
+            wasm_modules,
+            readable_streams: Vec::with_capacity(readable_stream_transfers.len()),
+            writable_streams: Vec::with_capacity(writable_stream_transfers.len()),
+            transform_streams: Vec::with_capacity(transform_stream_transfers.len()),
+            blobs,
+            file_system_handles,
+            metadata,
         },
-        wasm_modules,
-        readable_streams,
-        writable_streams,
-        transform_streams,
-        blobs,
-        file_system_handles,
-        metadata,
-    })
+        message_ports: message_port_transfers,
+    };
+    if prepared.apply_transfer_steps(scope, transfers).is_none() {
+        prepared.discard(scope);
+        return None;
+    }
+    Some(prepared)
 }
 
 pub(crate) fn deserialize_from_wire<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &V8StructuredClonePayload,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    deserialize_from_wire_impl(scope, payload)
+    let closed = ClosedMessagePortObjects::for_payload(payload);
+    let value = deserialize_from_wire_impl(scope, payload, closed.clone());
+    if value.is_none()
+        && let Some(closed) = closed
+    {
+        closed.discard(scope);
+    }
+    value
 }
 
 pub(crate) fn deserialize_message_event_from_wire<'s>(
@@ -1288,14 +1760,39 @@ pub(crate) fn deserialize_message_event_from_wire<'s>(
         discard_all_transferred_stream_channels(scope, payload);
         return None;
     }
-    let value = deserialize_from_wire_impl(scope, payload)?;
-    let ports = v8::Array::new(scope, payload.transferred_message_ports().len() as i32);
-    for (index, port_id) in payload.transferred_message_ports().iter().enumerate() {
-        if let Some(port) = ensure_message_port_wrapper_for_id(scope, *port_id) {
-            let _ = ports.set_index(scope, index as u32, v8::Local::<v8::Value>::from(port));
+    let closed = ClosedMessagePortObjects::for_payload(payload);
+    let Some(value) = deserialize_from_wire_impl(scope, payload, closed.clone()) else {
+        if let Some(closed) = closed {
+            closed.discard(scope);
+        }
+        return None;
+    };
+    let ports = v8::Array::new(scope, payload.base.transferred_message_ports.len() as i32);
+    for (index, transfer) in payload.base.transferred_message_ports.iter().enumerate() {
+        let Some(port) =
+            transferred_message_port_object(scope, *transfer, index as u32, closed.as_ref())
+        else {
+            if let Some(closed) = closed {
+                closed.discard(scope);
+            }
+            discard_all_transferred_stream_channels(scope, payload);
+            return None;
+        };
+        if ports.set_index(scope, index as u32, v8::Local::<v8::Value>::from(port)) != Some(true) {
+            if let Some(closed) = closed {
+                closed.discard(scope);
+            }
+            discard_all_transferred_stream_channels(scope, payload);
+            return None;
         }
     }
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    if ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        if let Some(closed) = closed {
+            closed.discard(scope);
+        }
+        discard_all_transferred_stream_channels(scope, payload);
+        return None;
+    }
     Some((value, ports))
 }
 
@@ -1318,6 +1815,7 @@ fn validate_message_event_metadata(
 fn deserialize_from_wire_impl<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     payload: &V8StructuredClonePayload,
+    closed_message_ports: Option<ClosedMessagePortObjects>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let context = scope.get_current_context();
     let wasm_modules = payload
@@ -1355,6 +1853,7 @@ fn deserialize_from_wire_impl<'s>(
         scope,
         Box::new(WireDeserializer {
             transferred_message_ports: payload.base.transferred_message_ports.clone(),
+            closed_message_ports,
             wasm_modules,
             readable_streams,
             writable_streams,
@@ -1398,4 +1897,103 @@ fn deserialize_from_wire_impl<'s>(
         }
     }
     Some(value)
+}
+
+pub(crate) fn write_geometry_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    serializer: &dyn v8::ValueSerializerHelper,
+) -> Option<bool> {
+    if let Some(points) = geometry_quad_clone_points(scope, object) {
+        serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+        serializer.write_uint32(GEOMETRY_KIND_DOM_QUAD_REFERENCES);
+        let context = scope.get_current_context();
+        for point in points {
+            if !serializer.write_value(context, point.into())? {
+                return Some(false);
+            }
+        }
+        return Some(true);
+    }
+    let payload = geometry_clone_payload_from_object(scope, object)?;
+    write_geometry_clone_payload(serializer, payload);
+    Some(true)
+}
+
+pub(crate) fn read_geometry_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let kind = read_u32(deserializer)?;
+    if kind == GEOMETRY_KIND_DOM_QUAD_REFERENCES {
+        let points = [
+            read_geometry_quad_point(scope, deserializer)?,
+            read_geometry_quad_point(scope, deserializer)?,
+            read_geometry_quad_point(scope, deserializer)?,
+            read_geometry_quad_point(scope, deserializer)?,
+        ];
+        return Some(build_geometry_quad_from_cloned_points(scope, points));
+    }
+    let payload = read_geometry_clone_payload(kind, deserializer)?;
+    Some(build_geometry_object_from_clone_payload(scope, payload))
+}
+
+fn read_geometry_quad_point<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let value = deserializer.read_value(scope.get_current_context())?;
+    let point = v8::Local::<v8::Object>::try_from(value).ok()?;
+    crate::web_api_interfaces::DOMPoint::is_instance(scope, point).then_some(point)
+}
+
+pub(crate) fn write_web_transport_error_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: &WebTransportErrorClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_WEB_TRANSPORT_ERROR);
+    // A new wire tag keeps lossless DOMString code units separate from the
+    // existing UTF-8 DOMException encoding retained by older stored values.
+    let bytes: Vec<_> = payload
+        .message
+        .iter()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    write_raw_vec(serializer, &bytes);
+    serializer.write_uint32(match payload.source {
+        WebTransportErrorSource::Stream => 0,
+        WebTransportErrorSource::Session => 1,
+    });
+    serializer.write_uint32(u32::from(payload.stream_error_code.is_some()));
+    if let Some(code) = payload.stream_error_code {
+        serializer.write_uint32(code);
+    }
+}
+
+pub(crate) fn read_web_transport_error_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<WebTransportErrorClonePayload> {
+    let bytes = read_raw_vec(deserializer)?;
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let message = bytes
+        .chunks_exact(2)
+        .map(|units| u16::from_le_bytes([units[0], units[1]]))
+        .collect();
+    let source = match read_u32(deserializer)? {
+        0 => WebTransportErrorSource::Stream,
+        1 => WebTransportErrorSource::Session,
+        _ => return None,
+    };
+    let stream_error_code = match read_u32(deserializer)? {
+        0 => None,
+        1 => Some(read_u32(deserializer)?),
+        _ => return None,
+    };
+    Some(WebTransportErrorClonePayload {
+        message,
+        source,
+        stream_error_code,
+    })
 }

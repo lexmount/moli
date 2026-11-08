@@ -602,7 +602,7 @@ fn element_methods_and_dataset_live_on_owner_prototypes() {
               fragmentChild.setAttribute("name", "fragment-name");
               fragmentChild.id = "fragment-id";
               fragment.appendChild(fragmentChild);
-              method(Document.prototype, "getElementById", 1, false);
+              method(Document.prototype, "getElementById", 1, true);
               method(DocumentFragment.prototype, "getElementById", 1, false);
               assert(!own(document, "getElementById"), "getElementById should not be own on document");
               assert(!own(fragment, "getElementById"), "getElementById should not be own on fragment");
@@ -2222,13 +2222,13 @@ fn svg_lengths_preserve_specified_units_and_resolve_live_context() {
               assert(close(standalone.valueInSpecifiedUnits, 2.54),
                 "value setter preserves unit");
               standalone.valueInSpecifiedUnits = 1;
-              assert(close(standalone.value, 96 / 2.54),
+              assert(standalone.value === Math.fround(96 / 2.54),
                 "specified setter resolves user value");
 
               standalone.valueAsString = "40q";
               assert(standalone.unitType === SVGLength.SVG_LENGTHTYPE_UNKNOWN,
                 "modern unit type");
-              assert(close(standalone.value, 96 / 2.54), "quarter millimeter value");
+              assert(standalone.value === Math.fround(96 / 2.54), "quarter millimeter value");
               standalone.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_MM);
               assert(standalone.valueAsString === "10mm", "quarter millimeter conversion");
 

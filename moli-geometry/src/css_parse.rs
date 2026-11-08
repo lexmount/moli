@@ -36,23 +36,48 @@ pub fn dom_matrix_components_from_values(values: &[f64]) -> Option<DomMatrixComp
 }
 
 pub fn parse_dom_matrix_value(text: &str) -> Option<DomMatrixComponents> {
+    parse_dom_matrix_value_with_dimension(text).map(|(components, _)| components)
+}
+
+pub fn parse_dom_matrix_value_with_dimension(text: &str) -> Option<(DomMatrixComponents, bool)> {
+    if text.is_empty() {
+        return Some((DomMatrixComponents::identity(), true));
+    }
     let trimmed = text.trim();
-    if trimmed.is_empty()
-        || trimmed.eq_ignore_ascii_case("none")
-        || css_comments_wrap_none_keyword(trimmed)
-    {
-        return Some(DomMatrixComponents::identity());
+    if trimmed.eq_ignore_ascii_case("none") || css_comments_wrap_none_keyword(trimmed) {
+        return Some((DomMatrixComponents::identity(), true));
+    }
+    if trimmed.is_empty() {
+        return None;
     }
 
     let functions = moli_css_parse::parse_transform_function_list(trimmed)?;
     if functions.is_empty() {
-        return Some(DomMatrixComponents::identity());
+        return None;
     }
+    let is_2d = functions.iter().all(is_2d_transform_function);
     let mut product = DomMatrixComponents::identity();
     for function in functions {
         product = product.multiply(components_from_transform_function(&function)?);
     }
-    Some(product)
+    Some((product, is_2d))
+}
+
+fn is_2d_transform_function(function: &CssTransformFunction) -> bool {
+    matches!(
+        function.name.as_str(),
+        "matrix"
+            | "translate"
+            | "translatex"
+            | "translatey"
+            | "scale"
+            | "scalex"
+            | "scaley"
+            | "rotate"
+            | "rotatez"
+            | "skewx"
+            | "skewy"
+    )
 }
 
 fn components_from_transform_function(

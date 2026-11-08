@@ -1,4 +1,14 @@
-use crate::commands::CommandReceiver;
+use crate::{
+    commands::{CommandReceiver, Reservation},
+    payload::Payload,
+};
+use std::collections::VecDeque;
+
+struct Outgoing {
+    data: Payload,
+    opcode: FrameOpcode,
+    _reservation: Reservation,
+}
 
 use crate::{
     Command, Event, FrameOpcode,
@@ -44,32 +54,79 @@ pub(crate) async fn run_synthetic_websocket_connection(
     )
     .await?;
 
-    while let Some(queued) = command_rx.recv().await {
+    let mut outgoing: VecDeque<Outgoing> = VecDeque::new();
+    let mut closing: Option<(Option<u16>, String, Reservation)> = None;
+    loop {
+        if let Some(message) = outgoing.front_mut() {
+            message.data.start_read();
+            if message.data.bytes().is_some() {
+                let message = outgoing.pop_front().expect("ready message");
+                send_event(
+                    &event_tx,
+                    Event::SendCompleted {
+                        socket_id,
+                        opcode: message.opcode,
+                        payload_length: message.data.len(),
+                    },
+                )
+                .await?;
+                continue;
+            }
+        } else if let Some((code, reason, reservation)) = closing.take() {
+            drop(command_rx);
+            drop(reservation);
+            send_event(
+                &event_tx,
+                Event::Close {
+                    socket_id,
+                    code: code.unwrap_or(1005),
+                    reason: code.map(|_| reason).unwrap_or_default(),
+                    was_clean: true,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        let preparing = outgoing
+            .front()
+            .is_some_and(|message| message.data.is_reading());
+        let queued = tokio::select! {
+            result = async { outgoing.front_mut().expect("preparing message").data.finish_read().await }, if preparing => {
+                if let Err(error) = result {
+                    drop(command_rx);
+                    outgoing.clear();
+                    send_error_and_close(&event_tx, socket_id, error).await?;
+                    return Ok(());
+                }
+                continue;
+            }
+            queued = command_rx.recv() => match queued {
+                Some(queued) => queued,
+                None => return Ok(()),
+            },
+        };
         let reservation = queued.reservation;
         match queued.command {
-            Command::SendText(text) => {
-                let amount = text.len();
-                send_event(
-                    &event_tx,
-                    Event::SendCompleted {
-                        socket_id,
-                        opcode: FrameOpcode::Text,
-                        payload_length: amount,
-                    },
-                )
-                .await?;
+            Command::SendText(text) if closing.is_none() => {
+                outgoing.push_back(Outgoing {
+                    data: Payload::Bytes(text.into_bytes()),
+                    opcode: FrameOpcode::Text,
+                    _reservation: reservation,
+                });
             }
-            Command::SendBinary(bytes) => {
-                let amount = bytes.len();
-                send_event(
-                    &event_tx,
-                    Event::SendCompleted {
-                        socket_id,
-                        opcode: FrameOpcode::Binary,
-                        payload_length: amount,
-                    },
-                )
-                .await?;
+            Command::SendBinary(bytes) if closing.is_none() => {
+                outgoing.push_back(Outgoing {
+                    data: Payload::Bytes(bytes),
+                    opcode: FrameOpcode::Binary,
+                    _reservation: reservation,
+                });
+            }
+            Command::SendBlob(data) if closing.is_none() => {
+                outgoing.push_back(Outgoing {
+                    data: Payload::Blob(data),
+                    opcode: FrameOpcode::Binary,
+                    _reservation: reservation,
+                });
             }
             Command::ReceiveText(data) => {
                 send_event(&event_tx, Event::TextMessage { socket_id, data }).await?;
@@ -80,6 +137,7 @@ pub(crate) async fn run_synthetic_websocket_connection(
             Command::ServerClose { code, reason } => {
                 drop(command_rx);
                 drop(reservation);
+                outgoing.clear();
                 let close_event_code = code.unwrap_or(1005);
                 let close_event_reason = code.map(|_| reason).unwrap_or_default();
                 send_event(
@@ -94,23 +152,27 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 .await?;
                 return Ok(());
             }
-            Command::Close { code, reason } => {
-                drop(command_rx);
-                drop(reservation);
-                let close_event_code = code.unwrap_or(1005);
-                let close_event_reason = code.map(|_| reason).unwrap_or_default();
+            Command::Close { code, reason } if closing.is_none() => {
+                if outgoing.is_empty() {
+                    // Nothing remains to drain: end admission before the event
+                    // sink can block, as in the original immediate-close path.
+                    drop(command_rx);
+                    drop(reservation);
+                    send_event(&event_tx, Event::Closing { socket_id }).await?;
+                    send_event(
+                        &event_tx,
+                        Event::Close {
+                            socket_id,
+                            code: code.unwrap_or(1005),
+                            reason: code.map(|_| reason).unwrap_or_default(),
+                            was_clean: true,
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
+                closing = Some((code, reason, reservation));
                 send_event(&event_tx, Event::Closing { socket_id }).await?;
-                send_event(
-                    &event_tx,
-                    Event::Close {
-                        socket_id,
-                        code: close_event_code,
-                        reason: close_event_reason,
-                        was_clean: true,
-                    },
-                )
-                .await?;
-                return Ok(());
             }
             Command::Fail(message) => {
                 drop(command_rx);
@@ -118,11 +180,9 @@ pub(crate) async fn run_synthetic_websocket_connection(
                 send_error_and_close(&event_tx, socket_id, message).await?;
                 return Ok(());
             }
+            _ => {}
         }
     }
-
-    // Owner drop can close this channel before task cancellation is observed.
-    Ok(())
 }
 
 fn response_header<'a>(

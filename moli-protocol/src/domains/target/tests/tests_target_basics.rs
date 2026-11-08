@@ -5,9 +5,10 @@ use crate::conn::PageTargetHost;
 async fn get_browser_contexts_returns_active_and_inactive_ids() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+    ctx.with_fixture(|conn| {
+        conn.inactive_browser_contexts
+            .push(BrowserContext::new("BID-B".into()))
+    });
 
     ctx.process_async(json!({"id": 5, "method": "Target.getBrowserContexts"}))
         .await;
@@ -20,7 +21,7 @@ async fn create_browser_context_adds_inactive_context() {
     let mut ctx = TestContext::new();
     ctx.process_async(json!({"id": 4, "method": "Target.createBrowserContext"}))
         .await;
-    let active_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+    let active_id = ctx.with_fixture(|conn| conn.browser_context.as_ref().unwrap().id.clone());
     ctx.expect_result(4, json!({ "browserContextId": active_id }), None);
 
     ctx.process_async(json!({"id": 5, "method": "Target.createBrowserContext"}))
@@ -31,9 +32,9 @@ async fn create_browser_context_adds_inactive_context() {
         .expect("second browser context id")
         .to_owned();
     assert_ne!(second_id, active_id);
-    assert_eq!(ctx.conn.browser_context.as_ref().unwrap().id, active_id);
-    assert_eq!(ctx.conn.inactive_browser_contexts.len(), 1);
-    assert_eq!(ctx.conn.inactive_browser_contexts[0].id, second_id);
+    ctx.with_fixture(|conn| assert_eq!(conn.browser_context.as_ref().unwrap().id, active_id));
+    ctx.with_fixture(|conn| assert_eq!(conn.inactive_browser_contexts.len(), 1));
+    ctx.with_fixture(|conn| assert_eq!(conn.inactive_browser_contexts[0].id, second_id));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -51,13 +52,14 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
         Some("SID-bg-await".to_owned()),
         "about:blank#bg-await".to_owned(),
     ));
-    ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.conn
-        .register_pending_inspector_await(1041201, Some("SID-active-await"));
-    ctx.conn
-        .register_pending_inspector_await(1041203, Some("SID-active-attached-await"));
-    ctx.conn
-        .register_pending_inspector_await(1041202, Some("SID-bg-await"));
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.with_fixture(|conn| {
+        conn.register_pending_inspector_await(1041201, Some("SID-active-await"))
+    });
+    ctx.with_fixture(|conn| {
+        conn.register_pending_inspector_await(1041203, Some("SID-active-attached-await"))
+    });
+    ctx.with_fixture(|conn| conn.register_pending_inspector_await(1041202, Some("SID-bg-await")));
 
     ctx.process_async(json!({
         "id": 1041200,
@@ -85,11 +87,12 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
         }),
         "target-local awaits must settle exactly once without touching the background owner"
     );
-    assert!(
-        ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(Some("SID-bg-await")),
-        "background owner await should remain pending after active target close"
-    );
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.has_pending_inspector_awaits_for_session_owner(Some("SID-bg-await")),
+            "background owner await should remain pending after active target close"
+        )
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -105,16 +108,18 @@ async fn create_browser_context_records_proxy_server_override() {
     }))
     .await;
     let (active_id, active_proxy, active_no_proxy) = {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        (
-            active.id.clone(),
-            active.default_http_proxy_override.clone(),
-            active.default_http_no_proxy_override.clone(),
-        )
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            (
+                active.id.clone(),
+                active.default_http_proxy_override.clone(),
+                active.default_http_no_proxy_override.clone(),
+            )
+        })
     };
     ctx.expect_result(41, json!({ "browserContextId": active_id }), None);
     assert_eq!(active_proxy.as_deref(), Some("http://proxy.test:8080"));
@@ -138,15 +143,17 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
     }))
     .await;
     let (active_id, active_no_proxy) = {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        (
-            active.id.clone(),
-            active.default_http_no_proxy_override.clone(),
-        )
+        ctx.with_fixture(|conn| {
+            let active = {
+                conn.browser_context
+                    .as_ref()
+                    .expect("active browser context")
+            };
+            (
+                active.id.clone(),
+                active.default_http_no_proxy_override.clone(),
+            )
+        })
     };
     ctx.expect_result(42, json!({ "browserContextId": active_id }), None);
     assert_eq!(active_no_proxy.as_deref(), Some("example.com,.internal"));
@@ -158,8 +165,7 @@ async fn attach_to_target_selects_inactive_browser_context() {
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 6,
@@ -168,12 +174,12 @@ async fn attach_to_target_selects_inactive_browser_context() {
     }))
     .await;
 
-    let session_id = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_session_id_owned())
-        .expect("session id after attach");
+    let session_id = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_session_id_owned())
+            .expect("session id after attach")
+    });
     ctx.expect_result(6, json!({ "sessionId": session_id }), None);
     ctx.expect_event(
         "Target.attachedToTarget",
@@ -185,13 +191,14 @@ async fn attach_to_target_selects_inactive_browser_context() {
             }
         })),
     );
-    assert_eq!(ctx.conn.browser_context.as_ref().unwrap().id, "BID-B");
-    assert!(
-        ctx.conn
-            .inactive_browser_contexts
-            .iter()
-            .any(|bc| bc.id == "BID-A")
-    );
+    ctx.with_fixture(|conn| assert_eq!(conn.browser_context.as_ref().unwrap().id, "BID-B"));
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.inactive_browser_contexts
+                .iter()
+                .any(|bc| bc.id == "BID-A")
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -201,8 +208,7 @@ async fn attach_to_target_creates_attached_session_and_keeps_target_context_acti
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
     inactive.attach_active_session("SID-B");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 61,
@@ -223,24 +229,26 @@ async fn attach_to_target_creates_attached_session_and_keeps_target_context_acti
         attached["params"]["sessionId"],
         json!(attached_session_id.as_str())
     );
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+    ctx.with_fixture(|conn| { assert_eq!(
+        conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-B"),
         "attachToTarget should keep the selected target context active while creating another session"
-    );
-    assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.attached_target_id_for_session(&attached_session_id)),
-        Some("TID-B")
-    );
-    assert!(
-        ctx.conn
-            .inactive_browser_contexts
-            .iter()
-            .any(|bc| bc.id == "BID-A")
-    );
+    ) });
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|bc| bc.attached_target_id_for_session(&attached_session_id)),
+            Some("TID-B")
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.inactive_browser_contexts
+                .iter()
+                .any(|bc| bc.id == "BID-A")
+        })
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -273,7 +281,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
 
     ctx.process_async(json!({
         "id": 20,
@@ -283,7 +291,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(20, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 21,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -321,7 +329,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     assert_eq!(target["method"], "Target.detachedFromTarget");
     assert_eq!(target["params"]["targetId"], "TID-000000000A");
 
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 
     server.abort();
 }
@@ -358,13 +366,14 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("Fetch fixture target")
-        .enable_primary_network_events();
+    ctx.with_fixture(|conn| {
+        conn.runtime_session_owner_slot_mut(Some("SID-1"))
+            .expect("Fetch fixture target")
+            .enable_primary_network_events()
+    });
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -437,7 +446,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
         message["method"] == json!("Inspector.detached") && message["sessionId"] == json!("SID-1")
     }));
 
-    assert!(ctx.conn.browser_context.is_none());
+    ctx.with_fixture(|conn| assert!(conn.browser_context.is_none()));
 
     server.abort();
 }
@@ -446,9 +455,10 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
 async fn create_target_for_inactive_browser_context_keeps_previously_active_context() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+    ctx.with_fixture(|conn| {
+        conn.inactive_browser_contexts
+            .push(BrowserContext::new("BID-B".into()))
+    });
 
     ctx.process_async(json!({
         "id": 1010,
@@ -466,30 +476,35 @@ async fn create_target_for_inactive_browser_context_keeps_previously_active_cont
         .expect("created target id")
         .to_owned();
     ctx.expect_result(1010, json!({ "targetId": target_id }), None);
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+    ctx.with_fixture(|conn| { assert_eq!(
+        conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-A"),
         "creating a target in another browser context must not leave that context selected as the default active context"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive browser context should still be present");
-    assert!(inactive.has_active_target());
+    ) });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive browser context should still be present")
+        };
+        assert!(inactive.has_active_target());
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_target_with_auto_attach_attaches_second_target_in_same_browser_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({"id": 10, "method": "Target.createTarget",
                            "params": {
@@ -514,13 +529,15 @@ async fn create_target_with_auto_attach_attaches_second_target_in_same_browser_c
         .to_owned();
     ctx.expect_result(10, json!({ "targetId": second_target_id }), None);
 
-    let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(
-        bc.background_target(&second_target_id)
-            .and_then(|target| target.session_id()),
-        Some(session_id.as_str())
-    );
+    ctx.with_fixture(|conn| {
+        let bc = conn.browser_context.as_ref().unwrap();
+        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+        assert_eq!(
+            bc.background_target(&second_target_id)
+                .and_then(|target| target.session_id()),
+            Some(session_id.as_str())
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -534,17 +551,21 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
         "<title>loaded</title><div id='ok'>loaded target</div>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 101,
@@ -567,7 +588,7 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
         .to_owned();
     ctx.expect_result(101, json!({ "targetId": second_target_id }), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 102,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -581,23 +602,25 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
     ctx.take_all();
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.active_session_id(), Some("SID-active"));
-    assert_eq!(
-        bc.background_target(&second_target_id)
-            .and_then(|target| target.session_id()),
-        Some(session_id.as_str())
-    );
-    assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "background Page.navigate should load the background target without activating it"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+        assert_eq!(bc.active_session_id(), Some("SID-active"));
+        assert_eq!(
+            bc.background_target(&second_target_id)
+                .and_then(|target| target.session_id()),
+            Some(session_id.as_str())
+        );
+        assert!(
+            bc.background_target(&second_target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "background Page.navigate should load the background target without activating it"
+        );
+    });
 
     ctx.process_async(json!({
         "id": 103,
@@ -622,17 +645,21 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
 async fn page_bring_to_front_activates_background_session_explicitly() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1021,
@@ -663,35 +690,37 @@ async fn page_bring_to_front_activates_background_session_explicitly() {
     .await;
     ctx.expect_result(1022, json!({}), Some(session_id.as_str()));
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
-    assert_eq!(bc.active_session_id(), Some(session_id.as_str()));
-    assert_eq!(
-        bc.background_target("TID-000000000A")
-            .and_then(|target| target.session_id()),
-        Some("SID-active")
-    );
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
+        assert_eq!(bc.active_session_id(), Some(session_id.as_str()));
+        assert_eq!(
+            bc.background_target("TID-000000000A")
+                .and_then(|target| target.session_id()),
+            Some("SID-active")
+        );
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_bring_to_front_on_inactive_context_restores_previous_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-active-a");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active-a");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active-a")
+    });
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-active-b".to_owned());
     inactive.attach_active_session("SID-active-b".to_owned());
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(inactive));
 
     ctx.process_async(json!({
         "id": 1023,
@@ -701,36 +730,44 @@ async fn page_bring_to_front_on_inactive_context_restores_previous_context() {
     .await;
     ctx.expect_result(1023, json!({}), Some("SID-active-b"));
 
-    assert_eq!(
-        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
-        Some("BID-A"),
-        "direct Page.bringToFront should preserve dispatcher-style context restore"
-    );
-    let inactive = ctx
-        .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-B")
-        .expect("inactive context should remain background");
-    assert_eq!(inactive.active_target_id(), Some("TID-active-b"));
-    assert_eq!(inactive.active_session_id(), Some("SID-active-b"));
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+            Some("BID-A"),
+            "direct Page.bringToFront should preserve dispatcher-style context restore"
+        )
+    });
+    ctx.with_fixture(|conn| {
+        let inactive = {
+            conn.inactive_browser_contexts
+                .iter()
+                .find(|bc| bc.id == "BID-B")
+                .expect("inactive context should remain background")
+        };
+        assert_eq!(inactive.active_target_id(), Some("TID-active-b"));
+        assert_eq!(inactive.active_session_id(), Some("SID-active-b"));
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_navigate_on_auto_attached_background_target_session_routes_without_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1031,
@@ -753,7 +790,7 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
         .to_owned();
     ctx.expect_result(1031, json!({ "targetId": second_target_id }), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
             "id": 1032,
             "method": "Page.navigate",
             "sessionId": session_id,
@@ -767,23 +804,25 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
     assert_eq!(navigation["result"]["frameId"], json!(second_target_id));
     ctx.take_all();
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.active_session_id(), Some("SID-active"));
-    assert_eq!(
-        bc.background_target(&second_target_id)
-            .and_then(|target| target.session_id()),
-        Some(session_id.as_str())
-    );
-    assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
-        "background Page.navigate should load the background target without activating it"
-    );
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+        assert_eq!(bc.active_session_id(), Some("SID-active"));
+        assert_eq!(
+            bc.background_target(&second_target_id)
+                .and_then(|target| target.session_id()),
+            Some(session_id.as_str())
+        );
+        assert!(
+            bc.background_target(&second_target_id)
+                .is_some_and(|target| target.has_loaded_page()),
+            "background Page.navigate should load the background target without activating it"
+        );
+    });
 
     ctx.process_async(json!({
             "id": 1033,
@@ -814,17 +853,21 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
         "<!doctype html><title>active</title>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1034,
@@ -866,7 +909,7 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     .await;
     ctx.expect_result(1036, json!({}), Some(session_id.as_str()));
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 1037,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -878,15 +921,17 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     assert_eq!(paused["params"]["resourceType"], json!("Document"));
     let network_id = paused["params"]["networkId"].clone();
     {
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-        assert!(
-            !bc.background_target(&second_target_id)
-                .expect("background target must exist")
-                .fetch_owner
-                .pending_state()
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+            assert!(
+                !bc.background_target(&second_target_id)
+                    .expect("background target must exist")
+                    .fetch_owner
+                    .pending_state()
+                    .is_empty()
+            );
+        });
     }
 
     ctx.process_async(json!({
@@ -906,19 +951,21 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     assert_eq!(failed["params"]["requestId"], network_id);
     assert_eq!(failed["params"]["errorText"], json!("Navigation stopped"));
     {
-        let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-        let background = bc
-            .background_target(&second_target_id)
-            .expect("background target should remain background");
-        assert_eq!(background.session_id(), Some(session_id.as_str()));
-        assert!(
-            bc.background_target(&second_target_id)
-                .expect("background target must exist")
-                .fetch_owner
-                .pending_state()
-                .is_empty()
-        );
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_ref().expect("browser context");
+            assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+            let background = bc
+                .background_target(&second_target_id)
+                .expect("background target should remain background");
+            assert_eq!(background.session_id(), Some(session_id.as_str()));
+            assert!(
+                bc.background_target(&second_target_id)
+                    .expect("background target must exist")
+                    .fetch_owner
+                    .pending_state()
+                    .is_empty()
+            );
+        });
     }
 }
 
@@ -927,17 +974,21 @@ async fn runtime_add_binding_and_preload_then_remove_on_auto_attached_background
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10360,
@@ -1070,17 +1121,21 @@ async fn runtime_remove_binding_on_background_target_session_routes_without_acti
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 1036,
@@ -1129,27 +1184,29 @@ async fn runtime_remove_binding_on_background_target_session_routes_without_acti
     .await;
     ctx.expect_result(1039, json!({}), Some(&session_id));
 
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("active browser context");
-    assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.active_session_id(), Some("SID-active"));
-    assert_eq!(
-        bc.background_target(&second_target_id)
-            .and_then(|target| target.session_id()),
-        Some(session_id.as_str())
-    );
-    assert!(
-        ctx.conn
+    ctx.with_fixture(|conn| {
+        let bc = {
+            conn.browser_context
+                .as_ref()
+                .expect("active browser context")
+        };
+        assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+        assert_eq!(bc.active_session_id(), Some("SID-active"));
+        assert_eq!(
+            bc.background_target(&second_target_id)
+                .and_then(|target| target.session_id()),
+            Some(session_id.as_str())
+        );
+    });
+    ctx.with_fixture(|conn| { assert!(
+        conn
             .target_devtools_session_state_for_session(Some(&session_id))
             .is_none_or(|state| state
                 .runtime_bindings
                 .iter()
                 .all(|binding| binding.name != "patchedBinding")),
         "binding definition should be removed from the background DevTools session without activation"
-    );
+    ) });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1157,17 +1214,21 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10390,
@@ -1248,7 +1309,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10396, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10397,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1312,7 +1373,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10399, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10400,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1374,17 +1435,21 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-    ctx.conn.set_auto_attach_owner(
-        None,
-        true,
-        false,
-        crate::conn::CdpTargetFilter::default_auto_attach(),
-    );
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
+    ctx.with_fixture(|conn| {
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+            true,
+        )
+    });
 
     ctx.process_async(json!({
         "id": 10402,
@@ -1473,7 +1538,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10408, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10409,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1578,7 +1643,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10412, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 10413,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1680,26 +1745,28 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
 async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
+    ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .attach_active_session("SID-active")
+    });
     let first_page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>first</body>")
+        .build_fixture_page("data:text/html,<body>first</body>")
         .await
         .expect("first target page should initialize");
     {
-        let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(first_page));
-        bc.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
+        ctx.with_fixture(|conn| {
+            let bc = conn.browser_context.as_mut().expect("browser context");
+            let _ = bc
+                .active_page_target_mut()
+                .runtime_slot
+                .replace_loaded_page(Some(first_page));
+            bc.active_page_target_mut().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = true;
+        });
     }
 
     ctx.process_async(json!({
@@ -1751,7 +1818,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     .await;
     ctx.expect_result(104152, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104153,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1766,6 +1833,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         second_navigation["result"]["frameId"],
         json!(second_target_id)
     );
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        second_navigation["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     ctx.take_all();
     ctx.process_async(json!({
         "id": 10415041,
@@ -1779,14 +1853,18 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         second_activate["result"]["result"]["value"],
         json!("second-target")
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
 
     ctx.process_async(json!({
         "id": 104154,
@@ -1809,35 +1887,37 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     }))
     .await;
     ctx.expect_result(104155, json!({}), None);
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
     let target_a_replay_url =
         "data:text/html,<title>target-a-replay</title><div id='ok'>target a replay</div>";
-    let target_a_commit = ctx
-        .conn
-        .prepare_loaded_navigation_commit_for_owner(&crate::conn::CommandOwnerScope::for_session(
-            "SID-active",
-        ))
-        .expect("target A commit state should be available before navigation");
-    assert!(
-        target_a_commit.runtime_frontend_enabled,
-        "target A commit state should keep Runtime enabled"
-    );
-    assert_eq!(
-        target_a_commit
-            .renderer_runtime_inspector_session_id
-            .as_deref(),
-        None,
-        "target A primary session should use the target default renderer inspector session"
-    );
+    ctx.with_fixture(|conn| {
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-active");
+        assert!(
+            conn.target_devtools_session_state_for_owner(&owner)
+                .unwrap()
+                .runtime_session_state
+                .runtime_frontend_enabled,
+            "target A commit state should keep Runtime enabled"
+        );
+        assert_eq!(
+            conn.target_renderer_runtime_inspector_session_id_for_owner(&owner),
+            None,
+            "target A primary session should use the target default renderer inspector session"
+        );
+    });
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104156,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1849,6 +1929,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     consume_main_document_navigation_start(&mut ctx);
     let first_replay = take_response_by_id(&mut ctx, 104156);
     assert_eq!(first_replay["result"]["frameId"], json!("TID-000000000A"));
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some("SID-active"),
+        "TID-000000000A",
+        first_replay["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     let first_worlds = ctx
         .sent
         .iter()
@@ -1872,16 +1959,20 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     }))
     .await;
     ctx.expect_result(104157, json!({}), None);
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .runtime_session_state
-        .runtime_frontend_enabled = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_session_state
+                .runtime_frontend_enabled = fixture_value;
+        });
+    }
 
-    ctx.process_async(json!({
+    ctx.navigate_with_page_events(json!({
         "id": 104158,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1893,6 +1984,13 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     consume_main_document_navigation_start(&mut ctx);
     let second_replay = take_response_by_id(&mut ctx, 104158);
     assert_eq!(second_replay["result"]["frameId"], json!(second_target_id));
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        second_replay["result"]["loaderId"].as_str().unwrap(),
+    )
+    .await;
     let second_worlds = ctx
         .sent
         .iter()

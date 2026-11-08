@@ -1,7 +1,7 @@
 use super::super::*;
 use super::request::PreparedWindowFetchRequest;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, RequestCacheMode, ScriptFetchRequestMetadata,
+    BrowserRequestMetadata, FetchCancelHandle, ScriptFetchRequestMetadata,
     should_request_be_blocked_due_to_bad_port,
 };
 
@@ -11,6 +11,7 @@ pub(super) fn record_intercepted_fetch(
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) {
+    let cache_mode = prepared.cache_mode();
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -27,6 +28,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.csp_report_context,
         prepared.credentials_mode,
         prepared.request_mode,
+        cache_mode,
         prepared.request_origin.clone(),
         prepared.network_partition_key,
         prepared.policy_context,
@@ -199,7 +201,8 @@ pub(super) fn spawn_network_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> u64 {
+) -> Result<u64, String> {
+    let cache_mode = prepared.cache_mode();
     let loader = prepared.resource_loader.request_client().clone();
     let mut request = Request::new_browser(
         &prepared.method,
@@ -213,11 +216,10 @@ pub(super) fn spawn_network_fetch(
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_redirect_mode(prepared.redirect_mode)
-    .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
-    .with_fetch_priority_hint(prepared.priority);
-    if prepared.referrer.is_empty() {
-        request = request.without_inferred_referrer();
-    }
+    .with_cache_mode(cache_mode)
+    .with_fetch_priority_hint(prepared.priority)
+    .with_fetch_referrer(&prepared.referrer)
+    .map_err(|error| error.to_string())?;
     if let Some(metadata) = window_fetch_script_metadata(&prepared) {
         request = request.with_script_fetch_metadata(metadata);
     }
@@ -261,6 +263,7 @@ pub(super) fn spawn_network_fetch(
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
+        cache_mode,
         prepared.request_origin.clone(),
         prepared.network_partition_key.clone(),
         prepared.policy_context,
@@ -294,15 +297,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_headers,
         request_body_text(&prepared.body),
     );
-    internal_id
-}
-
-fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
-    match cache {
-        "no-store" => RequestCacheMode::NoStore,
-        "no-cache" | "reload" => RequestCacheMode::Validate,
-        _ => RequestCacheMode::Default,
-    }
+    Ok(internal_id)
 }
 
 fn window_fetch_script_metadata(

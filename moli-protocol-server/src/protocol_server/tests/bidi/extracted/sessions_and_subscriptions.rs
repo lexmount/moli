@@ -171,6 +171,56 @@ async fn websocket_bidi_existing_classic_session_rejects_duplicate_upgrade() {
     let _ = first_socket.close(None).await;
     protocol_server.abort();
 }
+
+async fn assert_classic_dialog_survives_bidi_release(end_session: bool) {
+    let (addr, protocol_server) = spawn_test_protocol_server().await;
+    timeout(Duration::from_secs(5), async {
+        let session_id = classic_new_session_on_server_with_body(addr, json!({
+            "capabilities": {"alwaysMatch": {"unhandledPromptBehavior": "ignore"}}
+        })).await;
+        let mut socket = connect_classic_session_bidi_socket(addr, &session_id).await;
+        let attached = send_bidi_command(&mut socket, 1, "browser.getUserContexts", json!({})).await;
+        assert_eq!(attached["type"], "success");
+
+        if end_session {
+            let ended = send_bidi_command(&mut socket, 2, "session.end", json!({})).await;
+            assert_eq!(ended["type"], "success");
+        } else {
+            socket.close(None).await.expect("close attached BiDi client");
+        }
+        loop {
+            match socket.next().await {
+                Some(Ok(WsMessage::Close(_))) | Some(Err(_)) | None => break,
+                _ => {}
+            }
+        }
+
+        let url = classic_data_url_for_bidi_test("<script>globalThis.answer = confirm('retained native prompt'); document.title = 'resumed';</script>");
+        let navigated = classic_request_on_server_with_body(addr, "POST", &format!("/session/{session_id}/url"), json!({"url": url})).await;
+        assert_eq!(navigated["value"], json!(null));
+        let text = classic_request_on_server_with_body(addr, "GET", &format!("/session/{session_id}/alert/text"), json!({})).await;
+        assert_eq!(text["value"], "retained native prompt");
+        let accepted = classic_request_on_server_with_body(addr, "POST", &format!("/session/{session_id}/alert/accept"), json!({})).await;
+        assert_eq!(accepted["value"], json!(null));
+        let evaluated = classic_request_on_server_with_body(addr, "POST", &format!("/session/{session_id}/execute/sync"), json!({
+            "script": "return globalThis.answer;", "args": []
+        })).await;
+        assert_eq!(evaluated["value"], true);
+        classic_request_on_server_with_body(addr, "DELETE", &format!("/session/{session_id}"), json!({})).await;
+    }).await.expect("BiDi release must leave Classic able to finish the renderer dialog");
+    protocol_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_bidi_disconnect_preserves_classic_dialog_handler() {
+    assert_classic_dialog_survives_bidi_release(false).await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_session_end_preserves_classic_dialog_handler() {
+    assert_classic_dialog_survives_bidi_release(true).await;
+}
+
 #[tokio::test]
 async fn websocket_bidi_session_registry_allocates_unique_ids_across_connections() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
@@ -662,7 +712,19 @@ async fn websocket_bidi_session_subscribe_emits_context_created_before_create_re
         ))
         .await
         .expect("send session.subscribe");
-    assert_eq!(recv_ws_json(&mut socket).await["type"], json!("success"));
+    let subscribed = recv_until_id(&mut socket, 2).await;
+    assert_eq!(bidi_message_by_id(&subscribed, 2)["type"], "success");
+    let initial_contexts = bidi_events_by_method(&subscribed, "browsingContext.contextCreated");
+    assert_eq!(
+        initial_contexts.len(),
+        1,
+        "subscribe replays the existing Page"
+    );
+    assert_eq!(
+        initial_contexts[0]["params"]["parent"],
+        serde_json::Value::Null
+    );
+    assert_eq!(initial_contexts[0]["params"]["url"], "about:blank");
 
     socket
         .send(WsMessage::Text(
@@ -2506,7 +2568,7 @@ async fn websocket_bidi_session_unsubscribe_browsing_context_module_stops_naviga
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, context_id) = bidi_session_with_context(cdp_addr).await;
 
-    let subscribe = send_bidi_command(
+    let subscribe = send_bidi_command_response(
         &mut socket,
         3,
         "session.subscribe",

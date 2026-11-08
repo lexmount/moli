@@ -7,6 +7,7 @@ mod handle;
 mod handshake;
 mod headers;
 mod limits;
+mod payload;
 mod protocol;
 mod proxy;
 mod request;
@@ -46,3 +47,6 @@ mod terminal_tests;
 
 #[cfg(test)]
 mod runtime_tests;
+
+#[cfg(test)]
+mod blob_tests;

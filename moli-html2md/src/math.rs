@@ -1,0 +1,356 @@
+/// Locate a complete author-supplied TeX span before ordinary Markdown escaping.
+/// Dollar boundaries follow the usual non-space/non-digit rules, so prices do
+/// not consume the prose between two currency amounts.
+pub(crate) fn spans(text: &str) -> Vec<(usize, usize, String)> {
+    let mut steps = 0;
+    spans_counted(text, &mut steps)
+}
+
+fn spans_counted(text: &str, steps: &mut usize) -> Vec<(usize, usize, String)> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut backslashes = 0;
+    let mut dollar = None;
+    let mut double_dollar = None;
+    let mut paren = None;
+    let mut bracket = None;
+    let mut candidates = Vec::new();
+    while index < bytes.len() {
+        *steps += 1;
+        if bytes[index] == b'$' && backslashes % 2 == 0 {
+            if bytes.get(index + 1) == Some(&b'$') {
+                if let Some(start) = double_dollar.take() {
+                    accept_candidate(text, start, index + 2, 2, false, &mut candidates);
+                } else {
+                    double_dollar = Some(index);
+                }
+                index += 2;
+                backslashes = 0;
+                continue;
+            }
+            if let Some(start) = dollar.take() {
+                if !accept_candidate(text, start, index + 1, 1, true, &mut candidates)
+                    && text[index + 1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| !ch.is_whitespace())
+                {
+                    dollar = Some(index);
+                }
+            } else if text[index + 1..]
+                .chars()
+                .next()
+                .is_some_and(|ch| !ch.is_whitespace())
+            {
+                dollar = Some(index);
+            }
+            index += 1;
+            backslashes = 0;
+            continue;
+        }
+        if bytes[index] == b'\\' && backslashes % 2 == 0 {
+            match bytes.get(index + 1) {
+                Some(b'(') => {
+                    paren.get_or_insert(index);
+                }
+                Some(b'[') => {
+                    bracket.get_or_insert(index);
+                }
+                Some(b')' | b']') => {
+                    let start = if bytes[index + 1] == b')' {
+                        paren.take()
+                    } else {
+                        bracket.take()
+                    };
+                    if let Some(start) = start {
+                        accept_candidate(text, start, index + 2, 2, false, &mut candidates);
+                        // Complete explicit spans own their inner delimiters,
+                        // even when the payload needs a literal fallback.
+                        dollar = dollar.filter(|inner| *inner < start);
+                        double_dollar = double_dollar.filter(|inner| *inner < start);
+                        paren = paren.filter(|inner| *inner < start);
+                        bracket = bracket.filter(|inner| *inner < start);
+                    }
+                }
+                _ => {}
+            }
+            if matches!(bytes.get(index + 1), Some(b'(' | b'[' | b')' | b']')) {
+                index += 2;
+                backslashes = 0;
+                continue;
+            }
+        }
+        if bytes[index] == b'\\' {
+            backslashes += 1;
+        } else {
+            backslashes = 0;
+        }
+        index += 1;
+    }
+    candidates.sort_unstable_by_key(|candidate| candidate.0);
+    let mut end = 0;
+    candidates.retain(|candidate| {
+        let keep = candidate.0 >= end;
+        if keep {
+            end = candidate.1;
+        }
+        keep
+    });
+    candidates
+        .into_iter()
+        .filter_map(|(start, end, normalized)| normalized.map(|value| (start, end, value)))
+        .collect()
+}
+
+fn accept_candidate(
+    text: &str,
+    start: usize,
+    end: usize,
+    delimiter: usize,
+    single_dollar: bool,
+    candidates: &mut Vec<(usize, usize, Option<String>)>,
+) -> bool {
+    let content_start = start + delimiter;
+    let content_end = end - delimiter;
+    let followed_by_digit = text.as_bytes().get(end).is_some_and(u8::is_ascii_digit);
+    if content_start == content_end
+        || single_dollar
+            && (text[..content_end]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace)
+                || followed_by_digit)
+    {
+        return false;
+    }
+    let content = &text[content_start..content_end];
+    let span = &text[start..end];
+    let has_resource = contains_markdown_resource(content);
+    // Dollar candidates must retain their currency/resource rejection and retry
+    // rules. Explicit delimiters still own a resource-like literal fallback.
+    if has_resource && !span.starts_with('\\') {
+        return false;
+    }
+    // A rejected complete span still claims its range, so an inner dollar
+    // pair cannot turn part of a verbatim fallback into a different formula.
+    let normalized = if has_resource {
+        None
+    } else {
+        normalized_span(span)
+    };
+    candidates.push((start, end, normalized));
+    true
+}
+
+fn contains_markdown_resource(text: &str) -> bool {
+    text.contains("](") || text.contains("][") || text.contains("![[")
+}
+
+/// Keep TeX on one Markdown line. Comments and ordinary whitespace normalize;
+/// control spaces and verbatim payloads remain literal. HTML-like text inside
+/// text/verbatim commands cannot be preserved safely and rejects the span.
+/// Backslash delimiters become dollar delimiters understood by Markdown math.
+fn normalized_span(text: &str) -> Option<String> {
+    let delimiter = if text.starts_with("$$") || text.starts_with('\\') {
+        2
+    } else {
+        1
+    };
+    let mut output = String::new();
+    let mut chars = text[delimiter..text.len() - delimiter].chars().peekable();
+    let mut escaped = false;
+    let mut control_word = false;
+    let mut space = false;
+    let mut text_depth = 0usize;
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && !escaped {
+            let command: String = chars
+                .clone()
+                .take_while(char::is_ascii_alphabetic)
+                .collect();
+            if command == "verb" {
+                for _ in 0..command.len() {
+                    chars.next();
+                }
+                flush_space(&mut output, &mut space);
+                output.push_str(r"\verb");
+                if chars.peek() == Some(&'*') {
+                    output.push('*');
+                    chars.next();
+                }
+                let delimiter = chars
+                    .next()
+                    .filter(|c| !c.is_whitespace() && !c.is_ascii_alphabetic() && *c != '<')?;
+                output.push(delimiter);
+                let mut closed = false;
+                while let Some(c) = chars.next() {
+                    if matches!(c, '\n' | '\r') || html_start(c, chars.peek().copied()) {
+                        return None;
+                    }
+                    output.push(c);
+                    if c == delimiter {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+                control_word = false;
+                continue;
+            }
+            const TEXT_COMMANDS: &[&str] = &[
+                "text",
+                "mbox",
+                "textrm",
+                "textbf",
+                "textit",
+                "texttt",
+                "textsf",
+                "textnormal",
+                "hbox",
+            ];
+            if TEXT_COMMANDS.contains(&command.as_str()) {
+                let mut probe = chars.clone();
+                for _ in 0..command.len() {
+                    probe.next();
+                }
+                while probe.peek().is_some_and(char::is_ascii_whitespace) {
+                    probe.next();
+                }
+                if probe.next() == Some('{') {
+                    flush_space(&mut output, &mut space);
+                    output.push('\\');
+                    output.push_str(&command);
+                    output.push('{');
+                    chars = probe;
+                    text_depth += 1;
+                    control_word = false;
+                    continue;
+                }
+            }
+        }
+        if ch == '%' && !escaped {
+            while let Some(part) = chars.next() {
+                if part == '\r' {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    break;
+                }
+                if part == '\n' {
+                    break;
+                }
+            }
+            // TeX removes the comment and newline without inserting a token.
+            // Separate a control word only when concatenation would rename it.
+            space |= control_word && chars.peek().is_some_and(char::is_ascii_alphabetic);
+            continue;
+        }
+        if matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000c}') {
+            if escaped {
+                output.push(' ');
+            } else {
+                space = true;
+            }
+            escaped = false;
+            control_word = false;
+            continue;
+        }
+        if space {
+            control_word = false;
+        }
+        flush_space(&mut output, &mut space);
+        if html_start(ch, chars.peek().copied()) {
+            if text_depth > 0 {
+                return None;
+            }
+            output.push_str("< ");
+        } else {
+            output.push(ch);
+        }
+        if !escaped && text_depth > 0 {
+            if ch == '{' {
+                text_depth += 1;
+            } else if ch == '}' {
+                text_depth -= 1;
+            }
+        }
+        control_word = ch.is_ascii_alphabetic() && (escaped || control_word);
+        escaped = ch == '\\' && !escaped;
+    }
+    if output.is_empty() || text_depth > 0 || !markdown_payload_is_safe(&output) {
+        return None;
+    }
+    let inline = text.starts_with("\\(") || delimiter == 1;
+    if inline && output.ends_with(char::is_whitespace) {
+        // An empty TeX group preserves the preceding control space while
+        // keeping the inline Markdown closer after a non-space character.
+        output.push_str("{}");
+    }
+    let marker = if inline { "$" } else { "$$" };
+    Some(format!("{marker}{output}{marker}"))
+}
+
+fn markdown_payload_is_safe(text: &str) -> bool {
+    let mut escaped = false;
+    let mut brace_depth = 0usize;
+    for ch in text.chars() {
+        // The math reader tracks brace contexts even inside TeX's \verb.
+        match (ch, escaped) {
+            ('$', false) => return false,
+            ('{', false) => brace_depth += 1,
+            ('}', false) if brace_depth == 0 => return false,
+            ('}', false) => brace_depth -= 1,
+            _ => {}
+        }
+        escaped = ch == '\\' && !escaped;
+    }
+    // A trailing control escape would consume the closing Markdown delimiter.
+    !escaped && brace_depth == 0
+}
+
+fn flush_space(output: &mut String, pending: &mut bool) {
+    if *pending && !output.is_empty() {
+        output.push(' ');
+    }
+    *pending = false;
+}
+
+fn html_start(ch: char, next: Option<char>) -> bool {
+    ch == '<'
+        && next.is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spans_counted;
+
+    #[test]
+    fn math_scan_work_is_linear_for_backslashes_and_unclosed_delimiters() {
+        for text in ["\\\\".repeat(8_192), "\\(x ".repeat(4_096)] {
+            let mut steps = 0;
+            let _ = spans_counted(&text, &mut steps);
+            assert!(
+                steps <= text.len(),
+                "{steps} steps for {} bytes",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_unclosed_and_valid_math_is_scanned_once() {
+        for size in [256, 512, 1024, 2048] {
+            let text = r"\( $x_i$ ".repeat(size);
+            let mut steps = 0;
+            let spans = spans_counted(&text, &mut steps);
+            assert_eq!(spans.len(), size);
+            assert!(
+                steps <= text.len(),
+                "{steps} steps for {} bytes",
+                text.len()
+            );
+        }
+    }
+}

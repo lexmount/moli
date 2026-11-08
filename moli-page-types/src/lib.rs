@@ -326,6 +326,7 @@ pub struct NavigationResponse {
     pub redirected: bool,
     pub redirect_chain: Vec<NavigationRedirect>,
     pub from_cache: bool,
+    pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_headers: Option<Vec<(String, String)>>,
 }
@@ -346,6 +347,7 @@ impl Clone for NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_headers: self.network_request_headers.clone(),
         }
@@ -407,6 +409,7 @@ impl NavigationResponse {
                 .map(Into::into)
                 .collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -448,6 +451,7 @@ impl NavigationResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_headers: None,
         }
@@ -474,6 +478,7 @@ impl NavigationResponse {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             body,
@@ -506,6 +511,7 @@ impl NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         let (body, body_bytes) = self
@@ -543,6 +549,7 @@ impl NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)
@@ -2416,6 +2423,13 @@ pub struct PendingSubresourceFetchInfo {
     pub request_cookie_report: Option<StoredCookieQueryReport>,
 }
 
+/// The navigation identity and previous response for one child Document hop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildDocumentFetchRequest {
+    pub loader_id: String,
+    pub redirect: Option<NavigationRedirect>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingSubresourceResponseInfo {
     pub internal_id: u64,
@@ -2433,6 +2447,7 @@ pub struct PendingSubresourceResponseInfo {
     /// a response-stage Fetch pause is held.
     pub response_body: SubresourceResponseBody,
     pub from_cache: bool,
+    pub cache_state: moli_fetch::ResponseCacheState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2452,6 +2467,7 @@ pub struct PendingSubresourceAuthInfo {
     pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_body: SubresourceResponseBody,
     pub response_from_cache: bool,
+    pub response_cache_state: moli_fetch::ResponseCacheState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2604,6 +2620,9 @@ pub enum PendingSubresourceContinueEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubresourceResourceType {
+    /// A child frame's navigation request. Only CDP Fetch interception uses
+    /// this type; the request itself is issued by the child navigation.
+    Document,
     Script,
     Stylesheet,
     Image,
@@ -2656,7 +2675,8 @@ impl OptionalResourceFetchMask {
             SubresourceResourceType::Video => Some(Self::VIDEO),
             SubresourceResourceType::Media => Some(Self::MEDIA),
             SubresourceResourceType::TextTrack => Some(Self::TEXT_TRACK),
-            SubresourceResourceType::Script
+            SubresourceResourceType::Document
+            | SubresourceResourceType::Script
             | SubresourceResourceType::Stylesheet
             | SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
@@ -2706,6 +2726,7 @@ impl SubresourceRequestInitiatorType {
 impl SubresourceResourceType {
     pub fn as_cdp_type(self) -> &'static str {
         match self {
+            Self::Document => "Document",
             Self::Script => "Script",
             Self::Stylesheet => "Stylesheet",
             Self::Image => "Image",
@@ -2727,11 +2748,12 @@ impl SubresourceResourceType {
     /// Returns the resource type exposed by the CDP Fetch interception domain.
     ///
     /// Chromium's loader interception receives Fetch, EventSource, and XHR as
-    /// Blink's shared `kXhr` resource type. The Network domain still reports
-    /// their higher-level types through `as_cdp_type`.
+    /// Blink's shared `kXhr` resource type, and text tracks as `kMedia`. The
+    /// Network domain still reports their higher-level types through `as_cdp_type`.
     pub fn as_cdp_fetch_interception_type(self) -> &'static str {
         match self {
             Self::Fetch | Self::EventSource | Self::Xhr => "XHR",
+            Self::TextTrack => "Media",
             _ => self.as_cdp_type(),
         }
     }
@@ -3312,6 +3334,8 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub response_body: Option<SubresourceResponseBody>,
     #[serde(default)]
     pub from_cache: bool,
+    #[serde(default)]
+    pub cache_state: moli_fetch::ResponseCacheState,
 }
 
 /// A completed child main-resource request whose Network facts remain
@@ -3755,6 +3779,29 @@ mod tests {
     }
 
     #[test]
+    fn cdp_fetch_interception_groups_audio_video_and_text_tracks() {
+        let media = [
+            SubresourceResourceType::Audio,
+            SubresourceResourceType::Video,
+            SubresourceResourceType::Media,
+            SubresourceResourceType::TextTrack,
+        ];
+        for resource_type in media {
+            assert_eq!(resource_type.as_cdp_fetch_interception_type(), "Media");
+            for other in media {
+                assert!(resource_type.has_same_cdp_fetch_interception_type(other));
+            }
+            assert!(
+                !resource_type.has_same_cdp_fetch_interception_type(SubresourceResourceType::Font)
+            );
+        }
+        assert_eq!(
+            SubresourceResourceType::TextTrack.as_cdp_type(),
+            "TextTrack"
+        );
+    }
+
+    #[test]
     fn optional_resource_fetch_mask_round_trips_valid_bits_and_rejects_unknown_bits() {
         for bits in 0..=OptionalResourceFetchMask::ALL.bits() {
             assert_eq!(
@@ -4035,6 +4082,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             "hello".to_owned(),
@@ -4062,6 +4110,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             "é".to_owned(),
@@ -4100,6 +4149,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             String::new(),

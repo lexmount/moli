@@ -11,6 +11,13 @@ fn native_range_client_rects<'s>(
     range: v8::Local<'s, v8::Object>,
 ) -> Option<Result<Vec<ClientRect>, moli_layout::LayoutError>> {
     let boundaries = native_range_boundary_handles(scope, range)?;
+    native_range_client_rects_for_boundaries(scope, boundaries)
+}
+
+pub(super) fn native_range_client_rects_for_boundaries(
+    scope: &mut v8::PinScope<'_, '_>,
+    boundaries: RangeBoundaryHandles,
+) -> Option<Result<Vec<ClientRect>, moli_layout::LayoutError>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &*host_ptr };
     if !host.layout_policy().uses_real_layout() {
@@ -149,7 +156,7 @@ fn native_range_client_rects<'s>(
                     ));
                 }
             };
-            rects.extend(quads.into_iter().map(client_rect_from_layout_quad));
+            rects.extend(quads.into_iter().map(ClientRect::from));
         }
         Ok(rects)
     }))
@@ -163,18 +170,6 @@ fn collect_range_geometry_subtree(
     out.push(root);
     for child in dom_host.child_handles(root) {
         collect_range_geometry_subtree(dom_host, child, out);
-    }
-}
-
-fn client_rect_from_layout_quad(quad: moli_layout::LayoutQuad) -> ClientRect {
-    let rect = quad.bounding_rect();
-    ClientRect {
-        left: f64::from(rect.x),
-        top: f64::from(rect.y),
-        right: f64::from(rect.right()),
-        bottom: f64::from(rect.bottom()),
-        width: f64::from(rect.width),
-        height: f64::from(rect.height),
     }
 }
 

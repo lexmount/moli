@@ -657,7 +657,9 @@ fn build_trusted_type_object<'s>(
         .initialize(scope, object)
         .expect("TrustedType object declaration should initialize");
     kind.interface().initialize(scope, object).ok()?;
-    let _ = object.set_prototype(scope, prototype.into());
+    object
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(object)
 }
 
@@ -776,11 +778,7 @@ fn trusted_type_policy_create_callback<'s>(
     let Some(input) = crate::util::v8_string_from_utf16_units(scope, &input.0) else {
         return;
     };
-    let mut callback_arguments = Vec::with_capacity(args.length().max(1) as usize);
-    callback_arguments.push(input.into());
-    for index in 1..args.length() {
-        callback_arguments.push(args.get(index));
-    }
+    let callback_arguments = moli_v8_util::callback_arguments_with_first(&args, input.into());
     let value = match invoke_policy_callback(scope, policy, kind, &callback_arguments) {
         TrustedTypePolicyCallbackOutcome::Missing => {
             throw_type_error(
@@ -895,13 +893,18 @@ fn install_function_constructor_wrappers<'s>(
             .build(scope)
             .ok_or_else(|| anyhow!("failed to build {} Trusted Types wrapper", kind.name()))?;
         constructor.set_name(v8str(scope, kind.name()));
-        if let Some(prototype) = eval_object(scope, kind.prototype_expression()) {
-            let _ = prototype.define_own_property(
+        if let Some(prototype) = eval_object(scope, kind.prototype_expression())
+            && prototype.define_own_property(
                 scope,
                 v8str(scope, "constructor").into(),
                 constructor.into(),
                 v8::PropertyAttribute::DONT_ENUM,
-            );
+            ) != Some(true)
+        {
+            return Err(anyhow!(
+                "failed to install {} Trusted Types wrapper",
+                kind.name()
+            ));
         }
         if kind == TrustedFunctionConstructorKind::Function {
             define_global_value(scope, global, "Function", constructor.into())?;

@@ -20,6 +20,7 @@ async fn owner_loop_runs_file_reading_callback_without_retry_command() {
         r#"<!doctype html><body>
 <div id="drop" style="width: 100px; height: 100px">drop</div>
 <script>
+document.getElementById("drop").addEventListener("dragover", event => event.preventDefault());
 document.getElementById("drop").addEventListener("drop", event => {
   const reader =
     event.dataTransfer.items[0].webkitGetAsEntry().createReader();
@@ -35,37 +36,40 @@ document.getElementById("drop").addEventListener("drop", event => {
     )
     .await;
 
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
-            x: 10.0,
-            y: 10.0,
-            event_name: "drop".to_owned(),
-            data: RendererDragData {
-                items: Vec::new(),
-                files: Vec::new(),
-                directories: vec![RendererDraggedDirectory {
-                    name: "fixture".to_owned(),
-                    files: vec![RendererDraggedFile {
-                        bytes: b"body".to_vec(),
-                        mime_type: "text/plain".to_owned(),
-                        name: "entry.txt".to_owned(),
-                        last_modified: 1.0,
-                    }],
-                    directories: Vec::new(),
-                }],
-                drag_operations_mask: 1,
-            },
-            modifiers: 0,
-        })
-        .await
-        .expect("directory drop command should run");
-    assert!(
-        matches!(
-            reply,
-            RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
-        ),
-        "directory drop command should dispatch to the target"
-    );
+    let data = RendererDragData {
+        items: Vec::new(),
+        files: Vec::new(),
+        directories: vec![RendererDraggedDirectory {
+            name: "fixture".to_owned(),
+            files: vec![RendererDraggedFile {
+                bytes: b"body".to_vec(),
+                mime_type: "text/plain".to_owned(),
+                name: "entry.txt".to_owned(),
+                last_modified: 1.0,
+            }],
+            directories: Vec::new(),
+        }],
+        drag_operations_mask: 1,
+    };
+    for event_name in ["dragenter", "dragover", "drop"] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
+                x: 10.0,
+                y: 10.0,
+                event_name: event_name.to_owned(),
+                data: data.clone(),
+                modifiers: 0,
+            })
+            .await
+            .expect("directory drop command should run");
+        assert!(
+            matches!(
+                reply,
+                RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
+            ),
+            "directory drop command should dispatch to the target"
+        );
+    }
 
     tokio::time::timeout(Duration::from_secs(2), callback_request_seen)
         .await
@@ -132,6 +136,90 @@ navigator.webkitTemporaryStorage.queryUsageAndQuota((usage, quota) => {
         .await
         .expect("MiscPlatformApi owner-loop page should close");
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn child_frame_lifecycle_observer_fences_load_published_while_waiting() {
+    use futures_util::FutureExt as _;
+
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (origin, requested, release, server) = spawn_owner_wake_gated_server_with_content_type(
+        "/child-observer.js",
+        "globalThis.childDone = true;",
+        "text/javascript",
+    )
+    .await;
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{origin}/page")).unwrap(),
+        "<!doctype html><body></body>",
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: format!("const frame = document.createElement('iframe'); frame.srcdoc = `<script src='{origin}/child-observer.js'></script><p>ready</p>`; document.body.appendChild(frame); true"),
+        await_promise: false,
+    }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), requested)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut observer = Box::pin(
+        page.enqueue_protocol_command(
+            RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+                timeout_ms: 5_000,
+                loader: loader.clone(),
+            },
+        )
+        .unwrap()
+        .wait(),
+    );
+    // This later Native command witnesses admission of the waiting observer.
+    // Its admission frontier cannot contain the still-held child load.
+    page.enqueue_protocol_command(RendererPageCommand::ChildFrameTreeSnapshot)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert!(observer.as_mut().now_or_never().is_none());
+    release.send(()).unwrap();
+    let load_cursor = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let publication = output_rx.recv().await.unwrap();
+            if publication.records().iter().any(|record| {
+                matches!(
+                    record.item(),
+                    RendererOutputItem::OwnerAction(RendererOwnerAction::ChildFrameLoad { .. })
+                )
+            }) {
+                return publication.cursor();
+            }
+        }
+    })
+    .await
+    .expect("the held child must publish its load before observation completes");
+    let output = tokio::time::timeout(Duration::from_secs(5), observer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        output.completion().reply(),
+        RendererPageReply::Bool(true)
+    ));
+    let observed = output
+        .renderer_output_predecessor()
+        .expect("the completed observer must retain load output published during its wait")
+        .cursor();
+    assert_eq!(observed.stream(), load_cursor.stream());
+    assert!(
+        observed.sequence() >= load_cursor.sequence(),
+        "observer={observed:?}, load={load_cursor:?}"
+    );
+    server.await.unwrap();
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_lifecycle_best_effort_observes_autonomous_page_turns() {
     let runtime = JsRuntime::initialize();
@@ -4076,4 +4164,95 @@ fn owner_local_runtime_access_is_rejected_on_scaffold_lane() {
         })
         .await;
     });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_scheduler_waits_for_ready_timers_before_idle_callbacks() {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    for variant in [
+        "ready",
+        "source",
+        "child-ready",
+        "expired",
+        "cancelled",
+        "future",
+    ] {
+        let (base_url, completed, release_response, server) =
+            spawn_owner_wake_gated_server_with_content_type(
+                "/idle-ready-timers-completed",
+                "ok",
+                "text/plain",
+            )
+            .await;
+        let mut page = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse(&format!("{base_url}/page")).expect("page URL"),
+            "<!doctype html><body>idle timer admission</body>",
+        )
+        .await;
+        let expression = format!(
+            "{}\nsetTimeout(() => runIdleReadyTimerProbe({variant:?}, \
+             () => fetch('/idle-ready-timers-completed')), 50); 'scheduled'",
+            include_str!("../idle_ready_timers.js"),
+        );
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression,
+                await_promise: false,
+            })
+            .await
+            .expect("idle timer probe should schedule");
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::json!("scheduled"))
+        );
+        tokio::time::timeout(Duration::from_secs(2), completed)
+            .await
+            .expect("owner loop should finish idle probe without an observation command")
+            .expect("idle probe witness should remain open");
+        release_response.send(()).expect("release witness response");
+        server
+            .await
+            .expect("idle probe witness server should finish");
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: "JSON.stringify(__idleReadyTimerProbe)".to_owned(),
+                await_promise: false,
+            })
+            .await
+            .expect("completed idle timer probe should evaluate");
+        let value = renderer_json_value(reply).expect("idle probe result");
+        let row: serde_json::Value = serde_json::from_str(value.as_str().expect("probe JSON"))
+            .expect("idle probe observations should parse");
+        page.close_async()
+            .await
+            .expect("idle probe page should close");
+        assert_eq!(row["done"], true, "{variant}: {row}");
+        assert_eq!(row["didTimeout"], variant == "expired", "{variant}: {row}");
+        assert_eq!(row["futureRan"], false, "{variant}: {row}");
+        match variant {
+            "ready" | "source" | "child-ready" => {
+                assert_eq!(
+                    row["order"],
+                    serde_json::json!(["timer", "idle"]),
+                    "{variant}: {row}"
+                );
+            }
+            "expired" => {
+                assert!(
+                    row["order"] == serde_json::json!(["timer", "idle"])
+                        || row["order"] == serde_json::json!(["idle", "timer"]),
+                    "expired idle callbacks remain ordinary runnable tasks: {row}"
+                );
+            }
+            _ => assert_eq!(
+                row["order"],
+                serde_json::json!(["idle"]),
+                "{variant}: {row}"
+            ),
+        }
+    }
 }

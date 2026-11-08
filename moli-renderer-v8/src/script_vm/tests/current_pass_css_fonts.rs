@@ -41,7 +41,7 @@ async fn explicit_layout_selects_current_css_fonts_without_retiring_loaded_bytes
         &loader,
     );
     vm.set_layout_policy(LayoutPolicy::OnDemand);
-    vm.reconcile_document_web_fonts_for_layout();
+    vm.reconcile_document_font_resources();
     assert_eq!(explicit_font_width(&vm), 48.0);
     let loaded = vm
         ._context_host

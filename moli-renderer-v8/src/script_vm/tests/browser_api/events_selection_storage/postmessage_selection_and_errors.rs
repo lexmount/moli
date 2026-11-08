@@ -221,7 +221,8 @@ fn message_channel_construction_keeps_popup_realm_with_ambient_child_marker() {
         )
     };
 
-    let top_context_ptr = &vm.page_default_runtime.context as *const v8::Global<v8::Context>;
+    let top_context_ptr =
+        &vm.current_main_world().unwrap().context as *const v8::Global<v8::Context>;
     vm.with_context_scope_by_ptr(top_context_ptr, |scope, _host_ptr| {
         let _previous_child =
             crate::native_bridge::enter_active_child_window_scope(scope, Some(child_handle));
@@ -481,6 +482,278 @@ async fn window_message_handler_broadcast_channel_stays_in_lightweight_popup_own
 }
 
 #[test]
+fn closed_message_ports_preserve_transfer_identity_and_clone_aliases() {
+    let mut vm = new_storage_test_vm("https://closed-port-clone.test/");
+    let registry = vm._context_host.borrow().message_port_registry();
+    let result = vm.eval(r#"
+(() => {
+  const first = new MessageChannel(), second = new MessageChannel();
+  first.port2.close(); second.port2.close();
+  let duplicate;
+  try { structuredClone(0, {transfer:[first.port2, first.port2]}); }
+  catch (error) { duplicate = error.name; }
+  const result = structuredClone([first.port2, first.port2, second.port2], {
+    transfer:[first.port2, second.port2]
+  });
+  const aliases = result[0] === result[1] && result[0] !== result[2];
+  const distinct = result[0] !== first.port2 && result[2] !== second.port2;
+  let port = result[0], neutered = 0;
+  for (let count = 0; count < 4; count++) {
+    const original = port;
+    const copy = structuredClone([original, original], {transfer:[original]});
+    if (copy[0] !== copy[1] || copy[0] === original) throw new Error('lost clone identity');
+    original.close();
+    try { structuredClone(original, {transfer:[original]}); }
+    catch (error) { if (error.name === 'DataCloneError') neutered++; }
+    port = copy[0];
+  }
+  for (const item of [first.port1, first.port2, second.port1, second.port2, port, result[2]]) item.close();
+  return JSON.stringify({duplicate, aliases, distinct, neutered});
+})()
+"#).expect("closed ports should remain transferable");
+    assert_eq!(
+        result,
+        r#"{"duplicate":"DataCloneError","aliases":true,"distinct":true,"neutered":4}"#
+    );
+    assert_eq!(registry.endpoint_count(), 0);
+}
+
+#[test]
+fn failed_closed_port_deserialization_releases_materialized_endpoints() {
+    for message_event in [false, true] {
+        let mut vm = new_storage_test_vm("https://closed-port-wire-failure.test/");
+        let registry = vm._context_host.borrow().message_port_registry();
+        vm.eval(
+            r#"
+const channel = new MessageChannel(); channel.port1.close(); channel.port2.close();
+globalThis.closedWirePort = channel.port2;
+globalThis.closedWirePayload = [closedWirePort, 7];
+"#,
+        )
+        .expect("closed clone source");
+        assert_eq!(registry.endpoint_count(), 0);
+        vm.with_default_context_scope_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let port = global
+                .get(scope, crate::util::v8str(scope, "closedWirePort").into())
+                .expect("source port");
+            let port = v8::Local::<v8::Object>::try_from(port).expect("port object");
+            let value = global
+                .get(scope, crate::util::v8str(scope, "closedWirePayload").into())
+                .expect("clone source");
+            let transfers = crate::structured_clone::WireTransfers {
+                entries: &[crate::structured_clone::WireTransfer::MessagePort(port)],
+            };
+            let mut payload =
+                crate::structured_clone::serialize_for_wire_for_runtime_with_transfers(
+                    scope, value, &transfers,
+                )
+                .expect("closed-port wire payload");
+            assert!(payload.base.wire_bytes.pop().is_some());
+            let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+            let scope = &mut try_catch.init();
+            let failed = if message_event {
+                crate::structured_clone::deserialize_message_event_from_wire(scope, &payload)
+                    .is_none()
+            } else {
+                crate::structured_clone::deserialize_from_wire(scope, &payload).is_none()
+            };
+            assert!(
+                failed,
+                "truncated array framing must fail after its host-object entry"
+            );
+            if scope.has_caught() {
+                scope.reset();
+            }
+            Ok(())
+        })
+        .expect("failed clone should clean up native endpoints");
+        assert_eq!(
+            registry.endpoint_count(),
+            0,
+            "message_event={message_event}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn closed_window_message_ports_share_data_and_event_port_identity() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://closed-port-window.test/",
+        &loader,
+    );
+    let registry = vm._context_host.borrow().message_port_registry();
+    vm.eval(
+        r#"
+globalThis.closedPortResult = null;
+const first = new MessageChannel(), second = new MessageChannel();
+first.port1.close(); first.port2.close(); second.port1.close(); second.port2.close();
+onmessage = event => {
+  closedPortResult = [event.data[0] === event.data[1],
+    event.data[0] === event.ports[0], event.data[2] === event.ports[1],
+    event.ports[0] !== event.ports[1], event.ports.length];
+  for (const port of event.ports) port.close();
+};
+postMessage([first.port2, first.port2, second.port2], '*', [first.port2, second.port2]);
+"#,
+    )
+    .expect("closed Window message ports should prepare");
+    for _ in 0..20 {
+        if vm
+            .eval("String(closedPortResult !== null)")
+            .expect("delivery state")
+            == "true"
+        {
+            break;
+        }
+        let _ = vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("message turn");
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(closedPortResult)")
+            .expect("port identities"),
+        "[true,true,true,true,2]"
+    );
+    assert_eq!(registry.endpoint_count(), 0);
+}
+
+#[tokio::test]
+async fn transferred_closed_ports_discover_connection_errors_after_start() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://closed-port-start.test/",
+        &loader,
+    );
+    let registry = vm._context_host.borrow().message_port_registry();
+    let result = vm.eval(r#"
+const source = new MessageChannel(); source.port1.close(); source.port2.close();
+globalThis.closedReceiver = structuredClone(source.port2, {transfer:[source.port2]});
+globalThis.closeEvents = 0; closedReceiver.onclose = () => closeEvents++;
+globalThis.receiverError = () => {try {closedReceiver.postMessage(() => {}); return null;} catch (error) {return error.name;}};
+const beforeStart = receiverError();
+closedReceiver.start();
+JSON.stringify([beforeStart, receiverError(), closeEvents]);
+"#).expect("closed transfer connection should be reconstructed");
+    assert_eq!(result, r#"["DataCloneError","DataCloneError",0]"#);
+    for _ in 0..20 {
+        if vm
+            .eval("String(receiverError() === null)")
+            .expect("connection state")
+            == "true"
+        {
+            break;
+        }
+        let _ = vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("connection-error turn");
+    }
+    assert_eq!(
+        vm.eval(
+            r#"
+const copied = structuredClone(closedReceiver, {transfer:[closedReceiver]}); copied.close();
+JSON.stringify([receiverError(), closeEvents]);
+"#
+        )
+        .expect("closed receiver should transfer again"),
+        "[null,0]"
+    );
+    assert_eq!(registry.endpoint_count(), 0);
+}
+
+#[tokio::test]
+async fn message_port_peer_close_waits_for_receive_queue_activation() {
+    for activation in ["channel.port1.start()", "channel.port1.onmessage = null"] {
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://port-close-activation.test/",
+            &loader,
+        );
+        let registry = vm._context_host.borrow().message_port_registry();
+        vm.eval(
+            r#"
+globalThis.portCloseEvents = [];
+const channel = new MessageChannel();
+channel.port1.onclose = event => portCloseEvents.push([event.type, event.isTrusted]);
+channel.port2.close();
+"#,
+        )
+        .expect("retain an unstarted peer close");
+        for _ in 0..2 {
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("unstarted close wake");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(portCloseEvents)").unwrap(),
+            "[]",
+            "{activation}"
+        );
+        vm.eval(activation).expect("activate the receiving queue");
+        for _ in 0..8 {
+            if vm.eval("String(portCloseEvents.length)").unwrap() == "1" {
+                break;
+            }
+            vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("deliver pending peer close");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(portCloseEvents)").unwrap(),
+            r#"[["close",true]]"#,
+            "{activation}"
+        );
+        vm.eval("channel.port1.close()")
+            .expect("close remaining peer");
+        assert_eq!(registry.endpoint_count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn closing_and_transferring_a_port_cancels_later_callbacks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://closed-port-backlog.test/",
+        &loader,
+    );
+    let registry = vm._context_host.borrow().message_port_registry();
+    vm.eval(
+        r#"
+globalThis.closedPortMessages = [];
+const channel = new MessageChannel();
+channel.port1.onmessage = event => {
+  closedPortMessages.push(event.data);
+  if (event.data === 1) {
+    channel.port1.close();
+    const moved = structuredClone(channel.port1, {transfer:[channel.port1]});
+    moved.close();
+  }
+};
+channel.port2.postMessage(1); channel.port2.postMessage(2);
+"#,
+    )
+    .expect("port backlog should prepare");
+    for _ in 0..20 {
+        let _ = vm
+            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .expect("port delivery turn");
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify(closedPortMessages)")
+            .expect("only the active callback should finish"),
+        "[1]"
+    );
+    assert_eq!(registry.endpoint_count(), 1);
+    vm.eval("channel.port2.close()").expect("close sender");
+    assert_eq!(registry.endpoint_count(), 0);
+}
+
+#[test]
 fn window_post_message_requires_message_argument() {
     let mut vm = new_storage_test_vm("https://window-post-message-required-argument.test/");
 
@@ -548,6 +821,225 @@ fn body_onmessageerror_content_attribute_reflects_window_handler() {
     assert_eq!(
         result,
         r#"{"initial":[true,true],"compiledType":"function","reflected":true,"removed":true,"runs":11}"#
+    );
+}
+
+#[test]
+fn window_post_message_dictionary_conversion_preserves_abrupt_completion() {
+    let mut vm = new_storage_test_vm("https://window-message-conversion.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = mode => {
+    const log = [];
+    const sentinel = {};
+    const payload = { get value() { log.push('payload'); return 7; } };
+    const dictionary = {
+      get transfer() {
+        log.push('transfer');
+        if (mode === 'transfer') throw sentinel;
+        if (mode === 'entry') return [17];
+        if (mode === 'iterator') return {
+          [Symbol.iterator]() {
+            log.push('iterator');
+            return { next() { log.push('next'); throw sentinel; } };
+          }
+        };
+        return [];
+      },
+      get targetOrigin() {
+        log.push('origin');
+        if (mode === 'origin') throw sentinel;
+        if (mode === 'string') return {
+          toString() { log.push('string'); throw sentinel; }
+        };
+        return '*';
+      }
+    };
+    let options = new Proxy(dictionary, {
+      has() { log.push('has'); throw sentinel; }
+    });
+    if (mode === 'revoked') {
+      const pair = Proxy.revocable(dictionary, {});
+      pair.revoke();
+      options = pair.proxy;
+    }
+    let error = null;
+    let same = false;
+    try { postMessage(payload, options); }
+    catch (caught) {
+      same = caught === sentinel;
+      error = same ? 'sentinel' : caught.name;
+    }
+    return { mode, log, error, same };
+  };
+  return JSON.stringify([
+    'valid', 'transfer', 'origin', 'iterator', 'entry', 'string', 'revoked'
+  ].map(probe));
+})()
+"#,
+        )
+        .expect("Window postMessage dictionary conversion should evaluate");
+
+    let result: serde_json::Value = serde_json::from_str(&result).expect("conversion results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"valid","log":["transfer","origin","payload"],"error":null,"same":false},
+            {"mode":"transfer","log":["transfer"],"error":"sentinel","same":true},
+            {"mode":"origin","log":["transfer","origin"],"error":"sentinel","same":true},
+            {"mode":"iterator","log":["transfer","iterator","next"],"error":"sentinel","same":true},
+            {"mode":"entry","log":["transfer"],"error":"TypeError","same":false},
+            {"mode":"string","log":["transfer","origin","string"],"error":"sentinel","same":true},
+            {"mode":"revoked","log":[],"error":"TypeError","same":false}
+        ])
+    );
+}
+
+#[test]
+fn window_post_message_overloads_convert_only_the_selected_arguments() {
+    let mut vm = new_storage_test_vm("https://window-message-overloads.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = mode => {
+    let clones = 0;
+    let thirdReads = 0;
+    const payload = { get value() { clones++; return 7; } };
+    const unused = { get [Symbol.iterator]() { thirdReads++; throw new Error('unused'); } };
+    let error = null;
+    try {
+      if (mode === 'null') postMessage(payload, null);
+      else if (mode === 'undefined') postMessage(payload, undefined);
+      else if (mode === 'omitted') postMessage(payload);
+      else if (mode === 'third') postMessage(payload, {}, unused);
+      else if (mode === 'third-null') postMessage(payload, null, unused);
+      else if (mode === 'third-undefined') postMessage(payload, undefined, unused);
+      else if (mode === 'legacy-object') postMessage(payload, {
+        toString() { return '*'; },
+        get targetOrigin() { throw new Error('unselected dictionary'); },
+        get transfer() { throw new Error('unselected dictionary'); }
+      }, []);
+      else if (mode === 'entry') postMessage(payload, '*', [17]);
+      else postMessage(payload, Symbol('origin'));
+    } catch (caught) { error = caught.name; }
+    return { mode, clones, thirdReads, error };
+  };
+  return JSON.stringify([
+    'null','undefined','omitted','third','third-null','third-undefined',
+    'legacy-object','entry','symbol'
+  ].map(probe));
+})()
+"#,
+        )
+        .expect("Window postMessage overload conversion should evaluate");
+
+    let result: serde_json::Value = serde_json::from_str(&result).expect("overload results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"null","clones":1,"thirdReads":0,"error":null},
+            {"mode":"undefined","clones":1,"thirdReads":0,"error":null},
+            {"mode":"omitted","clones":1,"thirdReads":0,"error":null},
+            {"mode":"third","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"third-null","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"third-undefined","clones":0,"thirdReads":1,"error":"Error"},
+            {"mode":"legacy-object","clones":1,"thirdReads":0,"error":null},
+            {"mode":"entry","clones":0,"thirdReads":0,"error":"TypeError"},
+            {"mode":"symbol","clones":0,"thirdReads":0,"error":"TypeError"}
+        ])
+    );
+}
+
+#[test]
+fn window_post_message_serializes_before_target_origin_validation() {
+    let mut vm = new_storage_test_vm("https://window-message-prepare.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const rows = [];
+  for (const mode of ['throw', 'uncloneable', 'transfer', 'undefined']) {
+    const marker = {};
+    const buffer = new ArrayBuffer(8);
+    const channel = new MessageChannel();
+    let clones = 0;
+    const payload = {get value() {
+      clones++;
+      if (mode === 'throw') throw marker;
+      return mode === 'uncloneable' ? () => {} : 7;
+    }};
+    let error = null, same = false;
+    try {
+      if (mode === 'undefined') postMessage(payload, undefined, undefined);
+      else postMessage(payload, 'not a URL', mode === 'transfer' ? [channel.port2, buffer] : []);
+    } catch (caught) { same = caught === marker; error = same ? 'marker' : caught.name; }
+    let portUsable = false;
+    try {
+      const moved = structuredClone(channel.port2, {transfer: [channel.port2]});
+      moved.close(); portUsable = true;
+    } catch (_) {}
+    rows.push({mode, clones, error, same, bytes: buffer.byteLength, portUsable});
+    channel.port1.close(); channel.port2.close();
+  }
+  return JSON.stringify(rows);
+})()
+"#,
+        )
+        .expect("Window message preparation should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("preparation results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"throw","clones":1,"error":"marker","same":true,"bytes":8,"portUsable":true},
+            {"mode":"uncloneable","clones":1,"error":"DataCloneError","same":false,"bytes":8,"portUsable":true},
+            {"mode":"transfer","clones":1,"error":"SyntaxError","same":false,"bytes":0,"portUsable":true},
+            {"mode":"undefined","clones":1,"error":"SyntaxError","same":false,"bytes":8,"portUsable":true}
+        ])
+    );
+}
+
+#[test]
+fn window_post_message_validates_all_ports_after_buffer_transfer() {
+    let mut vm = new_storage_test_vm("https://window-message-port-commit.test/");
+    let result = vm.eval(r#"
+(() => {
+  const rows = [];
+  for (const mode of ['port', 'buffer']) for (const bufferFirst of [false, true]) {
+    const first = new MessageChannel(), second = new MessageChannel();
+    const buffer = new ArrayBuffer(8);
+    const payload = {get value() {
+      if (mode === 'port') {
+        const moved = structuredClone(second.port2, {transfer: [second.port2]});
+        moved.close();
+      } else structuredClone(buffer, {transfer: [buffer]});
+      return 7;
+    }};
+    const transfers = bufferFirst ? [buffer, first.port2, second.port2] : [first.port2, second.port2, buffer];
+    let error = null;
+    try { postMessage(payload, '*', transfers); } catch (caught) { error = caught.name; }
+    const usable = port => {
+      try { const moved = structuredClone(port, {transfer: [port]}); moved.close(); return true; }
+      catch (_) { return false; }
+    };
+    rows.push({mode, bufferFirst, error, bytes: buffer.byteLength,
+               first: usable(first.port2), second: usable(second.port2)});
+    for (const port of [first.port1, first.port2, second.port1, second.port2]) port.close();
+  }
+  return JSON.stringify(rows);
+})()
+"#).expect("Window port commit should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).expect("port commit results");
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"mode":"port","bufferFirst":false,"error":"DataCloneError","bytes":0,"first":true,"second":false},
+            {"mode":"port","bufferFirst":true,"error":"DataCloneError","bytes":0,"first":true,"second":false},
+            {"mode":"buffer","bufferFirst":false,"error":"DataCloneError","bytes":0,"first":true,"second":true},
+            {"mode":"buffer","bufferFirst":true,"error":"DataCloneError","bytes":0,"first":true,"second":true}
+        ])
     );
 }
 

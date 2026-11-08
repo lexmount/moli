@@ -394,8 +394,7 @@ impl HtmlParserSession {
                 .drain_discovered_modulepreload_link_candidates(),
             discovered_parser_meta_csp_candidates: sink
                 .drain_discovered_parser_meta_csp_candidates(),
-            discovered_blocking_stylesheet_inputs: sink
-                .drain_discovered_blocking_stylesheet_inputs(),
+            discovered_stylesheet_inputs: sink.drain_discovered_stylesheet_inputs(),
         }
     }
 

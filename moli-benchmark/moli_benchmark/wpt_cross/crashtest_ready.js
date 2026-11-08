@@ -1,7 +1,4 @@
-async function(expectedURL) {
-  if (location.href !== new URL(expectedURL, location.href).href) {
-    throw new Error('crashtest document changed before readiness check');
-  }
+async function() {
   // Follow wptrunner's test-wait.js: load, fonts, two animation frames,
   // then test-wait removal. TestRendered is dispatched once after observing.
   const root = document.documentElement;

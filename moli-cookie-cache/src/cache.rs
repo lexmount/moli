@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use moli_cookie_jar::{
     CookiePriority, StoredCookie, StoredCookiePartitionKey, StoredCookieSameSite,
-    StoredCookieSourceScheme,
+    StoredCookieSourceScheme, cookie_creation_time,
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -29,6 +29,8 @@ struct CachedCookie {
     secure: bool,
     http_only: bool,
     expires_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    creation_unix_micros: Option<i64>,
     same_site: CachedSameSite,
     priority: Option<CachedCookiePriority>,
     #[serde(default)]
@@ -121,6 +123,9 @@ impl CachedCookie {
         if self.partitioned && self.partition_key.is_none() {
             return None;
         }
+        let creation_time = self
+            .creation_unix_micros
+            .and_then(cookie_creation_time::from_unix_micros);
 
         Some(StoredCookie {
             name: self.name,
@@ -139,6 +144,7 @@ impl CachedCookie {
             source_scheme: self.source_scheme.into(),
             source_port: self.source_port,
             creation_index: 0,
+            creation_time,
             last_access_index: 0,
         })
     }
@@ -166,6 +172,9 @@ impl CachedCookie {
             secure: cookie.secure,
             http_only: cookie.http_only,
             expires_unix: cookie.expires.map(|expires| expires.unix_timestamp()),
+            creation_unix_micros: cookie
+                .creation_time
+                .and_then(cookie_creation_time::to_unix_micros),
             same_site: cookie.same_site.into(),
             priority: cookie.priority.map(Into::into),
             partitioned: partition_key.is_some(),

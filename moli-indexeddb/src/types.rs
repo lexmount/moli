@@ -2,6 +2,52 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Key, KeyPath};
 
+/// Renderer-neutral bounds for storage and index queries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyRange {
+    pub lower: Option<Key>,
+    pub upper: Option<Key>,
+    pub lower_open: bool,
+    pub upper_open: bool,
+}
+
+impl KeyRange {
+    pub fn validate(&self) -> Result<(), crate::IndexedDbError> {
+        for key in self.lower.iter().chain(self.upper.iter()) {
+            key.validate_depth()
+                .map_err(|message| crate::IndexedDbError::Data(message.to_owned()))?;
+        }
+        if let (Some(lower), Some(upper)) = (&self.lower, &self.upper)
+            && (lower > upper || (lower == upper && (self.lower_open || self.upper_open)))
+        {
+            return Err(crate::IndexedDbError::Data(
+                "invalid IndexedDB key range".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn contains(&self, key: &Key) -> bool {
+        let above_lower = self
+            .lower
+            .as_ref()
+            .is_none_or(|lower| key > lower || (key == lower && !self.lower_open));
+        let below_upper = self
+            .upper
+            .as_ref()
+            .is_none_or(|upper| key < upper || (key == upper && !self.upper_open));
+        above_lower && below_upper
+    }
+}
+
+/// One materialized result, optionally projected to keys only.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordSnapshot {
+    pub key: Key,
+    pub primary_key: Key,
+    pub value: Option<IndexedDbValue>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ObjectStoreOptions {
     pub key_path: Option<KeyPath>,
@@ -17,7 +63,7 @@ pub struct IndexOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexInfo {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub key_path: KeyPath,
     pub unique: bool,
     pub multi_entry: bool,
@@ -32,44 +78,11 @@ pub enum TransactionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpenDisposition {
-    Existing,
-    UpgradeNeeded { old_version: u64, new_version: u64 },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenOptions {
-    pub origin: String,
-    pub name: String,
-    pub version: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenResult {
-    pub database: DatabaseHandle,
-    pub disposition: OpenDisposition,
-    pub upgrade_transaction: Option<TransactionHandle>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DatabaseInfo {
-    pub name: String,
-    pub version: u64,
-    pub object_store_names: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DatabaseNameAndVersion {
-    pub name: String,
-    pub version: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
-    pub name: String,
+    pub name: crate::IndexedDbName,
     pub key_path: Option<KeyPath>,
     pub auto_increment: bool,
-    pub index_names: Vec<String>,
+    pub index_names: Vec<crate::IndexedDbName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +97,7 @@ pub struct IndexedDbQuotaCheck {
 /// objects are kept as separate typed payloads. The storage backend owns both
 /// parts so record replacement, deletion, quota accounting, and persistence
 /// have one lifecycle boundary.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexedDbValue {
     pub(crate) wire_bytes: Vec<u8>,
     pub(crate) external_objects: Vec<IndexedDbExternalObject>,
@@ -109,6 +122,64 @@ impl IndexedDbValue {
     pub fn into_parts(self) -> (Vec<u8>, Vec<IndexedDbExternalObject>) {
         (self.wire_bytes, self.external_objects)
     }
+
+    pub fn has_deferred_blob_bytes(&self) -> bool {
+        self.external_objects.iter().any(|object| match object {
+            IndexedDbExternalObject::Blob { bytes, .. }
+            | IndexedDbExternalObject::File { bytes, .. } => bytes.as_bytes().is_none(),
+            _ => false,
+        })
+    }
+
+    /// Prepare immutable Blob attachments before enqueueing a SQL write. This
+    /// may read another database, so it must not run inside a SQLite job.
+    pub fn prepare_blob_bytes(
+        mut self,
+        complete: impl FnOnce(Self, Result<(), crate::IndexedDbError>) + Send + 'static,
+    ) {
+        let mut parts = Vec::new();
+        let mut selected = Vec::new();
+        for (index, object) in self.external_objects.iter().enumerate() {
+            if let IndexedDbExternalObject::Blob { bytes, .. }
+            | IndexedDbExternalObject::File { bytes, .. } = object
+                && bytes.as_bytes().is_none()
+            {
+                selected.push((index, bytes.len()));
+                parts.push(bytes.clone());
+            }
+        }
+        if parts.is_empty() {
+            complete(self, Ok(()));
+            return;
+        }
+        let data = match moli_file_api::BlobData::concat(parts) {
+            Ok(data) => data,
+            Err(error) => {
+                complete(self, Err(crate::IndexedDbError::Io(error.to_string())));
+                return;
+            }
+        };
+        data.read_all(Box::new(move |result| {
+            let bytes: moli_file_api::BlobData = match result {
+                Ok(bytes) => bytes.into(),
+                Err(error) => {
+                    complete(self, Err(crate::IndexedDbError::Io(error.to_string())));
+                    return;
+                }
+            };
+            let mut offset = 0;
+            for (index, length) in selected {
+                let data = bytes.slice(offset..offset + length);
+                match &mut self.external_objects[index] {
+                    IndexedDbExternalObject::Blob { bytes, .. }
+                    | IndexedDbExternalObject::File { bytes, .. } => *bytes = data,
+                    _ => unreachable!("selected a Blob attachment"),
+                }
+                offset += length;
+            }
+            complete(self, Ok(()));
+        }));
+    }
 }
 
 impl From<Vec<u8>> for IndexedDbValue {
@@ -117,14 +188,14 @@ impl From<Vec<u8>> for IndexedDbValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IndexedDbExternalObject {
     Blob {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
     },
     File {
-        bytes: Vec<u8>,
+        bytes: moli_file_api::BlobData,
         mime_type: String,
         name: String,
         last_modified: f64,
@@ -157,16 +228,6 @@ pub enum IndexedDbFileSystemHandleKind {
 pub enum IndexedDbFileSystemHandleBucket {
     Default,
     Named { bucket_id: u64 },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RequestOutcome {
-    Value(Option<IndexedDbValue>),
-    Values(Vec<IndexedDbValue>),
-    Key(Option<Key>),
-    Keys(Vec<Key>),
-    Count(u64),
-    Unit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

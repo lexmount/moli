@@ -4421,7 +4421,11 @@ async fn child_browsing_context_navigation_forward_result_promises_stay_window_l
         ))
         .await?;
     browser
-        .wait_for_page_delay(&mut page, Duration::from_millis(250))
+        .wait_for_script_truthy(
+            &mut page,
+            r#"document.body.dataset.childTimeoutFinished === "true""#,
+            Duration::from_secs(2),
+        )
         .await?;
 
     assert!(

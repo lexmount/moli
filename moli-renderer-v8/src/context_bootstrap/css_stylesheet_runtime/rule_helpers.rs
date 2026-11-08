@@ -1,4 +1,5 @@
 use super::*;
+pub(crate) use crate::webidl::dom_string_property_value as cssom_dom_string_property_value;
 
 pub(crate) fn object_list_contains<'s>(
     objects: &[v8::Local<'s, v8::Object>],
@@ -250,25 +251,6 @@ pub(crate) fn local_nested_style_block_text_contains_rules(style_text: &str) -> 
     )
     .map(|mutation| css_rule_snapshots_contain_nested_rules(&mutation.rules))
     .unwrap_or(true)
-}
-
-pub(crate) fn cssom_dom_string_property_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<String> {
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member(owner, property),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 pub(crate) fn lightweight_css_style_object_css_text<'s>(

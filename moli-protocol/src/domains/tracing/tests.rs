@@ -6,7 +6,7 @@ use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSessionRoute};
 use crate::testing::TestContext;
 
 fn context_with_page_sessions() -> TestContext {
-    let mut ctx = TestContext::new();
+    let ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-tracing".to_owned());
     browser_context.set_active_target_id("TID-tracing".to_owned());
     browser_context.set_target_url("https://example.test/page#fragment".to_owned());
@@ -14,8 +14,7 @@ fn context_with_page_sessions() -> TestContext {
     assert!(
         browser_context.assign_attached_session_to_target("TID-tracing", "SID-peer".to_owned(),)
     );
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser_context));
     ctx
 }
 
@@ -188,7 +187,7 @@ async fn tracing_is_browser_global_but_only_the_starting_session_can_end_it() {
     }))
     .await;
     ctx.expect_error(13, -32000, "Tracing is not started");
-    assert!(ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(conn.tracing_state.is_active()));
 
     ctx.process_async(json!({
         "id": 14,
@@ -197,7 +196,7 @@ async fn tracing_is_browser_global_but_only_the_starting_session_can_end_it() {
     }))
     .await;
     ctx.expect_result(14, json!({}), Some("SID-owner"));
-    assert!(!ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(!conn.tracing_state.is_active()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -297,7 +296,7 @@ async fn owner_cleanup_cancels_trace_without_emitting_completion() {
             "targetId": "TID-tracing",
         })),
     );
-    assert!(!ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(!conn.tracing_state.is_active()));
     assert!(
         ctx.sent.is_empty(),
         "owner cleanup must not flush trace output"
@@ -326,19 +325,21 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
     );
     let mut ctx = context_with_page_sessions();
 
-    let start = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 32,
-            "method": "Tracing.start",
-            "sessionId": "SID-peer",
-            "params": {
-                "traceConfig": {
-                    "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
-                }
-            },
-        })
-        .to_string(),
-    );
+    let start = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 32,
+                "method": "Tracing.start",
+                "sessionId": "SID-peer",
+                "params": {
+                    "traceConfig": {
+                        "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
+                    }
+                },
+            })
+            .to_string(),
+        )
+    });
     let pending_start = match start {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => panic!("CPU Tracing.start must be pending"),
@@ -350,10 +351,17 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
     .await
     .expect("initial CPU trace should start");
     assert!(start_tasks > 0);
-    let start_step = ctx
-        .conn
-        .complete_pending_command_dispatch(completed_start)
-        .await;
+    let start_step = {
+        let completed = completed_start;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         start_step.into_parts().0,
         vec![json!({
@@ -363,53 +371,66 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
         })]
     );
 
-    let detach = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 32_001,
-            "method": "Target.detachFromTarget",
-            "params": { "sessionId": "SID-peer" },
-        })
-        .to_string(),
-    );
+    let detach = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 32_001,
+                "method": "Target.detachFromTarget",
+                "params": { "sessionId": "SID-peer" },
+            })
+            .to_string(),
+        )
+    });
     let pending_detach = match detach {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(plan) => {
             panic!("CPU trace owner detach should wait for isolate cleanup: {plan:?}")
         }
     };
-    let completed_detach = pending_detach.wait().await;
-    let (detach_step, stop_tasks) = tokio::time::timeout(
+    let (completed_detach, stop_tasks) = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         drive_owner_tasks_until(
             &mut owner_task_rx,
-            ctx.conn.complete_pending_command_dispatch(completed_detach),
+            ctx.drive_owned_wait(pending_detach.wait()),
         ),
     )
     .await
     .expect("owner detach should wait for CPU trace cancellation");
     assert!(stop_tasks > 0);
+    let detach_step = ctx
+        .state
+        .with_state(|state| {
+            state.complete_command_dispatch_with_context(
+                completed_detach,
+                &mut crate::conn::CommandDispatchContext::default(),
+            )
+        })
+        .unwrap();
+    let (messages, scheduler) = ctx.complete_command_task_step_for_test(detach_step).await;
+    ctx.route_direct_command_output_for_test(Vec::new(), scheduler)
+        .await;
     assert!(
-        detach_step
-            .into_parts()
-            .0
+        messages
             .iter()
             .any(|message| { message["id"] == json!(32_001) && message["result"] == json!({}) })
     );
-    assert!(!ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(!conn.tracing_state.is_active()));
 
-    let replacement_start = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 33,
-            "method": "Tracing.start",
-            "sessionId": "SID-owner",
-            "params": {
-                "traceConfig": {
-                    "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
-                }
-            },
-        })
-        .to_string(),
-    );
+    let replacement_start = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 33,
+                "method": "Tracing.start",
+                "sessionId": "SID-owner",
+                "params": {
+                    "traceConfig": {
+                        "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
+                    }
+                },
+            })
+            .to_string(),
+        )
+    });
     let pending_replacement = match replacement_start {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(plan) => {
@@ -423,10 +444,17 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
     .await
     .expect("replacement CPU trace should start");
     assert!(replacement_start_tasks > 0);
-    let replacement_step = ctx
-        .conn
-        .complete_pending_command_dispatch(completed_replacement)
-        .await;
+    let replacement_step = {
+        let completed = completed_replacement;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     assert_eq!(
         replacement_step.into_parts().0,
         vec![json!({
@@ -438,11 +466,16 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
 
     let (cancelled, replacement_stop_tasks) = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        drive_owner_tasks_until(
-            &mut owner_task_rx,
-            ctx.conn
-                .cancel_tracing_for_session_owner_async(Some("SID-owner")),
-        ),
+        drive_owner_tasks_until(&mut owner_task_rx, async {
+            let pending = ctx.with_fixture(|conn| {
+                conn.start_cancel_tracing_for_session_owner(Some("SID-owner"))
+            });
+            let Some(pending) = pending else {
+                return false;
+            };
+            pending.wait().await;
+            true
+        }),
     )
     .await
     .expect("replacement CPU trace should cancel cleanly");
@@ -521,7 +554,7 @@ async fn unsupported_trace_encodings_fail_explicitly() {
         .await;
         ctx.expect_error(id, -32602, message);
     }
-    assert!(!ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(!conn.tracing_state.is_active()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -572,19 +605,21 @@ async fn cpu_trace_start_response_waits_for_existing_isolate_ack() {
     );
     let mut ctx = context_with_page_sessions();
 
-    let start = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 70,
-            "method": "Tracing.start",
-            "sessionId": "SID-owner",
-            "params": {
-                "traceConfig": {
-                    "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
-                }
-            },
-        })
-        .to_string(),
-    );
+    let start = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 70,
+                "method": "Tracing.start",
+                "sessionId": "SID-owner",
+                "params": {
+                    "traceConfig": {
+                        "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
+                    }
+                },
+            })
+            .to_string(),
+        )
+    });
     let pending = match start {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => {
@@ -602,7 +637,16 @@ async fn cpu_trace_start_response_waits_for_existing_isolate_ack() {
     let completed = tokio::time::timeout(std::time::Duration::from_secs(2), pending.wait())
         .await
         .expect("Tracing.start should complete after the data-source ack");
-    let step = ctx.conn.complete_pending_command_dispatch(completed).await;
+    let step = {
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (messages, scheduler_events) = step.into_parts();
     assert!(scheduler_events.is_empty());
     assert_eq!(
@@ -637,33 +681,37 @@ async fn cpu_trace_start_reports_chromium_error_when_stopped_before_ack() {
         }),
         moli_v8_platform::ProcessEnvironmentNotifications::default().notifier(|| {}),
     );
-    let mut ctx = context_with_page_sessions();
+    let ctx = context_with_page_sessions();
 
-    let start = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 72,
-            "method": "Tracing.start",
-            "sessionId": "SID-owner",
-            "params": {
-                "traceConfig": {
-                    "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
-                }
-            },
-        })
-        .to_string(),
-    );
+    let start = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 72,
+                "method": "Tracing.start",
+                "sessionId": "SID-owner",
+                "params": {
+                    "traceConfig": {
+                        "includedCategories": ["disabled-by-default-v8.cpu_profiler"]
+                    }
+                },
+            })
+            .to_string(),
+        )
+    });
     let pending_start = match start {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => panic!("CPU Tracing.start must be pending"),
     };
-    let end = ctx.conn.start_command_dispatch(
-        &json!({
-            "id": 73,
-            "method": "Tracing.end",
-            "sessionId": "SID-owner",
-        })
-        .to_string(),
-    );
+    let end = ctx.with_fixture(|conn| {
+        conn.start_command_dispatch(
+            &json!({
+                "id": 73,
+                "method": "Tracing.end",
+                "sessionId": "SID-owner",
+            })
+            .to_string(),
+        )
+    });
     let pending_end = match end {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(_) => panic!("CPU Tracing.end must wait for owner cleanup"),
@@ -677,10 +725,17 @@ async fn cpu_trace_start_reports_chromium_error_when_stopped_before_ack() {
     let completed_end = tokio::time::timeout(std::time::Duration::from_secs(2), pending_end.wait())
         .await
         .expect("Tracing.end should complete after the owner callback cleans up");
-    let end_step = ctx
-        .conn
-        .complete_pending_command_dispatch(completed_end)
-        .await;
+    let end_step = {
+        let completed = completed_end;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (end_messages, scheduler_events) = end_step.into_parts();
     assert!(scheduler_events.is_empty());
     assert_eq!(end_messages[0]["id"], 73);
@@ -710,17 +765,24 @@ async fn cpu_trace_start_reports_chromium_error_when_stopped_before_ack() {
     );
 
     let completed_start = pending_start.wait().await;
-    let start_step = ctx
-        .conn
-        .complete_pending_command_dispatch(completed_start)
-        .await;
+    let start_step = {
+        let completed = completed_start;
+        ctx.state
+            .with_state(|state| {
+                state.complete_command_dispatch_with_context(
+                    completed,
+                    &mut crate::conn::CommandDispatchContext::default(),
+                )
+            })
+            .expect("live test owner")
+    };
     let (start_messages, scheduler_events) = start_step.into_parts();
     assert!(scheduler_events.is_empty());
     assert!(
         start_messages.is_empty(),
         "Tracing.end already emitted the interrupted start response"
     );
-    assert!(!ctx.conn.tracing_state.is_active());
+    ctx.with_fixture(|conn| assert!(!conn.tracing_state.is_active()));
 
     registration.unregister();
     drop(isolate);
@@ -729,16 +791,20 @@ async fn cpu_trace_start_reports_chromium_error_when_stopped_before_ack() {
 #[test]
 fn tracing_owner_scope_distinguishes_flattened_sessions() {
     let ctx = context_with_page_sessions();
-    assert_eq!(
-        ctx.conn.session_route(Some("SID-peer")),
-        Some(CdpSessionRoute::PageTarget {
-            browser_context_id: "BID-tracing".to_owned(),
-            target_id: "TID-tracing".to_owned(),
-            session_key: moli_page_types::DevToolsSessionKey::Attached("SID-peer".to_owned()),
-        })
-    );
-    assert_ne!(
-        ctx.conn.tracing_owner_scope(Some("SID-owner")),
-        ctx.conn.tracing_owner_scope(Some("SID-peer")),
-    );
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.session_route(Some("SID-peer")),
+            Some(CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-tracing".to_owned(),
+                target_id: "TID-tracing".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Attached("SID-peer".to_owned()),
+            })
+        )
+    });
+    ctx.with_fixture(|conn| {
+        assert_ne!(
+            conn.tracing_owner_scope(Some("SID-owner")),
+            conn.tracing_owner_scope(Some("SID-peer")),
+        )
+    });
 }

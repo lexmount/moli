@@ -108,7 +108,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "anyrender"
 version = "0.12.0"
-source = "git+https://github.com/ldm0/anyrender?rev=18fd67d7a5622a9821d86434857fd69856912a43#18fd67d7a5622a9821d86434857fd69856912a43"
+source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
 dependencies = [
  "kurbo",
  "peniko",
@@ -119,7 +119,7 @@ dependencies = [
 [[package]]
 name = "anyrender_svg"
 version = "0.13.0"
-source = "git+https://github.com/ldm0/anyrender?rev=18fd67d7a5622a9821d86434857fd69856912a43#18fd67d7a5622a9821d86434857fd69856912a43"
+source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
 dependencies = [
  "anyrender",
  "kurbo",
@@ -130,7 +130,7 @@ dependencies = [
 [[package]]
 name = "anyrender_vello_cpu"
 version = "0.15.0"
-source = "git+https://github.com/ldm0/anyrender?rev=18fd67d7a5622a9821d86434857fd69856912a43#18fd67d7a5622a9821d86434857fd69856912a43"
+source = "git+https://github.com/ldm0/anyrender?rev=916ef982d2175081dafc1ba0f7489396124d9496#916ef982d2175081dafc1ba0f7489396124d9496"
 dependencies = [
  "anyrender",
  "debug_timer",
@@ -1137,6 +1137,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive-new"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cdc8d50f426189eef89dac62fabfa0abb27d5cc008f25bf4156a0203325becc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1689,8 +1700,7 @@ dependencies = [
 [[package]]
 name = "glifo"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282a26c1e23de04bdab3e34a21b6f877a479b96737792516b9b8b8f69b6661be"
+source = "git+https://github.com/ldm0/vello?rev=1f3376b102ca9a0950221f3df09316c4ef1299ba#1f3376b102ca9a0950221f3df09316c4ef1299ba"
 dependencies = [
  "bytemuck",
  "foldhash",
@@ -1826,15 +1836,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "html-escape"
-version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d1ad449764d627e22bfd7cd5e8868264fc9236e07c752972b4080cd351cb476"
-dependencies = [
- "utf8-width",
 ]
 
 [[package]]
@@ -2301,7 +2302,7 @@ dependencies = [
 [[package]]
 name = "krilla"
 version = "0.8.2"
-source = "git+https://github.com/LaurenzV/krilla?rev=5eb4e1fb24a24ce78b533c23b080969917530c32#5eb4e1fb24a24ce78b533c23b080969917530c32"
+source = "git+https://github.com/lexmount/krilla?rev=c1f42beeb7fcefd958c27e3a72c5f120eba071b7#c1f42beeb7fcefd958c27e3a72c5f120eba071b7"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
@@ -2599,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "moli"
-version = "1.1.19"
+version = "1.1.22"
 dependencies = [
  "anyhow",
  "axum",
@@ -2698,12 +2699,27 @@ name = "moli-cookie-cache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cookie",
  "moli-cookie-jar",
  "netscape-cookie-file-parser",
  "serde",
  "serde_json",
  "time",
  "typed-num",
+]
+
+[[package]]
+name = "moli-cookie-db"
+version = "0.1.0"
+dependencies = [
+ "moli-cookie-jar",
+ "moli-sqlite",
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
+ "time",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2714,9 +2730,12 @@ dependencies = [
  "base64 0.22.1",
  "moli-browser-profile",
  "moli-cookie-cache",
+ "moli-cookie-db",
  "moli-cookie-jar",
  "moli-crypto",
  "moli-leveldb-parser",
+ "moli-sqlite",
+ "moli-web-storage",
  "rusqlite",
  "rusty-leveldb",
  "serde",
@@ -2760,24 +2779,30 @@ dependencies = [
  "anyhow",
  "bytes",
  "moli-browser-profile",
+ "moli-cookie-db",
  "moli-cookie-jar",
  "moli-dom",
  "moli-fetch",
+ "moli-indexeddb",
  "moli-page-types",
  "moli-parser",
  "moli-renderer-v8",
  "moli-selector",
+ "moli-sqlite",
  "moli-storage-key",
  "moli-storage-service",
  "moli-test-support",
  "moli-url",
  "moli-web-mime",
+ "moli-web-storage",
  "moli-wpt-compat",
  "parking_lot",
  "serde",
  "serde_json",
  "static_assertions",
  "strip-ansi-escapes",
+ "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
  "url",
@@ -2810,8 +2835,10 @@ name = "moli-css-parse"
 version = "0.1.0"
 dependencies = [
  "cssparser",
+ "euclid",
  "stylo",
  "stylo_traits",
+ "unicode-case-mapping",
  "url",
 ]
 
@@ -2910,14 +2937,18 @@ dependencies = [
  "moli-dns-resolver",
  "moli-header-field",
  "moli-http-cache",
+ "moli-site",
  "moli-trace",
  "moli-url",
  "moli-url-policy",
  "moli-web-bot-auth",
  "moli-web-mime",
  "parking_lot",
+ "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rcgen",
+ "serde",
  "strum",
+ "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -2983,6 +3014,7 @@ name = "moli-html2md"
 version = "0.1.0"
 dependencies = [
  "html5ever 0.39.0",
+ "icu_properties",
  "markup5ever_rcdom",
  "pulldown-cmark",
  "serde_json",
@@ -3029,9 +3061,13 @@ name = "moli-indexeddb"
 version = "0.1.0"
 dependencies = [
  "moli-crypto",
+ "moli-file-api",
+ "moli-sqlite",
+ "parking_lot",
+ "rusqlite",
  "serde",
- "serde_json",
  "strum",
+ "tokio",
  "unicode-id-start",
 ]
 
@@ -3042,6 +3078,7 @@ dependencies = [
  "brotlic",
  "euclid",
  "kurbo",
+ "moli-css-parse",
  "moli-image",
  "moli-system-fonts",
  "moli-trace",
@@ -3103,6 +3140,8 @@ dependencies = [
 name = "moli-multipart"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
+ "moli-encoding",
  "moli-header-field",
 ]
 
@@ -3219,6 +3258,7 @@ dependencies = [
  "moli-fetch",
  "moli-header-field",
  "moli-image",
+ "moli-indexeddb",
  "moli-layout",
  "moli-page-types",
  "moli-paint",
@@ -3241,12 +3281,15 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "strum",
+ "thiserror",
  "time",
  "tokio",
  "tokio-tungstenite",
+ "toml",
  "tracing",
  "url",
  "v8",
+ "v_htmlescape",
  "vergen-gitcl",
 ]
 
@@ -3271,7 +3314,6 @@ dependencies = [
  "futures-util",
  "moli-bounded-json",
  "moli-browser-profile",
- "moli-cookie-cache",
  "moli-cookie-jar",
  "moli-core",
  "moli-fetch",
@@ -3280,18 +3322,22 @@ dependencies = [
  "moli-protocol-cdp",
  "moli-protocol-webdriver-bidi",
  "moli-protocol-webdriver-classic",
+ "moli-test-support",
  "moli-trace",
  "parking_lot",
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "png",
+ "rand 0.10.3",
  "serde_json",
  "socket2",
+ "thiserror",
  "time",
  "tokio",
  "tokio-tungstenite",
  "tower",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3300,6 +3346,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "icu_locale_core",
  "moli-header-field",
  "moli-protocol",
  "serde_json",
@@ -3313,6 +3360,7 @@ dependencies = [
  "moli-protocol",
  "serde_json",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3334,10 +3382,10 @@ dependencies = [
  "flate2",
  "futures-util",
  "hashlink",
- "html-escape",
  "html5ever 0.40.1",
  "http",
  "httpdate",
+ "idna",
  "indexmap",
  "kurbo",
  "lopdf",
@@ -3346,6 +3394,7 @@ dependencies = [
  "moli-broadcast-channel",
  "moli-browser-profile",
  "moli-canvas",
+ "moli-content-type",
  "moli-cookie-jar",
  "moli-crypto",
  "moli-csp",
@@ -3380,6 +3429,7 @@ dependencies = [
  "moli-session-history",
  "moli-shared-worker",
  "moli-site",
+ "moli-sqlite",
  "moli-storage-key",
  "moli-storage-service",
  "moli-streams",
@@ -3396,6 +3446,7 @@ dependencies = [
  "moli-v8-util",
  "moli-web-errors",
  "moli-web-mime",
+ "moli-web-storage",
  "moli-webapi-declare",
  "moli-webcrypto",
  "moli-webidl",
@@ -3408,6 +3459,7 @@ dependencies = [
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "png",
  "precomputed-hash",
+ "read-fonts",
  "selectors",
  "serde",
  "serde_json",
@@ -3418,12 +3470,15 @@ dependencies = [
  "stylo_dom",
  "stylo_static_prefs",
  "stylo_traits",
+ "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
  "typed-num",
  "url",
  "uuid",
  "v8",
+ "v_xmlescape",
  "wasm_dep_analyzer",
  "widestring",
  "wuff",
@@ -3488,6 +3543,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-sqlite"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moli-storage-key"
 version = "0.1.0"
 dependencies = [
@@ -3527,6 +3593,7 @@ name = "moli-stylesheet-blocking"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "moli-css-parse",
  "moli-dom",
  "moli-fetch",
  "moli-owner-queue",
@@ -3608,6 +3675,7 @@ dependencies = [
  "moli-v8-init",
  "parking_lot",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "v8",
@@ -3656,6 +3724,18 @@ dependencies = [
  "mime",
  "moli-content-type",
  "moli-header-field",
+]
+
+[[package]]
+name = "moli-web-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-sqlite",
+ "moli-storage-key",
+ "parking_lot",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]
@@ -3742,15 +3822,18 @@ dependencies = [
  "http",
  "moli-crypto",
  "moli-curl",
+ "moli-file-api",
  "moli-header-field",
  "moli-url",
  "openssl",
+ "parking_lot",
  "rcgen",
  "rustls",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
+ "urlencoding",
 ]
 
 [[package]]
@@ -5023,7 +5106,7 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.41.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "bitflags",
  "cssparser",
@@ -5153,7 +5236,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.5.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -5482,7 +5565,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -5538,7 +5621,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "string_cache 0.11.0",
  "string_cache_codegen 0.11.2",
@@ -5547,7 +5630,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5559,7 +5642,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "bitflags",
  "stylo_malloc_size_of",
@@ -5568,7 +5651,7 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "app_units",
  "cssparser",
@@ -5586,7 +5669,7 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "toml",
 ]
@@ -5605,7 +5688,7 @@ dependencies = [
 [[package]]
 name = "stylo_traits"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "app_units",
  "bitflags",
@@ -5915,7 +5998,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "to_shmem"
 version = "0.6.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "cssparser",
  "servo_arc",
@@ -5928,7 +6011,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.2.0"
-source = "git+https://github.com/lexmount/stylo?rev=973988b9c592a802eefdc5abe6072dd9ba221385#973988b9c592a802eefdc5abe6072dd9ba221385"
+source = "git+https://github.com/lexmount/stylo?rev=5e853c2255715a825e3f9ea043d3998a55377e77#5e853c2255715a825e3f9ea043d3998a55377e77"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -6199,6 +6282,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
+name = "unicode-case-mapping"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e9026503b74f3207a4c04e6bf4ea735daa8edf6c0bbfa044cae597bb947a9db"
+
+[[package]]
 name = "unicode-id-start"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6274,10 +6363,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
 name = "usvg"
 version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
+source = "git+https://github.com/lexmount/resvg?rev=02b16a3cc3ca4dd019293c45aacf89ca11875ed9#02b16a3cc3ca4dd019293c45aacf89ca11875ed9"
 dependencies = [
  "base64 0.23.1",
  "data-url",
@@ -6308,12 +6402,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
-name = "utf8-width"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091"
-
-[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6330,6 +6418,9 @@ name = "uuid"
 version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
+dependencies = [
+ "getrandom 0.4.3",
+]
 
 [[package]]
 name = "v8"
@@ -6363,6 +6454,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "v_escape-base"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1212fce830b75af194b578e55b3db9049f2c8c45f58d397fb25602fdb50fb3d"
+
+[[package]]
+name = "v_escape-base"
+version = "0.1.0"
+source = "git+https://github.com/lexmount/v_escape?rev=d30e780f4d498ffae80e836bc046501f6dfde47a#d30e780f4d498ffae80e836bc046501f6dfde47a"
+dependencies = [
+ "derive-new",
+]
+
+[[package]]
+name = "v_htmlescape"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "befb3d53c9e3ec641417685896cbc8cc5bd264d6a2e190c56aaef1af24740d99"
+dependencies = [
+ "v_escape-base 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "v_xmlescape"
+version = "0.1.0"
+source = "git+https://github.com/lexmount/v_escape?rev=d30e780f4d498ffae80e836bc046501f6dfde47a#d30e780f4d498ffae80e836bc046501f6dfde47a"
+dependencies = [
+ "v_escape-base 0.1.0 (git+https://github.com/lexmount/v_escape?rev=d30e780f4d498ffae80e836bc046501f6dfde47a)",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6377,8 +6499,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "vello_common"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb2141a2bca6e6d598e471fd4d1d7eed8e020aad6a28187edda07f091a325dd"
+source = "git+https://github.com/ldm0/vello?rev=1f3376b102ca9a0950221f3df09316c4ef1299ba#1f3376b102ca9a0950221f3df09316c4ef1299ba"
 dependencies = [
  "bytemuck",
  "fearless_simd",

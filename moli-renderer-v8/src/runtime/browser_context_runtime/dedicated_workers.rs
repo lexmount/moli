@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::{Context as _, Result};
 use tokio::sync::oneshot;
 
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
@@ -74,7 +76,7 @@ impl RendererBrowserContextRuntime {
         instance_id: u64,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
             instance_id,
             inspector_session_id,
@@ -90,7 +92,7 @@ impl RendererBrowserContextRuntime {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         self.dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(
             instance_id,
             inspector_session_id,
@@ -106,12 +108,12 @@ impl RendererBrowserContextRuntime {
         inspector_session_id: String,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch> {
         let Some(target) = self.dedicated_worker_devtools_target(instance_id) else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
         let Some(output_journal) = target.output_journal else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
         let response = response
             .route_to_worker_devtools_session_output(inspector_session_id.clone(), output_journal);
@@ -129,9 +131,9 @@ impl RendererBrowserContextRuntime {
         let dispatch = if dispatched {
             response_rx
                 .await
-                .unwrap_or_else(|_| Err("DedicatedWorkerRuntimeUnavailable".to_owned()))
+                .unwrap_or_else(|_| Err(WorkerInspectorError::DedicatedUnavailable.into()))
         } else {
-            Err("DedicatedWorkerRuntimeUnavailable".to_owned())
+            Err(WorkerInspectorError::DedicatedUnavailable.into())
         };
         Ok(
             crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(
@@ -148,9 +150,9 @@ impl RendererBrowserContextRuntime {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(handle) = self.dedicated_worker_devtools_handle(instance_id) else {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::DedicatedUnavailable.into());
         };
         let (response_tx, response_rx) = oneshot::channel();
         if !handle.dispatch_runtime_protocol_message(
@@ -159,11 +161,11 @@ impl RendererBrowserContextRuntime {
             deferred_response,
             response_tx,
         ) {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::DedicatedUnavailable.into());
         }
         response_rx
             .await
-            .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?
+            .context(WorkerInspectorError::DedicatedUnavailable)?
     }
 
     pub fn attach_dedicated_worker_runtime_inspector_session(

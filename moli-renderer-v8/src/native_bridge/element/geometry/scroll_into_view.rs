@@ -1,6 +1,9 @@
 use moli_page_types::DomScrollIntoViewRect;
 
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{
+    document_runtime::DomHandle, native_bridge::JsContextHost,
+    scroll_options::ScrollLogicalPosition as ScrollIntoViewAlignment,
+};
 
 use super::provider::{read_box_model, read_scroll_into_view_geometry};
 use super::scroll::{
@@ -8,14 +11,6 @@ use super::scroll::{
 };
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
-
-#[derive(Clone, Copy)]
-pub(super) enum ScrollIntoViewAlignment {
-    Start,
-    Center,
-    End,
-    Nearest,
-}
 
 #[derive(Clone, Copy)]
 struct ScrollIntoViewParams {

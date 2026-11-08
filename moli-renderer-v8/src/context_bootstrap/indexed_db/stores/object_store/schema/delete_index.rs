@@ -1,11 +1,16 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    schedule_schema_failure, schedule_schema_operation,
+    typed_state::sql::indexed_db_request_sql_client,
+};
 use crate::webidl;
+use moli_indexeddb::sqlite::service::Command;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.deleteIndex")]
 struct IdbObjectStoreDeleteIndexArgs {
-    #[webidl(required)]
-    index_name: String,
+    #[webidl(required, converter = "raw")]
+    index_name: webidl::DomString16,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_callback<'s>(
@@ -16,27 +21,44 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
     let Some(parsed) = webidl::parse_args::<IdbObjectStoreDeleteIndexArgs>(scope, &args) else {
         return;
     };
-    let index_name = parsed.index_name;
+    let index_name = moli_indexeddb::IndexedDbName::from_utf16(parsed.index_name.0);
     let store = args.this();
-    let Some((_transaction, database, handle, store_name)) =
-        object_store_versionchange_common(scope, store)
-    else {
-        let error = dom_exception_value(
-            scope,
-            "The object store is not running in a version change transaction.",
-            "InvalidStateError",
-        );
-        scope.throw_exception(error);
+    let (transaction, database, handle, store_name) =
+        match object_store_versionchange_common(scope, store) {
+            Ok(values) => values,
+            Err(error) => {
+                let error = request_error_object(scope, &error);
+                scope.throw_exception(error);
+                return;
+            }
+        };
+    let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
         return;
     };
-    match with_indexed_db_manager(scope, |manager| {
-        manager.delete_index(handle, &store_name, &index_name)
-    }) {
+    let result = if index_info_from_store_metadata(scope, store, &index_name).is_none() {
+        Err(moli_indexeddb::IndexedDbError::NotFound(
+            "The index was not found".into(),
+        ))
+    } else {
+        schedule_schema_operation(
+            scope,
+            transaction,
+            client,
+            Command::DeleteIndex {
+                transaction: handle,
+                store: store_name.clone(),
+                name: index_name.clone(),
+            },
+            None,
+        )
+    };
+    match result {
         Ok(()) => {
-            let _ = remove_database_index_metadata(scope, database, &store_name, &index_name);
-            if let Some(metadata) = indexed_db_database_store_metadata(scope, database, &store_name)
+            if let Err(error) =
+                remove_database_index_metadata(scope, database, &store_name, &index_name)
             {
-                let _ = sync_store_surface_from_metadata(scope, store, metadata);
+                schedule_schema_failure(scope, transaction, error);
+                return;
             }
             rv.set_undefined();
         }

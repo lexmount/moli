@@ -492,14 +492,19 @@ impl DomHost {
                 if !allow_document {
                     return None;
                 }
-                let mut document = document.clone();
-                document.set_design_mode_enabled(false);
-                self.dom
-                    .create_node(super::NodeData::Document(document), None, false, false)
+                let document = document.clone_for_node();
+                self.dom.create_node(
+                    super::NodeData::Document(Box::new(document)),
+                    None,
+                    false,
+                    false,
+                )
             }
-            super::NodeData::DocumentType(doctype) => {
-                self.create_document_type(doctype.name(), doctype.public_id(), doctype.system_id())
-            }
+            super::NodeData::DocumentType(doctype) => self.create_document_type(
+                doctype.name_value(),
+                doctype.public_id_value(),
+                doctype.system_id_value(),
+            ),
             super::NodeData::Text(text) => self.create_text_node(text.data()),
             super::NodeData::CDataSection(cdata) => self.create_cdata_section(cdata.data()),
             super::NodeData::Comment(comment) => self.create_comment(comment.data()),
@@ -508,19 +513,15 @@ impl DomHost {
             }
             super::NodeData::DocumentFragment(_) => self.create_document_fragment(),
             super::NodeData::Element(element) => {
-                let clone = if element.namespace() == "http://www.w3.org/1999/xhtml"
-                    && element.prefix().is_none()
-                {
-                    self.create_element(element.local_name())
-                } else {
-                    let qualified_name = match element.prefix() {
-                        Some(prefix) if !prefix.is_empty() => {
-                            format!("{prefix}:{}", element.local_name())
-                        }
-                        _ => element.local_name().to_owned(),
-                    };
-                    self.create_element_ns(Some(element.namespace()), &qualified_name)?
-                };
+                // Copy an existing identity without HTML name normalization or
+                // reparsing it as a new qualified name. Template contents must
+                // also be created for the receiving Document from the outset.
+                let clone = self.create_element_without_attributes_for_document(
+                    document_handle,
+                    element.local_name().to_owned(),
+                    element.namespace().to_owned(),
+                    element.prefix().map(str::to_owned),
+                );
                 self.copy_element_state(node, clone);
                 clone
             }
@@ -587,6 +588,109 @@ mod tests {
         DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://clone.test/").expect("test URL"),
         ))
+    }
+
+    #[test]
+    fn deeply_nested_template_adoption_updates_contents_without_recursion() {
+        let mut host = test_host();
+        let destination = host.create_detached_html_document();
+        let template = host.create_element("template");
+        let mut contents = host.dom().template_contents_fragment(template).unwrap();
+        let mut associated_nodes = vec![contents];
+        for _ in 0..DEEP_TREE_DEPTH {
+            let document = host.owner_document_handle(contents).unwrap();
+            let nested = host.create_element_without_attributes_for_document(
+                document,
+                "template".into(),
+                "http://www.w3.org/1999/xhtml".into(),
+                None,
+            );
+            assert!(host.append_child(contents, nested));
+            contents = host.dom().template_contents_fragment(nested).unwrap();
+            associated_nodes.extend([nested, contents]);
+        }
+        assert_eq!(host.adopt_node(destination, template), Some(template));
+        let owner = host
+            .dom
+            .appropriate_template_contents_owner_document(destination);
+        for node in associated_nodes {
+            assert_eq!(host.owner_document_handle(node), Some(owner));
+            assert!(!host.is_connected(node));
+        }
+        assert_eq!(host.owner_document_handle(template), Some(destination));
+    }
+
+    #[test]
+    fn document_response_metadata_survives_stream_replacement_but_not_cloning() {
+        let mut host = test_host();
+        let document = host.document_handle();
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            None
+        );
+        assert!(host.set_document_source_response_status_for_handle(document, Some(404)));
+        host.reset_html_document_shell();
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            Some(404)
+        );
+        let clone = host.clone_node(document, true).unwrap();
+        assert_eq!(host.document_source_response_status_for_handle(clone), None);
+        assert_eq!(
+            host.document_source_response_status_for_handle(document),
+            Some(404)
+        );
+    }
+
+    #[test]
+    fn element_copies_preserve_native_identity_and_target_template_document() {
+        const HTML: &str = "http://www.w3.org/1999/xhtml";
+        let mut source = test_host();
+        let xml_document = source.create_detached_xml_document();
+        let mut target = test_host();
+        let target_xml = target.create_detached_xml_document();
+        for (namespace, local_name, prefix) in [
+            (HTML, "MiXeD", None),
+            (HTML, "MiXeD", Some("p")),
+            ("", "a:b", None),
+            (HTML, "template", None),
+        ] {
+            let original = source.create_element_without_attributes_for_document(
+                xml_document,
+                local_name.into(),
+                namespace.into(),
+                prefix.map(str::to_owned),
+            );
+            let cloned = source.clone_node(original, true).unwrap();
+            let imported = source
+                .import_node(source.document_handle(), original, true)
+                .unwrap();
+            let foreign_html = target
+                .import_foreign_node(target.document_handle(), source.dom(), original, true)
+                .unwrap();
+            let foreign_xml = target
+                .import_foreign_node(target_xml, source.dom(), original, true)
+                .unwrap();
+            for (host, handle, document, is_html_document) in [
+                (&source, cloned, xml_document, false),
+                (&source, imported, source.document_handle(), true),
+                (&target, foreign_html, target.document_handle(), true),
+                (&target, foreign_xml, target_xml, false),
+            ] {
+                let node = host.node(handle).unwrap();
+                let element = node.as_element().unwrap();
+                assert_eq!(node.owner_document(), Some(document));
+                assert_eq!(element.local_name(), local_name);
+                assert_eq!(element.namespace(), namespace);
+                assert_eq!(element.prefix(), prefix);
+                if local_name == "template" {
+                    assert_eq!(
+                        host.node_document_is_html_document(element.template_contents().unwrap()),
+                        Some(is_html_document),
+                    );
+                }
+            }
+        }
     }
 
     fn append_deep_element_chain(host: &mut DomHost, depth: usize) -> (DomHandle, DomHandle) {
@@ -893,6 +997,48 @@ mod tests {
                 assert_eq!(original.media_volume(), 0.25);
                 assert_eq!(original.media_current_time(), 7.0);
             }
+        }
+    }
+    #[test]
+    fn document_type_clone_and_foreign_import_preserve_all_utf16_fields() {
+        use crate::native::DomStringValue;
+        let mut source = test_host();
+        let values = [
+            DomStringValue::from_utf16(&[0xd800]),
+            DomStringValue::from_utf16(&[0xd801, 0]),
+            DomStringValue::from_utf16(&[0xdc00, 0xd83d, 0xde00]),
+        ];
+        let handle = source.create_document_type(&values[0], &values[1], &values[2]);
+        let clone = source.clone_node(handle, true).unwrap();
+        let mut target = test_host();
+        target.create_comment("offset the arena");
+        let imported = target
+            .import_foreign_node(target.document_handle(), source.dom(), handle, true)
+            .unwrap();
+        for (host, id) in [(&source, handle), (&source, clone), (&target, imported)] {
+            let node = host.node(id).unwrap();
+            let doctype = node.as_document_type().unwrap();
+            assert_eq!(doctype.name_value(), &values[0]);
+            assert_eq!(doctype.public_id_value(), &values[1]);
+            assert_eq!(doctype.system_id_value(), &values[2]);
+            assert_eq!(node.node_name_value(), values[0]);
+        }
+        assert!(
+            source
+                .node(handle)
+                .unwrap()
+                .is_equal_node(source.dom(), source.node(clone).unwrap())
+        );
+        for index in 0..3 {
+            let mut different = values.clone();
+            different[index] = DomStringValue::from_utf16(&[0xfffd]);
+            let other = source.create_document_type(&different[0], &different[1], &different[2]);
+            assert!(
+                !source
+                    .node(handle)
+                    .unwrap()
+                    .is_equal_node(source.dom(), source.node(other).unwrap())
+            );
         }
     }
 }

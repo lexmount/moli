@@ -284,13 +284,14 @@ async fn runtime_enable_replays_child_default_context_per_attached_session() {
         Some("SID-1"),
     )
     .await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
-    );
+    ctx.with_fixture(|conn| {
+        assert!({
+            conn.browser_context
+                .as_mut()
+                .expect("browser context")
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        })
+    });
 
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 40715).await;
     wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
@@ -554,10 +555,10 @@ async fn runtime_add_binding_with_child_default_execution_context_id_installs_ch
         }
     })
     .to_string();
-    let pending = ctx
-        .conn
-        .try_start_pending_command_dispatch(&raw)
-        .expect("child-default Runtime.addBinding should start as a command task");
+    let pending = ctx.with_fixture(|conn| {
+        conn.try_start_pending_command_dispatch(&raw)
+            .expect("child-default Runtime.addBinding should start as a command task")
+    });
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     let binding_result = messages
@@ -1121,14 +1122,18 @@ async fn runtime_evaluate_child_navigation_emits_child_frame_navigation_and_life
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 522,
         "method": "Page.navigate",
@@ -1174,14 +1179,18 @@ async fn runtime_evaluate_timeout_child_navigation_emits_child_frame_navigation_
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 525,
         "method": "Page.navigate",
@@ -1218,14 +1227,18 @@ async fn runtime_evaluate_child_location_navigation_emits_child_frame_navigation
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 528,
         "method": "Page.navigate",
@@ -1302,14 +1315,18 @@ async fn runtime_evaluate_child_history_back_emits_child_frame_navigation_and_li
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-        .page_session_state
-        .page_lifecycle_events = true;
+    {
+        let fixture_value = true;
+        ctx.with_fixture(|conn| {
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .active_page_target_mut()
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .page_lifecycle_events = fixture_value;
+        });
+    }
     ctx.process_async(json!({
         "id": 531,
         "method": "Page.navigate",

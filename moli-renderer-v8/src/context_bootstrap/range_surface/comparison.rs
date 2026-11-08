@@ -4,7 +4,7 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.comparePoint")]
 struct RangeComparePointArgs<'s> {
-    #[webidl(with = range_compare_point_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
     #[webidl(required)]
     offset: u32,
@@ -13,7 +13,7 @@ struct RangeComparePointArgs<'s> {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.isPointInRange")]
 struct RangeIsPointInRangeArgs<'s> {
-    #[webidl(with = range_is_point_in_range_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
     #[webidl(required)]
     offset: u32,
@@ -24,61 +24,15 @@ struct RangeIsPointInRangeArgs<'s> {
 struct RangeCompareBoundaryPointsArgs<'s> {
     #[webidl(required)]
     how: u16,
-    #[webidl(with = range_compare_boundary_points_source_range_arg)]
+    #[webidl(required, interface = web_api_interfaces::Range)]
     source_range: v8::Local<'s, v8::Object>,
 }
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Range.intersectsNode")]
 struct RangeIntersectsNodeArgs<'s> {
-    #[webidl(with = range_intersects_node_arg)]
+    #[webidl(required, interface = web_api_interfaces::Node)]
     node: v8::Local<'s, v8::Object>,
-}
-
-const RANGE_IS_POINT_IN_RANGE_INVALID_NODE: &str = "__moliRangeIsPointInRangeInvalidNode";
-const RANGE_COMPARE_BOUNDARY_POINTS_INVALID_RANGE: &str =
-    "Range.compareBoundaryPoints requires another Range";
-
-fn range_compare_point_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range.comparePoint requires a Node")
-}
-
-fn range_is_point_in_range_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, RANGE_IS_POINT_IN_RANGE_INVALID_NODE)
-}
-
-fn range_compare_boundary_points_source_range_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let Ok(range) = v8::Local::<v8::Object>::try_from(args.get(index)) else {
-        return Err(webidl::WebIdlError::custom_message(
-            RANGE_COMPARE_BOUNDARY_POINTS_INVALID_RANGE,
-        ));
-    };
-    if range_boundary_container_object(scope, range, RangeBoundarySide::Start).is_none() {
-        return Err(webidl::WebIdlError::custom_message(
-            RANGE_COMPARE_BOUNDARY_POINTS_INVALID_RANGE,
-        ));
-    }
-    Ok(range)
-}
-
-fn range_intersects_node_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    webidl_node_arg(scope, args, index, "Range.intersectsNode requires a Node")
 }
 
 pub(super) fn range_compare_point_callback<'s>(
@@ -153,16 +107,8 @@ pub(super) fn range_is_point_in_range_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let parsed = match webidl::try_parse_args::<RangeIsPointInRangeArgs<'s>>(scope, &args) {
-        Ok(parsed) => parsed,
-        Err(error) if error.custom_message_text() == Some(RANGE_IS_POINT_IN_RANGE_INVALID_NODE) => {
-            rv.set(v8::Boolean::new(scope, false).into());
-            return;
-        }
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            return;
-        }
+    let Some(parsed) = webidl::parse_args::<RangeIsPointInRangeArgs<'s>>(scope, &args) else {
+        return;
     };
     let node = parsed.node;
     let offset = parsed.offset;
@@ -246,7 +192,7 @@ pub(super) fn range_intersects_node_callback<'s>(
         return;
     }
 
-    let Some(parent) = object_property_as_object(scope, node, "parentNode") else {
+    let Some(parent) = range_node_parent(scope, node) else {
         rv.set(v8::Boolean::new(scope, true).into());
         return;
     };

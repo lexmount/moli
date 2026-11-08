@@ -78,13 +78,20 @@ pub(in crate::context_bootstrap) fn document_location_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .is_err()
-    {
+    if !crate::web_api_interfaces::Document::is_instance(scope, receiver) {
         webidl::throw_type_error(
             scope,
             "Document.location getter called on incompatible receiver.",
         );
+        return;
+    }
+    let Ok((host, document)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        return;
+    };
+    if !unsafe { &*host }.document_is_fully_active(document) {
+        rv.set_null();
         return;
     }
     match object_location_slot_value(scope, receiver).filter(|value| !value.is_undefined()) {
@@ -99,30 +106,33 @@ pub(in crate::context_bootstrap) fn document_location_setter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .is_err()
-    {
+    if !crate::web_api_interfaces::Document::is_instance(scope, receiver) {
         webidl::throw_type_error(
             scope,
             "Document.location setter called on incompatible receiver.",
         );
         return;
     }
-    let Some(location) = object_location_slot_value(scope, receiver)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    let Ok((host, document)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
-        rv.set_undefined();
         return;
     };
-    let value = args.get(0);
-    let href = match value.is_null_or_undefined() {
-        true => String::new(),
-        false => match value.to_string(scope) {
-            Some(value) => value.to_rust_string_lossy(scope),
-            None => return,
-        },
+    let location = unsafe { &*host }
+        .document_is_fully_active(document)
+        .then(|| object_location_slot_value(scope, receiver))
+        .flatten()
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    let Some(location) = location else {
+        webidl::throw_type_error(scope, "Cannot assign href to a null Location.");
+        return;
     };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+    // PutForwards gets the Location first and leaves conversion, exception
+    // identity and navigation to its existing href setter.
+    if location.set(scope, v8str(scope, "href").into(), args.get(0)) == Some(false) {
+        webidl::throw_type_error(scope, "Cannot assign href to Location.");
+        return;
+    }
     rv.set_undefined();
 }
 

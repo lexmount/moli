@@ -517,14 +517,12 @@ mod tests {
         .into_iter()
         .next()
         .map(|blocker| {
-            crate::stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput::from(
-                &blocker,
-            )
+            crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput::from(&blocker)
         })
         .expect("first parser-created import blocker");
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut runtime = DocumentRuntime::new_networked(&first_document, &loader);
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs([&first_input]);
+        runtime.note_discovered_document_owned_stylesheet_inputs([&first_input]);
         let first_operation = runtime
             .stylesheet_lifecycle
             .fetches
@@ -557,13 +555,11 @@ mod tests {
         .into_iter()
         .next()
         .map(|blocker| {
-            crate::stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput::from(
-                &blocker,
-            )
-            .with_node_id(first_input.node_id())
+            crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput::from(&blocker)
+                .with_node_id(first_input.node_id())
         })
         .expect("replacement parser-created import blocker");
-        runtime.note_discovered_document_owned_blocking_stylesheet_inputs([&second_input]);
+        runtime.note_discovered_document_owned_stylesheet_inputs([&second_input]);
         assert!(
             runtime
                 .stylesheet_lifecycle

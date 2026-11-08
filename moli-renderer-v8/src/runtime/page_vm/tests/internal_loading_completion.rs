@@ -428,29 +428,192 @@ document.querySelector('meta[http-equiv="refresh"]')
 }
 
 #[test]
-fn equivalent_meta_mutation_preserves_the_original_refresh_deadline() {
+fn equal_meta_declarations_do_not_activate_an_already_claimed_refresh() {
     run_page_vm_large_stack_async_test("equivalent-meta-refresh-mutation", || async move {
-        let mut page_vm = loaded_page_with_delayed_meta_refresh("stable.html", "60").await;
-        let original_deadline = page_vm
-            .next_internal_loading_deadline_for_test()
-            .expect("load should arm the original delayed refresh");
+        for mutation in [
+            r#"document.querySelector('meta[http-equiv="refresh"]').setAttribute('content', '1;./stable.html')"#,
+            r#"document.head.insertAdjacentHTML('beforeend', '<meta http-equiv="refresh" content="1;stable.html">')"#,
+        ] {
+            let mut page_vm = loaded_page_with_delayed_meta_refresh("stable.html", "1").await;
+            let original_deadline = page_vm
+                .next_internal_loading_deadline_for_test()
+                .expect("load should arm the original delayed refresh");
+            super::super::wait_for_page_timer_deadline(Some(original_deadline)).await;
+            let original = page_vm
+                .page_task_executor_sources_for_test()
+                .take_internal_loading_for_executor_test()
+                .expect("claim the original payload before the new declaration replaces it");
+            page_vm
+                .vm_mut()
+                .eval(mutation)
+                .expect("process a new declaration with the same resolved target");
 
+            let replacement_deadline = page_vm
+                .next_internal_loading_deadline_for_test()
+                .expect("the replacement declaration must still own a post");
+            assert!(replacement_deadline > original_deadline);
+            let obsolete = page_vm.apply_selected_page_internal_loading_turn(original);
+            assert_eq!(
+            obsolete.action.target_effect,
+            crate::page_task_queue::PageInternalLoadingTargetEffect::AppliedToCurrentOwner {
+                effect: crate::page_task_queue::PageOwnedInternalLoadingTaskEffect::MetaRefreshNavigationNotActivated,
+            },
+            "the old same-URL payload must not activate the new declaration early",
+        );
+            assert!(
+                page_vm
+                    .vm_mut()
+                    .take_pending_location_navigation_with_seed()
+                    .is_none()
+            );
+            assert_eq!(
+                page_vm.next_internal_loading_deadline_for_test(),
+                Some(replacement_deadline),
+                "the obsolete payload must leave the new declaration scheduled",
+            );
+            super::super::wait_for_page_timer_deadline(Some(replacement_deadline)).await;
+            let replacement = page_vm.run_internal_loading_body_for_test().unwrap();
+            assert_eq!(
+            replacement.action.target_effect,
+            crate::page_task_queue::PageInternalLoadingTargetEffect::AppliedToCurrentOwner {
+                effect: crate::page_task_queue::PageOwnedInternalLoadingTaskEffect::MetaRefreshNavigationActivated,
+            },
+        );
+            let pending = page_vm
+                .vm_mut()
+                .take_pending_location_navigation_with_seed()
+                .unwrap();
+            assert_eq!(pending.url.as_str(), "https://example.com/stable.html");
+        }
+    });
+}
+
+#[test]
+fn same_value_meta_attribute_sets_restart_the_document_owned_deadline() {
+    run_page_vm_large_stack_async_test("same-value-meta-refresh-mutation", || async move {
+        for records_enabled in [false, true] {
+            for mutation in [
+                "meta.content = meta.content",
+                "meta.setAttribute('content', meta.getAttribute('content'))",
+                "meta.setAttributeNS(null, 'content', meta.getAttribute('content'))",
+                "meta.httpEquiv = meta.httpEquiv",
+                "meta.setAttributeNS(null, 'http-equiv', meta.getAttribute('http-equiv'))",
+            ] {
+                let mut page_vm =
+                    loaded_page_with_delayed_meta_refresh("same-value.html", "60").await;
+                page_vm
+                    .vm_mut()
+                    .eval("const meta = document.querySelector('meta')")
+                    .unwrap();
+                if records_enabled {
+                    page_vm.vm_mut().eval("const observer = new MutationObserver(() => {}); observer.observe(meta, {attributes: true, attributeOldValue: true})").unwrap();
+                }
+                let original = page_vm.next_internal_loading_deadline_for_test().unwrap();
+                page_vm.vm_mut().eval(mutation).unwrap();
+                assert!(
+                    page_vm.next_internal_loading_deadline_for_test().unwrap() > original,
+                    "{mutation}, observers={records_enabled}",
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn unrelated_dom_mutation_preserves_the_original_refresh_deadline() {
+    run_page_vm_large_stack_async_test("unrelated-meta-refresh-mutation", || async move {
+        let mut page_vm = loaded_page_with_delayed_meta_refresh("stable.html", "60").await;
+        let original = page_vm.next_internal_loading_deadline_for_test().unwrap();
         page_vm
             .vm_mut()
-            .eval(
-                r#"
-document.querySelector('meta[http-equiv="refresh"]')
-    .setAttribute('content', '60;./stable.html');
-'rediscovered'
-"#,
-            )
-            .expect("mutate the serialized content to the same parsed candidate");
-
+            .eval("document.body.append(document.createElement('div'))")
+            .unwrap();
         assert_eq!(
             page_vm.next_internal_loading_deadline_for_test(),
-            Some(original_deadline),
-            "rediscovering the same delay and resolved URL must not postpone the refresh"
+            Some(original)
         );
+    });
+}
+
+#[test]
+fn main_meta_refresh_uses_exact_attribute_identity() {
+    run_page_vm_large_stack_async_test("meta-refresh-attribute-identity", || async move {
+        for (mutation, restarts) in [
+            ("meta.setAttributeNS(null, 'CONTENT', String(i))", false),
+            ("meta.setAttributeNS('', 'HTTP-EQUIV', String(i))", false),
+            (
+                "meta.setAttributeNS('urn:test', 'content', String(i))",
+                false,
+            ),
+            ("meta.setAttribute('CONTENT', meta.content)", true),
+            ("meta.setAttribute('HTTP-EQUIV', meta.httpEquiv)", true),
+        ] {
+            let mut page_vm = loaded_page_with_delayed_meta_refresh("#done", "60").await;
+            page_vm
+                .vm_mut()
+                .eval("const meta = document.querySelector('meta')")
+                .unwrap();
+            let mut deadline = page_vm.next_internal_loading_deadline_for_test().unwrap();
+            for i in 0..3 {
+                page_vm
+                    .vm_mut()
+                    .eval(&format!("{{const i = {i}; {mutation};}}"))
+                    .unwrap();
+                let updated = page_vm.next_internal_loading_deadline_for_test().unwrap();
+                if restarts {
+                    assert!(updated > deadline, "{mutation}");
+                } else {
+                    assert_eq!(updated, deadline, "{mutation}");
+                }
+                deadline = updated;
+            }
+        }
+    });
+}
+
+#[test]
+fn same_value_namespaced_meta_plain_setters_preserve_the_refresh_deadline() {
+    run_page_vm_large_stack_async_test("namespaced-meta-refresh-mutation", || async move {
+        for records_enabled in [false, true] {
+            for name in ["content", "http-equiv"] {
+                let mut page_vm = loaded_page_with_delayed_meta_refresh("stable.html", "60").await;
+                page_vm
+                    .vm_mut()
+                    .eval(&format!(
+                        r#"
+const meta = document.querySelector('meta');
+const name = {name:?};
+const value = meta.getAttribute(name);
+meta.removeAttribute(name);
+meta.setAttributeNS('urn:test', name, value);
+meta.setAttributeNS(null, name, value);
+"#
+                    ))
+                    .unwrap();
+                if records_enabled {
+                    page_vm.vm_mut().eval("const observer = new MutationObserver(() => {}); observer.observe(meta, {attributes: true})").unwrap();
+                }
+                let original = page_vm.next_internal_loading_deadline_for_test().unwrap();
+                let records = page_vm
+                    .vm_mut()
+                    .eval(
+                        r#"
+meta.setAttribute(name, meta.getAttribute(name));
+JSON.stringify(typeof observer === 'undefined' ? [] :
+    observer.takeRecords().map(r => [r.attributeName, r.attributeNamespace]))
+"#,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    page_vm.next_internal_loading_deadline_for_test(),
+                    Some(original),
+                    "{name}, observers={records_enabled}",
+                );
+                if records_enabled {
+                    assert_eq!(records, format!(r#"[["{name}","urn:test"]]"#),);
+                }
+            }
+        }
     });
 }
 

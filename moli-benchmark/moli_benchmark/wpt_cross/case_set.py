@@ -24,8 +24,8 @@ A testharness case is selectable if:
 * The file body and directly referenced relative scripts do NOT reference
   unsupported wptserve ``.py`` handlers.
 * The broad default file path does not contain ``.https.``, ``.h2.``,
-  ``.sub.``, or ``.serviceworker.`` substrings unless the case is in the
-  default Service Worker allowlist. Focused ``--dir-prefix`` runs may opt into
+  ``.sub.``, or ``.serviceworker.`` substrings unless the case is in a
+  default suite allowlist. Focused ``--dir-prefix`` runs may opt into
   ``.https.``, ``.sub.``, and ``.serviceworker.`` cases because the fixture
   server has local HTTP substitutions for those WPT features.
 
@@ -288,6 +288,12 @@ DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS: tuple[str, ...] = (
     ".serviceworker.",
 )
 
+DEFAULT_HTML_FILENAME_ALLOW_TOKENS_BY_DIR_PREFIX: tuple[
+    tuple[str, tuple[str, ...]], ...
+] = (
+    ("IndexedDB", (".https.", ".sub.")),
+)
+
 ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
     "none",
     ANY_JS_WINDOW_GLOBAL,
@@ -300,10 +306,15 @@ ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
 # of the runner contract. A non-``none`` ``--any-js-global`` remains an
 # explicit override for focused investigations.
 DEFAULT_ANY_JS_GLOBALS_BY_DIR_PREFIX: tuple[tuple[str, str], ...] = (
+    ("IndexedDB", "both"),
     ("compression", "both"),
     ("streams", "both"),
 )
-DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = ("compression", "streams")
+DEFAULT_SCRIPT_CASE_DIR_PREFIXES: tuple[str, ...] = (
+    "IndexedDB",
+    "compression",
+    "streams",
+)
 
 # The initial layout baseline deliberately starts with the CSS areas that are
 # both high-value for Moli and predominantly made up of deterministic, static
@@ -700,24 +711,16 @@ def _html_path_is_supported(
     explicit_dir_prefix: bool,
     include_tentative: bool,
 ) -> bool:
-    excluded = HTML_EXCLUDE_SUBSTRINGS
+    allowed: set[str] = set()
     if explicit_dir_prefix:
-        excluded = tuple(
-            token
-            for token in excluded
-            if token
-            not in {
-                ".https.",
-                ".sub.",
-                ".serviceworker.",
-            }
-        )
-    elif _is_default_service_worker_case(rel):
-        excluded = tuple(
-            token
-            for token in excluded
-            if token not in DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS
-        )
+        allowed.update({".https.", ".sub.", ".serviceworker."})
+    else:
+        if _is_default_service_worker_case(rel):
+            allowed.update(DEFAULT_SERVICE_WORKER_FILENAME_ALLOW_TOKENS)
+        for prefix, tokens in DEFAULT_HTML_FILENAME_ALLOW_TOKENS_BY_DIR_PREFIX:
+            if _matches_any_dir_prefix(rel, (prefix,)):
+                allowed.update(tokens)
+    excluded = tuple(token for token in HTML_EXCLUDE_SUBSTRINGS if token not in allowed)
     excluded = _filtered_exclude_tokens(
         excluded,
         include_tentative=include_tentative,
@@ -1018,6 +1021,7 @@ def _supported_wptserve_handler_references(
         supported += SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_PATTERNS
     if rel is not None:
         supported += _script_load_error_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _eventsource_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("xhr/"):
         supported += SUPPORTED_XHR_DELAY_WPTSERVE_HANDLER_PATTERNS
         supported += _xhr_handler_reference_patterns(rel.rsplit("/", 1)[0])
@@ -1064,6 +1068,18 @@ def _has_unsupported_server_feature(
 
 
 @lru_cache(maxsize=None)
+def _eventsource_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "eventsource/resources/message.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
 def _script_load_error_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     resource = "html/semantics/scripting-1/the-script-element/resources/load-error-events.py"
     relative = posixpath.relpath(resource, directory)

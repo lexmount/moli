@@ -35,7 +35,7 @@ pub(in crate::native_bridge) fn node_create_attribute_callback<'s>(
     } else {
         parsed.name
     };
-    match new_attr_object(scope, &name, "", None, Some(args.this()), None, None, &name) {
+    match new_document_attr_object(scope, args.this(), &name, None, None, &name) {
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
@@ -70,12 +70,10 @@ pub(in crate::native_bridge) fn node_create_attribute_ns_callback<'s>(
                 return;
             }
         };
-    match new_attr_object(
+    match new_document_attr_object(
         scope,
+        args.this(),
         &parsed.qualified_name,
-        "",
-        None,
-        Some(args.this()),
         namespace.as_deref(),
         prefix.as_deref(),
         &local_name,

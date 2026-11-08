@@ -265,12 +265,12 @@ pub(in crate::worker) fn worker_xhr_timeout_callback(
 pub(crate) fn try_worker_xhr_send_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
+    xhr: v8::Local<'s, v8::Object>,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
 
-    let xhr = args.this();
     let body = match convert_xhr_send_body_from_args(scope, args) {
         Ok(body) => body,
         Err(error) => {
@@ -295,9 +295,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     };
 
     cancel_worker_xhr_timeout(scope, xhr);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, true);
-    set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, false);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
+    begin_xhr_send(scope, xhr);
 
     let prepared = match prepare_worker_xhr_send_request(scope, &state, xhr, method, prepared_body)
     {
@@ -795,21 +793,11 @@ fn worker_xhr_open_generation_changed(
 
 pub(crate) fn try_worker_xhr_abort_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+    xhr: v8::Local<'_, v8::Object>,
 ) -> bool {
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
-
-    let xhr = args.this();
-    let ready_state_key = v8str(scope, "readyState");
-    let ready_state = xhr
-        .get(scope, ready_state_key.into())
-        .and_then(|value| value.number_value(scope))
-        .unwrap_or(0.0) as u32;
-    if ready_state == 0 || ready_state == 4 {
-        return true;
-    }
 
     cancel_worker_xhr_timeout(scope, xhr);
     clear_worker_xhr_timeout_start(scope, xhr);
@@ -852,15 +840,7 @@ pub(crate) fn try_worker_xhr_abort_callback(
         }
     }
 
-    set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, true);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 4.0);
-    reset_xhr_response_for_request_error(scope, xhr);
-    dispatch_xhr_upload_abort_if_in_progress(scope, xhr);
-    xhr_dispatch_progress_event(scope, xhr, "abort", 0.0, 0.0);
-    xhr_dispatch_progress_event(scope, xhr, "loadend", 0.0, 0.0);
-    set_xhr_state_number(scope, xhr, XHR_READY_STATE_SLOT, 0.0);
+    crate::network_host::finish_xhr_abort(scope, xhr);
     true
 }
 
@@ -1040,6 +1020,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         response_headers: response_head.headers.clone(),
                         response_body,
                         response_from_cache: response_head.from_cache,
+                        response_cache_state: response_head.cache_state,
                     })
                 } else {
                     None
@@ -1075,6 +1056,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         response_headers: response_head.headers.clone(),
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,
+                        cache_state: response_head.cache_state,
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head,
@@ -1178,8 +1160,7 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         .ok_or(WorkerXhrSendPrepareError::ScriptUrlUnavailable)?;
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
         .map_err(WorkerXhrSendPrepareError::Url)?;
-    let request_headers =
-        xhr_author_request_headers(scope, xhr, prepared_body.default_content_type);
+    let request_headers = xhr_author_request_headers(scope, xhr, &prepared_body);
     let credentials_mode =
         if xhr_state_bool_property(scope, xhr, XHR_WITH_CREDENTIALS_SLOT).unwrap_or(false) {
             RequestCredentialsMode::Include

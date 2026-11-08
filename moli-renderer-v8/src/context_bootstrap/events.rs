@@ -12,9 +12,12 @@ pub(crate) use message::construct_original_message_event;
 mod methods;
 mod modifiers;
 mod subclasses;
+pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod submit;
 mod ui;
+pub(in crate::context_bootstrap) use ui::initialize_legacy_ui_event;
 mod value;
 mod wrappers;
 
@@ -105,6 +108,60 @@ pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
     web_api_interfaces::initialize(scope, event, "TextEvent").ok()?;
     initialize_event_wrapper(scope, wrapper, event)?;
     Some(wrapper)
+}
+
+const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
+
+pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype =
+        super::exposed_interfaces::ensure_intrinsic_interface_prototype(scope, "BeforeUnloadEvent")
+            .ok()?;
+    let wrapper = v8::Object::new(scope);
+    if wrapper.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    let event = new_event_state(scope);
+    base::initialize_event_object(scope, event, "", false, false);
+    base::set_event_initialized(scope, event, false);
+    set_private_value(
+        scope,
+        event,
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        v8str(scope, "").into(),
+    );
+    web_api_interfaces::initialize(scope, event, "BeforeUnloadEvent").ok()?;
+    initialize_event_wrapper(scope, wrapper, event)?;
+    Some(wrapper)
+}
+
+pub(super) fn before_unload_event_return_value_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if let Some(value) =
+        event_private_value(scope, args.this(), BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
+    {
+        rv.set(value);
+    }
+}
+
+pub(super) fn before_unload_event_return_value_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(value) = args.get(0).to_string(scope) else {
+        return;
+    };
+    set_event_private_value(
+        scope,
+        args.this(),
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        value.into(),
+    );
 }
 
 pub(crate) fn construct_original_page_transition_event<'s>(
@@ -317,7 +374,7 @@ pub(super) use base::{
     event_target_getter_function, event_type_getter_function, set_event_dispatch_fields,
     set_event_initialized,
 };
-pub(in crate::context_bootstrap) use init::EventInit;
+pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
@@ -442,7 +499,8 @@ pub(super) fn track_event_track_getter_function<'s>(
 
 pub(crate) use wrappers::{
     event_attribute, event_bool_attribute, event_callback_values, event_private_value,
-    initialize_event_wrapper, new_event_state, new_event_wrapper, set_event_private_value,
+    initialize_event_wrapper, new_event_state, new_event_wrapper, node_event_callback_values,
+    set_event_private_value,
 };
 
 pub(in crate::context_bootstrap) use message::message_event_init_callback;

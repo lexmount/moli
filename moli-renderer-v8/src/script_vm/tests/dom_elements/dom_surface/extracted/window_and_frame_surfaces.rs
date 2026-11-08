@@ -1215,6 +1215,82 @@ frame.src = "data:text/html,<body>cross-origin</body>";
     );
 }
 #[test]
+fn child_frame_src_same_cross_origin_fragment_keeps_browser_navigation_authority() {
+    let mut vm = new_storage_test_vm("https://cross-origin-fragment-owner.test/");
+    vm.exec(
+        r#"
+globalThis.fragmentOwnerFrame = document.createElement('iframe');
+fragmentOwnerFrame.src = 'data:text/html,<!doctype html><body>cross-origin#foo';
+(document.body || document.documentElement || document).appendChild(fragmentOwnerFrame);
+"#,
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    let before = vm.eval("history.length").unwrap().parse::<u64>().unwrap();
+    vm.exec("fragmentOwnerFrame.src = fragmentOwnerFrame.src", None)
+        .expect(
+            "the embedding element can navigate a cross-origin child to its current fragment URL",
+        );
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval("history.length").unwrap().parse::<u64>().unwrap(),
+        before + 1
+    );
+    assert_eq!(
+        vm.eval("(() => {try {fragmentOwnerFrame.contentWindow.document; return false;} catch (error) {return error.name === 'SecurityError';}})()").unwrap(),
+        "true",
+    );
+}
+
+#[test]
+fn child_internal_window_sync_reads_native_location_without_access_checks() {
+    let mut vm = new_storage_test_vm("https://child-window-internal-sync.test/");
+    vm.exec(
+        r#"
+globalThis.internalSyncFrame = document.createElement('iframe');
+internalSyncFrame.id = 'internal-sync-frame';
+internalSyncFrame.srcdoc = '<body>initial';
+(document.body || document.documentElement || document).appendChild(internalSyncFrame);
+globalThis.retainedInternalSyncWindow = internalSyncFrame.contentWindow;
+"#,
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    vm.exec(
+        "internalSyncFrame.src = 'data:text/html,<body>cross-origin'; internalSyncFrame.removeAttribute('srcdoc');",
+        None,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    let frame = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("internal-sync-frame")
+        .unwrap();
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        unsafe { &mut *host_ptr }
+            .sync_existing_child_browsing_context_window_state(&mut scope, frame);
+        assert!(
+            !scope.has_caught(),
+            "browser-owned synchronization must not leave a cross-origin exception pending"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            "(() => {try {retainedInternalSyncWindow.document; return false;} catch(error) {return error.name === 'SecurityError';}})()",
+        )
+        .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn child_window_proxy_identity_survives_cross_origin_round_trip() {
     let mut vm = new_storage_test_vm("https://child-window-proxy-round-trip.test/");
 
@@ -1404,6 +1480,110 @@ opaqueFrame.srcdoc = "<p id='opaque-secret'>opaque child</p>";
     );
     assert_eq!(server.finish_targets().await, vec!["/child.html"]);
 }
+
+#[tokio::test]
+async fn isolated_window_world_members_obey_document_domain_changes() {
+    const HOST: &str = "worlds.web-platform.test";
+    let server = StaticHttpServer::spawn(1).await;
+    let parent_url = server.url_for_host(HOST, "/parent.html");
+    let child_url = server.url_for_host(HOST, "/child.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.eval(&format!(
+        "globalThis.loaded=false;globalThis.frame=document.createElement('iframe');\
+         frame.onload=()=>{{loaded=true}};frame.src={};\
+         (document.body||document.documentElement||document).appendChild(frame);'ready'",
+        serde_json::to_string(child_url.as_str()).unwrap()
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(loaded)",
+        "true",
+        "independent same-origin HTTP child",
+    )
+    .await;
+    let root = vm.create_isolated_world("domain-members", false).unwrap();
+    vm.eval_in_isolated_context(
+        root,
+        r#"
+globalThis.cachedChild=document.querySelector('iframe').contentWindow;
+globalThis.isolatedCalls=0;
+cachedChild.addEventListener('isolated-domain-event',()=>{isolatedCalls++});
+globalThis.dispatchIsolated=cachedChild.dispatchEvent.bind(cachedChild);
+'cached'
+"#,
+    )
+    .unwrap();
+    vm.eval(
+        r#"
+globalThis.defaultCalls=0;
+const eventChild=frame.contentWindow;
+eventChild.addEventListener('default-domain-event',()=>{defaultCalls++});
+globalThis.dispatchDefault=eventChild.dispatchEvent.bind(eventChild);
+'registered'
+"#,
+    )
+    .unwrap();
+    vm.eval(&format!(
+        "document.domain={};'parent-opted-in'",
+        serde_json::to_string(HOST).unwrap()
+    ))
+    .unwrap();
+    assert_eq!(vm.eval_in_isolated_context(root,
+        "(()=>{try{cachedChild.document.URL;return 'accepted'}catch(error){return error.name+':'+(error instanceof DOMException)}})()")
+        .unwrap(),"SecurityError:true","cached world members must enforce the changed origin policy");
+    assert_eq!(
+        vm.eval("dispatchDefault(new Event('default-domain-event'));String(defaultCalls)")
+            .unwrap(),
+        "0",
+        "a main-world listener must not run across the changed origin boundary"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            root,
+            "dispatchIsolated(new Event('isolated-domain-event'));String(isolatedCalls)",
+        )
+        .unwrap(),
+        "1",
+        "isolated Event conversion may use the target Context in the listener's world"
+    );
+    let child = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .unwrap()
+        .context_id;
+    vm.eval_in_child_default_context(
+        child,
+        &format!(
+            "document.domain={};'child-opted-in'",
+            serde_json::to_string(HOST).unwrap()
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(root, "cachedChild.document.URL")
+            .unwrap(),
+        child_url.as_str()
+    );
+    assert_eq!(
+        vm.eval("dispatchDefault(new Event('default-domain-event'));String(defaultCalls)")
+            .unwrap(),
+        "1"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            root,
+            "dispatchIsolated(new Event('isolated-domain-event'));String(isolatedCalls)",
+        )
+        .unwrap(),
+        "2"
+    );
+    assert_eq!(server.finish_targets().await, vec!["/child.html"]);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn child_cross_origin_window_denials_use_the_child_dom_exception_realm() {
     const PARENT_HOST: &str = "web-platform.test";

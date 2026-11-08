@@ -1,4 +1,55 @@
+#[path = "shadow_dom/split30_gethtml_derived_options.rs"]
+mod split30_gethtml_derived_options;
+#[path = "shadow_dom/split30_slot_derived_options.rs"]
+mod split30_slot_derived_options;
+
 use super::*;
+
+#[test]
+fn template_adoption_clears_retained_shadow_adopted_style_sheet_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://template-shadow-sheets.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      for (const mode of ['adopt', 'append']) {
+        const template = document.createElement('template');
+        const nested = template.content.appendChild(document.createElement('template'));
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync('span {color: blue}');
+        const roots = [template, nested].map(owner => {
+          const host = document.createElement('div');
+          const root = host.attachShadow({mode: 'open'});
+          root.innerHTML = '<span>text</span>';
+          root.adoptedStyleSheets = [sheet];
+          owner.content.appendChild(host);
+          return root;
+        });
+        const lists = roots.map(root => root.adoptedStyleSheets);
+        const sheets = lists.map(list => list[0]);
+        check(lists.every(list => list.length === 1), 'own template owner retains sheets');
+        check(sheets.every(sheet => sheet.cssRules.length === 1), 'sheet contents available');
+        document.adoptNode(template);
+        check(lists.every(list => list.length === 1), 'same document retains sheets');
+        const destination = document.implementation.createHTMLDocument('destination');
+        const inert = destination.createElement('template').content.ownerDocument;
+        if (mode === 'adopt') destination.adoptNode(template);
+        else destination.body.appendChild(template);
+        check(roots.every(root => root.ownerDocument === inert), mode + ' shadow owners moved');
+        // Observe the retained lists without invoking a getter that could reinstall sheets.
+        check(lists.every(list => list.length === 0), mode + ' retained lists cleared');
+        check(sheets.every(sheet => sheet.cssRules.length === 1), mode + ' sheet objects preserved');
+      }
+      return true;
+    })()"#
+        )
+        .expect("template shadow stylesheet adoption should evaluate"),
+        "true"
+    );
+}
 
 #[test]
 fn child_content_document_body_set_html_unsafe_preserves_declarative_shadow_roots() {
@@ -3351,6 +3402,37 @@ fn clonable_shadow_roots_are_copied_by_host_clone_node() {
     );
 }
 #[test]
+fn html_fragment_replacement_distinguishes_shadow_roots_from_inert_template_contents() {
+    let mut vm = new_parsed_test_vm(
+        "https://fragment-custom-elements.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let probe = include_str!("html_fragment_custom_elements.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({probe})"))
+        .expect("fragment custom element probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    let rows = result["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 12);
+    for row in rows {
+        assert_eq!(row["upgraded"], true, "{row}");
+        assert_eq!(
+            row["events"],
+            serde_json::json!(["constructed", "connected"]),
+            "{row}"
+        );
+        if row["kind"] == "template" {
+            assert_eq!(row["inert"], true, "{row}");
+            assert_eq!(row["before"], serde_json::json!([]), "{row}");
+        }
+    }
+    assert_eq!(
+        result["realmInfo"],
+        serde_json::json!({"distinctObject": true, "distinctTypeError": true})
+    );
+}
+
+#[test]
 fn set_html_unsafe_preserves_declarative_shadow_roots() {
     let mut vm = new_storage_test_vm("https://set-html-unsafe-shadow.test/");
 
@@ -3416,6 +3498,59 @@ fn set_html_unsafe_preserves_declarative_shadow_roots() {
         "function|1|true|true|2|input|span|1|em|true|2|true|false|true|true|true|slot|true"
     );
 }
+
+#[test]
+fn set_html_unsafe_in_xml_documents_uses_xml_fragment_serialization() {
+    let mut vm = new_storage_test_vm("https://set-html-unsafe-xml.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const markup = '<p><foo><b><i>test</b></i>';
+  const xml = document.implementation.createDocument(null, 'root', null);
+  xml.documentElement.setHTMLUnsafe(markup);
+
+  const svg = document.implementation.createDocument(
+    'http://www.w3.org/2000/svg',
+    'root',
+    null
+  );
+  svg.documentElement.setHTMLUnsafe(markup);
+
+  const liveSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  liveSvg.setHTMLUnsafe('<circle></circle>');
+
+  return [
+    xml.contentType,
+    xml.documentElement.innerHTML,
+    xml.documentElement.firstChild.namespaceURI,
+    svg.contentType,
+    svg.documentElement.innerHTML,
+    svg.documentElement.firstChild.namespaceURI,
+    liveSvg.innerHTML,
+    liveSvg.firstChild.namespaceURI
+  ].join('|');
+})()
+"#,
+        )
+        .expect("setHTMLUnsafe should serialize XML document fragments as XML");
+
+    assert_eq!(
+        result,
+        concat!(
+            "application/xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "image/svg+xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "<circle></circle>|",
+            "http://www.w3.org/2000/svg"
+        )
+    );
+}
+
 #[test]
 fn get_html_serializes_shadow_roots_when_requested() {
     let mut vm = new_storage_test_vm("https://shadow-get-html.test/");

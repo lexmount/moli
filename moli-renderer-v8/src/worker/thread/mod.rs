@@ -19,11 +19,9 @@ use crate::broadcast_channel_runtime::{
     BroadcastChannelStorageKey, SharedBroadcastChannelRegistry,
 };
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyUrlViolation,
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyReportingEndpoints,
 };
-use crate::context_bootstrap::flush_one_pending_file_reader;
+use crate::context_bootstrap::flush_one_pending_file_reading_task;
 use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
 #[cfg(test)]
 use crate::network::ResourceRequestClientOwner;
@@ -45,7 +43,9 @@ mod isolate;
 mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
+pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
 
+use super::networking_tasks::WorkerNetworkingTaskQueue;
 use dispatch::{
     abort_service_worker_fetch_request_signal, cancel_service_worker_fetch_stream,
     create_script_origin, dispatch_broadcast_channel_event, dispatch_message_event,
@@ -112,8 +112,6 @@ use super::module_runtime::{
     run_next_worker_dynamic_module_import, worker_dynamic_module_import_waits_for_fetch,
     worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
-
-pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
 
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
@@ -198,6 +196,8 @@ pub(crate) struct WorkerSpawnOptions {
     /// inherited from an explicit API, creator, or shared-worker instance key.
     pub(crate) broadcast_channel_top_level_site: Option<String>,
     pub(crate) creator_storage_key: Option<MoliStorageKey>,
+    pub(crate) creator_message_security:
+        Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     pub(crate) service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -332,6 +332,7 @@ impl WorkerSpawnOptions {
             api_storage_key: None,
             broadcast_channel_top_level_site: None,
             creator_storage_key: None,
+            creator_message_security: None,
             service_worker_runtime: None,
             reserved_service_worker_client_id: None,
             indexed_db_manager: None,
@@ -462,6 +463,14 @@ impl WorkerSpawnOptions {
         self
     }
 
+    pub(crate) fn with_creator_message_security(
+        mut self,
+        security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
+    ) -> Self {
+        self.creator_message_security = security;
+        self
+    }
+
     pub(crate) fn with_creator_storage_key(mut self, storage_key: MoliStorageKey) -> Self {
         self.creator_storage_key = Some(storage_key);
         self
@@ -544,10 +553,12 @@ pub(super) struct ActiveTimer {
 
 fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     let state = state.borrow();
-    !state.pending_fetches.is_empty()
+    !state.networking_tasks.is_empty()
+        || !state.pending_fetches.is_empty()
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
+        || !state.pending_blob_reads.is_empty()
         || state
             .opfs_owner_state
             .as_ref()
@@ -578,13 +589,6 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_service_worker_sync_events.is_empty()
 }
 
-fn module_graph_csp_violation_message(violation: &ContentSecurityPolicyUrlViolation) -> String {
-    format!(
-        "Module worker dependency fetch blocked by Content Security Policy for `{}`.",
-        violation.blocked_uri
-    )
-}
-
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
     loader: WorkerResourceLoader,
@@ -596,13 +600,7 @@ fn start_worker_module_graph_fetch(
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let (
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        resource_kind,
-    ) =
-        match request.csp_source() {
+    let (enforce, report, endpoints, resource_kind) = match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
             module_static_import_content_security_policies,
             Vec::new(),
@@ -616,32 +614,29 @@ fn start_worker_module_graph_fetch(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
-    let initial_csp_report_only_violation =
-        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-            &content_security_report_only_policies,
-            request.initiator_url(),
-            request.url(),
-            resource_kind,
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Report,
-            &content_security_reporting_endpoints,
+    let resource_kind = request.module_type().csp_resource_kind(resource_kind);
+    let initiator = request.initiator_url().clone();
+    let csp_context = crate::content_security_policy::ModuleFetchCspContext::new(
+        request.url().clone(),
+        None,
+        move |url, original_url, redirect_status| {
+            let check = |policies: &[ContentSecurityPolicy], disposition| {
+                crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
+                    policies, &initiator, url, original_url, resource_kind,
+                    redirect_status, disposition, &endpoints,
+                )
+            };
+            (
+                check(&report, ContentSecurityPolicyDisposition::Report),
+                check(&enforce, ContentSecurityPolicyDisposition::Enforce),
+            )
+        },
+    );
+    if let Err(error) = csp_context.check_initial_request(request.url()) {
+        let _ = completion_tx.send(
+            WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
+                .with_csp_violations(csp_context.take_violations()),
         );
-    if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-        &content_security_policies,
-        request.initiator_url(),
-        request.url(),
-        resource_kind,
-        ContentSecurityPolicyRedirectStatus::NoRedirect,
-        ContentSecurityPolicyDisposition::Enforce,
-        &content_security_reporting_endpoints,
-    ) {
-        let message = module_graph_csp_violation_message(&violation);
-        let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
-            .with_csp_violation(violation);
-        if let Some(report_only_violation) = initial_csp_report_only_violation {
-            completion = completion.with_csp_report_only_violation(report_only_violation);
-        }
-        let _ = completion_tx.send(completion);
         return;
     }
     let browser_request_metadata = request.browser_request_metadata();
@@ -649,13 +644,13 @@ fn start_worker_module_graph_fetch(
         match moli_fetch::Request::new("GET", request.url().as_str(), None, vec![]) {
             Ok(request) => request
                 .with_page_network_policy()
-                .with_network_partition_key(network_partition_key.clone())
+                .with_network_partition_key(network_partition_key)
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
-                let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
-                    fetch_id,
-                    Err(error.to_string()),
-                ));
+                let _ = completion_tx.send(
+                    WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
+                        .with_csp_violations(csp_context.take_violations()),
+                );
                 return;
             }
         };
@@ -666,68 +661,34 @@ fn start_worker_module_graph_fetch(
                 ..moli_fetch::ScriptFetchRequestMetadata::default()
             });
     }
-    fetch_request = fetch_request
-        .with_initiator_url(request.initiator_url())
-        .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
-        .with_credentials_mode(request.credentials_mode());
+    fetch_request = csp_context.apply(
+        fetch_request
+            .with_initiator_url(request.initiator_url())
+            .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
+            .with_credentials_mode(request.credentials_mode()),
+    );
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();
     let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
-    let response_content_security_policies = content_security_policies.clone();
-    let response_content_security_report_only_policies =
-        content_security_report_only_policies.clone();
-    let response_content_security_reporting_endpoints =
-        content_security_reporting_endpoints.clone();
-    let response_resource_kind = resource_kind;
+    let response_csp_context = csp_context.clone();
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
     let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
-        let mut csp_violation = None;
-        let mut csp_report_only_violation = initial_csp_report_only_violation;
         let result = result
             .map_err(|error| {
                 format!("failed to fetch module worker dependency `{requested_url}`: {error}")
             })
             .and_then(|response| {
+                response_csp_context
+                    .check_response(&response)
+                    .map_err(|error| error.to_string())?;
                 moli_fetch::ensure_http_status_success(
                     response.final_url.as_str(),
                     response.status,
                     false,
                 )
                 .map_err(|error| error.to_string())?;
-                let redirect_status = if response.redirect_chain.is_empty() {
-                    ContentSecurityPolicyRedirectStatus::NoRedirect
-                } else {
-                    ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                };
-                if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
-                    && csp_report_only_violation.is_none()
-                {
-                    csp_report_only_violation =
-                        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                            &response_content_security_report_only_policies,
-                            &request_initiator_url,
-                            &response.final_url,
-                            response_resource_kind,
-                            redirect_status,
-                            ContentSecurityPolicyDisposition::Report,
-                            &response_content_security_reporting_endpoints,
-                        );
-                }
-                if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                    &response_content_security_policies,
-                    &request_initiator_url,
-                    &response.final_url,
-                    response_resource_kind,
-                    redirect_status,
-                    ContentSecurityPolicyDisposition::Enforce,
-                    &response_content_security_reporting_endpoints,
-                ) {
-                    let message = module_graph_csp_violation_message(&violation);
-                    csp_violation = Some(violation);
-                    return Err(message);
-                }
                 crate::network_host::validate_fetch_response_security_policy(
                     &request_initiator_url,
                     &response.head(),
@@ -754,19 +715,13 @@ fn start_worker_module_graph_fetch(
                     response_time_ms,
                 )
                 .with_kind(response_kind);
-                let final_url = head.final_url.clone();
                 let source = WorkerModuleSource::from_bytes(response_kind, body_bytes);
-                Ok(WorkerModuleFetchedSource::new(final_url, source)
+                Ok(WorkerModuleFetchedSource::new(head.final_url, source)
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
             });
-        let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result);
-        if let Some(violation) = csp_report_only_violation {
-            completion = completion.with_csp_report_only_violation(violation);
-        }
-        if let Some(violation) = csp_violation {
-            completion = completion.with_csp_violation(violation);
-        }
+        let completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result)
+            .with_csp_violations(response_csp_context.take_violations());
         let _ = completion_tx_for_callback.send(completion);
     };
     let Some(load) = loader.register_load(
@@ -774,37 +729,29 @@ fn start_worker_module_graph_fetch(
         ResourceLoadDisposition::Ordinary,
         None,
     ) else {
-        let _ = completion_tx.send(WorkerModuleGraphFetchCompletion::new(
-            fetch_id,
-            Err("worker module dependency fetch rejected during shutdown".to_owned()),
-        ));
+        let _ = completion_tx.send(
+            WorkerModuleGraphFetchCompletion::new(
+                fetch_id,
+                Err("worker module dependency fetch rejected during shutdown".to_owned()),
+            )
+            .with_csp_violations(csp_context.take_violations()),
+        );
         return;
     };
     if let Err(error) = loader
         .request_client()
         .fetch_cacheable_script_text_callback_with_load(fetch_request, load, send_completion)
     {
-        let mut completion = WorkerModuleGraphFetchCompletion::new(
-            fetch_id,
-            Err(format!(
-                "failed to start module worker dependency fetch `{}`: {error}",
-                request.url()
-            )),
-        );
-        if let Some(violation) =
-            content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                &content_security_report_only_policies,
-                request.initiator_url(),
-                request.url(),
-                resource_kind,
-                ContentSecurityPolicyRedirectStatus::NoRedirect,
-                ContentSecurityPolicyDisposition::Report,
-                &content_security_reporting_endpoints,
+        let _ = completion_tx.send(
+            WorkerModuleGraphFetchCompletion::new(
+                fetch_id,
+                Err(format!(
+                    "failed to start module worker dependency fetch `{}`: {error}",
+                    request.url()
+                )),
             )
-        {
-            completion = completion.with_csp_report_only_violation(violation);
-        }
-        let _ = completion_tx.send(completion);
+            .with_csp_violations(csp_context.take_violations()),
+        );
     }
 }
 
@@ -830,18 +777,19 @@ fn start_worker_module_graph_fetch_batch(
     }
 }
 
-fn drain_worker_file_reader_queue(
-    isolate: &mut v8::OwnedIsolate,
-    context: &v8::Global<v8::Context>,
-) {
-    loop {
-        let scope = pin!(v8::HandleScope::new(isolate));
-        let scope = &mut scope.init();
-        let ctx = v8::Local::new(scope, context);
-        let scope = &mut v8::ContextScope::new(scope, ctx);
-        if !flush_one_pending_file_reader(scope) {
-            break;
-        }
+fn run_worker_file_reading_task(isolate: &mut v8::OwnedIsolate, context: &v8::Global<v8::Context>) {
+    let scope = pin!(v8::HandleScope::new(isolate));
+    let scope = &mut scope.init();
+    let ctx = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, ctx);
+    if super::global_scope::get_worker_state(scope)
+        .is_some_and(|state| !state.borrow().callback_task_delivery_allowed())
+    {
+        return;
+    }
+    if super::global_scope::drain_one_worker_blob_read(scope)
+        || flush_one_pending_file_reading_task(scope)
+    {
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     }
 }
@@ -1334,6 +1282,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         api_storage_key,
         broadcast_channel_top_level_site,
         creator_storage_key,
+        creator_message_security,
         service_worker_runtime,
         reserved_service_worker_client_id,
         indexed_db_manager,
@@ -1385,6 +1334,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 api_storage_key,
                 broadcast_channel_top_level_site,
                 creator_storage_key,
+                creator_message_security,
                 service_worker_runtime,
                 reserved_service_worker_client_id,
                 indexed_db_manager,
@@ -1516,6 +1466,7 @@ async fn worker_main(
     api_storage_key: Option<BroadcastChannelStorageKey>,
     broadcast_channel_top_level_site: Option<String>,
     creator_storage_key: Option<MoliStorageKey>,
+    creator_message_security: Option<crate::context_bootstrap::RuntimeMessageSourceSecurity>,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -1568,9 +1519,7 @@ async fn worker_main(
         .bind_request_client(loader.request_client().clone());
     install_worker_promise_rejection_dispatch(
         worker_isolate.worker_isolate_mut(),
-        parent_tx.clone(),
         worker_wake_tx.clone(),
-        script_url.clone(),
     );
 
     // Worker-owned isolate timer queues are shared between V8 callbacks and the
@@ -1579,6 +1528,10 @@ async fn worker_main(
     worker_isolate
         .worker_isolate_mut()
         .set_slot(worker_timer_queues.clone());
+    let worker_networking_tasks = WorkerNetworkingTaskQueue::new(worker_wake_tx.clone());
+    worker_isolate
+        .worker_isolate_mut()
+        .set_slot(worker_networking_tasks.clone());
 
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
@@ -1627,7 +1580,25 @@ async fn worker_main(
     let service_worker_client_id = service_worker_worker_client
         .as_ref()
         .map(|client| client.client_id);
+    let message_agent_cluster = match &global_kind {
+        WorkerGlobalKind::Dedicated { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::WindowOrDedicatedWorker
+        }
+        WorkerGlobalKind::Shared { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::SharedWorker
+        }
+        WorkerGlobalKind::Service { .. } => {
+            crate::structured_clone::RuntimeMessageAgentCluster::ServiceWorker
+        }
+    };
+    let message_source_security = crate::context_bootstrap::RuntimeMessageSourceSecurity::worker(
+        current_script_url.as_ref(),
+        creator_message_security,
+        resource_owner_id,
+        message_agent_cluster,
+    );
     let state = Rc::new(RefCell::new(WorkerGlobalState {
+        message_source_security,
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
         resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),
         parent_tx: parent_tx.clone(),
@@ -1636,6 +1607,8 @@ async fn worker_main(
         closed: false,
         in_error_reporting_mode: false,
         next_timer_id: 0,
+        file_reading_tasks: std::collections::VecDeque::new(),
+        networking_tasks: worker_networking_tasks.clone(),
         loader,
         global_kind,
         script_kind,
@@ -1686,6 +1659,10 @@ async fn worker_main(
         webcrypto_completion_tx,
         pending_webcrypto: std::collections::HashMap::new(),
         next_webcrypto_task_id: 1,
+        next_blob_read_id: 1,
+        pending_blob_reads: std::collections::HashMap::new(),
+        ready_blob_reads: Arc::default(),
+        file_reading_wake: worker_runtime_wake_tx.clone(),
         opfs_completion_tx,
         opfs_owner_state: None,
         pending_service_worker_periodic_sync_events: std::collections::HashMap::new(),
@@ -1799,7 +1776,7 @@ async fn worker_main(
         }
     }
     if install_global_failed {
-        inspector_task_runner.dispose("Worker global installation failed");
+        inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::InstallationFailed);
         *isolate_handle.lock() = None;
         worker_isolate.unregister_worker_isolate_platform();
         return;
@@ -1907,7 +1884,6 @@ async fn worker_main(
             trace!(url = %script_url, "worker termination won before the next task");
             break;
         }
-        drain_worker_file_reader_queue(worker_isolate.worker_isolate_mut(), &context);
 
         if state.borrow().closed {
             trace!(url = %script_url, "worker closed via self.close()");
@@ -1952,7 +1928,13 @@ async fn worker_main(
         let has_pending_indexed_db_tasks =
             worker_has_pending_indexed_db_tasks(worker_isolate.worker_isolate_mut(), &context);
 
+        let has_ready_file_reading_tasks = {
+            let state = state.borrow();
+            !state.file_reading_tasks.is_empty() || !state.ready_blob_reads.lock().is_empty()
+        };
+
         enum WorkerLoopWake {
+            FileReading,
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
             Xhr(Option<WorkerXhrCompletion>),
@@ -1986,6 +1968,7 @@ async fn worker_main(
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
+                _ = async {}, if has_ready_file_reading_tasks => WorkerLoopWake::FileReading,
                 _ = tokio::time::sleep_until(deadline) => WorkerLoopWake::Timer,
             }
         } else {
@@ -2000,6 +1983,7 @@ async fn worker_main(
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
+                _ = async {}, if has_ready_file_reading_tasks => WorkerLoopWake::FileReading,
             }
         };
 
@@ -2014,18 +1998,29 @@ async fn worker_main(
 
         // Process wake if any.
         match wake {
+            WorkerLoopWake::FileReading => {
+                // One FileReading task per turn, with its cleanup checkpoint.
+                // Replenishing this source must not postpone timers or messages.
+                run_worker_file_reading_task(worker_isolate.worker_isolate_mut(), &context);
+                if !state.borrow().callback_task_delivery_allowed() {
+                    break;
+                }
+                drain_worker_dynamic_module_imports_for_context(
+                    worker_isolate.worker_isolate_mut(),
+                    &context,
+                    &state,
+                    &module_graph_fetch_tx,
+                );
+                // The ready source above does not await I/O. Participate in
+                // Tokio's budget so other worker-runtime futures also progress.
+                tokio::task::consume_budget().await;
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::Post(payload))) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
                     continue;
                 }
-                dispatch_message_event(
-                    worker_isolate.worker_isolate_mut(),
-                    &context,
-                    &payload,
-                    &parent_tx,
-                    &script_url,
-                );
+                dispatch_message_event(worker_isolate.worker_isolate_mut(), &context, &payload);
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
                     &context,
@@ -2066,8 +2061,6 @@ async fn worker_main(
                     worker_isolate.worker_isolate_mut(),
                     &context,
                     port_id,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2105,8 +2098,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2127,7 +2118,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2285,8 +2275,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2307,7 +2295,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2328,7 +2315,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2349,7 +2335,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2370,7 +2355,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2622,6 +2606,30 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_service_worker_push_unsubscribe_result(scope, &state, result);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunNetworkingTask)) => {
+                // Body consumption can fulfill module top-level await, so these
+                // tasks must also run while module bootstrap is pending.
+                let callback = worker_networking_tasks.pop_front();
+                if let Some(callback) = callback {
+                    let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                    let scope = &mut scope.init();
+                    let ctx = callback.target_context(scope);
+                    let scope = &mut v8::ContextScope::new(scope, ctx);
+                    if let super::timer_callback::WorkerTimerCallbackOutcome::Threw(report) =
+                        callback.invoke(scope, &[])
+                    {
+                        dispatch_current_worker_callback_exception(scope, *report);
+                    }
+                    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
+                        scope,
+                    );
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::DispatchPendingPromiseRejections)) => {
@@ -3079,11 +3087,7 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
                 if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
@@ -3096,11 +3100,7 @@ async fn worker_main(
                         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                     }
                 } else if pending_module_bootstrap.is_some() {
-                    if let Some(violation) = completion.csp_report_only_violation() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
-                    }
-                    if let Some(violation) = completion.csp_violation() {
+                    for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
@@ -3345,7 +3345,7 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
-    inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
+    inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
@@ -3356,15 +3356,21 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
     let common = Rc::clone(&state.borrow().common);
     common.clear_for_context_teardown();
+    state.borrow_mut().file_reading_tasks.clear();
     close_worker_owned_broadcast_channels(&state);
     close_worker_owned_message_ports(&state);
     resource_loader.finish_detach();
     crate::blob::cleanup_owner_resources(resource_owner_id);
     *isolate_handle.lock() = None;
+    worker_networking_tasks.clear();
+    worker_isolate
+        .worker_isolate_mut()
+        .remove_slot::<WorkerNetworkingTaskQueue>();
     drop(active_timers);
     drop(context);
     drop(state);

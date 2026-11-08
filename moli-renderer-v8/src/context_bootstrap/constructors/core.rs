@@ -1,4 +1,4 @@
-use super::super::media_queries::install_simple_event_target_methods;
+use super::super::media_queries::initialize_simple_event_target;
 use super::*;
 
 pub(in crate::context_bootstrap) fn event_target_constructor_callback<'s>(
@@ -14,7 +14,7 @@ pub(in crate::context_bootstrap) fn event_target_constructor_callback<'s>(
         return;
     }
     let target = args.this();
-    install_simple_event_target_methods(scope, target);
+    initialize_simple_event_target(scope, target);
     rv.set(target.into());
 }
 

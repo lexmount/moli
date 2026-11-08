@@ -27,7 +27,7 @@ impl BrowserProfileLock {
 
 pub fn acquire_profile_lock(paths: &BrowserProfilePaths) -> Result<BrowserProfileLock> {
     if !paths.root.as_os_str().is_empty() {
-        std::fs::create_dir_all(&paths.root)
+        crate::profile_file::create_durable_profile_directory(&paths.root)
             .with_context(|| format!("failed to create profile dir `{}`", paths.root.display()))?;
     }
 

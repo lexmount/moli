@@ -1,4 +1,4 @@
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8str};
+use crate::{document_runtime::DomHandle, native_bridge::JsContextHost, scroll_options};
 
 use super::super::super::{
     document,
@@ -13,9 +13,7 @@ use super::provider::read_element_metrics;
 use super::scroll::{
     apply_observable_window_scroll, node_scroll_position, set_node_scroll_position,
 };
-use super::scroll_into_view::{
-    ScrollIntoViewAlignment, scroll_node_into_view, scroll_node_into_view_if_needed,
-};
+use super::scroll_into_view::{scroll_node_into_view, scroll_node_into_view_if_needed};
 
 fn node_scroll_position_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -121,102 +119,19 @@ fn node_scroll_position_setter_for_object<'s>(
     Ok(())
 }
 
-fn parse_scroll_coordinates(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    fallback_x: f64,
-    fallback_y: f64,
-) -> (f64, f64) {
-    if args.length() > 0
-        && args.get(0).is_object()
-        && !args.get(0).is_function()
-        && let Some(options) = args.get(0).to_object(scope)
-    {
-        let x = options
-            .get(scope, v8str(scope, "left").into())
-            .or_else(|| options.get(scope, v8str(scope, "x").into()))
-            .and_then(|value| value.number_value(scope).filter(|value| !value.is_nan()))
-            .unwrap_or(fallback_x);
-        let y = options
-            .get(scope, v8str(scope, "top").into())
-            .or_else(|| options.get(scope, v8str(scope, "y").into()))
-            .and_then(|value| value.number_value(scope).filter(|value| !value.is_nan()))
-            .unwrap_or(fallback_y);
-        return (x, y);
-    }
-
-    let x = args
-        .get(0)
-        .number_value(scope)
-        .filter(|value| !value.is_nan())
-        .unwrap_or(fallback_x);
-    let y = args
-        .get(1)
-        .number_value(scope)
-        .filter(|value| !value.is_nan())
-        .unwrap_or(fallback_y);
-    (x, y)
-}
-
-fn scroll_alignment_option(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: v8::Local<'_, v8::Object>,
-    name: &'static str,
-    fallback: ScrollIntoViewAlignment,
-) -> ScrollIntoViewAlignment {
-    let Some(value) = options.get(scope, v8str(scope, name).into()) else {
-        return fallback;
-    };
-    match value.to_rust_string_lossy(scope).as_str() {
-        "start" => ScrollIntoViewAlignment::Start,
-        "center" => ScrollIntoViewAlignment::Center,
-        "end" => ScrollIntoViewAlignment::End,
-        "nearest" => ScrollIntoViewAlignment::Nearest,
-        _ => fallback,
-    }
-}
-
-fn element_scroll_into_view_alignments(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> (ScrollIntoViewAlignment, ScrollIntoViewAlignment) {
-    if args.length() == 0 {
-        return (
-            ScrollIntoViewAlignment::Nearest,
-            ScrollIntoViewAlignment::Start,
-        );
-    }
-    let value = args.get(0);
-    if value.is_boolean() {
-        return if value.boolean_value(scope) {
-            (
-                ScrollIntoViewAlignment::Nearest,
-                ScrollIntoViewAlignment::Start,
-            )
-        } else {
-            (
-                ScrollIntoViewAlignment::Nearest,
-                ScrollIntoViewAlignment::End,
-            )
-        };
-    }
-    let Some(options) = value.to_object(scope) else {
-        return (
-            ScrollIntoViewAlignment::Nearest,
-            ScrollIntoViewAlignment::Start,
-        );
-    };
-    (
-        scroll_alignment_option(scope, options, "inline", ScrollIntoViewAlignment::Nearest),
-        scroll_alignment_option(scope, options, "block", ScrollIntoViewAlignment::Start),
-    )
-}
-
 fn scroll_node_to<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     relative: bool,
 ) -> Result<(), moli_layout::LayoutError> {
+    if node_runtime_and_handle_from_object_or_detached(scope, args.this()).is_err() {
+        return Ok(());
+    }
+    let Some(coordinates) = scroll_options::coordinates(scope, &args) else {
+        return Ok(());
+    };
+    // Conversion may detach or replace the receiver's document. Resolve its
+    // native owner again before reading state or requesting layout.
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
@@ -228,12 +143,7 @@ fn scroll_node_to<'s>(
         return Ok(());
     }
     let (current_left, current_top) = node_scroll_position(unsafe { &*runtime_ptr }, handle);
-    let (left, top) = if relative {
-        let (delta_left, delta_top) = parse_scroll_coordinates(scope, &args, 0.0, 0.0);
-        (current_left + delta_left, current_top + delta_top)
-    } else {
-        parse_scroll_coordinates(scope, &args, current_left, current_top)
-    };
+    let (left, top) = coordinates.resolve(current_left, current_top, relative);
     let metrics = read_element_metrics(unsafe { &*runtime_ptr }, handle)?;
     let Some(metrics) = metrics else {
         return Ok(());
@@ -572,18 +482,22 @@ pub(in crate::native_bridge) fn node_scroll_into_view_if_needed_callback(
     rv.set_undefined();
 }
 
-pub(in crate::native_bridge) fn node_scroll_into_view_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(in crate::native_bridge) fn node_scroll_into_view_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this()) {
-        let (horizontal, vertical) = element_scroll_into_view_alignments(scope, &args);
-        if let Err(error) =
+    if node_runtime_and_handle_from_object_or_detached(scope, args.this()).is_err() {
+        return;
+    }
+    let Some((horizontal, vertical)) = scroll_options::into_view_alignments(scope, &args) else {
+        return;
+    };
+    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this())
+        && let Err(error) =
             scroll_node_into_view(scope, runtime_ptr, handle, None, horizontal, vertical)
-        {
-            throw_scroll_layout_error(scope, "scrollIntoView", error);
-        }
+    {
+        throw_scroll_layout_error(scope, "scrollIntoView", error);
     }
     reveal_lazy_images_for_scroll(scope, args.this());
     rv.set_undefined();

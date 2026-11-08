@@ -163,6 +163,20 @@ impl PendingSubresourceFetchInfo {
     }
 }
 
+impl ChildDocumentFetchRequest {
+    #[doc(hidden)]
+    pub fn renderer_transport_charge_bytes(&self) -> usize {
+        string_charge(&self.loader_id).saturating_add(self.redirect.as_ref().map_or(
+            0,
+            |redirect| {
+                url_charge(&redirect.from_url)
+                    .saturating_add(url_charge(&redirect.to_url))
+                    .saturating_add(headers_charge(&redirect.headers))
+            },
+        ))
+    }
+}
+
 impl PendingSubresourceContinueEvent {
     #[doc(hidden)]
     pub fn renderer_transport_charge_bytes(&self) -> usize {

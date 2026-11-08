@@ -216,17 +216,36 @@ impl NavigationResourceLoader {
 
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
         self.begin_fetch()?;
+        let single_hop = !request.transport_follows_redirects();
+        let response_cancel = if single_hop {
+            self.inner.cancel.child_for_subrequest()
+        } else {
+            self.inner.cancel.clone()
+        };
         match self
             .request_client
             .fetch_raw_stream_with_cancel(
                 request.with_page_network_policy(),
-                self.inner.cancel.clone(),
+                response_cancel.clone(),
             )
             .await
         {
             Ok(mut response) => {
                 let head = response.head();
                 let mut body = Vec::new();
+                // A caller-owned redirect must not wait for an unbounded
+                // redirect body. Cancel this hop without cancelling navigation.
+                if single_hop
+                    && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+                    && head
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                {
+                    response_cancel.cancel();
+                    self.finish_response_ready()?;
+                    return Ok(RawResponse::from_head_and_body(head, body));
+                }
                 while let Some(chunk) = response.next_chunk().await {
                     body.extend_from_slice(&chunk);
                 }
@@ -235,7 +254,45 @@ impl NavigationResourceLoader {
                     return Err(error);
                 }
                 self.finish_response_ready()?;
+                if single_hop {
+                    self.inner.cancel.adopt_response_progress(&response_cancel);
+                }
                 Ok(RawResponse::from_head_and_body(head, body))
+            }
+            Err(error) => {
+                self.finish_failed();
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn restart_after_response(&self) -> Result<()> {
+        let mut state = self.inner.state.lock();
+        ensure!(
+            *state == NavigationResourceLoaderState::ResponseReady,
+            "navigation restart requires a completed response (state: {:?})",
+            *state
+        );
+        *state = NavigationResourceLoaderState::Created;
+        Ok(())
+    }
+
+    pub async fn fetch_raw_with_network_metadata(
+        &self,
+        request: Request,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.begin_fetch()?;
+        let result = self
+            .request_client
+            .fetch_raw_with_cancel_and_network_metadata(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
+            .await;
+        match result {
+            Ok(response) => {
+                self.finish_response_ready()?;
+                Ok(response)
             }
             Err(error) => {
                 self.finish_failed();
@@ -255,16 +312,30 @@ impl NavigationResourceLoader {
         request: Request,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
         self.begin_fetch()?;
+        let cancellation = if request.transport_follows_redirects() {
+            self.inner.cancel.clone()
+        } else {
+            self.inner.cancel.child_for_subrequest()
+        };
         match self
             .request_client
             .fetch_raw_stream_with_cancel_and_network_metadata(
                 request.with_page_network_policy(),
-                self.inner.cancel.clone(),
+                cancellation.clone(),
             )
             .await
         {
             Ok(response) => {
                 self.finish_response_ready()?;
+                if !matches!(response.response().status, 301 | 302 | 303 | 307 | 308)
+                    || !response
+                        .response()
+                        .headers
+                        .iter()
+                        .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+                {
+                    self.inner.cancel.adopt_response_progress(&cancellation);
+                }
                 Ok(response)
             }
             Err(error) => {

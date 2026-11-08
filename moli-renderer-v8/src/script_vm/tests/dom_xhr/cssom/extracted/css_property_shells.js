@@ -6,7 +6,6 @@
   ];
   for (const style of styles) for (const [property, alias] of [
     ['timeline-trigger', 'timelineTrigger'],
-    ['font-optical-sizing', 'fontOpticalSizing'],
     ['-webkit-locale', 'webkitLocale']
   ]) {
     assert(property in style && alias in style, 'property accessors');

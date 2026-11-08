@@ -1,23 +1,27 @@
 use super::*;
 
 #[test]
-fn rtc_session_description_requires_a_dictionary_with_a_valid_type() {
+fn rtc_session_description_accepts_optional_dictionary_and_validates_supplied_type() {
     let mut vm = new_storage_test_vm("http://session-description.test/");
     let result = vm.eval(r#"
-      (() => {
+(() => {
         const rejects = callback => {
           try { callback(); return false; } catch (error) { return error instanceof TypeError; }
         };
         const checks = [
-          RTCSessionDescription.length === 1,
+          RTCSessionDescription.length === 0,
           RTCSessionDescription.name === 'RTCSessionDescription',
           rejects(() => RTCSessionDescription({type: 'offer'})),
-          rejects(() => new RTCSessionDescription())
+          new RTCSessionDescription().type === null
         ];
-        for (const value of [undefined, null, {}, true, 3, 'offer', Symbol(), 1n,
-          {type: undefined}, {type: null}, {type: ''}, {type: 'Offer'},
+        for (const value of [true, 3, 'offer', Symbol(), 1n,
+          {type: null}, {type: ''}, {type: 'Offer'},
           {type: ' offer'}, {type: 'answer\0'}, {type: Symbol()}, {type: 1}]) {
           checks.push(rejects(() => new RTCSessionDescription(value)));
+        }
+        for (const value of [undefined, null, {}, {type: undefined}]) {
+          const description = new RTCSessionDescription(value);
+          checks.push(description.type === null, description.sdp === '', description.toJSON().type === null);
         }
         for (const type of ['offer', 'pranswer', 'answer', 'rollback']) {
           const description = new RTCSessionDescription({type});
@@ -34,7 +38,7 @@ fn rtc_session_description_requires_a_dictionary_with_a_valid_type() {
         checks.push(rejects(() => new RTCSessionDescription({type: 'offer', sdp: Symbol()})));
         return checks.every(Boolean);
       })()
-    "#).expect("RTCSessionDescription should require an RTCSdpType and retain DOMString SDP without validation");
+"#).expect("RTCSessionDescription should accept legacy defaults and validate a supplied RTCSdpType and retain DOMString SDP without validation");
     assert_eq!(result, "true");
 }
 
@@ -42,7 +46,7 @@ fn rtc_session_description_requires_a_dictionary_with_a_valid_type() {
 fn rtc_session_description_converts_members_in_order_and_preserves_exceptions() {
     let mut vm = new_storage_test_vm("https://session-description-conversion.test/");
     let result = vm.eval(r#"
-      (() => {
+(() => {
         const reads = [];
         const dictionary = Object.create({
           sdp: {toString() { reads.push('convert sdp'); return 'sdp'; }},
@@ -70,22 +74,24 @@ fn rtc_session_description_converts_members_in_order_and_preserves_exceptions() 
           checks.push(false);
         } catch (caught) { checks.push(caught instanceof TypeError, !typeRead); }
         let sdpRead = false;
-        try { new RTCSessionDescription({get sdp() { sdpRead = true; return ''; }}); checks.push(false); }
-        catch (caught) { checks.push(caught instanceof TypeError, sdpRead); }
+        const emptyType = new RTCSessionDescription({get sdp() { sdpRead = true; return ''; }});
+        checks.push(emptyType.type === null, sdpRead);
         Object.defineProperty(Object.prototype, 'type', {
           configurable: true, get() { throw error; }
         });
         try {
           for (const value of [undefined, null]) {
-            try { new RTCSessionDescription(value); checks.push(false); }
-            catch (caught) { checks.push(caught instanceof TypeError); }
+            const empty = new RTCSessionDescription(value);
+            checks.push(empty.type === null, empty.sdp === '');
           }
+          try { new RTCSessionDescription({}); checks.push(false); }
+          catch (caught) { checks.push(caught === error); }
         } finally { delete Object.prototype.type; }
         const clone = new RTCSessionDescription(description);
         checks.push(clone !== description, clone.type === 'answer', clone.sdp === 'sdp');
         return checks.every(Boolean);
       })()
-    "#).expect("RTCSessionDescription dictionary conversion should observe WebIDL order and original exceptions");
+"#).expect("RTCSessionDescription dictionary conversion should observe WebIDL order and original exceptions");
     assert_eq!(result, "true");
 }
 

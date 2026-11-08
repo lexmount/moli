@@ -80,6 +80,45 @@ promise_test(async function () {
     const handlerSeen = new Promise(function (resolve) {
       worker.onerror = function () {
         resolve();
+        return false;
+      };
+    });
+    const listenerSeen = new Promise(function (resolve) {
+      worker.addEventListener(
+        "error",
+        function (event) {
+          resolve(event.defaultPrevented);
+        },
+        { once: true },
+      );
+    });
+
+    const defaultPrevented = await wait_for(listenerSeen, "worker error listener");
+    await wait_for(handlerSeen, "worker.onerror false-returning handler");
+    await wait(30);
+
+    assert_true(defaultPrevented, "false-returning worker.onerror should mark the error as handled");
+  } finally {
+    window.onerror = previousOnerror;
+    worker.terminate();
+  }
+}, "False-returning worker.onerror marks the worker error as handled for later listeners");
+
+promise_test(async function () {
+  const workerUrl = new URL(
+    "/wpt/ported/worker/resources/worker-error.js",
+    location.href,
+  ).href;
+  const previousOnerror = window.onerror;
+  window.onerror = function () {
+    return true;
+  };
+
+  const worker = new Worker(workerUrl);
+  try {
+    const handlerSeen = new Promise(function (resolve) {
+      worker.onerror = function () {
+        resolve();
         return 1;
       };
     });
@@ -97,10 +136,10 @@ promise_test(async function () {
     await wait_for(handlerSeen, "worker.onerror truthy handler");
     await wait(30);
 
-    assert_true(defaultPrevented, "truthy worker.onerror should mark the error as handled");
+    assert_false(defaultPrevented, "truthy worker.onerror must not mark the error as handled");
   } finally {
     window.onerror = previousOnerror;
     worker.terminate();
   }
-}, "Truthy worker.onerror marks the worker error as handled for later listeners");
+}, "Truthy worker.onerror leaves the worker error uncanceled for later listeners");
 </script>

@@ -126,11 +126,47 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
         .as_ref()
         .cloned()
         .unwrap_or_default();
-    if semantics.is_select_listbox() {
-        return Some((data.option_labels, false));
+    if kind == LayoutFormControlKind::Select {
+        return Some((select_control_texts(&data), false));
     }
-    let placeholder = data.value.is_empty()
-        && !data.placeholder.is_empty()
+    let (text, placeholder) = form_control_text(kind, &data.value, &data.placeholder);
+    Some((
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text.into()]
+        },
+        placeholder,
+    ))
+}
+
+/// Text rows actually displayed by a select, independently of option DOM text.
+pub fn select_control_texts(data: &crate::LayoutFormControlData) -> Vec<Arc<str>> {
+    if data.select_rows() > 1 {
+        data.option_labels.clone()
+    } else {
+        let (text, _) = form_control_text(
+            LayoutFormControlKind::Select,
+            &data.value,
+            &data.placeholder,
+        );
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text.into()]
+        }
+    }
+}
+
+/// Visible text and placeholder selection shared by resource discovery and
+/// control rendering. This projection performs no layout or font loading.
+pub fn form_control_text(
+    kind: LayoutFormControlKind,
+    value: &str,
+    placeholder_text: &str,
+) -> (String, bool) {
+    let placeholder = value.is_empty()
+        && !placeholder_text.is_empty()
         && matches!(
             kind,
             LayoutFormControlKind::TextArea
@@ -146,26 +182,26 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
         );
     let text = match kind {
         LayoutFormControlKind::Input(input) => match input {
-            LayoutInputControlKind::Button => data.value.to_string(),
+            LayoutInputControlKind::Button => value.to_string(),
             LayoutInputControlKind::Reset => {
-                if data.value.is_empty() {
+                if value.is_empty() {
                     "Reset".to_owned()
                 } else {
-                    data.value.to_string()
+                    value.to_string()
                 }
             }
             LayoutInputControlKind::Submit => {
-                if data.value.is_empty() {
+                if value.is_empty() {
                     "Submit".to_owned()
                 } else {
-                    data.value.to_string()
+                    value.to_string()
                 }
             }
             LayoutInputControlKind::File => {
-                if data.value.is_empty() {
+                if value.is_empty() {
                     "Choose File".to_owned()
                 } else {
-                    data.value.to_string()
+                    value.to_string()
                 }
             }
             LayoutInputControlKind::Checkbox
@@ -186,18 +222,18 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
             | LayoutInputControlKind::Time
             | LayoutInputControlKind::Url
             | LayoutInputControlKind::Week => {
-                if data.value.is_empty() {
-                    data.placeholder.to_string()
+                if value.is_empty() {
+                    placeholder_text.to_string()
                 } else {
-                    data.value.to_string()
+                    value.to_string()
                 }
             }
         },
         LayoutFormControlKind::TextArea | LayoutFormControlKind::Select => {
-            if data.value.is_empty() {
-                data.placeholder.to_string()
+            if value.is_empty() {
+                placeholder_text.to_string()
             } else {
-                data.value.to_string()
+                value.to_string()
             }
         }
         LayoutFormControlKind::Button
@@ -209,14 +245,7 @@ fn form_control_texts(semantics: &Option<LayoutElementSemantics>) -> Option<(Vec
         | LayoutFormControlKind::Progress
         | LayoutFormControlKind::Meter => String::new(),
     };
-    Some((
-        if text.is_empty() {
-            Vec::new()
-        } else {
-            vec![text.into()]
-        },
-        placeholder,
-    ))
+    (text, placeholder)
 }
 
 pub(crate) fn select_row_height(font_size: f32, line_height: f32) -> f32 {

@@ -1,4 +1,5 @@
 use super::*;
+use attribute_node::nullable_state_string;
 
 mod attr_object;
 mod attribute_node;
@@ -21,7 +22,7 @@ pub(super) use attribute_node::{
     bridge_remove_attribute_node_for_live_element_callback,
     bridge_set_attribute_node_for_live_element_callback, detached_create_attribute_method_callback,
     detached_create_attribute_ns_method_callback, detached_native_remove_attribute_node,
-    detached_native_set_attribute_node,
+    detached_native_set_attribute_node, new_document_attr_object,
 };
 pub(in crate::native_bridge) use attribute_node::{
     detached_get_attribute_node_method_callback, detached_get_attribute_node_ns_method_callback,

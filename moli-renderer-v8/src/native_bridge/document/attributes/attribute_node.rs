@@ -109,6 +109,7 @@ pub(in crate::native_bridge::document) fn live_set_attribute_node<'s>(
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
             scope,
@@ -258,6 +259,7 @@ pub(in crate::native_bridge::document) fn live_remove_attribute_node<'s>(
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
             scope,
@@ -332,6 +334,7 @@ pub(in crate::native_bridge::document) fn detached_native_set_attribute_node<'s>
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     read_detached_native_attribute_snapshot(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
@@ -429,6 +432,7 @@ pub(in crate::native_bridge::document) fn detached_native_remove_attribute_node<
     element: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let element = canonical_detached_node_object(scope, element)?;
     read_detached_native_attribute_snapshot(scope, element)?;
     let Ok(attr) = v8::Local::<v8::Object>::try_from(value) else {
         throw_dom_exception(
@@ -727,7 +731,7 @@ fn remove_live_attribute_node_native(
     }
 }
 
-fn nullable_state_string<'s>(
+pub(super) fn nullable_state_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Object>,
     property: &str,
@@ -776,6 +780,7 @@ pub(in crate::native_bridge::document) fn native_attr_object_from_snapshot<'s>(
     element: v8::Local<'s, v8::Object>,
     attribute: &DetachedNativeAttributeSnapshot,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let element = canonical_detached_node_object(scope, element)?;
     let cache = live_attr_cache_object(scope, element)?;
     let namespace_key =
         namespace_attr_cache_key(attribute.namespace_uri.as_deref(), &attribute.local_name);
@@ -861,6 +866,29 @@ fn detach_attr_node<'s>(
     );
 }
 
+pub(in crate::native_bridge::document) fn new_document_attr_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    name: &str,
+    namespace: Option<&str>,
+    prefix: Option<&str>,
+    local_name: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    new_attr_object(
+        target_scope,
+        name,
+        "",
+        None,
+        Some(document),
+        namespace,
+        prefix,
+        local_name,
+    )
+}
+
 pub(in crate::native_bridge::document) fn detached_create_attribute_method_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -885,7 +913,7 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_method_callb
         } else {
             parsed.name
         };
-    match new_attr_object(scope, &name, "", None, Some(args.this()), None, None, &name) {
+    match new_document_attr_object(scope, args.this(), &name, None, None, &name) {
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
@@ -909,12 +937,10 @@ pub(in crate::native_bridge::document) fn detached_create_attribute_ns_method_ca
                 return;
             }
         };
-    match new_attr_object(
+    match new_document_attr_object(
         scope,
+        args.this(),
         &parsed.qualified_name,
-        "",
-        None,
-        Some(args.this()),
         namespace.as_deref(),
         prefix.as_deref(),
         &local_name,

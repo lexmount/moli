@@ -4,6 +4,7 @@ mod frame_document_parser_tree;
 mod graph;
 mod graph_fetch_store;
 mod host_callbacks;
+mod import_attributes;
 mod import_map;
 mod modulator;
 mod owner_ids;
@@ -43,6 +44,7 @@ pub(crate) use self::dynamic_resolver::{
     DynamicModuleJoinedFetch, DynamicModuleScheduledFetch, PendingDynamicModuleEvaluationReaction,
     PendingDynamicModuleImport,
 };
+pub(crate) use self::import_attributes::{import_attributes_key, module_request_attributes};
 pub(crate) use self::import_map::ImportMapRegistryState;
 pub(crate) use self::modulator::{
     NativeDocumentModulator, NativeFrameDocumentDependencyFetchBuildFailure,

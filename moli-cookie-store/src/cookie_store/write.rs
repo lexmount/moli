@@ -151,12 +151,37 @@ impl CookieStore {
     /// continuing an existing rich set result.
     pub fn set_with_access_result_chain(
         &mut self,
+        cookie: Cookie<'static>,
+        context: &InsertContext<'_>,
+        prior_result: CookieSetAccessResult,
+    ) -> CookieSetAccessResult {
+        self.set_with_ordering(cookie, context, prior_result, false)
+    }
+
+    /// Restore through canonical policy while retaining persisted ordering.
+    pub fn restore_with_context(
+        &mut self,
+        cookie: Cookie<'static>,
+        context: &InsertContext<'_>,
+    ) -> CookieSetAccessResult {
+        self.set_with_ordering(cookie, context, provisional_set_access_result(), true)
+    }
+
+    fn set_with_ordering(
+        &mut self,
         mut cookie: Cookie<'static>,
         context: &InsertContext<'_>,
         mut prior_result: CookieSetAccessResult,
+        preserve_ordering: bool,
     ) -> CookieSetAccessResult {
         if matches!(prior_result.status, CookieSetResult::Rejected(_)) {
             return prior_result;
+        }
+
+        if preserve_ordering {
+            cookie.restore_creation_time();
+        } else {
+            cookie.initialize_creation_time();
         }
 
         if cookie.partitioned().unwrap_or(false) && cookie.partition_key().is_none() {
@@ -179,9 +204,10 @@ impl CookieStore {
             return prior_result;
         }
 
-        match self.insert_with_context_impl(cookie, context) {
-            Ok(action) => {
+        match self.insert_with_context_impl(cookie, context, preserve_ordering) {
+            Ok((action, effective_same_site)) => {
                 prior_result.status = CookieSetResult::Accepted(action);
+                prior_result.effective_same_site = Some(effective_same_site);
                 prior_result
             }
             Err(error) => {
@@ -205,7 +231,8 @@ impl CookieStore {
         &mut self,
         cookie: Cookie<'static>,
         context: &InsertContext<'_>,
-    ) -> InsertResult {
+        preserve_ordering: bool,
+    ) -> Result<(StoreAction, CookieEffectiveSameSite), CookieError> {
         let request_url = context.url;
         let cookie = canonicalize_cookie_for_store_checks(self, cookie, request_url)?;
 
@@ -223,6 +250,9 @@ impl CookieStore {
             && !cookie.secure().unwrap_or(false)
         {
             return Err(CookieError::SameSiteNoneRequiresSecure);
+        }
+        if let Some(reason) = same_site_set_rejection_reason(&cookie, context) {
+            return Err(reason.into_cookie_error());
         }
         if context.enforce_browser_policy
             && cookie_name_value_too_large(cookie.name(), cookie.value())
@@ -257,6 +287,7 @@ impl CookieStore {
                 .domain
                 .as_cow()
                 .ok_or(CookieError::UnspecifiedDomain)?;
+            let observed = self.observer.is_some();
             if let Some(old_cookie) = self.get_mut_with_partition_key(
                 &cookie_domain,
                 &cookie.path,
@@ -268,8 +299,12 @@ impl CookieStore {
                 {
                     return Err(CookieError::NonHttpScheme);
                 } else if cookie.is_expired() {
+                    let key = observed.then(|| CookieStoreKey::for_cookie(old_cookie));
                     old_cookie.expire();
-                    return Ok(StoreAction::ExpiredExisting);
+                    if let Some(key) = key {
+                        self.notify(CookieStoreMutation::Delete(key));
+                    }
+                    return Ok((StoreAction::ExpiredExisting, effective_same_site(&cookie)));
                 }
             }
         }
@@ -280,15 +315,15 @@ impl CookieStore {
             let cookie_path = String::from(&cookie.path);
             let cookie_name = cookie.name().to_owned();
             let cookie_key = CookieKey::for_cookie(&cookie);
-            let existing_creation_index = self
+            let existing_creation = self
                 .get_with_partition_key(
                     &cookie_domain,
                     &cookie_path,
                     &cookie_name,
                     cookie.partition_key(),
                 )
-                .map(|existing| existing.creation_index());
-            let replacing_existing = existing_creation_index.is_some();
+                .map(|existing| (existing.creation_index(), existing.creation_time()));
+            let replacing_existing = existing_creation.is_some();
             if !self.make_room_for_cookie(
                 &cookie_domain,
                 cookie.partition_key(),
@@ -297,37 +332,55 @@ impl CookieStore {
             ) {
                 return Err(CookieError::StorageFull);
             }
-            let creation_index = if let Some(creation_index) = existing_creation_index {
-                creation_index
+            if preserve_ordering {
+                self.next_creation_index = self
+                    .next_creation_index
+                    .max(cookie.creation_index().saturating_add(1));
+                self.next_access_index = self
+                    .next_access_index
+                    .max(cookie.last_access_index().saturating_add(1));
             } else {
-                // Expired tombstones should not count as an in-place replacement. Remove any
-                // stale entry for this key before inserting so quota checks and store actions
-                // treat the new cookie as a fresh live entry.
-                let _ = self.remove_with_partition_key(
-                    &cookie_domain,
-                    &cookie_path,
-                    &cookie_name,
-                    cookie.partition_key(),
-                );
-                self.bump_creation_index()
-            };
-            cookie.set_creation_index(creation_index);
-            cookie.touch_with_access_index(self.bump_access_index());
-            Ok(
-                if self
-                    .cookies
-                    .entry(cookie_domain)
-                    .or_default()
-                    .entry(cookie_path)
-                    .or_default()
-                    .insert(cookie_key, cookie)
-                    .is_none()
-                {
-                    StoreAction::Inserted
-                } else {
+                let creation_index =
+                    if let Some((creation_index, creation_time)) = existing_creation {
+                        cookie.set_creation_time(creation_time);
+                        creation_index
+                    } else {
+                        // Expired tombstones should not count as an in-place replacement. Remove any
+                        // stale entry for this key before inserting so quota checks and store actions
+                        // treat the new cookie as a fresh live entry.
+                        let _ = self.remove_with_partition_key(
+                            &cookie_domain,
+                            &cookie_path,
+                            &cookie_name,
+                            cookie.partition_key(),
+                        );
+                        self.bump_creation_index()
+                    };
+                cookie.set_creation_index(creation_index);
+                cookie.touch_with_access_index(self.bump_access_index());
+            }
+            // Report the canonical cookie after replacement inherits its original age.
+            let effective_same_site = effective_same_site(&cookie);
+            let observed = self.observer.is_some().then(|| Box::new(cookie.clone()));
+            let replaced = self
+                .cookies
+                .entry(cookie_domain)
+                .or_default()
+                .entry(cookie_path)
+                .or_default()
+                .insert(cookie_key, cookie)
+                .is_some();
+            if let Some(cookie) = observed {
+                self.notify(CookieStoreMutation::Upsert { cookie });
+            }
+            Ok((
+                if replaced {
                     StoreAction::UpdatedExisting
+                } else {
+                    StoreAction::Inserted
                 },
-            )
+                effective_same_site,
+            ))
         } else {
             Err(CookieError::Expired)
         }

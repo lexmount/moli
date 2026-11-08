@@ -15,6 +15,8 @@ use crate::{
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
 };
 
+const RESOURCE_INITIATOR_SLOT: &str = "__lmObserverResourceInitiator";
+
 /// IDs are local to one common runtime and never reused. Lookup also checks
 /// the exact JS owner, so an ID from another runtime cannot alias a binding.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -202,6 +204,8 @@ impl CallbackRegistry {
         let callback_value = v8::Local::<v8::Object>::try_from(callback.value(scope)).ok()?;
         let relevant_global = relevant_context.global(scope);
         let incumbent_global = callback.incumbent_context(scope).global(scope);
+        let initiator = crate::resource_initiator::CallbackInitiator::capture(scope).value(scope);
+        crate::util::set_private_value(scope, observer, RESOURCE_INITIATOR_SLOT, initiator);
         // Create weak handles outside the registry borrow: V8 may run native
         // finalizers during allocations, including another binding's cleanup.
         let observer_weak = Rc::new(v8::Weak::new(scope, observer));
@@ -278,6 +282,9 @@ impl CallbackRegistry {
         if !binding.is_current(scope) {
             return None;
         }
+        let value = crate::util::get_private_value(scope, observer, RESOURCE_INITIATOR_SLOT)
+            .unwrap_or_else(|| v8::undefined(scope).into());
+        let initiator = crate::resource_initiator::CallbackInitiator::from_value(scope, value);
         let relevant = residence.relevant_global.get_creation_context(scope)?;
         let incumbent = residence.incumbent_global.get_creation_context(scope)?;
         let callback = PreparedWebIdlCallbackFunction::try_new(
@@ -302,6 +309,7 @@ impl CallbackRegistry {
                 PreparedWebIdlCallbackExecution::worker(scope, callback, context)
             }
         }
+        .map(|execution| execution.with_resource_initiator(initiator))
     }
 
     pub(crate) fn activate_performance_observer(

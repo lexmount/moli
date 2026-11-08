@@ -7,7 +7,7 @@ import json
 import pytest
 from websockets.asyncio.server import serve
 
-from moli_frontend_smoke.cdp import CdpError, RawCdpClient, connect
+from moli_frontend_smoke.cdp import CdpError, CdpTimeoutError, RawCdpClient, connect
 
 
 @pytest.mark.parametrize("timeout", [0.25, 5.0])
@@ -74,12 +74,20 @@ def test_timeout_diagnostic_identifies_the_pending_operation(operation: str) -> 
     async def scenario() -> None:
         client = RawCdpClient(websocket=_SilentSocket())  # type: ignore[arg-type]
         if operation == "command":
-            with pytest.raises(CdpError, match="Target.createTarget response after 0.01s"):
-                await client.command("Target.createTarget", timeout=0.01)
+            with pytest.raises(CdpError, match="Target.createTarget response after 0.01s") as raised:
+                await client.command("Target.createTarget", session_id="page", timeout=0.01)
         else:
-            with pytest.raises(CdpError, match="Page.loadEventFired event after 0.01s"):
+            with pytest.raises(CdpError, match="Page.loadEventFired event after 0.01s") as raised:
                 await client.wait_event(
                     "Page.loadEventFired", session_id="page", timeout=0.01,
                 )
+        assert isinstance(raised.value, CdpTimeoutError)
+        assert raised.value.context == {
+            "method": "Target.createTarget" if operation == "command" else "Page.loadEventFired",
+            "operation": "response" if operation == "command" else "event",
+            "timeoutSeconds": 0.01,
+            "commandId": 1 if operation == "command" else None,
+            "sessionId": "page",
+        }
 
     asyncio.run(scenario())

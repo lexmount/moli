@@ -3,7 +3,15 @@ use super::*;
 impl ScriptVm {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn snapshot_globals(&mut self) -> Result<Option<BTreeMap<String, JsValueSnapshot>>> {
-        let baseline_json = serde_json::to_string(&self.baseline_globals)
+        let MainWorld::Ready {
+            runtime,
+            _baseline_globals: baseline_globals,
+        } = &self.main_world
+        else {
+            return Ok(Some(BTreeMap::new()));
+        };
+        let default_context = runtime.context_ptr();
+        let baseline_json = serde_json::to_string(baseline_globals)
             .context("failed to encode baseline globals for script snapshot")?;
         let snapshot_source = format!(
             r#"
@@ -94,7 +102,6 @@ impl ScriptVm {
 }})()
 "#
         );
-        let default_context = &self.page_default_runtime.context as *const _;
         let snapshot_json = self
             .eval_string_in_context_ptr_internal_snapshot(default_context, &snapshot_source)
             .context("failed to evaluate script state snapshot")?;
@@ -111,7 +118,6 @@ impl ScriptVm {
 
     #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) fn snapshot_globals(&mut self) -> Result<Option<BTreeMap<String, JsValueSnapshot>>> {
-        let _ = &self.baseline_globals;
         Ok(None)
     }
 
@@ -123,7 +129,8 @@ impl ScriptVm {
             .runtime_observable_source_queue
             .take_report_observable_output(
                 self.runtime_observable_default_execution_context_id(),
-                self.page_default_runtime.runtime_observable_context_token,
+                self.current_main_world()
+                    .map(|runtime| runtime.runtime_observable_context_token),
             ))
     }
 
@@ -152,11 +159,15 @@ impl ScriptVm {
     }
 
     pub(super) fn page_runtime_observable_contexts(&self) -> Vec<PageRuntimeObservableContext> {
-        let mut contexts = vec![PageRuntimeObservableContext {
-            execution_context_id: self.runtime_observable_default_execution_context_id(),
-            context_token: self.page_default_runtime.runtime_observable_context_token,
-            context: &self.page_default_runtime.context as *const _,
-        }];
+        let mut contexts = self
+            .current_main_world()
+            .map(|runtime| PageRuntimeObservableContext {
+                execution_context_id: self.runtime_observable_default_execution_context_id(),
+                context_token: runtime.runtime_observable_context_token,
+                context: runtime.context_ptr(),
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
         let mut isolated_context_ids = self
             .page_isolated_world_contexts
             .execution_context_ids()
@@ -390,15 +401,16 @@ impl ScriptVm {
     pub(super) fn moli_memory_counters(&self) -> RendererMoliMemoryDiagnostics {
         let document = self.document_runtime.snapshot_document();
         let dom = moli_dom_memory_counters(&document);
-        let main_window_proxy_identity_hash = self
-            .renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_runtime.context);
-                Ok(context.global(scope).get_identity_hash().get())
-            })
-            .ok();
+        let main_window_proxy_identity_hash = self.current_main_world().and_then(|runtime| {
+            self.renderer_document_isolate
+                .with_entered_renderer_document_isolate(|isolate| {
+                    let scope = pin!(v8::HandleScope::new(isolate));
+                    let scope = &mut scope.init();
+                    let context = v8::Local::new(scope, &runtime.context);
+                    Ok(context.global(scope).get_identity_hash().get())
+                })
+                .ok()
+        });
         let host = self._context_host.borrow();
         RendererMoliMemoryDiagnostics {
             scope: RendererMoliMemoryScopeDiagnostics {
@@ -458,9 +470,10 @@ impl ScriptVm {
                 isolate.low_memory_notification();
                 Ok(())
             })?;
-        self._context_host
-            .borrow_mut()
-            .prune_collected_iframe_content_surfaces();
+        let mut host = self._context_host.borrow_mut();
+        host.prune_collected_iframe_content_surfaces();
+        host.native_bridge_mut()
+            .prune_collected_isolated_world_wrapper_caches();
         Ok(())
     }
 
@@ -484,9 +497,10 @@ impl ScriptVm {
                 }
                 Ok(())
             })?;
-        self._context_host
-            .borrow_mut()
-            .prune_collected_iframe_content_surfaces();
+        let mut host = self._context_host.borrow_mut();
+        host.prune_collected_iframe_content_surfaces();
+        host.native_bridge_mut()
+            .prune_collected_isolated_world_wrapper_caches();
         Ok(())
     }
 
@@ -494,7 +508,7 @@ impl ScriptVm {
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
     ) -> Result<Vec<String>> {
-        // SAFETY: callers pass pointers to `self.page_default_runtime.context` or page realm context entries owned by this `ScriptVm`.
+        // SAFETY: callers pass pointers to an owned ready main-world Context or page realm context entries owned by this `ScriptVm`.
         // The snapshot operation only reads a context slot; it does not mutate or remove any
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.
@@ -508,7 +522,7 @@ impl ScriptVm {
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
     ) -> Result<Vec<Value>> {
-        // SAFETY: callers pass pointers to `self.page_default_runtime.context` or page realm context entries owned by this `ScriptVm`.
+        // SAFETY: callers pass pointers to an owned ready main-world Context or page realm context entries owned by this `ScriptVm`.
         // The snapshot operation only reads a context slot; it does not mutate or remove any
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.
@@ -618,12 +632,6 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .take_pending_javascript_dialogs()
-    }
-
-    pub(crate) fn set_javascript_dialog_handler_enabled(&mut self, enabled: bool) {
-        self._context_host
-            .borrow_mut()
-            .set_javascript_dialog_handler_enabled(enabled);
     }
 
     #[cfg(test)]

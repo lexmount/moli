@@ -22,35 +22,11 @@ pub(super) struct ErrorEventInit<'s> {
     message: webidl::DomString16,
 }
 
-impl Default for ErrorEventInit<'_> {
-    fn default() -> Self {
-        Self {
-            base: EventInit::default(),
-            colno: 0,
-            error: None,
-            filename: String::new(),
-            lineno: 0,
-            message: webidl::DomString16(Vec::new()),
-        }
-    }
-}
-
 pub(super) fn parse_error_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<ErrorEventInit<'s>> {
-    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument("ErrorEvent", 2))
-        .and_then(|object| match object {
-            Some(object) => webidl::parse_dictionary_object(scope, object),
-            None => Ok(ErrorEventInit::default()),
-        });
-    match parsed {
-        Ok(init) => Some(init),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
+    crate::context_bootstrap::events::parse_event_dictionary(scope, args, "ErrorEvent")
 }
 
 impl<'s> ErrorEventInit<'s> {

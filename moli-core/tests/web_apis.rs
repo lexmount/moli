@@ -30,6 +30,12 @@ use tokio::time::Duration;
 
 #[path = "web_apis/abort_signal.rs"]
 mod abort_signal;
+#[path = "web_apis/fetch_body_native.rs"]
+mod fetch_body_native;
+#[path = "web_apis/fetch_body_realm.rs"]
+mod fetch_body_realm;
+#[path = "web_apis/request_stream.rs"]
+mod request_stream;
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
@@ -854,8 +860,15 @@ async fn local_event_target_callback_exceptions_do_not_abort_dispatch() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/local-event-target-callback-exception"))
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            r#"document.body.dataset.fontOrder === "first|second|handler""#,
+            Duration::from_secs(3),
+        )
         .await?;
 
     assert!(
@@ -2344,8 +2357,15 @@ async fn document_fonts_remove_event_listener_keeps_other_event_types_intact() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/document-fonts-events"))
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            r#"document.body.dataset.loadingdone === "1""#,
+            Duration::from_secs(3),
+        )
         .await?;
 
     assert!(
@@ -4035,8 +4055,15 @@ async fn chrome_fontfaceset_event_handlers_fire_in_loading_then_done_order_subse
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-events-subset"))
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            r#"document.body.dataset.readyStatus === "loaded""#,
+            Duration::from_secs(3),
+        )
         .await?;
 
     assert!(

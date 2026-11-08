@@ -11,6 +11,10 @@ fn navigation(token: &DocumentNavigationToken, id: &str) -> NavigationDispatchSt
 
 fn request(token: &DocumentNavigationToken, id: &str) -> PendingFetchNavigation {
     PendingFetchNavigation {
+        reserved_service_worker_client: None,
+        interception: None,
+        remaining_request_stages: Vec::new(),
+        redirected_request_id: None,
         auth_retry_budget: Default::default(),
         fetch_request_id: id.to_owned(),
         interception_session_id: Some("SID-A".to_owned()),

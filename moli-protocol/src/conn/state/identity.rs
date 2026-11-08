@@ -103,6 +103,19 @@ impl DevToolsDocumentResidenceIdentity {
     }
 }
 
+/// A node exported by this WebDriver session. Keeping native provenance (and
+/// no V8 handle) lets Classic distinguish an unknown reference, another frame,
+/// and a known node whose Document has since been replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebDriverNodeReference {
+    pub page_residence: DevToolsDocumentResidenceIdentity,
+    pub target_id: String,
+    pub browsing_context_id: String,
+    pub backend_node_id: u32,
+    pub kind: crate::automation::WebDriverNodeKind,
+    pub(crate) frame_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+}
+
 impl TargetPageResidenceIdentity {
     pub(crate) fn new(
         browser_context_id: String,

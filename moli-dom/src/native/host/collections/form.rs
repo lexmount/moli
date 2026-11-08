@@ -101,24 +101,30 @@ impl DomHost {
             .is_some_and(is_listed_form_control_element)
     }
 
+    pub fn builtin_form_associated_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        let element = self.node(handle).and_then(Node::as_element)?;
+        if !is_parser_form_association_candidate(element) {
+            return None;
+        }
+        if is_builtin_reassociateable_form_associated_element(element) {
+            return self.form_control_owner(handle);
+        }
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
     pub fn form_control_owner(&self, handle: DomHandle) -> Option<DomHandle> {
         let element = self.node(handle).and_then(Node::as_element)?;
-        if !matches!(
-            element.local_name(),
-            "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-        ) || element.namespace() != "http://www.w3.org/1999/xhtml"
-        {
+        if !is_builtin_reassociateable_form_associated_element(element) {
             return None;
         }
 
-        if let Some(form_id) = element.attribute("form") {
+        if let Some(form_id) = element.attribute("form")
+            && self.is_connected_to_document(handle)
+        {
             if form_id.is_empty() {
                 return None;
             }
             let tree_root = self.root_node_handle(handle)?;
-            if self.is_shadow_root(tree_root) && !self.is_connected(tree_root) {
-                return None;
-            }
             let candidate = self.element_handle_by_id_in_subtree(tree_root, form_id)?;
             let candidate = self.resolve_reference_target_chain(candidate)?;
             return self
@@ -126,7 +132,14 @@ impl DomHost {
                 .then_some(candidate);
         }
 
-        if let Some(owner) = element.parser_associated_form_owner()
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
+    fn parser_or_ancestor_form_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        if let Some(owner) = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(Element::parser_associated_form_owner)
             && self.is_html_element_named(owner, "form")
             && self.root_node_handle(handle) == self.root_node_handle(owner)
         {

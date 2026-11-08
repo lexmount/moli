@@ -32,9 +32,11 @@ async fn websocket_cdp_navigation_keeps_network_child_frame_visible_at_load_boun
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -82,7 +84,7 @@ async fn websocket_cdp_navigation_keeps_network_child_frame_visible_at_load_boun
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -322,9 +324,11 @@ async fn websocket_cdp_websocket_frame_events_are_emitted_without_followup_comma
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -372,7 +376,7 @@ async fn websocket_cdp_websocket_frame_events_are_emitted_without_followup_comma
             json!({
                 "id": 3_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -503,9 +507,11 @@ async fn websocket_cdp_pending_runtime_await_completes_after_websocket_dom_updat
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-websocket-dom");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/page");
@@ -627,9 +633,11 @@ window.addEventListener('load', () => {{
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-page-websocket-dom");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/page");
@@ -752,9 +760,11 @@ async fn websocket_cdp_network_and_websocket_outputs_are_session_isolated_withou
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -967,9 +977,11 @@ async fn websocket_cdp_parser_script_network_events_capture_response_body() {
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1017,7 +1029,7 @@ async fn websocket_cdp_parser_script_network_events_capture_response_body() {
             json!({
                 "id": 12_u64,
                 "method": "Target.attachToTarget",
-                "params": { "targetId": target_id }
+                "params": { "targetId": target_id, "flatten": true }
             })
             .to_string()
             .into(),
@@ -1261,9 +1273,11 @@ async fn websocket_cdp_parser_script_network_backlog_flushes_before_domcontentlo
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1395,9 +1409,11 @@ globalThis.__lmInlineXhrDone = new Promise(resolve => {
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -1585,9 +1601,11 @@ async fn websocket_cdp_event_source_emits_incremental_network_events() {
         spawn_dedicated_fixture_server(fixture_app, "cdp-event-source");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let browser_context_id = cdp_create_browser_context(&mut socket, 10).await;
@@ -1807,9 +1825,11 @@ async fn websocket_cdp_runtime_awaitpromise_external_script_node_keeps_node_subt
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-script-node");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/plain");
@@ -1884,9 +1904,11 @@ async fn websocket_cdp_runtime_awaitpromise_same_owner_turn_style_node_keeps_nod
         spawn_dedicated_fixture_server(fixture_app, "runtime-await-inline-style-node");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/plain");
@@ -1961,9 +1983,11 @@ async fn websocket_cdp_remote_objects_classify_cross_frame_nodes_at_v8_boundary(
         spawn_dedicated_fixture_server(fixture_app, "runtime-cross-frame-node-subtype");
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
     let page_url = format!("http://{fixture_addr}/parent");
@@ -2067,9 +2091,11 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
     });
 
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .expect("connect to cdp websocket");
 
@@ -2136,6 +2162,7 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
         .expect("auto-attached session id")
         .to_owned();
 
+    let mut initialization_messages = Vec::new();
     for (id, method, params) in [
         (103_u64, "Browser.getWindowForTarget", json!({})),
         (104_u64, "Page.enable", json!({})),
@@ -2198,7 +2225,7 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
             ))
             .await
             .expect("send playwright-style page init command");
-        let _ = recv_until_id(&mut socket, id).await;
+        initialization_messages.extend(recv_until_id(&mut socket, id).await);
     }
 
     socket
@@ -2217,21 +2244,37 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
         .await
         .expect("send Page.navigate");
 
-    let mut navigation_messages = Vec::new();
-    let mut saw_navigate_response = false;
-    let mut saw_main_load_event = false;
-    while !(saw_navigate_response && saw_main_load_event) {
+    // Retain real initialization traffic too: a load of the initial blank
+    // document cannot satisfy this navigation's load boundary.
+    let mut navigation_messages = initialization_messages;
+    let mut navigation_loader_id = None;
+    let is_navigation_load = |message: &serde_json::Value, loader_id: &str| {
+        message["sessionId"] == json!(session_id)
+            && message["method"] == "Page.lifecycleEvent"
+            && message["params"]["frameId"] == json!(target_id)
+            && message["params"]["loaderId"] == loader_id
+            && message["params"]["name"] == "load"
+    };
+    loop {
         let message = recv_ws_json(&mut socket).await;
         if message["id"] == json!(115_u64) {
-            saw_navigate_response = true;
-        }
-        if message["sessionId"] == json!(session_id)
-            && message["method"] == json!("Page.loadEventFired")
-        {
-            saw_main_load_event = true;
+            navigation_loader_id = Some(
+                message["result"]["loaderId"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("navigation loader id: {message:?}"))
+                    .to_owned(),
+            );
         }
         navigation_messages.push(message);
+        if navigation_loader_id.as_deref().is_some_and(|loader| {
+            navigation_messages
+                .iter()
+                .any(|message| is_navigation_load(message, loader))
+        }) {
+            break;
+        }
     }
+    let navigation_loader_id = navigation_loader_id.unwrap();
 
     let child_frame_id = navigation_messages
         .iter()
@@ -2241,7 +2284,9 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
                 && message["params"]["parentFrameId"] == json!(target_id)
         })
         .and_then(|message| message["params"]["frameId"].as_str())
-        .expect("child frame should emit Page.frameAttached")
+        .unwrap_or_else(|| {
+            panic!("child frame should emit Page.frameAttached: {navigation_messages:?}")
+        })
         .to_owned();
     let child_context_visible = navigation_messages.iter().any(|message| {
         message["sessionId"] == json!(session_id)
@@ -2279,13 +2324,21 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
         .unwrap_or_else(|| {
             panic!("child default execution context index: {navigation_messages:?}")
         });
-    let main_load_event_index = navigation_messages
+    let main_load_marker_index = navigation_messages
         .iter()
-        .position(|message| {
-            message["sessionId"] == json!(session_id)
-                && message["method"] == json!("Page.loadEventFired")
+        .position(|message| is_navigation_load(message, &navigation_loader_id))
+        .expect("current navigation load marker");
+    let main_load_event_index = navigation_messages[..main_load_marker_index]
+        .iter()
+        .rposition(|message| {
+            message["sessionId"] == json!(session_id) && message["method"] == "Page.loadEventFired"
         })
-        .expect("main load event index");
+        .expect("current navigation main load event index");
+    assert_eq!(
+        navigation_messages[main_load_event_index]["params"]["timestamp"],
+        navigation_messages[main_load_marker_index]["params"]["timestamp"],
+        "Page.loadEventFired and the loader-bound marker describe the same native fact: {navigation_messages:?}"
+    );
 
     assert!(
         child_attached_index < main_load_event_index,

@@ -72,6 +72,7 @@ async fn mouse_input_completion_publishes_handler_navigation_once() {
                 delta_y: 0.0,
                 pointer: RendererPointerEventProperties::default(),
                 modifiers: 0,
+                intercept_drags: false,
             })
             .await
             .expect("input command");
@@ -219,6 +220,7 @@ async fn mouse_input_completion_preserves_standalone_and_child_navigation_scope(
                 delta_y: 0.0,
                 pointer: RendererPointerEventProperties::default(),
                 modifiers: 0,
+                intercept_drags: false,
             })
             .await
             .expect("scope input command");

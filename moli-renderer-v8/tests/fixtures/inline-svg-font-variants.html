@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<style>
+html,body{margin:0;background:white}
+svg{position:absolute;width:90px;height:60px;font-family:"Moli SVG Variants";font-size:48px}
+#italic-inherited{left:0;top:0;font-style:italic}
+#italic-authored{left:100px;top:0}
+#italic-control{left:200px;top:0}
+#condensed-inherited{left:0;top:70px;font-stretch:condensed}
+#condensed-authored{left:100px;top:70px}
+#condensed-control{left:200px;top:70px}
+#lighter-row{font-weight:700}
+#lighter-inherited{left:0;top:140px}
+#lighter-authored{left:100px;top:140px}
+#lighter-control{left:200px;top:140px}
+#bolder-row{font-weight:500}
+#bolder-inherited{left:0;top:210px}
+#bolder-authored{left:100px;top:210px}
+#bolder-control{left:200px;top:210px}
+#bold-inherited{left:0;top:280px;font-weight:700}
+#bold-authored{left:100px;top:280px}
+#bold-control{left:200px;top:280px}
+</style>
+</head>
+<body>
+<svg id="italic-inherited" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white">M</text></svg>
+<svg id="italic-authored" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-style="italic">M</text></svg>
+<svg id="italic-control" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white">M</text></svg>
+<svg id="condensed-inherited" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white">M</text></svg>
+<svg id="condensed-authored" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-stretch="condensed">M</text></svg>
+<svg id="condensed-control" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white">M</text></svg>
+<div id="lighter-row">
+<svg id="lighter-inherited" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="lighter">M</text></svg>
+<svg id="lighter-authored" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="400">M</text></svg>
+<svg id="lighter-control" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="700">M</text></svg>
+</div>
+<div id="bolder-row">
+<svg id="bolder-inherited" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="bolder">M</text></svg>
+<svg id="bolder-authored" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="700">M</text></svg>
+<svg id="bolder-control" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="600">M</text></svg>
+</div>
+<svg id="bold-inherited" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white">M</text></svg>
+<svg id="bold-authored" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="700">M</text></svg>
+<svg id="bold-control" width="90" height="60" viewBox="0 0 90 60"><rect width="90" height="60" fill="#0f766e"/><text x="8" y="50" fill="white" font-weight="400">M</text></svg>
+</body>
+</html>

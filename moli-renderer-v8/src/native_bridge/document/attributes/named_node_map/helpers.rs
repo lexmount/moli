@@ -11,6 +11,7 @@ pub(super) fn named_node_map_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     map: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let map = moli_webapi_declare::web_api_object_target(scope, map)?;
     get_private_object(scope, map, NAMED_NODE_MAP_ELEMENT_SLOT).or_else(|| {
         map.get_internal_field(scope, 0)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())

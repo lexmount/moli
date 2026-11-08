@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+encoding_rs = "0.8"
+moli-encoding = { path = "../moli-encoding" }
 moli-header-field = { path = "../moli-header-field" }
 
 [lints]

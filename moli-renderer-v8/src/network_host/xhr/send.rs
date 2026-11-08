@@ -34,11 +34,11 @@ pub(super) fn xhr_send_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if crate::worker::try_worker_xhr_send_callback(scope, &args) {
+    let xhr = xhr_receiver_target(scope, args.this());
+    if crate::worker::try_worker_xhr_send_callback(scope, &args, xhr) {
         return;
     }
 
-    let xhr = args.this();
     let body = match convert_xhr_send_body_from_args(scope, &args) {
         Ok(body) => body,
         Err(error) => {
@@ -70,15 +70,13 @@ pub(super) fn xhr_send_callback<'s>(
     };
 
     cancel_xhr_timeout(scope, xhr);
-    set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, true);
-    set_xhr_state_bool(scope, xhr, XHR_ABORTED_SLOT, false);
-    set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, 0.0);
+    begin_xhr_send(scope, xhr);
 
     let prepared = match prepare_xhr_send_request(scope, host, xhr, method, prepared_body) {
         Ok(prepared) => prepared,
         Err(XhrSendPrepareError::ExecutionContext) => {
             if async_request {
-                queue_xhr_failure_delivery(scope, host, xhr);
+                queue_xhr_failure_delivery(scope, xhr);
             } else {
                 let request_url =
                     xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
@@ -89,7 +87,7 @@ pub(super) fn xhr_send_callback<'s>(
         }
         Err(XhrSendPrepareError::Url(message)) => {
             if async_request {
-                queue_xhr_failure_delivery(scope, host, xhr);
+                queue_xhr_failure_delivery(scope, xhr);
             } else {
                 let request_url =
                     xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
@@ -319,6 +317,10 @@ fn send_synchronous_network_xhr(
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)
+    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+        document_referrer_policy: prepared.document_referrer_policy.clone(),
+        ..Default::default()
+    })
     .with_request_origin(prepared.request_origin.clone())
     .with_credentials_mode(prepared.credentials_mode)
     .with_use_cors_preflight(prepared.use_cors_preflight)
@@ -459,7 +461,13 @@ fn send_synchronous_network_xhr(
                     "xmlhttprequest",
                     None,
                     &response,
-                ),
+                )
+                .with_initiator_url(crate::resource_initiator::response_url(
+                    prepared.initiator_url.clone(),
+                    &prepared.request_origin,
+                    &response.final_url,
+                    response.cache_state,
+                )),
             );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.request_origin,

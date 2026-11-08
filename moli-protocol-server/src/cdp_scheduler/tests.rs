@@ -24,8 +24,8 @@ use moli_protocol::{
     },
     conn::RuntimeInspectorResponseReady,
     test_support::{
-        arm_background_navigation_request, arm_background_navigation_request_for_target,
-        deferred_main_document_load_observation_id, deferred_main_document_load_output_interest,
+        arm_background_navigation_request, deferred_main_document_load_observation_id,
+        deferred_main_document_load_output_interest,
         root_frame_stopped_loading_work as make_root_frame_stopped_loading_work,
         root_frame_stopped_loading_work_for_target, settle_background_navigation_request,
     },
@@ -405,9 +405,14 @@ fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
         "REQ-known",
         &target_id,
     );
+    let owner = moli_protocol::ProtocolStateOwner::new(conn);
     assert_eq!(
-        ProtocolOutputSequence::from_background_event(known.clone())
-            .navigation_gate_target_ids(&conn),
+        owner
+            .with_state(|state| {
+                ProtocolOutputSequence::from_background_event(known.clone())
+                    .navigation_gate_target_ids(&state)
+            })
+            .unwrap(),
         [target_id]
     );
 
@@ -418,7 +423,10 @@ fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
     }));
     let mixed = ProtocolOutputSequence::from_background_events(vec![known, unresolved]);
     assert!(
-        mixed.navigation_gate_target_ids(&conn).is_empty(),
+        owner
+            .with_state(|state| mixed.navigation_gate_target_ids(&state))
+            .unwrap()
+            .is_empty(),
         "an atomic batch with any unresolved owner must remain connection-gated"
     );
 }
@@ -579,14 +587,146 @@ fn renderer_output_publication_waits_for_its_exact_load_predecessors() {
     );
 
     queues.satisfy_front_client_turn_predecessor();
-    assert!(!queues.should_complete_next_residence());
+    let owner = moli_protocol::ProtocolStateOwner::new(CdpConnection::new());
+    assert!(
+        !owner
+            .with_state(|state| queues.should_complete_next_residence(&state))
+            .unwrap()
+    );
     queues.satisfy_load_predecessor(second);
     assert!(
-        !queues.should_complete_next_residence(),
+        !owner
+            .with_state(|state| queues.should_complete_next_residence(&state))
+            .unwrap(),
         "an unrelated completed load must not release the frozen batch early"
     );
     queues.satisfy_load_predecessor(first);
-    assert!(queues.should_complete_next_residence());
+    assert!(
+        owner
+            .with_state(|state| queues.should_complete_next_residence(&state))
+            .unwrap()
+    );
+}
+
+#[test]
+fn pending_renderer_projection_keeps_its_load_window_while_peer_work_advances() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let candidate = future_load_candidate(&publication);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    scheduler.queues.enqueue_pending_renderer_output_projection(
+        cursor,
+        Vec::new(),
+        Some(candidate),
+    );
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: root_frame_stopped_loading_work(1, "FRAME-peer"),
+    }]);
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    let snapshot = scheduler.queues.take_external_load_wait_snapshot();
+    assert_eq!(snapshot.len(), 1, "peer work may leave the queue");
+    assert_eq!(
+        scheduler.queues.renderer_output_order(cursor),
+        Some((Vec::new(), Some(candidate)))
+    );
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Page.loadEventFired"})]),
+    ));
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .is_none()
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+}
+
+#[test]
+fn renderer_owner_work_waits_for_its_original_projection_and_exact_load() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let load = deferred_main_document_load_observation_id(1);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(cursor, vec![load], None);
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-source"),
+            cursor,
+        ),
+    }]);
+    let Some(ProtocolSchedulerResidence::ProtocolWork {
+        load_predecessors, ..
+    }) = scheduler.queues.protocol_residences.get(1)
+    else {
+        panic!("the original owner work stays queued");
+    };
+    assert_eq!(load_predecessors, &[load]);
+    scheduler.queues.close_future_load_predecessor_window();
+    assert!(scheduler.queues.take_command_followup_snapshot().is_empty());
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), None);
+    scheduler.queues.satisfy_load_predecessor(load);
+    assert_eq!(
+        scheduler.next_ungated_protocol_residence_index(),
+        None,
+        "load completion alone cannot release unfinished source work"
+    );
+    assert!(
+        scheduler
+            .queues
+            .complete_renderer_output_projection(cursor, ProtocolOutputSequence::empty())
+    );
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .is_some()
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+}
+
+#[test]
+fn renderer_output_handoff_keeps_before_and_after_response_order() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let mut queues = SchedulerQueues::default();
+    queues.enqueue_pending_renderer_output_projection(cursor, Vec::new(), None);
+    queues
+        .append_renderer_output_projection(
+            cursor,
+            ProtocolOutputSequence::from_messages(vec![json!({"method": "Moli.afterResponse"})]),
+        )
+        .unwrap();
+    assert!(queues.take_unconstrained_renderer_output(cursor).is_none());
+    assert!(queues.complete_renderer_output_projection(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Debugger.paused"})])
+    ));
+    assert_eq!(
+        queues
+            .take_unconstrained_renderer_output(cursor)
+            .unwrap()
+            .into_messages(),
+        vec![
+            json!({"method": "Debugger.paused"}),
+            json!({"method": "Moli.afterResponse"})
+        ]
+    );
+    assert_eq!(queues.protocol_residence_len(), 0);
 }
 
 #[test]
@@ -622,7 +762,7 @@ fn concrete_renderer_output_precedes_work_published_by_the_same_ingress() {
 #[test]
 fn protocol_work_published_by_held_ingress_inherits_exact_load_predecessor() {
     let load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.apply_scheduler_events_with_load_predecessors(
         vec![CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work(1, "FRAME-1"),
@@ -851,7 +991,7 @@ async fn runtime_response_releases_its_frozen_renderer_publication_predecessor()
     let publication = post_load_renderer_publication(PageId::new_for_testing(1), 1);
     let candidate = future_load_candidate(&publication);
     let cursor = publication_cursor(&publication);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({
@@ -861,11 +1001,9 @@ async fn runtime_response_releases_its_frozen_renderer_publication_predecessor()
         Some(candidate),
     );
 
-    let output = scheduler
-        .complete_renderer_output_predecessor_before_runtime_response(
-            &RendererOutputFence::new_for_test(cursor),
-        )
-        .await;
+    let output = scheduler.complete_renderer_output_predecessor_before_runtime_response(
+        &RendererOutputFence::new_for_test(cursor),
+    );
 
     assert_eq!(
         output.into_messages(),
@@ -880,7 +1018,7 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
     let publication = post_load_renderer_publication(PageId::new_for_testing(1), 1);
     let load = deferred_main_document_load_observation_id(1);
     let cursor = publication_cursor(&publication);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({
@@ -890,17 +1028,67 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
         None,
     );
 
-    let output = scheduler
-        .complete_renderer_output_predecessor_before_runtime_response(
-            &RendererOutputFence::new_for_test(cursor),
-        )
-        .await;
+    let output = scheduler.complete_renderer_output_predecessor_before_runtime_response(
+        &RendererOutputFence::new_for_test(cursor),
+    );
 
     assert!(output.is_empty());
     assert_eq!(
         scheduler.queues.protocol_residence_len(),
         1,
         "the exact load observation remains the only release authority"
+    );
+}
+
+#[test]
+fn load_publication_cannot_become_a_successor_of_its_own_post_load_action() {
+    let page = PageId::new_for_testing(7);
+    let document = root_document_lifecycle_identity(page, 1);
+    let parent = renderer_publication(
+        page,
+        1,
+        RendererOutputPublicationOrdering::AfterPendingPageLoad {
+            source_document: document,
+        },
+    );
+    let timer = renderer_publication(
+        page,
+        2,
+        RendererOutputPublicationOrdering::AfterPendingPageLoad {
+            source_document: document,
+        },
+    );
+    let mut queues = SchedulerQueues::default();
+    for publication in [&parent, &timer] {
+        queues.enqueue_pending_renderer_output_projection(
+            publication_cursor(publication),
+            Vec::new(),
+            Some(future_load_candidate(publication)),
+        );
+    }
+    queues.close_load_publication_window(publication_cursor(&parent));
+    let observation = deferred_main_document_load_observation_id(1);
+    assert_eq!(
+        queues.bind_main_document_load_predecessor(
+            observation,
+            &load_interest_for_publication(&parent)
+        ),
+        1
+    );
+    let (parent_predecessors, parent_candidate) = queues
+        .renderer_output_order(publication_cursor(&parent))
+        .unwrap();
+    assert!(
+        parent_predecessors.is_empty() && parent_candidate.is_none(),
+        "the publication carrying Load cannot depend on its post-load successor"
+    );
+    assert_eq!(
+        queues
+            .renderer_output_order(publication_cursor(&timer))
+            .unwrap()
+            .0,
+        [observation],
+        "a later timer must keep its exact load predecessor"
     );
 }
 
@@ -930,13 +1118,174 @@ fn provisional_load_binding_prevents_specialized_wait_drain_from_overtaking_ingr
 }
 
 #[tokio::test]
+async fn external_load_wait_cannot_publish_post_load_before_held_load_output() {
+    async fn command(
+        scheduler: &mut CdpScheduler,
+        receivers: &mut super::CdpSchedulerEventReceivers,
+        message: serde_json::Value,
+    ) -> ProtocolOutputSequence {
+        let handle = scheduler.state.handle();
+        let raw = message.to_string();
+        let pending = handle.process_message_for_test(&raw);
+        tokio::pin!(pending);
+        let mut output = ProtocolOutputSequence::empty();
+        loop {
+            tokio::select! {
+                biased;
+                outcome = &mut pending => {
+                    output.append(scheduler.apply_renderer_owner_turn_outcome(receivers, outcome.unwrap()).await
+                        .unwrap_or_else(|failure| panic!("fixture command failed: {:?}", failure.into_parts().1)));
+                    let sent = messages(&output);
+                    assert!(sent.iter().any(|event| event["id"] == message["id"] && event.get("result").is_some()),
+                        "fixture command failed: {message}; output={sent:?}");
+                    return output;
+                }
+                input = receivers.recv_interleaved_input() => {
+                    output.append(scheduler.complete_interleaved_scheduler_input(receivers, input.unwrap()).await
+                        .unwrap_or_else(|failure| panic!("fixture input failed: {:?}", failure.into_parts().1)));
+                }
+            }
+        }
+    }
+
+    fn messages(output: &ProtocolOutputSequence) -> Vec<serde_json::Value> {
+        output
+            .events
+            .iter()
+            .cloned()
+            .filter_map(BackgroundProtocolEvent::into_wire_message)
+            .collect()
+    }
+
+    async fn external_drain(
+        scheduler: &mut CdpScheduler,
+        receivers: &mut super::CdpSchedulerEventReceivers,
+    ) -> ProtocolOutputSequence {
+        let mut output = scheduler.complete_ready_protocol_residences_for_external_load_wait();
+        while !scheduler.queues.pending_loads.is_empty() {
+            let completed = receivers.protocol_work_completion_rx.recv().await.unwrap();
+            output.append(scheduler.complete_protocol_work(completed).unwrap());
+        }
+        output.append(scheduler.complete_ready_protocol_residences_for_external_load_wait());
+        output
+    }
+
+    tokio::task::LocalSet::new().run_until(async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let (release, stylesheet) = tokio::sync::watch::channel(false);
+            let fixture = axum::Router::new()
+                .route("/page", axum::routing::get(|| async {
+                    axum::response::Html("<link rel=stylesheet href=/held.css><body>load order</body>")
+                }))
+                .route("/held.css", axum::routing::get(move || {
+                    let mut stylesheet = stylesheet.clone();
+                    async move {
+                        stylesheet.wait_for(|ready| *ready).await.unwrap();
+                        ([("Content-Type", "text/css")], "body { color: black; }")
+                    }
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+            let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+                moli_protocol::CdpInitialStoragePartition::memory(),
+                moli_core::runtime::NavigationRuntimeConfig::new(
+                    moli_fetch::FetchConfig::default(), moli_core::OptionalResourceFetchMask::NONE,
+                    true, moli_core::LayoutPolicy::OnDemand,
+                ),
+            );
+            command(&mut scheduler, &mut receivers, json!({"id": 1, "method": "Page.enable"})).await;
+            let owner = AutomationContext {
+                protocol: FrontendProtocol::Cdp, session_id: None,
+                target_id: Some(DevToolsTargetId::from(moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID)),
+                browser_context_id: None,
+            };
+            command(&mut scheduler, &mut receivers, json!({"id": 2, "method": "Network.enable"})).await;
+            command(&mut scheduler, &mut receivers, json!({"id": 3, "method": "Page.setLifecycleEventsEnabled", "params": {"enabled": true}})).await;
+            let navigation = scheduler.execute_automation_command_with_protocol_messages(
+                &mut receivers, AutomationCommand::Navigate(moli_protocol::automation::DevToolsNavigateCommand {
+                    context: owner.clone(), url: format!("http://{address}/page"), referrer: None,
+                    wait: DevToolsNavigationWait::None,
+                }),
+            ).await;
+            let AutomationResult::Navigate(navigated) = navigation.result.unwrap() else {
+                panic!("fixture navigation should return its committed loader");
+            };
+            let loader = navigated.loader_id.unwrap().into_string();
+            let mut client = navigation.protocol_output.into_messages();
+            while !client.iter().any(|event| event["method"] == "Page.domContentEventFired") {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                client.extend(scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("DCL projection failed: {:?}", failure.into_parts().1)).into_messages());
+            }
+            assert!(client.iter().all(|event| event["method"] != "Page.loadEventFired"),
+                "the held stylesheet must keep Load pending");
+            release.send_replace(true);
+
+            // Consume real Native publications until the Document has produced
+            // Load. Retain that frozen batch at the scheduler delivery boundary
+            // instead of handing it to the client.
+            let mut frozen = loop {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                let output = scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("lifecycle projection failed: {:?}", failure.into_parts().1));
+                let projected = messages(&output);
+                if projected.iter().any(|event| event["method"] == "Page.loadEventFired") {
+                    break output;
+                }
+                client.extend(projected);
+            };
+            let source = scheduler.queues.protocol_residences.iter().find_map(|residence| match residence {
+                ProtocolSchedulerResidence::ProtocolWork { work, .. }
+                    if work.kind() == moli_protocol::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction => {
+                        work.renderer_output_source()
+                    }
+                _ => None,
+            }).expect("ready post-load work must retain its producing Native cursor");
+            while !scheduler.state.with_state(|state| state.renderer_output_cursor_is_projected(source)).unwrap() {
+                let input = receivers.recv_interleaved_input().await.unwrap();
+                frozen.append(scheduler.complete_interleaved_scheduler_input(&mut receivers, input).await
+                    .unwrap_or_else(|failure| panic!("source projection failed: {:?}", failure.into_parts().1)));
+            }
+            assert!(scheduler.queues.renderer_output_order(source).is_none(),
+                "the completed source is retained below at its delivery boundary");
+            assert!(scheduler.queues.pending_loads.is_empty());
+            scheduler.queues.enqueue_renderer_output_publication(source, frozen, Vec::new(), None);
+            let held = scheduler.queues.protocol_residences.pop_back().unwrap();
+            scheduler.queues.protocol_residences.push_front(held);
+
+            // Settle any work the specialized drain started, so this checks
+            // actual notifications, including frameStoppedLoading and idle.
+            let premature = external_drain(&mut scheduler, &mut receivers).await;
+            assert!(premature.is_empty(),
+                "post-load notifications overtook the held Load: {:?}", messages(&premature));
+            assert!(scheduler.queues.pending_loads.is_empty());
+
+            client.extend(scheduler.complete_renderer_output_predecessor_before_runtime_response(
+                &RendererOutputFence::new_for_test(source),
+            ).into_messages());
+            client.extend(external_drain(&mut scheduler, &mut receivers).await.into_messages());
+            let load = client.iter().position(|event| event["method"] == "Page.loadEventFired").unwrap();
+            let stopped = client.iter().position(|event| event["method"] == "Page.frameStoppedLoading").unwrap();
+            let document_request = client.iter().find(|event| event["method"] == "Network.requestWillBeSent"
+                && event["params"]["loaderId"] == loader && event["params"]["type"] == "Document")
+                .unwrap()["params"]["requestId"].clone();
+            let finished = client.iter().position(|event| event["method"] == "Network.loadingFinished"
+                && event["params"]["requestId"] == document_request).unwrap();
+            assert!(finished < load && load < stopped, "invalid delivery order: {client:#?}");
+            server.abort();
+        }).await.expect("held-load ordering fixture should finish");
+    }).await;
+}
+
+#[tokio::test]
 async fn specialized_wait_yield_closes_candidate_retained_in_the_main_fifo() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
     let candidate = future_load_candidate(&publication);
     let interest = load_interest_for_publication(&publication);
     let unrelated_later_load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -947,9 +1296,7 @@ async fn specialized_wait_yield_closes_candidate_retained_in_the_main_fifo() {
         work: root_frame_stopped_loading_work(1, "FRAME-1"),
     }]);
 
-    let _ = scheduler
-        .complete_ready_protocol_residences_for_external_load_wait()
-        .await;
+    let _ = scheduler.complete_ready_protocol_residences_for_external_load_wait();
 
     assert_eq!(
         scheduler
@@ -965,7 +1312,7 @@ fn scheduler_holds_concrete_renderer_output_until_its_exact_load_predecessor_fin
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
     let load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -994,8 +1341,8 @@ async fn renderer_stream_control_is_consumed_without_protocol_residence() {
         )),
     }
     .into();
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
-    let output = scheduler.ingest_renderer_publication_now(control).await;
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    let output = scheduler.ingest_renderer_publication_now(control);
 
     assert!(output.is_empty());
     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
@@ -1014,6 +1361,8 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
     drop(renderer_tx);
     let (_activity_tx, document_activity_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut receivers = super::CdpSchedulerEventReceivers {
+        state_events_ready: Default::default(),
+        protocol_work_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
         document_activity_completion_rx,
         background_event_rx,
         background_navigation_completion_rx,
@@ -1023,7 +1372,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
         RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(90));
     let predecessor =
         RendererOutputFence::new_for_test(RendererOutputCursor::new_for_test(stream, 1));
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
 
     let failure = scheduler
         .project_renderer_output_predecessor_before_devtools_result(&mut receivers, &predecessor)
@@ -1040,7 +1389,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
 
 #[test]
 fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
         work: root_frame_stopped_loading_work(1, "FRAME-1"),
     }]);
@@ -1069,7 +1418,7 @@ fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
 
 #[test]
 fn concrete_protocol_output_preserves_protocol_publish_order() {
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.apply_scheduler_events(vec![
         CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work(1, "FRAME-1"),
@@ -1092,9 +1441,7 @@ fn concrete_protocol_output_preserves_protocol_publish_order() {
 }
 
 #[test]
-#[should_panic(
-    expected = "protocol work must enter scheduler residence in exact publication order"
-)]
+#[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
     let mut queues = SchedulerQueues::default();
     queues.enqueue_protocol_work(
@@ -1110,9 +1457,7 @@ fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
 }
 
 #[test]
-#[should_panic(
-    expected = "protocol work must enter scheduler residence in exact publication order"
-)]
+#[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_missing_earlier_publication() {
     let mut queues = SchedulerQueues::default();
     queues.enqueue_protocol_work(
@@ -1127,7 +1472,7 @@ async fn pending_navigation_does_not_suspend_projected_renderer_notifications() 
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-next");
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
     let message = json!({"method": "Runtime.consoleAPICalled", "params": {"marker": "current"}});
     scheduler.queues.enqueue_renderer_output_publication(
         publication_cursor(&publication),
@@ -1146,16 +1491,16 @@ async fn pending_navigation_does_not_suspend_projected_renderer_notifications() 
         ProtocolSchedulerStep::CompleteReadyResidence
     );
     assert_eq!(
-        scheduler
-            .complete_next_protocol_residence()
-            .await
-            .into_messages(),
+        scheduler.complete_next_protocol_residence().into_messages(),
         vec![message]
     );
     assert!(
         scheduler
-            .conn
-            .has_inflight_background_navigation_for_target(navigation.target_id())
+            .state
+            .with_state(
+                |state| state.has_inflight_background_navigation_for_target(navigation.target_id())
+            )
+            .expect("live protocol actor state")
     );
     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
 }
@@ -1167,7 +1512,7 @@ async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
     let load = deferred_main_document_load_observation_id(1);
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-next");
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
     let message = json!({"method": "Runtime.consoleAPICalled", "params": {"marker": "after-load"}});
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
@@ -1183,7 +1528,6 @@ async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
     assert!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .is_empty()
     );
     assert_eq!(scheduler.queues.protocol_residence_len(), 1);
@@ -1192,14 +1536,16 @@ async fn navigation_notification_snapshot_preserves_exact_load_predecessors() {
     assert_eq!(
         scheduler
             .complete_renderer_output_predecessor_before_runtime_response(&fence)
-            .await
             .into_messages(),
         vec![message]
     );
     assert!(
         scheduler
-            .conn
-            .has_inflight_background_navigation_for_target(navigation.target_id())
+            .state
+            .with_state(
+                |state| state.has_inflight_background_navigation_for_target(navigation.target_id())
+            )
+            .expect("live protocol actor state")
     );
     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
 }
@@ -1210,7 +1556,7 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let navigation_target_id = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
     scheduler.apply_scheduler_events(vec![
         CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work_for_target(
@@ -1244,12 +1590,7 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
     );
-    assert!(
-        scheduler
-            .complete_next_protocol_residence()
-            .await
-            .is_empty()
-    );
+    assert!(scheduler.complete_next_protocol_residence().is_empty());
     let remaining_sequences = scheduler
         .queues
         .protocol_residences
@@ -1273,7 +1614,7 @@ async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-A");
     let target_a = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
     scheduler.apply_scheduler_events(vec![
         CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work_for_target(
@@ -1301,7 +1642,6 @@ async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
     assert!(
         scheduler
             .complete_protocol_residence_snapshot(snapshot)
-            .await
             .is_empty()
     );
     let remaining_sequences = scheduler
@@ -1345,7 +1685,7 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
         let navigation = arm_background_navigation_request(&mut conn, "LOADER-pending");
         let target = navigation.target_id().to_owned();
         let context = conn.default_browser_context_id().to_owned();
-        let mut scheduler = CdpScheduler::new(conn);
+        let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
         let events = vec![
             CdpSchedulerEvent::ProtocolWorkPublished {
                 work: root_frame_stopped_loading_work_for_target(
@@ -1387,17 +1727,11 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
             assert!(
                 scheduler
                     .complete_protocol_residence_snapshot(snapshot)
-                    .await
                     .is_empty()
             );
         } else {
             scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
-            assert!(
-                scheduler
-                    .complete_next_protocol_residence()
-                    .await
-                    .is_empty()
-            );
+            assert!(scheduler.complete_next_protocol_residence().is_empty());
         }
         assert_eq!(
             scheduler.queues.protocol_residences.len(),
@@ -1408,11 +1742,18 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
             !navigation.is_cancelled(),
             "an action from a retired owner has no execution authority"
         );
-        assert!(scheduler.conn.has_inflight_background_navigation());
-        assert!(settle_background_navigation_request(
-            &mut scheduler.conn,
-            &navigation
-        ));
+        assert!(
+            scheduler
+                .state
+                .with_state(|state| state.has_inflight_background_navigation())
+                .expect("live protocol actor state")
+        );
+        assert!(
+            scheduler
+                .state
+                .with_state(|state| state.settle_background_navigation_for_test(&navigation))
+                .unwrap()
+        );
         assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
     }
 }
@@ -1422,7 +1763,7 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
 
     let document_output = scheduler.route_background_event_around_inflight_navigation(
         network_response_event_for_target(
@@ -1451,10 +1792,12 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
     assert!(script_terminal.is_empty());
     assert_eq!(scheduler.pending_navigation_background_events.len(), 2);
 
-    assert!(settle_background_navigation_request(
-        &mut scheduler.conn,
-        &navigation
-    ));
+    assert!(
+        scheduler
+            .state
+            .with_state(|state| state.settle_background_navigation_for_test(&navigation))
+            .unwrap()
+    );
     let released = scheduler.drain_pending_navigation_background_events();
     let released = released
         .into_background_events()
@@ -1484,93 +1827,142 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
 
 #[tokio::test]
 async fn target_a_navigation_does_not_defer_target_b_network_events() {
-    let mut conn = CdpConnection::new();
-    conn.install_default_browser_target();
-    let context = AutomationContext {
-        protocol: FrontendProtocol::WebDriverBidi,
-        session_id: Some(DevToolsSessionId::from("bidi-test")),
-        target_id: None,
-        browser_context_id: None,
-    };
-    let create_target = |context: AutomationContext| {
-        AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
-            context,
-            url: "about:blank".to_owned(),
-            browser_context_id: None,
-            activate: false,
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (mut scheduler, mut receivers) =
+                CdpScheduler::new_with_initial_state_runtime_config(
+                    moli_protocol::CdpInitialStoragePartition::memory(),
+                    moli_core::runtime::NavigationRuntimeConfig::new(
+                        moli_fetch::FetchConfig::default(),
+                        moli_core::OptionalResourceFetchMask::NONE,
+                        true,
+                        moli_core::LayoutPolicy::OnDemand,
+                    ),
+                );
+            let context = AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
+                session_id: Some(DevToolsSessionId::from("bidi-test")),
+                target_id: None,
+                browser_context_id: None,
+            };
+            let create_target = |context: AutomationContext| {
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context,
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: false,
+                })
+            };
+            let first_create = scheduler
+                .execute_automation_command_with_protocol_messages(
+                    &mut receivers,
+                    create_target(context.clone()),
+                )
+                .await;
+            let first_result = first_create.result;
+            let AutomationResult::CreateTarget(first_result) =
+                first_result.expect("first target should be created")
+            else {
+                panic!("expected create-target result")
+            };
+            let first_target_id = first_result.target_id.into_string();
+            let second_create = scheduler
+                .execute_automation_command_with_protocol_messages(
+                    &mut receivers,
+                    create_target(context),
+                )
+                .await;
+            let second_result = second_create.result;
+            let AutomationResult::CreateTarget(second_result) =
+                second_result.expect("second target should be created")
+            else {
+                panic!("expected create-target result")
+            };
+            let second_target_id = second_result.target_id.into_string();
+            assert_ne!(first_target_id, second_target_id);
+            let navigation = scheduler
+                .state
+                .with_state(|state| {
+                    state.arm_background_navigation_for_test(&first_target_id, "LOADER-A")
+                })
+                .unwrap();
+            let target_a = navigation.target_id().to_owned();
+            let target_b = if target_a == second_target_id {
+                first_target_id
+            } else {
+                second_target_id
+            };
+            assert!(
+                scheduler
+                    .state
+                    .with_state(
+                        |state| state.has_inflight_background_navigation_for_target(&target_a)
+                    )
+                    .unwrap()
+            );
+            assert!(
+                !scheduler
+                    .state
+                    .with_state(
+                        |state| state.has_inflight_background_navigation_for_target(&target_b)
+                    )
+                    .unwrap()
+            );
+            let target_b_output = scheduler.route_background_event_around_inflight_navigation(
+                network_response_event_for_target(
+                    DevToolsNetworkResourceType::Xhr,
+                    "REQ-B",
+                    &target_b,
+                ),
+            );
+            assert_eq!(output_request_ids(target_b_output), ["REQ-B"]);
+
+            let navigation_b = scheduler
+                .state
+                .with_state(|state| state.arm_background_navigation_for_test(&target_b, "LOADER-B"))
+                .unwrap();
+            let target_b_held = scheduler.route_background_event_around_inflight_navigation(
+                network_response_event_for_target(
+                    DevToolsNetworkResourceType::Xhr,
+                    "REQ-B-held",
+                    &target_b,
+                ),
+            );
+            assert!(target_b_held.is_empty());
+            let target_a_output = scheduler.route_background_event_around_inflight_navigation(
+                network_response_event_for_target(
+                    DevToolsNetworkResourceType::Xhr,
+                    "REQ-A",
+                    &target_a,
+                ),
+            );
+            assert!(target_a_output.is_empty());
+            assert_eq!(scheduler.pending_navigation_background_events.len(), 2);
+
+            assert!(
+                scheduler
+                    .state
+                    .with_state(|state| state.settle_background_navigation_for_test(&navigation))
+                    .unwrap()
+            );
+            assert_eq!(
+                output_request_ids(scheduler.drain_pending_navigation_background_events()),
+                ["REQ-A"],
+                "settling target A must not release target B's held event"
+            );
+            assert_eq!(scheduler.pending_navigation_background_events.len(), 1);
+            assert!(
+                scheduler
+                    .state
+                    .with_state(|state| state.settle_background_navigation_for_test(&navigation_b))
+                    .unwrap()
+            );
+            assert_eq!(
+                output_request_ids(scheduler.drain_pending_navigation_background_events()),
+                ["REQ-B-held"]
+            );
         })
-    };
-    let first_create = conn
-        .execute_automation_command(create_target(context.clone()))
         .await;
-    let (first_result, _) = first_create.into_parts();
-    let AutomationResult::CreateTarget(first_result) =
-        first_result.expect("first target should be created")
-    else {
-        panic!("expected create-target result")
-    };
-    let first_target_id = first_result.target_id.into_string();
-    let second_create = conn
-        .execute_automation_command(create_target(context))
-        .await;
-    let (second_result, _) = second_create.into_parts();
-    let AutomationResult::CreateTarget(second_result) =
-        second_result.expect("second target should be created")
-    else {
-        panic!("expected create-target result")
-    };
-    let second_target_id = second_result.target_id.into_string();
-    assert_ne!(first_target_id, second_target_id);
-    let navigation = arm_background_navigation_request(&mut conn, "LOADER-A");
-    let target_a = navigation.target_id().to_owned();
-    let target_b = if target_a == second_target_id {
-        first_target_id
-    } else {
-        second_target_id
-    };
-    assert!(conn.has_inflight_background_navigation_for_target(&target_a));
-    assert!(!conn.has_inflight_background_navigation_for_target(&target_b));
-
-    let mut scheduler = CdpScheduler::new(conn);
-    let target_b_output = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(DevToolsNetworkResourceType::Xhr, "REQ-B", &target_b),
-    );
-    assert_eq!(output_request_ids(target_b_output), ["REQ-B"]);
-
-    let navigation_b =
-        arm_background_navigation_request_for_target(&mut scheduler.conn, &target_b, "LOADER-B");
-    let target_b_held = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(
-            DevToolsNetworkResourceType::Xhr,
-            "REQ-B-held",
-            &target_b,
-        ),
-    );
-    assert!(target_b_held.is_empty());
-    let target_a_output = scheduler.route_background_event_around_inflight_navigation(
-        network_response_event_for_target(DevToolsNetworkResourceType::Xhr, "REQ-A", &target_a),
-    );
-    assert!(target_a_output.is_empty());
-    assert_eq!(scheduler.pending_navigation_background_events.len(), 2);
-
-    assert!(settle_background_navigation_request(
-        &mut scheduler.conn,
-        &navigation
-    ));
-    assert_eq!(
-        output_request_ids(scheduler.drain_pending_navigation_background_events()),
-        ["REQ-A"],
-        "settling target A must not release target B's held event"
-    );
-    assert_eq!(scheduler.pending_navigation_background_events.len(), 1);
-    assert!(settle_background_navigation_request(
-        &mut scheduler.conn,
-        &navigation_b
-    ));
-    assert_eq!(
-        output_request_ids(scheduler.drain_pending_navigation_background_events()),
-        ["REQ-B-held"]
-    );
 }
 
 #[test]
@@ -1578,7 +1970,7 @@ fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
-    let mut scheduler = CdpScheduler::new(conn);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
 
     let request_id = "REQ-boundary-race";
     assert!(
@@ -1591,10 +1983,12 @@ fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
             .is_empty()
     );
 
-    assert!(settle_background_navigation_request(
-        &mut scheduler.conn,
-        &navigation
-    ));
+    assert!(
+        scheduler
+            .state
+            .with_state(|state| state.settle_background_navigation_for_test(&navigation))
+            .unwrap()
+    );
     let mut output = ProtocolOutputSequence::empty();
     scheduler.append_navigation_gate_release_before_renderer_boundary(&mut output);
     output.append(ProtocolOutputSequence::from_background_event(

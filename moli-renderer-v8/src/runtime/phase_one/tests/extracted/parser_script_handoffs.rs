@@ -89,7 +89,7 @@ fn parser_step_with_inline_script_surfaces_handoff_on_live_backend() {
             result,
             discovered_async_prefetch_scripts: _,
             discovered_modulepreload_link_candidates: _,
-            discovered_blocking_stylesheet_inputs: _,
+            discovered_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script>window.answer = 42;</script></head><body><div>late</div></body></html>",
         );
@@ -151,7 +151,7 @@ fn inline_script_handoff_is_classified_as_blocking_classic_on_live_backend() {
         result,
         discovered_async_prefetch_scripts: _,
         discovered_modulepreload_link_candidates: _,
-        discovered_blocking_stylesheet_inputs: _,
+        discovered_stylesheet_inputs: _,
     } = driver
         .parser_session
         .stream_handle()
@@ -205,7 +205,7 @@ fn no_execution_datablock_handoff_consumes_parser_prepare_state_on_live_backend(
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
                 discovered_modulepreload_link_candidates: _,
             } = driver
                 .parser_session
@@ -305,7 +305,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
                 result,
                 discovered_async_prefetch_scripts,
             discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script async src=\"/async.js\"></script></head></html>",
             );
@@ -433,7 +433,7 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs,
+                discovered_stylesheet_inputs,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
             );
@@ -493,8 +493,8 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
             page_vm
                 .vm_mut()
                 .document_runtime
-                .note_discovered_document_owned_blocking_stylesheet_inputs(
-                    discovered_blocking_stylesheet_inputs.iter(),
+                .note_discovered_document_owned_stylesheet_inputs(
+                    discovered_stylesheet_inputs.iter(),
                 );
 
             let outcome = driver
@@ -550,7 +550,7 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script defer src=\"/defer.js\"></script></head></html>",
             );
@@ -733,7 +733,7 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/module.mjs\"></script></head></html>",
             );
@@ -851,7 +851,7 @@ fn parser_owned_module_handoff_starts_external_root_pending_tree_without_source_
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/pending.mjs\"></script></head></html>",
             );
@@ -945,7 +945,7 @@ fn parser_owned_module_handoff_starts_loaded_source_pending_tree_dependencies() 
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/ready.mjs\"></script></head></html>",
             );
@@ -1051,7 +1051,7 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
+                discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"importmap\">{\"imports\":{\"fixture\":\"/module.mjs\"}}</script></head></html>",
             );
@@ -1175,7 +1175,7 @@ fn external_blocking_classic_handoff_is_stylesheet_gated_on_live_backend() {
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs,
+                discovered_stylesheet_inputs,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
             );
@@ -1205,7 +1205,7 @@ fn external_blocking_classic_handoff_is_stylesheet_gated_on_live_backend() {
             let stylesheet_gated =
                 blocking_classic_is_stylesheet_gated_for_testing(
                 &mut live_runtime,
-                &discovered_blocking_stylesheet_inputs,
+                &discovered_stylesheet_inputs,
                 &blocking_signatures_before,
             );
 

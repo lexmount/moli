@@ -11,9 +11,7 @@ mod template;
 
 pub(crate) use callbacks::construct_form_data_entries_for_form;
 pub(crate) use multipart_parse::form_data_object_from_multipart_bytes;
-pub(crate) use request_body::{
-    form_data_entries_multipart_body_with_prefix, form_data_request_body,
-};
+pub(crate) use request_body::{form_data_entries_multipart_body, form_data_request_body};
 pub(crate) use serialize::form_data_entries_to_string_pairs;
 pub(in crate::context_bootstrap) use storage::form_data_is_object;
 pub(super) use template::build_form_data_constructor_template;

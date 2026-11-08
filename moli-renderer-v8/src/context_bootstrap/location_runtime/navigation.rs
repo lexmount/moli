@@ -7,7 +7,11 @@ pub(in crate::context_bootstrap) fn resolve_location_navigation_target(
     raw_target: Option<String>,
 ) -> Option<url::Url> {
     match kind {
-        LocationNavigationKind::Reload => url::Url::parse(current_href).ok(),
+        // A browser-initiated refresh retains its resolved target even when
+        // classified as a reload. Location.reload() supplies no explicit URL.
+        LocationNavigationKind::Reload => {
+            url::Url::parse(raw_target.as_deref().unwrap_or(current_href)).ok()
+        }
         LocationNavigationKind::Assign | LocationNavigationKind::Replace => {
             let raw_target = raw_target.unwrap_or_default();
             if raw_target.is_empty() {

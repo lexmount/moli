@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from ..assertions import SmokeError, assert_equal, record_contract
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 
 
@@ -2605,35 +2606,7 @@ async def _create_page(client: RawCdpClient, url: str) -> InspectorRoutingPage:
     for method in ("Runtime.enable", "Page.enable", "Debugger.enable"):
         message_id = await client.send(method, session_id=primary_session_id)
         await client.recv_until_id(message_id, timeout=5)
-    navigate_id = await client.send(
-        "Page.navigate",
-        {"url": url},
-        session_id=primary_session_id,
-    )
-    saw_response = False
-    saw_load = False
-    seen: list[dict[str, Any]] = []
-    deadline = asyncio.get_running_loop().time() + 10.0
-    while not (saw_response and saw_load):
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError(f"timed out navigating Inspector routing page: {seen[-20:]}")
-        try:
-            message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        except TimeoutError as error:
-            raise SmokeError(
-                f"timed out navigating Inspector routing page: {seen[-20:]}"
-            ) from error
-        seen.append(message)
-        if message.get("id") == navigate_id:
-            if "error" in message:
-                raise SmokeError(f"Page.navigate failed: {message}")
-            saw_response = True
-        if (
-            message.get("sessionId") == primary_session_id
-            and message.get("method") == "Page.loadEventFired"
-        ):
-            saw_load = True
+    await navigate_document(client, primary_session_id, {"url": url})
 
     attached_session_id = await _attach(client, target_id)
     for method in ("Runtime.enable", "Debugger.enable"):
@@ -2811,4 +2784,5 @@ async def _wait_for_witness(fixture: str, *, expected_count: int) -> None:
             raise SmokeError(
                 f"timed out waiting for active-JS witness count {expected_count}: {status}"
             )
+        # smoke-timing: poll the server witness proving JavaScript entered its busy loop.
         await asyncio.sleep(0.01)

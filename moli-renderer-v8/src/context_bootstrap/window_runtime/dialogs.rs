@@ -97,6 +97,39 @@ pub(crate) fn window_noop_callback(
 ) {
 }
 
+pub(crate) fn window_focus_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !crate::context_bootstrap::is_window_receiver(scope, receiver) {
+        webidl::throw_type_error(scope, "Window.focus called on incompatible receiver.");
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver)
+    {
+        crate::native_bridge::element::focus_element(scope, host_ptr, handle);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn window_blur_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.blur called on incompatible receiver.");
+        return;
+    }
+    rv.set_undefined();
+}
+
 pub(crate) fn window_stop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -282,7 +315,7 @@ pub(crate) fn window_open_callback<'s>(
         window_features: parsed_features.enabled_feature_strings(),
         user_gesture: host.protocol_user_gesture_activation(),
     };
-    let source_scope = host.entered_owner_dispatch_scope(scope);
+    let source_scope = entered_window_dispatch_scope(scope, host);
     let Some((_, root_document, source)) =
         host.renderer_window_document_source_for_dispatch_scope(source_scope)
     else {
@@ -302,9 +335,7 @@ pub(crate) fn window_open_callback<'s>(
         _ if parsed_features.is_popup() => crate::RendererPopupDisposition::NewWindow,
         _ => crate::RendererPopupDisposition::Foreground,
     };
-    if host.has_browser_owned_auxiliary_page_factory()
-        && (!suppress_opener || Url::parse(&url).is_ok_and(|url| moli_url::is_about_blank(&url)))
-    {
+    if host.has_browser_owned_auxiliary_page_factory() {
         let creator_child_handle = window_receiver_child_handle(scope, entered_window);
         match host.open_renderer_owned_auxiliary_window(
             scope,
@@ -456,14 +487,14 @@ fn window_receiver_child_handle<'s>(
         .and_then(|value| child_window_handle_from_marker_data(scope, value))
 }
 
-pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+fn entered_window_dispatch_scope(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
-) -> Url {
+) -> OwnerDispatchScope {
     // The HTML entry settings object follows the context that entered the
     // script or microtask, not the borrowed Window method's native realm.
     let ambient_scope = host.entered_owner_dispatch_scope(scope);
-    let entry_scope = match ambient_scope {
+    match ambient_scope {
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
         crate::native_bridge::OwnerDispatchScope::Top
         | crate::native_bridge::OwnerDispatchScope::Child(_) => {
@@ -472,7 +503,14 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
                 .map(|identity| identity.dispatch_scope())
                 .unwrap_or(ambient_scope)
         }
-    };
+    }
+}
+
+pub(in crate::context_bootstrap) fn entered_window_api_base_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &crate::native_bridge::JsContextHost,
+) -> Url {
+    let entry_scope = entered_window_dispatch_scope(scope, host);
     match entry_scope {
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             if let Some(url) = host.child_browsing_context_base_url(handle) {

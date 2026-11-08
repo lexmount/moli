@@ -208,8 +208,18 @@ impl InspectorOutbound {
             Err(error) => {
                 let raw = moli_v8_util::inspector_protocol_message_text(view);
                 tracing::warn!(target: "moli::cdp::inspector",
-                    %error, %raw, message_units, message_width,
-                    "failed to decode inspector protocol response; dropping");
+                    %error, %raw, call_id, message_units, message_width,
+                    "failed to decode inspector protocol response; returning protocol error");
+                self.push_response_value(
+                    call_id,
+                    serde_json::json!({
+                        "id": call_id,
+                        "error": {
+                            "code": -32603,
+                            "message": format!("Failed to decode Inspector response: {error}"),
+                        },
+                    }),
+                );
             }
         }
     }
@@ -443,17 +453,6 @@ impl InspectorOutbound {
     ) {
         let callback = self.route_frontend_response(callback);
         self.register_response_callback(callback);
-    }
-
-    /// Publishes a synchronous non-V8 agent response through the terminal
-    /// destination selected when the frontend call was registered.
-    pub(in crate::script_vm) fn publish_frontend_response(
-        &self,
-        callback: RendererRuntimeInspectorResponseSender,
-        message: Value,
-    ) {
-        let callback = self.route_frontend_response(callback);
-        let _ = callback.send(message);
     }
 
     pub(in crate::script_vm) fn route_frontend_response(

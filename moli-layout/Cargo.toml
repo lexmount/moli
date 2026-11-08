@@ -8,6 +8,7 @@ license.workspace = true
 brotlic = "0.8.2"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
+moli-css-parse = { path = "../moli-css-parse" }
 moli-image = { path = "../moli-image" }
 moli-system-fonts = { path = "../moli-system-fonts" }
 moli-trace = { path = "../moli-trace" }

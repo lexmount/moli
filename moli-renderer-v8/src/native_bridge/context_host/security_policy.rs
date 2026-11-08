@@ -3,9 +3,10 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::{
     content_security_policy::{
-        ContentSecurityPolicyNonUrlKind, ContentSecurityPolicyRedirectStatus,
-        ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
+        ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
+        TrustedTypesForScriptRequirements,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -126,6 +127,27 @@ impl JsContextHost {
         Some(
             crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
                 &snapshot.policy_container,
+            ),
+        )
+    }
+
+    pub(crate) fn module_fetch_csp_context_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+        request_url: &url::Url,
+        kind: crate::module_runtime::ModuleKind,
+        metadata: &crate::module_runtime::ModuleFetchMetadata,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        Some(
+            unsafe { &*self.runtime }.module_fetch_csp_context_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                kind,
+                metadata,
+                request_url,
+                Some(owner),
             ),
         )
     }
@@ -389,15 +411,15 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> Option<OwnerDispatchScope> {
-        if let Some(popup_id) = self.lightweight_popup_id_for_node_owner_document(handle) {
-            return Some(OwnerDispatchScope::LightweightPopup(popup_id));
-        }
         let node = self.dom_host().node(handle)?;
         let owner_document = if node.is_document() {
             handle
         } else {
             node.owner_document()?
         };
+        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(owner_document) {
+            return Some(OwnerDispatchScope::LightweightPopup(popup_id));
+        }
         if owner_document == self.document_handle() {
             return Some(OwnerDispatchScope::Top);
         }
@@ -567,6 +589,35 @@ impl JsContextHost {
             return OwnerDispatchScope::LightweightPopup(popup_id);
         }
         OwnerDispatchScope::Top
+    }
+
+    pub(crate) fn font_request_allowed_by_csp(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        document_url: &url::Url,
+        request_url: &url::Url,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> bool {
+        let Some(policy) = self.document_connect_policy_snapshot_for_owner(owner) else {
+            return false;
+        };
+        let mut allowed = true;
+        for disposition in [
+            ContentSecurityPolicyDisposition::Report,
+            ContentSecurityPolicyDisposition::Enforce,
+        ] {
+            if let Some(violation) =
+                policy.font_violation(document_url, request_url, disposition, redirect_status)
+            {
+                let host_ptr = self as *mut Self;
+                self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                    scope, host_ptr, owner, &violation,
+                );
+                allowed &= disposition != ContentSecurityPolicyDisposition::Enforce;
+            }
+        }
+        allowed
     }
 
     pub(crate) fn check_document_connect_csp_for_owner<'s>(
@@ -1227,7 +1278,7 @@ impl JsContextHost {
         }
     }
 
-    fn dispatch_content_security_policy_violation_event_for_owner_best_effort<'s>(
+    pub(crate) fn dispatch_content_security_policy_violation_event_for_owner_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,

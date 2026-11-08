@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from typing import Any
 from urllib.parse import urlsplit
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..config import is_moli_browser
 from ..assertions import SmokeError, assert_equal, wait_until
@@ -32,8 +34,8 @@ async def _verify_chromium_page_layout_metrics_sample(state: SmokeState) -> None
     state.record("chromium_page_layout_metrics_sample")
 
 async def _verify_chromium_idle_override_sample(state: SmokeState) -> None:
-    primary = await state.context.new_cdp_session(state.page)
-    peer = await state.context.new_cdp_session(state.page)
+    primary = await new_cdp_session(state.context, state.page)
+    peer = await new_cdp_session(state.context, state.page)
     same_site_fixture = FixtureServer()
     same_site_fixture.start()
     split = urlsplit(state.fixture)
@@ -588,7 +590,6 @@ async def _assert_manifest_network_lifecycle(
         "Manifest",
         "manifest response resource type",
     )
-
 
 
 async def run_page_manifest_and_layout(state: SmokeState) -> None:

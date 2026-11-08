@@ -92,12 +92,12 @@ async fn websocket_handshake_inherits_browser_cookie_store() {
         let ws_url = Url::parse(&url).expect("websocket url");
         let cookie_url = moli_websocket::websocket_cookie_url(&ws_url);
         {
-            let mut store = cookie_store.lock();
+            let mut store = cookie_store.lock().unwrap();
             let reports = store.store_response_headers_with_reports(
                 &cookie_url,
                 &[(
                     "set-cookie".to_owned(),
-                    b"sid=server; Path=/; HttpOnly".to_vec(),
+                    b"sid=server; Path=/; HttpOnly; SameSite=None; Secure".to_vec(),
                 )],
             );
             assert!(reports.iter().any(|report| report.is_accepted()));

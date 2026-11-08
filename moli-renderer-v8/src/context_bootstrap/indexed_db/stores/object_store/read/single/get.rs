@@ -16,19 +16,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
         return;
     };
     let store = args.this();
-    let Some((request, transaction, store_name)) = object_store_operation_common(scope, store)
-    else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
+    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
         return;
     };
     let query = match parse_key_or_range(scope, parsed.query) {
         Ok(Some(query)) => query,
-        _ => {
+        Ok(None) => {
             let error = dom_exception_value(
                 scope,
                 "Failed to execute 'get': the query is not a valid key or key range.",
@@ -37,42 +30,21 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
             scope.throw_exception(error);
             return;
         }
-    };
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-    {
-        enqueue_transaction_operation(
-            scope,
-            transaction,
-            store,
-            request,
-            &store_name,
-            IndexedDbTransactionOperation::ObjectStoreGet { query },
-        );
-        rv.set(request.into());
-        return;
-    }
-    let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return;
-    };
-    match scan_object_store_entries(scope, handle, &store_name, Some(&query)) {
-        Ok(entries) => {
-            let result = entries
-                .first()
-                .and_then(|(_, bytes)| deserialize_js_value(scope, bytes))
-                .unwrap_or_else(|| v8::undefined(scope).into());
-            store_request_success(scope, request, result);
-        }
         Err(error) => {
-            let error = request_error_object(scope, &error);
-            store_request_error(scope, request, error);
+            error.throw(scope);
+            return;
         }
-    }
+    };
+    let Some(request) = create_operation_request(scope, store, transaction) else {
+        return;
+    };
+    schedule_transaction_operation(
+        scope,
+        transaction,
+        store,
+        request,
+        &store_name,
+        IndexedDbTransactionOperation::ObjectStoreGet { query },
+    );
     rv.set(request.into());
 }

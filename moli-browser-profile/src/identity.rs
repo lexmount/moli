@@ -390,14 +390,14 @@ mod tests {
     fn default_identity_keeps_network_and_js_brand_order_together() {
         let identity = BrowserIdentityProfile::default();
 
-        assert_eq!(identity.major_version(), "145");
-        assert_eq!(identity.full_version(), "145.0.0.0");
+        assert_eq!(identity.major_version(), "156");
+        assert_eq!(identity.full_version(), "156.0.8078.74");
         assert_eq!(identity.platform(), "Windows");
         assert_eq!(identity.navigator_platform(), "Win32");
         assert_eq!(identity.languages(), ["en-US", "en"]);
         assert_eq!(
             identity.sec_ch_ua_value().as_deref(),
-            Some("\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"145\", \"Chromium\";v=\"145\"")
+            Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
         );
         assert_eq!(
             identity
@@ -405,7 +405,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.brand.as_str())
                 .collect::<Vec<_>>(),
-            ["Not:A-Brand", "Google Chrome", "Chromium"]
+            ["Not:A-Brand", "Chromium", "Google Chrome"]
         );
     }
 

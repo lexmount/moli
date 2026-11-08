@@ -4,8 +4,6 @@ use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::*;
 
-pub(crate) const WORKER_STATE_SLOT: &str = "__workerState";
-
 impl WorkerGlobalState {
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
         !self.termination_requested.load(Ordering::Acquire)
@@ -17,6 +15,7 @@ impl WorkerGlobalState {
 }
 
 pub(crate) struct WorkerGlobalState {
+    pub(crate) message_source_security: crate::context_bootstrap::RuntimeMessageSourceSecurity,
     /// Components shared with Window runtimes, owned by this Worker run.
     pub(crate) common: Rc<crate::common_runtime::CommonRuntimeState>,
     /// Resource Timing capacity and overflow state belongs to this worker,
@@ -36,6 +35,12 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) in_error_reporting_mode: bool,
     /// Timer id counter.
     pub(in crate::worker) next_timer_id: u32,
+    /// Blob deliveries and FileReader phases share the native file-reading FIFO.
+    pub(in crate::worker) file_reading_tasks:
+        std::collections::VecDeque<crate::context_bootstrap::FileReadingTask>,
+    /// Networking completions are browser tasks, outside the author timer ID space.
+    pub(in crate::worker) networking_tasks:
+        super::super::networking_tasks::WorkerNetworkingTaskQueue,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.
@@ -140,6 +145,11 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) pending_webcrypto: HashMap<u64, PendingWorkerWebCryptoTask>,
     /// Worker WebCrypto task id counter (never zero so 0 can mean "unset").
     pub(in crate::worker) next_webcrypto_task_id: u64,
+    pub(in crate::worker) next_blob_read_id: u64,
+    pub(in crate::worker) pending_blob_reads: HashMap<u64, crate::blob::read::BlobReadTask>,
+    pub(in crate::worker) ready_blob_reads:
+        Arc<parking_lot::Mutex<std::collections::VecDeque<u64>>>,
+    pub(in crate::worker) file_reading_wake: mpsc::UnboundedSender<()>,
     /// OPFS completions routed from the partition-owned storage IO sequence.
     pub(in crate::worker) opfs_completion_tx: mpsc::UnboundedSender<WorkerOpfsCompletion>,
     pub(in crate::worker) opfs_owner_state: Option<WorkerOpfsOwnerState>,
@@ -266,16 +276,12 @@ pub(crate) fn worker_realm_secure_context_available(scope: &mut v8::PinScope<'_,
 pub(crate) fn get_worker_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<Rc<RefCell<WorkerGlobalState>>> {
-    let global = scope.get_current_context().global(scope);
-    let val = get_private_value(scope, global, WORKER_STATE_SLOT)?;
-    let external = v8::Local::<v8::External>::try_from(val).ok()?;
-    let ptr = external.value() as *const RefCell<WorkerGlobalState>;
-    // Safety: the Rc is kept alive by the worker thread for the lifetime of
-    // the context.  We increment the ref-count here so we get our own Rc.
-    unsafe {
-        Rc::increment_strong_count(ptr);
-        Some(Rc::from_raw(ptr))
-    }
+    // Cleanup may run with an exception pending. Native lookup must not enter
+    // V8 property APIs, including when this Context has no Worker owner.
+    scope
+        .get_current_context()
+        .get_slot::<crate::common_runtime::CommonRuntimeBinding>()?
+        .worker_state()
 }
 
 pub(crate) fn worker_global_is_closed(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -317,15 +323,6 @@ pub(crate) fn worker_exception_report_target(
         .map(ToString::to_string)
         .unwrap_or_default();
     Some((state.parent_tx.clone(), script_url))
-}
-
-pub(crate) fn worker_uses_shared_worker_agent_cluster(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    get_worker_state(scope).is_some_and(|state| {
-        matches!(
-            state.borrow().global_kind,
-            crate::worker::thread::WorkerGlobalKind::Shared { .. }
-        )
-    })
 }
 
 pub(super) fn worker_close_callback(

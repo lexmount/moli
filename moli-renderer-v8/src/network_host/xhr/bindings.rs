@@ -10,8 +10,26 @@ use super::header_surface::{
     xhr_get_all_response_headers_callback, xhr_get_response_header_callback,
     xhr_override_mime_type_callback, xhr_set_request_header_callback,
 };
-use super::send::{dispatch_xhr_upload_abort_if_in_progress, xhr_send_callback};
+use super::send::xhr_send_callback;
 use super::*;
+
+/// Retire the native request without dispatching the public abort algorithm.
+/// open() and abort() each retain their own state and event transitions.
+fn terminate_window_xhr_fetch(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
+    let internal_id =
+        xhr_state_number_property(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT).unwrap_or(0.0) as u64;
+    if internal_id == 0 {
+        return;
+    }
+    let Some(context) = xhr.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    if let Some(host) = context_host_ptr_from_global_bridge(scope) {
+        // SAFETY: this context's bridge owns the host in the current isolate.
+        let _ = unsafe { &mut *host }.abort_subresource_fetch(internal_id);
+    }
+}
 
 pub(crate) use self::constants::{
     install_window_xml_http_request_template_bindings, install_xml_http_request_template_surface,

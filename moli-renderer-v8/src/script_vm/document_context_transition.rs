@@ -142,7 +142,15 @@ impl ScriptVm {
         let journal = environment.output_journal();
         let isolate = self.renderer_document_isolate.clone();
         let inspector_isolate = isolate.clone();
-        let context = &self.page_default_runtime.context;
+        let context = &self
+            .main_world
+            .current()
+            .ok_or_else(|| anyhow!("Window reuse requires its initialized realm"))?
+            .context;
+        let source_document = self
+            ._context_host
+            .borrow()
+            .root_document_lifecycle_identity();
         let page_inspector = &mut self.page_inspector;
         isolate.with_renderer_document_isolate_and_inspector_mut(|isolate, backend| {
             page_inspector
@@ -150,7 +158,12 @@ impl ScriptVm {
             if let Some(commit) = env.main_document_commit.clone() {
                 journal.append(crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document: source_document.expect(
+                            "a replaced main Document retains its native lifecycle identity",
+                        ),
+                        commit,
+                    },
                 ));
             }
             let scope = pin!(v8::HandleScope::new(isolate));

@@ -10,7 +10,7 @@ from urllib.parse import quote
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..progress import await_with_progress
 from ..raw_cdp import RawCdpClient, RawCdpError, connect_raw_cdp
-from .browser_close import browser_close_instance_lifecycle
+from .browser_close import BrowserCloseError, browser_close_instance_lifecycle
 
 
 RawSemanticScenario = Callable[[str, str], Awaitable[dict[str, Any]]]
@@ -37,17 +37,18 @@ async def run_target_semantics_group(
                 item.scenario(endpoint, fixture),
             )
         except Exception as error:
-            results.append(
-                {
-                    "name": item.name,
-                    "ok": False,
-                    "contract": item.contract,
-                    "source": item.source,
-                    "commands": item.commands,
-                    "errorType": type(error).__name__,
-                    "error": str(error),
-                }
-            )
+            failed = {
+                "name": item.name,
+                "ok": False,
+                "contract": item.contract,
+                "source": item.source,
+                "commands": item.commands,
+                "errorType": type(error).__name__,
+                "error": str(error),
+            }
+            if isinstance(error, BrowserCloseError):
+                failed["observed"] = error.observed
+            results.append(failed)
         else:
             record_contract(
                 results,

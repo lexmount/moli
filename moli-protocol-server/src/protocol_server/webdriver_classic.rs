@@ -88,19 +88,21 @@ pub(super) use cookies::{
     webdriver_classic_delete_cookie, webdriver_classic_get_cookies,
     webdriver_classic_get_named_cookie,
 };
-use dom_refs::{resolve_classic_element_dom_reference, resolve_classic_shadow_root_dom_reference};
+use dom_refs::{
+    get_or_create_classic_node_reference, resolve_classic_element_dom_reference,
+    resolve_classic_shadow_root_dom_reference,
+};
 use helpers::{
     classic_error_into_response, classic_json_body, classic_success_into_response,
     classic_webdriver_json_response,
 };
+use moli_protocol::automation::WebDriverNodeKind;
 use script_refs::{
     ClassicScriptCanonicalNodeReference, ClassicScriptFrameOwnerReferenceKey,
-    ClassicScriptResultReference, classic_script_canonical_dom_reference,
-    classic_script_canonical_dom_reference_from_described_node,
+    ClassicScriptResultReference, classic_script_canonical_dom_reference_from_described_node,
     classic_script_frame_owner_dom_reference_from_described_node,
     classic_script_result_contains_popup_window_reference, classic_script_result_reference,
-    collect_classic_script_dom_reference_node_ids,
-    collect_classic_script_frame_reference_owner_keys,
+    collect_classic_script_frame_reference_owner_keys, collect_classic_script_node_references,
 };
 pub(super) use state::SharedClassicSessionRegistry;
 use state::{ClassicPageBoundDomReference, ClassicSessionBinding, ClassicSessionRuntimeHandle};
@@ -410,66 +412,53 @@ fn classic_element_reference_from_id(element_id: String) -> Value {
     })
 }
 
-fn registered_classic_element_reference_from_dom_reference(
-    state: &AppState,
+async fn registered_classic_element_reference_from_dom_reference(
     binding: &ClassicSessionBinding,
     page_residence: &DevToolsDocumentResidenceIdentity,
-    node_id: u32,
     reference: DevToolsDomNodeReference,
-) -> Value {
-    let element_id = state
-        .classic_session_registry
-        .lock()
-        .register_element_reference(
-            binding,
-            node_id,
-            ClassicPageBoundDomReference {
-                page_residence: page_residence.clone(),
-                reference,
-            },
-        );
-    classic_element_reference_from_id(element_id)
+) -> Result<Value, ClassicError> {
+    get_or_create_classic_node_reference(
+        binding,
+        page_residence,
+        reference,
+        WebDriverNodeKind::Element,
+    )
+    .await
+    .map(classic_element_reference_from_id)
 }
 
-fn registered_classic_element_references_from_canonical_references(
-    state: &AppState,
+async fn registered_classic_element_references_from_canonical_references(
     binding: &ClassicSessionBinding,
     page_residence: &DevToolsDocumentResidenceIdentity,
     references: impl IntoIterator<Item = ClassicScriptCanonicalNodeReference>,
-) -> Vec<Value> {
-    references
-        .into_iter()
-        .map(|reference| {
+) -> Result<Vec<Value>, ClassicError> {
+    let mut values = Vec::new();
+    for reference in references {
+        values.push(
             registered_classic_element_reference_from_dom_reference(
-                state,
                 binding,
                 page_residence,
-                reference.node_id,
                 reference.reference,
             )
-        })
-        .collect()
+            .await?,
+        );
+    }
+    Ok(values)
 }
 
-fn registered_classic_shadow_root_reference_from_dom_reference(
-    state: &AppState,
+async fn registered_classic_shadow_root_reference_from_dom_reference(
     binding: &ClassicSessionBinding,
     page_residence: &DevToolsDocumentResidenceIdentity,
-    node_id: u32,
     reference: DevToolsDomNodeReference,
-) -> Value {
-    let shadow_root_id = state
-        .classic_session_registry
-        .lock()
-        .register_shadow_root_reference(
-            binding,
-            node_id,
-            ClassicPageBoundDomReference {
-                page_residence: page_residence.clone(),
-                reference,
-            },
-        );
-    classic_shadow_root_reference(shadow_root_id)
+) -> Result<Value, ClassicError> {
+    get_or_create_classic_node_reference(
+        binding,
+        page_residence,
+        reference,
+        WebDriverNodeKind::ShadowRoot,
+    )
+    .await
+    .map(classic_shadow_root_reference)
 }
 
 fn classic_window_reference(window_id: impl Into<String>) -> Value {
@@ -592,14 +581,13 @@ async fn resolve_classic_element_remote_object_from_reference(
 }
 
 async fn resolve_classic_remote_object(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     object_group: &str,
     label: &str,
 ) -> Result<ClassicPageBoundRemoteObject, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(binding, element_id).await?;
     resolve_classic_element_remote_object_from_reference(
         binding,
         context,
@@ -810,7 +798,6 @@ enum ClassicElementLiveIdentity {
 }
 
 async fn prepare_classic_script_argument_handles(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     params: &Value,
@@ -823,12 +810,12 @@ async fn prepare_classic_script_argument_handles(
         let reference = match reference {
             ClassicScriptArgumentReference::Element(element_id) => {
                 ClassicResolvedScriptArgumentReference::Element(
-                    resolve_classic_element_dom_reference(state, binding, element_id)?,
+                    resolve_classic_element_dom_reference(binding, element_id).await?,
                 )
             }
             ClassicScriptArgumentReference::ShadowRoot(shadow_root_id) => {
                 ClassicResolvedScriptArgumentReference::ShadowRoot(
-                    resolve_classic_shadow_root_dom_reference(state, binding, shadow_root_id)?,
+                    resolve_classic_shadow_root_dom_reference(binding, shadow_root_id).await?,
                 )
             }
             ClassicScriptArgumentReference::Frame(frame_id) => {
@@ -1289,11 +1276,9 @@ fn classic_script_argument_deserializer_function(user_function: String) -> Strin
 }
 
 fn classic_script_result_value(
-    state: &AppState,
     binding: &ClassicSessionBinding,
-    page_residence: &DevToolsDocumentResidenceIdentity,
     value: Value,
-    dom_references_by_node_id: &BTreeMap<u32, ClassicScriptCanonicalNodeReference>,
+    node_references: &BTreeMap<ClassicScriptResultReference, String>,
     frame_ids_by_owner_reference: &BTreeMap<ClassicScriptFrameOwnerReferenceKey, String>,
     popup_window_handles_by_id: &BTreeMap<u64, String>,
 ) -> Result<Value, ClassicError> {
@@ -1302,11 +1287,9 @@ fn classic_script_result_value(
             .into_iter()
             .map(|value| {
                 classic_script_result_value(
-                    state,
                     binding,
-                    page_residence,
                     value,
-                    dom_references_by_node_id,
+                    node_references,
                     frame_ids_by_owner_reference,
                     popup_window_handles_by_id,
                 )
@@ -1315,51 +1298,26 @@ fn classic_script_result_value(
             .map(Value::Array),
         Value::Object(map) => {
             if let Some(reference) = classic_script_result_reference(&map) {
+                let node_id = || {
+                    node_references.get(&reference).cloned().ok_or_else(|| {
+                        ClassicError::new(
+                            ClassicErrorCode::UnknownError,
+                            "missing exported node reference",
+                        )
+                    })
+                };
                 return Ok(match reference {
-                    ClassicScriptResultReference::Element {
-                        node_id,
-                        backend_node_id,
-                    } => {
-                        let reference = classic_script_canonical_dom_reference(
-                            node_id,
-                            backend_node_id,
-                            dom_references_by_node_id,
-                        );
-                        registered_classic_element_reference_from_dom_reference(
-                            state,
-                            binding,
-                            page_residence,
-                            reference.node_id,
-                            reference.reference,
-                        )
+                    ClassicScriptResultReference::Element { .. } => {
+                        classic_element_reference_from_id(node_id()?)
                     }
-                    ClassicScriptResultReference::ShadowRoot {
-                        node_id,
-                        backend_node_id,
-                    } => {
-                        let reference = classic_script_canonical_dom_reference(
-                            node_id,
-                            backend_node_id,
-                            dom_references_by_node_id,
-                        );
-                        registered_classic_shadow_root_reference_from_dom_reference(
-                            state,
-                            binding,
-                            page_residence,
-                            reference.node_id,
-                            reference.reference,
-                        )
+                    ClassicScriptResultReference::ShadowRoot { .. } => {
+                        classic_shadow_root_reference(node_id()?)
                     }
-                    ClassicScriptResultReference::Frame {
-                        owner: owner_reference,
-                    } => {
-                        let Some(frame_id) = frame_ids_by_owner_reference.get(&owner_reference)
-                        else {
-                            return Err(ClassicError::new(
-                                ClassicErrorCode::NoSuchFrame,
-                                "frame not found",
-                            ));
-                        };
+                    ClassicScriptResultReference::Frame { owner } => {
+                        let frame_id =
+                            frame_ids_by_owner_reference.get(&owner).ok_or_else(|| {
+                                ClassicError::new(ClassicErrorCode::NoSuchFrame, "frame not found")
+                            })?;
                         classic_frame_reference(frame_id.clone())
                     }
                     ClassicScriptResultReference::Window => {
@@ -1370,12 +1328,13 @@ fn classic_script_result_value(
                         }
                     }
                     ClassicScriptResultReference::PopupWindow(popup_id) => {
-                        let Some(handle) = popup_window_handles_by_id.get(&popup_id) else {
-                            return Err(ClassicError::new(
-                                ClassicErrorCode::NoSuchWindow,
-                                "popup window handle not found",
-                            ));
-                        };
+                        let handle =
+                            popup_window_handles_by_id.get(&popup_id).ok_or_else(|| {
+                                ClassicError::new(
+                                    ClassicErrorCode::NoSuchWindow,
+                                    "popup window handle not found",
+                                )
+                            })?;
                         classic_window_reference(handle.clone())
                     }
                 });
@@ -1385,11 +1344,9 @@ fn classic_script_result_value(
                 out.insert(
                     key,
                     classic_script_result_value(
-                        state,
                         binding,
-                        page_residence,
                         value,
-                        dom_references_by_node_id,
+                        node_references,
                         frame_ids_by_owner_reference,
                         popup_window_handles_by_id,
                     )?,
@@ -1402,63 +1359,31 @@ fn classic_script_result_value(
 }
 
 async fn classic_webdriver_script_result_value(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     page_residence: &DevToolsDocumentResidenceIdentity,
     value: Value,
 ) -> Result<Value, ClassicError> {
-    let dom_references =
-        classic_script_dom_references_by_node_id(binding, page_residence, &value).await?;
+    let mut nodes = std::collections::BTreeSet::new();
+    collect_classic_script_node_references(&value, &mut nodes);
+    let mut node_references = BTreeMap::new();
+    for node in nodes {
+        if let Some((reference, kind)) = node.node_reference() {
+            let id = get_or_create_classic_node_reference(binding, page_residence, reference, kind)
+                .await?;
+            node_references.insert(node, id);
+        }
+    }
     let frame_ids =
         classic_script_frame_ids_by_owner_reference(binding, page_residence, &value).await?;
-    let popup_window_handles_by_id =
+    let popup_window_handles =
         classic_popup_window_handles_by_id_for_script_result(binding, &value).await?;
     classic_script_result_value(
-        state,
         binding,
-        page_residence,
         value,
-        &dom_references,
+        &node_references,
         &frame_ids,
-        &popup_window_handles_by_id,
+        &popup_window_handles,
     )
-}
-
-async fn classic_script_dom_references_by_node_id(
-    binding: &ClassicSessionBinding,
-    page_residence: &DevToolsDocumentResidenceIdentity,
-    value: &Value,
-) -> Result<BTreeMap<u32, ClassicScriptCanonicalNodeReference>, ClassicError> {
-    let mut node_ids = Vec::new();
-    collect_classic_script_dom_reference_node_ids(value, &mut node_ids);
-    node_ids.sort_unstable();
-    node_ids.dedup();
-
-    let mut out = BTreeMap::new();
-    let context = classic_browsing_context(binding);
-    for node_id in node_ids {
-        let reference = match binding
-            .runtime
-            .execute_on_page(
-                describe_node_command(&context, node_id, 0, false),
-                page_residence.clone(),
-            )
-            .await
-        {
-            Ok(AutomationResult::DescribeNode(result)) => {
-                classic_script_canonical_dom_reference_from_described_node(&result.node, node_id)
-            }
-            Ok(_) => {
-                return Err(ClassicError::new(
-                    ClassicErrorCode::UnknownError,
-                    "script result node lookup returned an unexpected result",
-                ));
-            }
-            Err(error) => return Err(classic_error_from_devtools_error(error)),
-        };
-        out.insert(node_id, reference);
-    }
-    Ok(out)
 }
 
 async fn classic_script_frame_ids_by_owner_reference(
@@ -1634,6 +1559,16 @@ pub(super) async fn webdriver_classic_new_session(
         Ok(enabled) => enabled,
         Err(error) => return classic_error_into_response(error),
     };
+    let bidi_requested = match matched_capabilities.get("webSocketUrl") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(requested)) => *requested,
+        Some(_) => {
+            return classic_error_into_response(ClassicError::new(
+                ClassicErrorCode::InvalidArgument,
+                "webSocketUrl must be a boolean",
+            ));
+        }
+    };
     let session = state
         .classic_session_registry
         .lock()
@@ -1665,19 +1600,10 @@ pub(super) async fn webdriver_classic_new_session(
     } else {
         None
     };
-    let initial_cookies = state.cookie_profile.snapshot();
-    let initial_cookie_snapshot = initial_cookies.clone();
-    let initial_storage_partition = state.initial_storage_partition(initial_cookies);
+    let initial_storage_partition = state.initial_storage_partition();
     let runtime = ClassicSessionRuntimeHandle::spawn(
-        initial_cookie_snapshot,
         initial_storage_partition,
-        moli_core::runtime::NavigationRuntimeConfig::new_with_layout_configuration(
-            state.fetch_config.clone(),
-            state.optional_resource_fetch_mask,
-            state.subframe_loading_enabled,
-            state.layout_configuration,
-        )
-        .with_debugger_enabled(state.debugger_enabled),
+        state.navigation_runtime_config.clone(),
         instance_connection,
     );
     let create_context = ClassicDevToolsCommandContext::new(session.session_id.as_str());
@@ -1709,7 +1635,7 @@ pub(super) async fn webdriver_classic_new_session(
             ));
         }
     };
-    if let Err(error) = runtime.set_javascript_dialog_handler_enabled(true).await {
+    if let Err(error) = runtime.register_javascript_dialog_handler().await {
         state
             .classic_session_registry
             .lock()
@@ -1759,6 +1685,7 @@ pub(super) async fn webdriver_classic_new_session(
         page_load_strategy,
         &unhandled_prompt_behavior,
         downloads_enabled,
+        bidi_requested,
     );
     classic_webdriver_json_response(
         StatusCode::OK,
@@ -1775,9 +1702,8 @@ pub(super) async fn webdriver_classic_delete_session(
         .lock()
         .release_session(&session_id);
     if let Some(runtime) = runtime {
-        let cookie_commit = runtime.shutdown().await;
-        if let Err(error) = state.cookie_profile.commit_and_save(cookie_commit) {
-            warn!(?error, "failed to persist Classic cookie profile");
+        if let Err(error) = runtime.shutdown_and_join().await {
+            warn!(?error, "Classic session shutdown failed");
         }
         return classic_webdriver_json_response(StatusCode::OK, delete_session_response());
     }
@@ -2412,7 +2338,7 @@ pub(super) async fn webdriver_classic_switch_frame(
         if let Err(error) = ensure_classic_current_browsing_context_exists(&binding).await {
             return classic_error_into_response(error);
         }
-        let reference = match resolve_classic_element_dom_reference(&state, &binding, element_id) {
+        let reference = match resolve_classic_element_dom_reference(&binding, element_id).await {
             Ok(reference) => reference,
             Err(error) => return classic_error_into_response(error),
         };
@@ -2687,7 +2613,6 @@ pub(super) async fn webdriver_classic_execute_sync(
         Err(error) => return classic_error_into_response(error),
     };
     let script_argument_handles = match prepare_classic_script_argument_handles(
-        &state,
         &binding,
         &context,
         &params,
@@ -2716,13 +2641,8 @@ pub(super) async fn webdriver_classic_execute_sync(
     match result {
         Ok((AutomationResult::Script(result), page_residence)) => match *result {
             DevToolsScriptResult::Value(value) => {
-                match classic_webdriver_script_result_value(
-                    &state,
-                    &binding,
-                    &page_residence,
-                    value.value,
-                )
-                .await
+                match classic_webdriver_script_result_value(&binding, &page_residence, value.value)
+                    .await
                 {
                     Ok(value) => classic_success_into_response(value),
                     Err(error) => classic_error_into_response(error),
@@ -2768,7 +2688,6 @@ pub(super) async fn webdriver_classic_execute_async(
         Err(error) => return classic_error_into_response(error),
     };
     let script_argument_handles = match prepare_classic_script_argument_handles(
-        &state,
         &binding,
         &context,
         &params,
@@ -2797,13 +2716,8 @@ pub(super) async fn webdriver_classic_execute_async(
     match result {
         Ok((AutomationResult::Script(result), page_residence)) => match *result {
             DevToolsScriptResult::Value(value) => {
-                match classic_webdriver_script_result_value(
-                    &state,
-                    &binding,
-                    &page_residence,
-                    value.value,
-                )
-                .await
+                match classic_webdriver_script_result_value(&binding, &page_residence, value.value)
+                    .await
                 {
                     Ok(value) => classic_success_into_response(value),
                     Err(error) => classic_error_into_response(error),
@@ -2885,14 +2799,12 @@ pub(super) async fn webdriver_classic_get_element_shadow_root(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&binding, &element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
 
-    if let Err(error) =
-        verify_classic_element_attached(&state, &binding, &context, &element_id).await
-    {
+    if let Err(error) = verify_classic_element_attached(&binding, &context, &element_id).await {
         return classic_error_into_response(error);
     }
 
@@ -2906,7 +2818,7 @@ pub(super) async fn webdriver_classic_get_element_shadow_root(
         .await;
     match result {
         Ok(AutomationResult::DescribeNode(result)) => {
-            let Some((node_id, reference)) =
+            let Some((_, reference)) =
                 classic_author_shadow_root_reference_from_described_node(&result.node)
             else {
                 return classic_error_into_response(ClassicError::new(
@@ -2914,15 +2826,14 @@ pub(super) async fn webdriver_classic_get_element_shadow_root(
                     "shadow root not found",
                 ));
             };
-            classic_success_into_response(
-                registered_classic_shadow_root_reference_from_dom_reference(
-                    &state,
-                    &binding,
-                    &page_residence,
-                    node_id,
-                    reference,
-                ),
+            registered_classic_shadow_root_reference_from_dom_reference(
+                &binding,
+                &page_residence,
+                reference,
             )
+            .await
+            .map(classic_success_into_response)
+            .unwrap_or_else(classic_error_into_response)
         }
         Ok(_) => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
@@ -2939,13 +2850,11 @@ pub(super) async fn webdriver_classic_get_element_shadow_root(
 }
 
 async fn verify_classic_element_attached(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<(), ClassicError> {
     let object_id = resolve_classic_remote_object(
-        state,
         binding,
         context,
         element_id,
@@ -3058,7 +2967,7 @@ async fn webdriver_classic_find_shadow_element_with_mode(
     };
     let context = classic_browsing_context(&binding);
     let shadow_root_reference =
-        match resolve_classic_shadow_root_dom_reference(&state, &binding, &shadow_root_id) {
+        match resolve_classic_shadow_root_dom_reference(&binding, &shadow_root_id).await {
             Ok(reference) => reference,
             Err(error) => return classic_error_into_response(error),
         };
@@ -3083,7 +2992,6 @@ async fn webdriver_classic_find_shadow_element_with_mode(
     {
         Ok(result) => {
             webdriver_classic_find_element_result_response(
-                &state,
                 &binding,
                 result,
                 multiple,
@@ -3112,7 +3020,7 @@ async fn webdriver_classic_find_element_with_mode_and_root(
     };
     let context = classic_browsing_context(&binding);
     let (command, expected_page) = if let Some(root_element_id) = root_element_id {
-        let root = match resolve_classic_element_dom_reference(&state, &binding, &root_element_id) {
+        let root = match resolve_classic_element_dom_reference(&binding, &root_element_id).await {
             Ok(reference) => reference,
             Err(error) => return classic_error_into_response(error),
         };
@@ -3132,7 +3040,6 @@ async fn webdriver_classic_find_element_with_mode_and_root(
     {
         Ok(result) => {
             webdriver_classic_find_element_result_response(
-                &state,
                 &binding,
                 result,
                 multiple,
@@ -3291,7 +3198,6 @@ struct ClassicFindElementExecution {
 }
 
 async fn webdriver_classic_find_element_result_response(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     execution: ClassicFindElementExecution,
     multiple: bool,
@@ -3320,14 +3226,14 @@ async fn webdriver_classic_find_element_result_response(
                 Ok(references) => references,
                 Err(error) => return classic_error_into_response(error),
             };
-            classic_success_into_response(json!(
-                registered_classic_element_references_from_canonical_references(
-                    state,
-                    binding,
-                    page_residence,
-                    references
-                )
-            ))
+            registered_classic_element_references_from_canonical_references(
+                binding,
+                page_residence,
+                references,
+            )
+            .await
+            .map(|references| classic_success_into_response(json!(references)))
+            .unwrap_or_else(classic_error_into_response)
         }
         AutomationResult::LocateNodes(result) if multiple => {
             if result.node_ids.is_empty() {
@@ -3347,14 +3253,14 @@ async fn webdriver_classic_find_element_result_response(
                 Ok(references) => references,
                 Err(error) => return classic_error_into_response(error),
             };
-            classic_success_into_response(json!(
-                registered_classic_element_references_from_canonical_references(
-                    state,
-                    binding,
-                    page_residence,
-                    references
-                )
-            ))
+            registered_classic_element_references_from_canonical_references(
+                binding,
+                page_residence,
+                references,
+            )
+            .await
+            .map(|references| classic_success_into_response(json!(references)))
+            .unwrap_or_else(classic_error_into_response)
         }
         AutomationResult::QuerySelector(result) => {
             let Some(frontend_node_id) = result.node_ids.first().copied() else {
@@ -3376,15 +3282,16 @@ async fn webdriver_classic_find_element_result_response(
                 Ok(reference) => reference,
                 Err(error) => return classic_error_into_response(error),
             };
-            classic_success_into_response(registered_classic_element_reference_from_dom_reference(
-                state,
+            registered_classic_element_reference_from_dom_reference(
                 binding,
                 page_residence
                     .as_ref()
                     .expect("non-empty find result must retain its Page residence"),
-                reference.node_id,
                 reference.reference,
-            ))
+            )
+            .await
+            .map(classic_success_into_response)
+            .unwrap_or_else(classic_error_into_response)
         }
         AutomationResult::LocateNodes(result) => {
             let Some(frontend_node_id) = result.node_ids.first().copied() else {
@@ -3406,15 +3313,16 @@ async fn webdriver_classic_find_element_result_response(
                 Ok(reference) => reference,
                 Err(error) => return classic_error_into_response(error),
             };
-            classic_success_into_response(registered_classic_element_reference_from_dom_reference(
-                state,
+            registered_classic_element_reference_from_dom_reference(
                 binding,
                 page_residence
                     .as_ref()
                     .expect("non-empty find result must retain its Page residence"),
-                reference.node_id,
                 reference.reference,
-            ))
+            )
+            .await
+            .map(classic_success_into_response)
+            .unwrap_or_else(classic_error_into_response)
         }
         _ => classic_error_into_response(ClassicError::new(
             ClassicErrorCode::UnknownError,
@@ -3510,7 +3418,7 @@ pub(super) async fn webdriver_classic_get_element_attribute(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&binding, &element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3541,7 +3449,6 @@ pub(super) async fn webdriver_classic_get_element_text(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -3552,13 +3459,8 @@ pub(super) async fn webdriver_classic_get_element_text(
     {
         Ok(object_id) => object_id,
         Err(error) if classic_text_should_fallback_to_dom_text(&error) => {
-            return webdriver_classic_get_element_text_from_dom(
-                &state,
-                &binding,
-                &context,
-                &element_id,
-            )
-            .await;
+            return webdriver_classic_get_element_text_from_dom(&binding, &context, &element_id)
+                .await;
         }
         Err(error) => return classic_error_into_response(error),
     };
@@ -3589,12 +3491,11 @@ pub(super) async fn webdriver_classic_get_element_text(
 }
 
 async fn webdriver_classic_get_element_text_from_dom(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Response {
-    let reference = match resolve_classic_element_dom_reference(state, binding, element_id) {
+    let reference = match resolve_classic_element_dom_reference(binding, element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3631,7 +3532,7 @@ pub(super) async fn webdriver_classic_get_element_tag_name(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&binding, &element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3679,7 +3580,6 @@ pub(super) async fn webdriver_classic_get_active_element(
                     .backend_node_id
                     .map(DevToolsDomNodeReference::BackendNodeId)
                     .unwrap_or(DevToolsDomNodeReference::FrontendNodeId(node_id));
-                let owner_node_id = value.backend_node_id.unwrap_or(node_id);
                 release_classic_remote_handle(
                     &binding,
                     &context,
@@ -3688,15 +3588,14 @@ pub(super) async fn webdriver_classic_get_active_element(
                     "active element",
                 )
                 .await;
-                classic_success_into_response(
-                    registered_classic_element_reference_from_dom_reference(
-                        &state,
-                        &binding,
-                        &page_residence,
-                        owner_node_id,
-                        reference,
-                    ),
+                registered_classic_element_reference_from_dom_reference(
+                    &binding,
+                    &page_residence,
+                    reference,
                 )
+                .await
+                .map(classic_success_into_response)
+                .unwrap_or_else(classic_error_into_response)
             }
             DevToolsScriptResult::Exception(exception) => {
                 classic_error_into_response(classic_webdriver_command_exception_error(exception))
@@ -3720,12 +3619,12 @@ pub(super) async fn webdriver_classic_element_equals(
     };
     let context = classic_browsing_context(&binding);
     let element_identity =
-        match classic_element_live_identity(&state, &binding, &context, &element_id).await {
+        match classic_element_live_identity(&binding, &context, &element_id).await {
             Ok(identity) => identity,
             Err(error) => return classic_error_into_response(error),
         };
     let other_element_identity =
-        match classic_element_live_identity(&state, &binding, &context, &other_element_id).await {
+        match classic_element_live_identity(&binding, &context, &other_element_id).await {
             Ok(identity) => identity,
             Err(error) => return classic_error_into_response(error),
         };
@@ -3733,12 +3632,11 @@ pub(super) async fn webdriver_classic_element_equals(
 }
 
 async fn classic_element_live_identity(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<ClassicElementLiveIdentity, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(binding, element_id).await?;
     let command = describe_node_reference_command(context, reference.reference, 0, false);
     match binding
         .runtime
@@ -3788,7 +3686,6 @@ pub(super) async fn webdriver_classic_is_element_enabled(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -3836,7 +3733,6 @@ pub(super) async fn webdriver_classic_is_element_selected(
     };
     let context = classic_browsing_context(&binding);
     let tag_name = match webdriver_classic_element_property_value(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -3850,7 +3746,6 @@ pub(super) async fn webdriver_classic_is_element_selected(
     };
     let selected = match tag_name.as_str() {
         "option" => match webdriver_classic_element_property_value(
-            &state,
             &binding,
             &context,
             &element_id,
@@ -3864,7 +3759,6 @@ pub(super) async fn webdriver_classic_is_element_selected(
         },
         "input" => {
             let input_type = match webdriver_classic_element_property_value(
-                &state,
                 &binding,
                 &context,
                 &element_id,
@@ -3878,7 +3772,6 @@ pub(super) async fn webdriver_classic_is_element_selected(
             };
             if InputType::from_attribute_value(Some(&input_type)).is_checkable() {
                 match webdriver_classic_element_property_value(
-                    &state,
                     &binding,
                     &context,
                     &element_id,
@@ -3908,7 +3801,7 @@ pub(super) async fn webdriver_classic_get_element_rect(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let reference = match resolve_classic_element_dom_reference(&state, &binding, &element_id) {
+    let reference = match resolve_classic_element_dom_reference(&binding, &element_id).await {
         Ok(reference) => reference,
         Err(error) => return classic_error_into_response(error),
     };
@@ -3940,7 +3833,6 @@ pub(super) async fn webdriver_classic_take_element_screenshot(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -3980,7 +3872,6 @@ pub(super) async fn webdriver_classic_get_element_css_value(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -4093,7 +3984,6 @@ async fn webdriver_classic_get_element_computed_value(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -4140,7 +4030,6 @@ pub(super) async fn webdriver_classic_is_element_displayed(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -4177,14 +4066,13 @@ pub(super) async fn webdriver_classic_is_element_displayed(
 }
 
 async fn webdriver_classic_element_property_value(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     name: impl Into<String>,
     label: &'static str,
 ) -> Result<Value, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(binding, element_id).await?;
     let command = get_element_property_reference_command(context, reference.reference, name);
     match binding
         .runtime
@@ -4221,7 +4109,6 @@ pub(super) async fn webdriver_classic_get_element_property(
         Err(error) => return classic_error_into_response(error),
     };
     let script_argument_handles = match prepare_classic_script_argument_handles(
-        &state,
         &binding,
         &context,
         &params,
@@ -4250,13 +4137,8 @@ pub(super) async fn webdriver_classic_get_element_property(
     match result {
         Ok((AutomationResult::Script(result), page_residence)) => match *result {
             DevToolsScriptResult::Value(value) => {
-                match classic_webdriver_script_result_value(
-                    &state,
-                    &binding,
-                    &page_residence,
-                    value.value,
-                )
-                .await
+                match classic_webdriver_script_result_value(&binding, &page_residence, value.value)
+                    .await
                 {
                     Ok(value) => classic_success_into_response(value),
                     Err(error) => classic_error_into_response(error),
@@ -4293,7 +4175,6 @@ pub(super) async fn webdriver_classic_clear_element(
     };
     let context = classic_browsing_context(&binding);
     let object_id = match resolve_classic_remote_object(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -4396,34 +4277,24 @@ pub(super) async fn webdriver_classic_send_keys_to_element(
         Err(error) => return classic_error_into_response(error),
     };
     let context = classic_browsing_context(&binding);
-    let is_file_input = match webdriver_classic_element_is_file_input(
-        &state,
-        &binding,
-        &context,
-        &element_id,
-    )
-    .await
-    {
-        Ok(is_file_input) => is_file_input,
-        Err(error) => return classic_error_into_response(error),
-    };
+    let is_file_input =
+        match webdriver_classic_element_is_file_input(&binding, &context, &element_id).await {
+            Ok(is_file_input) => is_file_input,
+            Err(error) => return classic_error_into_response(error),
+        };
     if is_file_input {
-        match webdriver_classic_send_file_input_keys(&state, &binding, &context, &element_id, &text)
-            .await
-        {
+        match webdriver_classic_send_file_input_keys(&binding, &context, &element_id, &text).await {
             Ok(()) => {
                 return classic_success_into_response(Value::Null);
             }
             Err(error) => return classic_error_into_response(error),
         }
     }
-    let geometry =
-        match webdriver_classic_element_geometry(&state, &binding, &context, &element_id).await {
-            Ok(geometry) => geometry,
-            Err(error) => return classic_error_into_response(error),
-        };
+    let geometry = match webdriver_classic_element_geometry(&binding, &context, &element_id).await {
+        Ok(geometry) => geometry,
+        Err(error) => return classic_error_into_response(error),
+    };
     let send_keys_preflight = match webdriver_classic_prepare_text_control_for_send_keys(
-        &state,
         &binding,
         &context,
         &element_id,
@@ -4477,14 +4348,12 @@ enum ClassicSendKeysPreflight {
 }
 
 async fn webdriver_classic_prepare_text_control_for_send_keys(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     text: &str,
 ) -> Result<ClassicSendKeysPreflight, ClassicError> {
     let object_id = resolve_classic_remote_object(
-        state,
         binding,
         context,
         element_id,
@@ -4561,15 +4430,9 @@ async fn webdriver_classic_activate_element_by_handle(
     object_group: &str,
     unexpected_result_message: &str,
 ) -> Result<(), ClassicError> {
-    let object_id = resolve_classic_remote_object(
-        state,
-        binding,
-        context,
-        element_id,
-        object_group,
-        object_group,
-    )
-    .await?;
+    let object_id =
+        resolve_classic_remote_object(binding, context, element_id, object_group, object_group)
+            .await?;
     let prepared = binding
         .runtime
         .execute_on_page(
@@ -4707,13 +4570,11 @@ async fn webdriver_classic_activate_element_by_handle(
 }
 
 async fn webdriver_classic_element_is_file_input(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<bool, ClassicError> {
     let tag_name = webdriver_classic_element_property_value(
-        state,
         binding,
         context,
         element_id,
@@ -4724,29 +4585,21 @@ async fn webdriver_classic_element_is_file_input(
     if tag_name.as_str() != Some("input") {
         return Ok(false);
     }
-    let input_type = webdriver_classic_element_property_value(
-        state,
-        binding,
-        context,
-        element_id,
-        "type",
-        "send keys",
-    )
-    .await?;
+    let input_type =
+        webdriver_classic_element_property_value(binding, context, element_id, "type", "send keys")
+            .await?;
     Ok(input_type
         .as_str()
         .is_some_and(|input_type| input_type.eq_ignore_ascii_case("file")))
 }
 
 async fn webdriver_classic_send_file_input_keys(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
     text: &str,
 ) -> Result<(), ClassicError> {
     let multiple = webdriver_classic_element_property_value(
-        state,
         binding,
         context,
         element_id,
@@ -4766,7 +4619,6 @@ async fn webdriver_classic_send_file_input_keys(
     let files = selected_files_from_paths(&paths, "WebDriver Classic file upload")
         .map_err(|error| ClassicError::new(ClassicErrorCode::InvalidArgument, error.message))?;
     let object_id = resolve_classic_remote_object(
-        state,
         binding,
         context,
         element_id,
@@ -4825,12 +4677,11 @@ fn classic_file_input_paths_from_send_keys(text: &str) -> Result<Vec<String>, Cl
 }
 
 async fn webdriver_classic_element_geometry(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
 ) -> Result<DevToolsDomGeometryResult, ClassicError> {
-    let reference = resolve_classic_element_dom_reference(state, binding, element_id)?;
+    let reference = resolve_classic_element_dom_reference(binding, element_id).await?;
     let page_residence = reference.page_residence;
     let commands = element_geometry_prepare_commands(context, reference.reference);
     let mut geometry = None;
@@ -4860,7 +4711,6 @@ async fn webdriver_classic_element_geometry(
 }
 
 async fn webdriver_classic_action_element_origin_points(
-    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     params: &serde_json::Value,
@@ -4868,8 +4718,7 @@ async fn webdriver_classic_action_element_origin_points(
     let element_ids = action_element_origin_ids(params)?;
     let mut origins = ClassicElementOriginViewportPoints::new();
     for element_id in element_ids {
-        let geometry =
-            webdriver_classic_element_geometry(state, binding, context, &element_id).await?;
+        let geometry = webdriver_classic_element_geometry(binding, context, &element_id).await?;
         let point = element_center_from_geometry(&geometry)?;
         origins.insert(element_id, point);
     }
@@ -4945,9 +4794,7 @@ pub(super) async fn webdriver_classic_perform_actions(
     let context = classic_browsing_context(&binding);
     let input_context = classic_top_level_context(&binding);
     let element_origins =
-        match webdriver_classic_action_element_origin_points(&state, &binding, &context, &params)
-            .await
-        {
+        match webdriver_classic_action_element_origin_points(&binding, &context, &params).await {
             Ok(element_origins) => element_origins,
             Err(error) => return classic_error_into_response(error),
         };
@@ -5017,18 +4864,21 @@ fn webdriver_classic_capabilities(
     page_load_strategy: ClassicPageLoadStrategy,
     unhandled_prompt_behavior: &ClassicUnhandledPromptBehavior,
     downloads_enabled: bool,
+    bidi_requested: bool,
 ) -> serde_json::Value {
-    let web_socket_url = format!("{}/{}", state.bidi_ws_url.trim_end_matches('/'), session_id);
     let mut capabilities = json!({
         "browserName": "moli",
         "browserVersion": version::PRODUCT,
         "platformName": std::env::consts::OS,
-        "acceptInsecureCerts": !state.fetch_config.tls_verify_host(),
+        "acceptInsecureCerts": !state.navigation_runtime_config.fetch_config().tls_verify_host(),
         "pageLoadStrategy": page_load_strategy.as_str(),
         "unhandledPromptBehavior": unhandled_prompt_behavior.returned_capability(),
         "setWindowRect": false,
-        "webSocketUrl": web_socket_url,
     });
+    if bidi_requested && let Some(object) = capabilities.as_object_mut() {
+        let web_socket_url = format!("{}/{}", state.bidi_ws_url.trim_end_matches('/'), session_id);
+        object.insert("webSocketUrl".to_owned(), json!(web_socket_url));
+    }
     if downloads_enabled && let Some(object) = capabilities.as_object_mut() {
         object.insert("se:downloadsEnabled".to_owned(), json!(true));
     }

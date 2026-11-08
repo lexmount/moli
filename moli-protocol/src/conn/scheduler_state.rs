@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::{BackgroundProtocolEvent, NavigationBackgroundEvent};
+use super::{BackgroundProtocolEvent, NavigationBackgroundEvent, RendererOutputDependencies};
 #[cfg(test)]
 use crate::domains::command_output::protocol_message_background_event;
 use serde_json::{Value, json};
@@ -9,6 +9,9 @@ const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
+    RendererOutputProjectionPrepared {
+        pending: super::PendingProtocolSchedulerWork,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
@@ -26,8 +29,9 @@ pub struct CdpTurnOutcome {
     scheduler_events: Vec<CdpSchedulerEvent>,
 }
 
-/// One renderer-owner turn whose exact publication predecessor must be
-/// projected before its protocol result becomes observable.
+/// One turn whose exact renderer dependencies must be projected before its
+/// protocol result becomes observable. Ordinary owner turns use one stream;
+/// Browser/Target commands explicitly compose several owners.
 ///
 /// This wrapper is intentionally a different type from [`CdpTurnOutcome`]. A
 /// scheduler hook cannot pass it to a protocol-only turn consumer and rely on
@@ -36,7 +40,7 @@ pub struct CdpTurnOutcome {
 #[derive(Debug)]
 pub struct CdpRendererOwnerTurnOutcome {
     turn: CdpTurnOutcome,
-    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    renderer_output_dependencies: RendererOutputDependencies,
 }
 
 impl CdpTurnOutcome {
@@ -118,9 +122,16 @@ impl CdpTurnOutcome {
         self,
         predecessor: Option<moli_core::RendererOutputFence>,
     ) -> CdpRendererOwnerTurnOutcome {
+        self.with_renderer_output_dependencies(predecessor.into())
+    }
+
+    pub(crate) fn with_renderer_output_dependencies(
+        self,
+        dependencies: RendererOutputDependencies,
+    ) -> CdpRendererOwnerTurnOutcome {
         CdpRendererOwnerTurnOutcome {
             turn: self,
-            renderer_output_predecessor: predecessor,
+            renderer_output_dependencies: dependencies,
         }
     }
 
@@ -136,7 +147,7 @@ impl CdpTurnOutcome {
         (
             protocol_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(BackgroundProtocolEvent::into_wire_message)
                 .collect(),
             self.scheduler_events,
         )
@@ -175,10 +186,16 @@ impl CdpTurnOutcome {
 }
 
 impl CdpRendererOwnerTurnOutcome {
+    pub fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.renderer_output_dependencies
+            .clone()
+            .into_single_stream()
+    }
+
     #[cfg(test)]
     pub fn into_parts(self) -> (Vec<serde_json::Value>, Vec<CdpSchedulerEvent>) {
         assert!(
-            self.renderer_output_predecessor.is_none(),
+            self.renderer_output_dependencies.is_empty(),
             "tests must project an exact renderer predecessor instead of flattening it"
         );
         self.turn.into_parts()
@@ -189,13 +206,13 @@ impl CdpRendererOwnerTurnOutcome {
     ) -> (
         Vec<BackgroundProtocolEvent>,
         Vec<CdpSchedulerEvent>,
-        Option<moli_core::RendererOutputFence>,
+        RendererOutputDependencies,
     ) {
         let (protocol_events, scheduler_events) = self.turn.into_protocol_event_parts();
         (
             protocol_events,
             scheduler_events,
-            self.renderer_output_predecessor,
+            self.renderer_output_dependencies,
         )
     }
 
@@ -207,7 +224,7 @@ impl CdpRendererOwnerTurnOutcome {
         Option<moli_core::RendererOutputFence>,
         Vec<BackgroundProtocolEvent>,
         Vec<CdpSchedulerEvent>,
-        Option<moli_core::RendererOutputFence>,
+        RendererOutputDependencies,
     ) {
         let (
             protocol_events,
@@ -222,7 +239,7 @@ impl CdpRendererOwnerTurnOutcome {
             renderer_output_boundary,
             post_response_events,
             scheduler_events,
-            self.renderer_output_predecessor,
+            self.renderer_output_dependencies,
         )
     }
 }
@@ -233,6 +250,8 @@ pub(super) struct CdpConnectionSchedulerState {
     next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
+    pub(super) runtime_command_output_barriers:
+        crate::domains::activity::RuntimeCommandOutputBarriers,
     scheduler_events: Vec<CdpSchedulerEvent>,
     recent_activity_traces: VecDeque<Value>,
     next_activity_trace_id: u64,
@@ -269,6 +288,22 @@ impl CdpConnectionSchedulerState {
 
     pub(super) fn extend_scheduler_events(&mut self, events: Vec<CdpSchedulerEvent>) {
         self.scheduler_events.extend(events);
+    }
+
+    pub(super) fn scheduler_event_count(&self) -> usize {
+        self.scheduler_events.len()
+    }
+
+    pub(super) fn bind_renderer_output_source_since(
+        &mut self,
+        start: usize,
+        source: moli_core::RendererOutputCursor,
+    ) {
+        for event in &mut self.scheduler_events[start..] {
+            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
+                work.bind_renderer_output_source(source);
+            }
+        }
     }
 
     pub(super) fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {

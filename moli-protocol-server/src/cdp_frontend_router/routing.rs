@@ -9,6 +9,7 @@ mod command;
 mod frontend_registry;
 mod output;
 mod pending_commands;
+mod session_output;
 
 pub(super) struct CdpRoutedFrontend {
     frontend_id: u64,

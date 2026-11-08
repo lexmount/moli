@@ -2,18 +2,16 @@ use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
     context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
+    context_bootstrap::ResolvedSimpleEventTarget,
     context_bootstrap::current_performance_time_origin,
     context_bootstrap::dom_time_since_origin_millis,
     context_bootstrap::event_initialized,
     context_bootstrap::event_is_dispatching,
     context_bootstrap::event_is_mouse_event,
     context_bootstrap::increment_performance_event_count,
-    context_bootstrap::is_simple_event_target,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
-    context_bootstrap::simple_event_target_add_event_listener_callback,
-    context_bootstrap::simple_event_target_dispatch_event_callback,
-    context_bootstrap::simple_event_target_remove_event_listener_callback,
+    context_bootstrap::resolve_event_target,
     context_bootstrap::trusted_script_string_or_type_error,
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
@@ -51,6 +49,7 @@ use super::{
 use crate::event_listener_args::{
     AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
+use crate::native_bridge::OwnerDispatchScope;
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -99,15 +98,22 @@ struct WindowRequestAnimationFrameArgs {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window.requestIdleCallback")]
-struct WindowRequestIdleCallbackArgs<'s> {
+struct WindowRequestIdleCallbackArgs {
     #[webidl(
         required,
         converter = "callback_function",
         missing_message = "Failed to execute 'requestIdleCallback' on 'Window': parameter 1 is not a function."
     )]
     callback: webidl::WebIdlCallbackFunction,
-    #[webidl(index = 1, converter = "raw")]
-    options: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(dictionary)]
+    options: IdleRequestOptions,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.requestIdleCallback")]
+struct IdleRequestOptions {
+    #[webidl(converter = "unsigned_long")]
+    timeout: Option<u32>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -122,6 +128,75 @@ struct WindowCancelAnimationFrameArgs {
 struct WindowCancelIdleCallbackArgs {
     #[webidl(required, converter = "unsigned_long")]
     handle: u32,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.postMessage")]
+struct StructuredSerializeOptions<'s> {
+    #[webidl(sequence, converter = "raw", default = Vec::new())]
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageOptions<'s> {
+    #[webidl(inherit)]
+    serialization: StructuredSerializeOptions<'s>,
+    #[webidl(name = "targetOrigin", converter = "usv_string", default = "/")]
+    target_origin: String,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageOptionsArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    message: v8::Local<'s, v8::Value>,
+    #[webidl(dictionary)]
+    options: WindowPostMessageOptions<'s>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.postMessage")]
+struct WindowPostMessageLegacyArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    message: v8::Local<'s, v8::Value>,
+    #[webidl(required, converter = "usv_string")]
+    target_origin: String,
+    #[webidl(sequence, converter = "raw", default = Vec::new())]
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+struct WindowPostMessageArgs<'s> {
+    message: v8::Local<'s, v8::Value>,
+    target_origin: String,
+    transfer: Vec<v8::Local<'s, v8::Object>>,
+}
+
+impl<'s> webidl::WebIdlArguments<'s> for WindowPostMessageArgs<'s> {
+    fn parse_arguments(
+        scope: &mut v8::PinScope<'s, '_>,
+        args: &v8::FunctionCallbackArguments<'s>,
+    ) -> Result<Self, webidl::WebIdlError> {
+        let origin_or_options = args.get(1);
+        // Three arguments select the legacy signature before type discrimination.
+        if args.length() <= 2
+            && (origin_or_options.is_null_or_undefined() || origin_or_options.is_object())
+        {
+            let parsed = webidl::try_parse_args::<WindowPostMessageOptionsArgs>(scope, args)?;
+            Ok(Self {
+                message: parsed.message,
+                target_origin: parsed.options.target_origin,
+                transfer: parsed.options.serialization.transfer,
+            })
+        } else {
+            let parsed = webidl::try_parse_args::<WindowPostMessageLegacyArgs>(scope, args)?;
+            Ok(Self {
+                message: parsed.message,
+                target_origin: parsed.target_origin,
+                transfer: parsed.transfer,
+            })
+        }
+    }
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -143,10 +218,14 @@ struct IdleDeadlinePrototypeDeclaration {
 pub(super) fn event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_add_event_listener_callback(scope, args, rv);
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.add_event_listener(scope, &args);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -169,7 +248,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         return;
     }
-    let child_window_target = child_window_handle(scope, args.this());
+    let child_window_target = child_window_handle(scope, identity.listener_owner);
     let target = if let Some(handle) = child_window_target {
         let Some(target) = host.current_child_window_event_target(handle) else {
             // Detachment clears the Window's listeners and execution context,
@@ -178,7 +257,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         };
         Some(EventTargetHandle::ChildWindow(target))
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
@@ -209,7 +288,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         define_non_enumerable_static_bool_property(
             scope,
-            args.this(),
+            identity.listener_owner,
             DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
             true,
         );
@@ -265,10 +344,14 @@ fn default_passive_value(
 pub(super) fn event_target_remove_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_remove_event_listener_callback(scope, args, rv);
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.remove_event_listener(scope, &args);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -284,16 +367,19 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let capture = call.options.capture;
-    let target = if let Some(handle) = child_window_handle(scope, args.this()) {
+    let target = if let Some(handle) = child_window_handle(scope, identity.listener_owner) {
         let Some(target) = host.current_child_window_event_target(handle) else {
             // The listeners were already removed when this Window detached.
             return;
         };
         Some(EventTargetHandle::ChildWindow(target))
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     };
     let Some(target) = target else {
+        if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+            return;
+        }
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -307,8 +393,21 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if is_simple_event_target(scope, args.this()) {
-        simple_event_target_dispatch_event_callback(scope, args, rv);
+    // IndexedDB retains its transaction-owner dispatch scope while sharing the
+    // public EventTarget operation with every other interface.
+    if crate::web_api_interfaces::IDBDatabase::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBRequest::is_instance(scope, args.this())
+        || crate::web_api_interfaces::IDBTransaction::is_instance(scope, args.this())
+    {
+        crate::context_bootstrap::dispatch_indexed_db_event_callback(scope, args, rv);
+        return;
+    }
+    let Some(identity) = resolve_event_target(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    if let Some(target) = ResolvedSimpleEventTarget::from_identity(scope, identity) {
+        target.dispatch_event(scope, &args, &mut rv);
         return;
     }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -316,9 +415,9 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let child_window_target = child_window_handle(scope, args.this());
+    let child_window_target = child_window_handle(scope, identity.listener_owner);
     let target = if child_window_target.is_none() {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_receiver(scope, identity.listener_owner, host_ptr, host)
     } else {
         None
     };
@@ -388,6 +487,14 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         rv.set_bool(false);
         return;
     };
+    // Binding validation precedes this test. Reject a retired framed
+    // Document before click pre-activation, counters or Event mutation.
+    if let EventTargetHandle::Node(node) = target
+        && host.document_execution_context_for_node(node).is_none()
+    {
+        rv.set_bool(false);
+        return;
+    }
     let click_activation_target = if event_type.as_deref() == Some("click")
         && event_is_mouse_event(scope, event)
         && let EventTargetHandle::Node(handle) = target
@@ -624,6 +731,10 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
     cancel_window_timer_for_receiver(scope, args.this(), id);
@@ -729,7 +840,10 @@ pub(super) fn window_request_idle_callback<'s>(
         return;
     };
 
-    let timeout_deadline_ms = parse_idle_callback_timeout_ms(scope, parsed.options)
+    let timeout_deadline_ms = parsed
+        .options
+        .timeout
+        .filter(|timeout_ms| *timeout_ms > 0)
         .map(|timeout_ms| current_time_ms() + timeout_ms as f64)
         .unwrap_or(-1.0);
     let runtime = unsafe { &mut *host_ptr };
@@ -809,56 +923,94 @@ pub(crate) fn window_post_message_callback<'s>(
     let source = PendingWindowMessageSource::new(source_endpoint, source_owner, source_realm_token);
 
     let target_dispatch_scope = target_endpoint.dispatch_scope();
-    let Some(target_owner) = host.current_window_execution_context_owner(target_dispatch_scope)
+    let target_owner = host.current_window_execution_context_owner(target_dispatch_scope);
+    let Some(source_security) = related_source
+        .as_ref()
+        .map(|(_, security, _)| security.clone())
+        .or_else(|| window_message_endpoint_security(host, source_endpoint))
     else {
         rv.set_undefined();
         return;
     };
-    let target = WindowTaskTarget::new(target_dispatch_scope, target_owner);
-    if let PendingWindowMessageEndpoint::LightweightPopup(popup_id) = target_endpoint
-        && !host.ensure_lightweight_popup_execution_context(scope, popup_id)
+    let Some(source_origin) = source_security.serialized_origin().map(str::to_owned) else {
+        rv.set_undefined();
+        return;
+    };
+    // Retain a page-local same-origin WindowProxy before conversions can
+    // retire its Document. Cross-origin sources keep owner-based resolution,
+    // including null after retirement. Always use the incumbent's default
+    // world rather than the callee's context or an isolated sender world.
+    let source_window = if let Some((_, _, window)) = related_source {
+        Some(window)
+    } else if let Some((_, context)) =
+        host.window_execution_context(scope, source_owner, source_endpoint.dispatch_scope())
     {
+        // A lightweight popup has its own native identity and WindowProxy even
+        // when this backend shares the opener's V8 context. Keep that identity
+        // for authorization and delivery instead of substituting context.global().
+        let identity = match source_endpoint {
+            PendingWindowMessageEndpoint::LightweightPopup(_) => host
+                .current_registered_window_execution_context_identity(
+                    source_endpoint.dispatch_scope(),
+                )
+                .filter(|identity| identity.owner() == source_owner),
+            _ => host.window_execution_context_identity_for_access_check(context),
+        };
+        if identity.is_some_and(|identity| {
+            host.window_execution_context_can_access_dispatch_scope(identity, target_dispatch_scope)
+        }) {
+            let window = match source_endpoint {
+                PendingWindowMessageEndpoint::LightweightPopup(id) => {
+                    host.lightweight_popup_window(scope, id)
+                }
+                _ => Some(context.global(scope)),
+            };
+            window.map(|window| v8::Global::new(scope, window))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let Some(parsed) = webidl::parse_args::<WindowPostMessageArgs>(scope, &args) else {
+        return;
+    };
+    let normalized_target_origin = parsed.target_origin;
+    let Some(prepared) = crate::context_bootstrap::prepare_value_for_window_post_message(
+        scope,
+        parsed.message,
+        parsed.transfer,
+        source_security,
+    ) else {
+        return;
+    };
+
+    // Serialization precedes target checks even for a retained, discarded
+    // Window. Captured ownership must never resolve to a replacement Window.
+    let Some(target_owner) = target_owner else {
+        prepared.discard(scope);
+        rv.set_undefined();
+        return;
+    };
+    if let PendingWindowMessageEndpoint::ChildWindow(handle) = target_endpoint
+        && !host.child_window_proxy_is_current(scope, handle, args.this())
+    {
+        prepared.discard(scope);
         rv.set_undefined();
         return;
     }
-    let Some(source_origin) = related_source
-        .as_ref()
-        .map(|(_, origin, _)| origin.clone())
-        .or_else(|| window_message_endpoint_origin(host, source_endpoint))
-    else {
+    if let PendingWindowMessageEndpoint::LightweightPopup(popup_id) = target_endpoint
+        && !host.ensure_lightweight_popup_execution_context(scope, popup_id)
+    {
+        prepared.discard(scope);
         rv.set_undefined();
         return;
-    };
-    let source_security =
-        crate::context_bootstrap::RuntimeMessageSourceSecurity::window(source_origin.clone());
-
-    let target_origin_value = args.get(1);
-    let options = (target_origin_value.is_object() && !target_origin_value.is_null_or_undefined())
-        .then(|| v8::Local::<v8::Object>::try_from(target_origin_value).ok())
-        .flatten();
-    let normalized_target_origin = if let Some(options) = options {
-        options
-            .get(scope, v8str(scope, "targetOrigin").into())
-            .and_then(|value| {
-                if value.is_undefined() {
-                    None
-                } else {
-                    value
-                        .to_string(scope)
-                        .map(|s| s.to_rust_string_lossy(scope))
-                }
-            })
-            .unwrap_or_else(|| "/".to_owned())
-    } else if target_origin_value.is_undefined() {
-        "/".to_owned()
-    } else {
-        target_origin_value
-            .to_string(scope)
-            .map(|s| s.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| "*".to_owned())
-    };
+    }
+    let target = WindowTaskTarget::new(target_dispatch_scope, target_owner);
 
     let Some(target_origin) = window_message_endpoint_origin(host, target_endpoint) else {
+        prepared.discard(scope);
         rv.set_undefined();
         return;
     };
@@ -878,24 +1030,10 @@ pub(crate) fn window_post_message_callback<'s>(
                 stage = "post_message_invalid_target_origin",
             );
         }
+        prepared.discard(scope);
         return;
     };
-    let data = if options.is_some() {
-        crate::context_bootstrap::structured_serialize_value_for_window_post_message_options(
-            scope,
-            args.get(0),
-            target_origin_value,
-            source_security,
-        )
-    } else {
-        crate::context_bootstrap::structured_serialize_value_for_window_post_message(
-            scope,
-            args.get(0),
-            (args.length() > 2).then(|| args.get(2)),
-            source_security,
-        )
-    };
-    let Some(data) = data else {
+    let Some(data) = prepared.commit_message_ports(scope) else {
         return;
     };
 
@@ -916,7 +1054,7 @@ pub(crate) fn window_post_message_callback<'s>(
     let task_id = host.queue_window_message(PendingWindowMessage {
         target,
         source,
-        source_window: related_source.map(|(_, _, window)| window),
+        source_window,
         data,
         origin: source_origin,
         intended_target_origin: target_origin_match,
@@ -978,11 +1116,14 @@ pub(crate) fn target_origin_matches(
         .unwrap_or(true)
 }
 
-pub(super) fn window_scroll_to_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn window_scroll_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
@@ -990,16 +1131,19 @@ pub(super) fn window_scroll_to_callback(
     let global = scope.get_current_context().global(scope);
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
-    let (x, y) = parse_scroll_coordinates(scope, &args, current_x, current_y);
+    let (x, y) = coordinates.resolve(current_x, current_y, false);
     scroll_window_to(scope, host_ptr, x, y);
     rv.set_undefined();
 }
 
-pub(super) fn window_scroll_by_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn window_scroll_by_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(coordinates) = crate::scroll_options::coordinates(scope, &args) else {
+        return;
+    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
@@ -1007,8 +1151,8 @@ pub(super) fn window_scroll_by_callback(
     let global = scope.get_current_context().global(scope);
     let current_x = scroll_x(scope, global);
     let current_y = scroll_y(scope, global);
-    let (dx, dy) = parse_scroll_coordinates(scope, &args, 0.0, 0.0);
-    scroll_window_to(scope, host_ptr, current_x + dx, current_y + dy);
+    let (x, y) = coordinates.resolve(current_x, current_y, true);
+    scroll_window_to(scope, host_ptr, x, y);
     rv.set_undefined();
 }
 
@@ -1446,7 +1590,6 @@ fn dispatch_window_message_in_current_target_context(
 ) -> WindowMessageDispatchOutcome {
     let target_endpoint =
         PendingWindowMessageEndpoint::from_dispatch_scope(message.target.dispatch_scope());
-    let source_endpoint = message.source.endpoint();
     let source_window = message
         .source_window
         .as_ref()
@@ -1470,7 +1613,13 @@ fn dispatch_window_message_in_current_target_context(
         return WindowMessageDispatchOutcome::Consumed;
     }
 
-    if window_message_requires_messageerror(&message, target_origin.as_deref()) {
+    let target_security = message
+        .data
+        .metadata
+        .contains_wasm_module
+        .then(|| window_message_endpoint_security(host, target_endpoint))
+        .flatten();
+    if window_message_requires_messageerror(&message, target_security.as_ref()) {
         if moli_trace::window_message_trace_enabled() {
             tracing::info!(
                 target: "moli_window_message_trace",
@@ -1487,7 +1636,7 @@ fn dispatch_window_message_in_current_target_context(
             host_ptr,
             host,
             target_endpoint,
-            source_endpoint,
+            message.source,
             source_window,
             "messageerror",
             v8::null(scope).into(),
@@ -1535,7 +1684,7 @@ fn dispatch_window_message_in_current_target_context(
             host_ptr,
             host,
             target_endpoint,
-            source_endpoint,
+            message.source,
             source_window,
             "messageerror",
             v8::null(scope).into(),
@@ -1561,7 +1710,7 @@ fn dispatch_window_message_in_current_target_context(
         host_ptr,
         host,
         target_endpoint,
-        source_endpoint,
+        message.source,
         source_window,
         "message",
         data,
@@ -1590,17 +1739,28 @@ fn window_message_endpoint_origin(
     }
 }
 
+fn window_message_endpoint_security(
+    host: &mut JsContextHost,
+    endpoint: PendingWindowMessageEndpoint,
+) -> Option<crate::context_bootstrap::RuntimeMessageSourceSecurity> {
+    let dispatch = match endpoint {
+        PendingWindowMessageEndpoint::TopWindow => OwnerDispatchScope::Top,
+        PendingWindowMessageEndpoint::ChildWindow(handle) => OwnerDispatchScope::Child(handle),
+        PendingWindowMessageEndpoint::LightweightPopup(id) => {
+            OwnerDispatchScope::LightweightPopup(id)
+        }
+    };
+    host.window_message_source_security(dispatch)
+}
+
 fn window_message_requires_messageerror(
     message: &PendingWindowMessage,
-    target_origin: Option<&str>,
+    target: Option<&crate::context_bootstrap::RuntimeMessageSourceSecurity>,
 ) -> bool {
-    let Some(target_origin) = target_origin else {
+    let Some(target) = target else {
         return false;
     };
-    !crate::context_bootstrap::wasm_module_message_allowed_for_target_origin(
-        &message.data,
-        Some(target_origin),
-    )
+    !crate::context_bootstrap::wasm_module_message_allowed_for_target(&message.data, target)
 }
 
 fn window_message_wasm_eval_csp_violation(
@@ -1624,32 +1784,43 @@ fn dispatch_window_message_event<'s>(
     host_ptr: *mut JsContextHost,
     host: &mut JsContextHost,
     target: PendingWindowMessageEndpoint,
-    source_endpoint: PendingWindowMessageEndpoint,
+    source_identity: PendingWindowMessageSource,
     source_window: Option<v8::Local<'s, v8::Object>>,
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let source: v8::Local<'_, v8::Value> =
-        source_window
-            .map(Into::into)
-            .unwrap_or_else(|| match source_endpoint {
-                PendingWindowMessageEndpoint::TopWindow => {
-                    top_window_message_source_for_target(scope, host, target)
-                        .unwrap_or_else(|| global.into())
-                }
-                PendingWindowMessageEndpoint::ChildWindow(handle) => {
-                    child_window_message_source(scope, host, handle)
-                        .map(Into::into)
-                        .unwrap_or_else(|| v8::null(scope).into())
-                }
-                PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
-                    .lightweight_popup_window(scope, popup_id)
+    let source_endpoint = source_identity.endpoint();
+    // Retained local Windows preserve their accepted proxy. Other local
+    // sources must still match their accepting owner: an endpoint can be
+    // reused by a successor Window.
+    let source: v8::Local<'_, v8::Value> = match source_window {
+        Some(window) => window.into(),
+        None if !host.window_execution_context_owner_is_current(
+            source_identity.owner(),
+            source_endpoint.dispatch_scope(),
+        ) =>
+        {
+            v8::null(scope).into()
+        }
+        None => match source_endpoint {
+            PendingWindowMessageEndpoint::TopWindow => {
+                top_window_message_source_for_target(scope, host, target)
+                    .unwrap_or_else(|| v8::null(scope).into())
+            }
+            PendingWindowMessageEndpoint::ChildWindow(handle) => {
+                child_window_message_source(scope, host, handle)
                     .map(Into::into)
-                    .unwrap_or_else(|| v8::null(scope).into()),
-            });
+                    .unwrap_or_else(|| v8::null(scope).into())
+            }
+            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
+                .lightweight_popup_window(scope, popup_id)
+                .map(Into::into)
+                .unwrap_or_else(|| v8::null(scope).into()),
+        },
+    };
+
     let event_name = event_type;
     let Some(event) = crate::context_bootstrap::construct_original_message_event(
         scope,
@@ -1691,7 +1862,9 @@ fn top_window_message_source_for_target<'s>(
     target: PendingWindowMessageEndpoint,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let PendingWindowMessageEndpoint::ChildWindow(handle) = target else {
-        return None;
+        return host
+            .page_default_context(scope)
+            .map(|context| context.global(scope).into());
     };
     let top = host.child_browsing_context_top_window_for_current_realm(scope, handle);
     if moli_trace::window_message_trace_enabled() {
@@ -1723,35 +1896,6 @@ fn collect_timer_extra_args(
     (2..args.length())
         .map(|i| v8::Global::new(scope, args.get(i)))
         .collect()
-}
-
-fn parse_scroll_coordinates(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    fallback_x: f64,
-    fallback_y: f64,
-) -> (f64, f64) {
-    if args.length() > 0
-        && args.get(0).is_object()
-        && !args.get(0).is_function()
-        && let Some(options) = args.get(0).to_object(scope)
-    {
-        let x = options
-            .get(scope, v8str(scope, "left").into())
-            .or_else(|| options.get(scope, v8str(scope, "x").into()))
-            .and_then(|value| value.number_value(scope))
-            .unwrap_or(fallback_x);
-        let y = options
-            .get(scope, v8str(scope, "top").into())
-            .or_else(|| options.get(scope, v8str(scope, "y").into()))
-            .and_then(|value| value.number_value(scope))
-            .unwrap_or(fallback_y);
-        return (x, y);
-    }
-
-    let x = args.get(0).number_value(scope).unwrap_or(fallback_x);
-    let y = args.get(1).number_value(scope).unwrap_or(fallback_y);
-    (x, y)
 }
 
 fn scroll_x<'s>(scope: &mut v8::PinScope<'s, '_>, global: v8::Local<'s, v8::Object>) -> f64 {
@@ -1828,24 +1972,6 @@ fn parse_timer_delay_ms<'s>(
     prefix: &'static str,
 ) -> u32 {
     webidl::timer_milliseconds_arg(scope, args, 1, prefix)
-}
-
-fn parse_idle_callback_timeout_ms(
-    scope: &mut v8::PinScope<'_, '_>,
-    options: Option<v8::Local<'_, v8::Value>>,
-) -> Option<u32> {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(options?) else {
-        return None;
-    };
-    let timeout = options.get(scope, v8str(scope, "timeout").into())?;
-    if timeout.is_null_or_undefined() {
-        return None;
-    }
-    let raw = timeout.number_value(scope).unwrap_or(0.0);
-    if !raw.is_finite() || raw <= 0.0 {
-        return Some(0);
-    }
-    Some(raw.min(u32::MAX as f64) as u32)
 }
 
 pub(crate) fn finish_animation_frame_callback_batch(
@@ -1976,13 +2102,15 @@ fn dom_handle_from_marker_value(
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
 }
 
-fn event_target_handle_from_this<'s>(
+// The public operation resolves native aliases once. DOM/Window keep their
+// existing handle identity and dispatcher; object-backed fixed dispatch targets
+// do not replace a DOM propagation target or its per-listener retargeting.
+fn event_target_handle_from_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
+    this: v8::Local<'s, v8::Object>,
     host_ptr: *mut JsContextHost,
     host: &JsContextHost,
 ) -> Option<EventTargetHandle> {
-    let this = args.this();
     let global = scope.get_current_context().global(scope);
     if this.strict_equals(global.into()) {
         return Some(EventTargetHandle::Window);
@@ -2095,7 +2223,7 @@ fn incumbent_related_page_message_source(
         WindowExecutionContextOwner,
         RuntimeObservableContextToken,
     ),
-    String,
+    crate::context_bootstrap::RuntimeMessageSourceSecurity,
     v8::Global<v8::Object>,
 )> {
     let context = scope.get_incumbent_context()?;
@@ -2103,13 +2231,13 @@ fn incumbent_related_page_message_source(
     if source_host == target_host {
         return None;
     }
-    let host = unsafe { &*source_host };
+    let host = unsafe { &mut *source_host };
     let identity = host.window_execution_context_identity_for_access_check(context)?;
     if !host.window_execution_context_identity_is_current(identity) {
         return None;
     }
     let endpoint = PendingWindowMessageEndpoint::from_dispatch_scope(identity.dispatch_scope());
-    let origin = window_message_endpoint_origin(host, endpoint)?;
+    let security = window_message_endpoint_security(host, endpoint)?;
     // MessageEvent.source is the default-world WindowProxy even when the
     // incumbent script executes in an isolated world of that Window.
     let (_, context) =
@@ -2117,7 +2245,7 @@ fn incumbent_related_page_message_source(
     let window = context.global(scope);
     Some((
         (endpoint, identity.owner(), identity.realm_token()),
-        origin,
+        security,
         v8::Global::new(scope, window),
     ))
 }
@@ -2184,6 +2312,7 @@ mod tests {
             locked_to_sender_agent_cluster: true,
             sender_agent_cluster: Some(RuntimeMessageAgentCluster::WindowOrDedicatedWorker),
             sender_origin: Some("https://sender.test".to_owned()),
+            sender_opaque_origin: None,
         };
         let message = PendingWindowMessage {
             target: WindowTaskTarget::new(endpoint.dispatch_scope(), owner),
@@ -2200,11 +2329,21 @@ mod tests {
 
         assert!(!window_message_requires_messageerror(
             &message,
-            Some("https://sender.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://sender.test".to_owned(),
+                    None
+                )
+            ),
         ));
         assert!(window_message_requires_messageerror(
             &message,
-            Some("https://receiver.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://receiver.test".to_owned(),
+                    None
+                )
+            ),
         ));
         assert!(!window_message_requires_messageerror(&message, None));
 
@@ -2214,7 +2353,12 @@ mod tests {
         };
         assert!(!window_message_requires_messageerror(
             &non_wasm,
-            Some("https://receiver.test"),
+            Some(
+                &crate::context_bootstrap::RuntimeMessageSourceSecurity::window(
+                    "https://receiver.test".to_owned(),
+                    None
+                )
+            ),
         ));
     }
 }

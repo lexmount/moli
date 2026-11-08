@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use super::{
     BrowserContext, CdpConnection,
     cookie_owner::{
@@ -12,32 +14,30 @@ use moli_cookie_jar::{
 };
 
 impl CdpConnection {
-    pub(crate) fn cookie_sites(&mut self) -> Result<Vec<String>, String> {
+    pub(crate) fn cookie_sites(&mut self) -> Result<Vec<String>> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.sites_with_cookies())
     }
 
-    pub(crate) fn cookie_site_data(&mut self) -> Result<Vec<CookieSiteDataSummary>, String> {
+    pub(crate) fn cookie_site_data(&mut self) -> Result<Vec<CookieSiteDataSummary>> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.cookie_site_data())
     }
 
-    pub(crate) fn cookie_storage_state_snapshot(
-        &mut self,
-    ) -> Result<CookieStorageStateSnapshot, String> {
+    pub(crate) fn cookie_storage_state_snapshot(&mut self) -> Result<CookieStorageStateSnapshot> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.cookie_storage_state_snapshot())
     }
 
     pub(crate) fn cookie_storage_state_snapshot_for_sites(
         &mut self,
         sites: &[&str],
-    ) -> Result<CookieStorageStateSnapshot, String> {
+    ) -> Result<CookieStorageStateSnapshot> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.cookie_storage_state_snapshot_for_sites(sites))
     }
 
@@ -71,16 +71,16 @@ impl CdpConnection {
         browser_context.apply_cookie_boundary_operation(operation)
     }
 
-    pub(crate) fn clear_cookies_for_sites(&mut self, sites: &[&str]) -> Result<usize, String> {
+    pub(crate) fn clear_cookies_for_sites(&mut self, sites: &[&str]) -> Result<usize> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.clear_cookies_for_sites(sites))
     }
 
     pub(crate) fn clear_cookies_for_sites_with_report(
         &mut self,
         sites: &[&str],
-    ) -> Result<CookieSiteDataClearReport, String> {
+    ) -> Result<CookieSiteDataClearReport> {
         self.clear_cookies_for_sites_with_scope_and_report(sites, CookieSiteDataClearScope::All)
     }
 
@@ -88,16 +88,16 @@ impl CdpConnection {
         &mut self,
         sites: &[&str],
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieSiteDataClearReport, String> {
+    ) -> Result<CookieSiteDataClearReport> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.clear_cookies_for_sites_with_scope_and_report(sites, scope))
     }
 
     pub(crate) fn preview_clear_cookies_for_sites(
         &mut self,
         sites: &[&str],
-    ) -> Result<CookieSiteDataClearPreviewReport, String> {
+    ) -> Result<CookieSiteDataClearPreviewReport> {
         self.preview_clear_cookies_for_sites_with_scope(sites, CookieSiteDataClearScope::All)
     }
 
@@ -105,16 +105,16 @@ impl CdpConnection {
         &mut self,
         sites: &[&str],
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieSiteDataClearPreviewReport, String> {
+    ) -> Result<CookieSiteDataClearPreviewReport> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.preview_clear_cookies_for_sites_with_scope(sites, scope))
     }
 
     pub(crate) fn preview_clear_cookie_store_with_scope(
         &mut self,
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieStorageClearPreviewReport, String> {
+    ) -> Result<CookieStorageClearPreviewReport> {
         self.preview_clear_cookie_storage_with_target_and_scope(
             CookieStorageClearTarget::WholeStore,
             scope,
@@ -125,16 +125,16 @@ impl CdpConnection {
         &mut self,
         target: CookieStorageClearTarget,
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieStorageClearPreviewReport, String> {
+    ) -> Result<CookieStorageClearPreviewReport> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.preview_clear_with_scope_and_target(target, scope))
     }
 
     pub(crate) fn clear_cookie_store_with_scope_and_report(
         &mut self,
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieStorageClearReport, String> {
+    ) -> Result<CookieStorageClearReport> {
         self.clear_cookie_storage_with_target_and_scope_and_report(
             CookieStorageClearTarget::WholeStore,
             scope,
@@ -145,9 +145,9 @@ impl CdpConnection {
         &mut self,
         target: CookieStorageClearTarget,
         scope: CookieSiteDataClearScope,
-    ) -> Result<CookieStorageClearReport, String> {
+    ) -> Result<CookieStorageClearReport> {
         let cookie_store = self.ensure_cookie_store()?;
-        let mut cookie_store = cookie_store.lock();
+        let mut cookie_store = cookie_store.lock()?;
         Ok(cookie_store.clear_with_scope_and_target_report(target, scope))
     }
 }

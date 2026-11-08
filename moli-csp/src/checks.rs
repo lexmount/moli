@@ -346,15 +346,18 @@ pub fn content_security_policy_url_violation_for_checked_url_with_redirect_statu
     )
 }
 
+/// Request-specific nonce, integrity, and provenance used during URL checks.
 #[derive(Clone, Copy)]
-enum ContentSecurityPolicyUrlRequest<'a> {
+pub enum ContentSecurityPolicyUrlRequest<'a> {
     Standard,
     Script(ContentSecurityPolicyScriptElementRequest<'a>),
     Style(ContentSecurityPolicyStyleElementRequest<'a>),
 }
 
+/// Check the current target while reporting the original request URL. Redirect
+/// targets can contain secrets that must not be exposed in violation reports.
 #[allow(clippy::too_many_arguments)]
-fn content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+pub fn content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
     policies: &[ContentSecurityPolicy],
     protected_url: &Url,
     checked_url: &Url,
@@ -1329,6 +1332,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
+            Self::DocumentFont => "font-src",
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
             Self::SharedWorkerScript | Self::WorkerStaticModuleImport => WORKER_SRC,
@@ -1344,6 +1348,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
+            Self::DocumentFont => &["font-src", DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
             Self::SharedWorkerScript => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],

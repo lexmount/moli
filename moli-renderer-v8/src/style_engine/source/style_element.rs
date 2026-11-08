@@ -40,8 +40,14 @@ impl MoliStyleEngine {
                     self.process_style_element_with_host(host, owner);
                 }
             }
-            DomStylesheetOwnerChangeKind::OwnerDocumentChanged
-            | DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: true } => {
+            DomStylesheetOwnerChangeKind::OwnerDocumentChanged => {
+                if style_element_has_document_root(host, owner)
+                    || self.owner_style_sheet_processing_source(owner).is_some()
+                {
+                    self.process_style_element_with_host(host, owner);
+                }
+            }
+            DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: true } => {
                 self.process_style_element_with_host(host, owner);
             }
             DomStylesheetOwnerChangeKind::Unregistered

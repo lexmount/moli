@@ -22,6 +22,30 @@ These three files are licensed under the repository's MIT OR Apache-2.0 terms.
 | `moli-ahem.ttf` | `a7d23739002b2f3f20aa6d50d64b220287d9993dbd4e68aee84eba9f7b6eb336` |
 | `moli-ahem.woff` | `17b7bee15b40e764d785d69412ec4fdc87715a5c107d46e31664fb6393f29f85` |
 | `moli-ahem.woff2` | `c054d1e545d4c234c8c4bfea2bf903d8304fad3b20a51dab60338cea29c793d2` |
+| `moli-ahem-narrow.ttf` | `198ca6ee6823ca2dd6e6a8e8ab50c235750aed172cda10b17bee32c32680ea03` |
+| `moli-ahem-wide.ttf` | `c4049fa36a8a19e45ca4f99a494f50078e7cd6f9aa025ee5d82c93c26824fba0` |
+
+The narrow and wide variants use 500-unit and 1000-unit advances. Four letters
+at 40px have widths of 80px and 160px respectively, providing controls for
+FontFaceSet selection order without relying on installed fonts.
+
+## Project-generated optical sizing face
+
+Regenerate `moli-opsz.ttf` with:
+
+```bash
+uv run scripts/generate-optical-sizing-test-font.py
+```
+
+This original 1000-unit-em variable font is licensed under MIT OR Apache-2.0.
+It contains `A` and space, with an `opsz` axis spanning 8 to 64 (default 16).
+The three masters use advances and rectangular ink widths of 400, 600 and
+1200 units at optical sizes 8, 16 and 64. Both `gvar` and `HVAR` are generated,
+so real shaping and painting can distinguish optical sizing from scaling the
+CSS font size. For example, two `A`s at 32px measure 51.2px with automatic
+optical sizing and 38.4px with `font-optical-sizing: none`.
+
+SHA-256: `c6be9d7a90aceb210bee50989b38c50657d6dd46729f195475b343559ae238c0`.
 
 ## Subset fallback faces
 

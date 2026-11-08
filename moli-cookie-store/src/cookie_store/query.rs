@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use cookie::Cookie as RawCookie;
+use time::OffsetDateTime;
 use url::Url;
 
 use crate::cookie::Cookie;
@@ -46,13 +47,14 @@ impl CookieStore {
         context: &QueryContext<'_>,
     ) -> CookieAccessQueryResult {
         let mut result = CookieAccessQueryResult::default();
+        let now = OffsetDateTime::now_utc();
         for cookie in self
             .cookies
             .iter()
             .filter(|&(d, _)| domain_match(d, context.url))
             .flat_map(|(_, dcs)| dcs.values().flat_map(|pcs| pcs.values().cloned()))
         {
-            let access_result = query_context_access_result(&cookie, context);
+            let access_result = query_context_access_result(&cookie, context, now);
             let entry = CookieWithAccessResult {
                 cookie,
                 access_result,
@@ -199,11 +201,12 @@ impl CookieStore {
         partition_key: Option<&crate::CookiePartitionKey>,
     ) -> bool {
         let access_index = self.bump_access_index();
-        self.get_mut_with_partition_key(domain, path, name, partition_key)
-            .map(|cookie| {
-                cookie.touch_with_access_index(access_index);
-            })
-            .is_some()
+        let Some(cookie) = self.get_mut_with_partition_key(domain, path, name, partition_key)
+        else {
+            return false;
+        };
+        cookie.touch_with_access_index(access_index);
+        true
     }
 
     /// Specify a public suffix lookup for the `CookieStore` to allow [public suffix
@@ -227,6 +230,7 @@ impl CookieStore {
             next_creation_index: self.next_creation_index,
             next_access_index: self.next_access_index,
             limits: self.limits,
+            observer: self.observer,
             public_suffix_list: Some(psl),
         }
     }
@@ -381,6 +385,13 @@ impl CookieStore {
             map_remove(&mut self.cookies, domain);
         }
 
+        if self.observer.is_some() {
+            if let Some(cookie) = &removed {
+                self.notify(CookieStoreMutation::Delete(CookieStoreKey::for_cookie(
+                    cookie,
+                )));
+            }
+        }
         removed
     }
 

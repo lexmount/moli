@@ -58,7 +58,7 @@ class SupervisorWorkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_worker_result_is_read_from_its_isolated_file(self) -> None:
         group = GROUPS_BY_NAME["protocol"]
-        job = WorkerJob(group=group, attempt=1, repeat=1)
+        job = WorkerJob(group=group, attempt=1, repeat=1, browser="chromium", chromium_bin="requested-chrome")
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary)
 
@@ -68,6 +68,9 @@ class SupervisorWorkerTests(unittest.IsolatedAsyncioTestCase):
                         "ok": True,
                         "group": "protocol",
                         "results": [{"name": "probe", "ok": True}],
+                        "browser": {"engine": "chromium"},
+                        "browserLaunches": [{"engine": "chromium", "browser": {"engine": "chromium"},
+                                             "command": ["/resolved/oracle/chrome", "--headless=new"]}],
                     }
                 )
                 return [
@@ -87,6 +90,7 @@ class SupervisorWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(outcome.passed)
             self.assertEqual(outcome.scenario_count, 1)
             self.assertEqual(outcome.log_path.read_text().strip(), "worker-log")
+            self.assertEqual(outcome.summary()["chromiumBin"], "/resolved/oracle/chrome")
 
     async def test_worker_wall_clock_timeout_is_bounded(self) -> None:
         group = GROUPS_BY_NAME["protocol"]

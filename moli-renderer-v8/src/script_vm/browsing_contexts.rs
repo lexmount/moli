@@ -70,7 +70,7 @@ impl ScriptVm {
     pub(crate) fn upgrade_late_defined_custom_elements_after_parser_checkpoint(
         &mut self,
     ) -> Result<()> {
-        self.with_default_context_scope(|scope, host_ptr| {
+        self.with_current_main_world_scope(|scope, host_ptr| {
             let document_handle = unsafe { &*host_ptr }.dom_host().document_handle();
             let _ = custom_elements::upgrade_late_defined_connected_tree_after_parser_sync(
                 scope,
@@ -80,6 +80,7 @@ impl ScriptVm {
             perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
             Ok(())
         })
+        .map(|_| ())
     }
 
     // Parser operations reach ScriptVm only when they must enter the page default
@@ -95,14 +96,17 @@ impl ScriptVm {
         token_attributes: &[Attribute],
         intended_parent: Option<DomHandle>,
     ) -> Result<Option<DomHandle>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        let context_ptr = runtime.context_ptr();
         let context_host = self._context_host.clone();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                // SAFETY: `context_ptr` points to `self.page_default_runtime.context`, which is kept
+                // SAFETY: `context_ptr` points to an owned ready main-world Context, which is kept
                 // alive for the duration of this non-escaping closure while the document
                 // isolate is exclusively borrowed.
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
@@ -203,6 +207,10 @@ impl ScriptVm {
         &mut self,
         navigator_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) {
+        if let Some(pending) = self.main_world.pending_mut() {
+            pending.navigator_identity = Some(navigator_identity.clone());
+            return;
+        }
         let _ = self.with_default_context_scope(|scope, _| {
             set_window_navigator_identity(scope, navigator_identity)
         });
@@ -263,7 +271,11 @@ impl ScriptVm {
     }
 
     pub(super) fn top_level_context_ptrs(&self) -> Vec<*const v8::Global<v8::Context>> {
-        let mut contexts = vec![&self.page_default_runtime.context as *const _];
+        let mut contexts = Vec::new();
+        contexts.extend(
+            self.current_main_world()
+                .map(WindowRealmRuntime::context_ptr),
+        );
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -279,7 +291,10 @@ impl ScriptVm {
         let mut contexts = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        contexts.push(&self.page_default_runtime.context as *const _);
+        contexts.extend(
+            self.current_main_world()
+                .map(WindowRealmRuntime::context_ptr),
+        );
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()

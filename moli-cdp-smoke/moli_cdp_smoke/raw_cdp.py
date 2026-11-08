@@ -9,6 +9,9 @@ from typing import Any
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from .diagnostics import record_wire
+
+
 MAX_CDP_MESSAGE_BYTES = 192 * 1024 * 1024
 
 
@@ -21,11 +24,16 @@ def _read_json_url(url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
-async def discover_websocket_url(endpoint: str) -> str:
+async def discover_browser_version(endpoint: str) -> dict[str, Any]:
     version_url = endpoint.rstrip("/") + "/json/version"
     payload = await asyncio.to_thread(_read_json_url, version_url)
     if not isinstance(payload, dict):
         raise RawCdpError(f"CDP discovery response was not an object: {payload!r}")
+    return payload
+
+
+async def discover_websocket_url(endpoint: str) -> str:
+    payload = await discover_browser_version(endpoint)
     websocket_url = payload.get("webSocketDebuggerUrl")
     if not isinstance(websocket_url, str) or not websocket_url:
         raise RawCdpError(f"CDP discovery response did not include webSocketDebuggerUrl: {payload}")
@@ -83,6 +91,7 @@ class RawCdpClient:
             message["params"] = params
         if session_id is not None:
             message["sessionId"] = session_id
+        record_wire(self, "send", message)
         await self.websocket.send(json.dumps(message, separators=(",", ":")))
         return message_id
 
@@ -102,6 +111,7 @@ class RawCdpClient:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise RawCdpError(f"unexpected CDP payload: {payload!r}")
+        record_wire(self, "receive", payload)
         return payload
 
     async def recv_until_id(self, message_id: int, *, timeout: float = 10.0) -> tuple[dict[str, Any], list[dict[str, Any]]]:

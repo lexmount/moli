@@ -1,5 +1,7 @@
 from __future__ import annotations
 from typing import Any
+
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..config import is_moli_browser
 from ..assertions import SmokeError, assert_equal, wait_until
@@ -63,7 +65,7 @@ async def _verify_chromium_performance_enable_sample(state: SmokeState) -> None:
     await state.cdp.send("Performance.enable", {"timeDomain": None})
     await state.cdp.send("Performance.disable")
 
-    attached = await state.context.new_cdp_session(state.page)
+    attached = await new_cdp_session(state.context, state.page)
     try:
         primary_disabled = await _performance_metrics(state.cdp)
         attached_disabled = await _performance_metrics(attached)
@@ -132,7 +134,7 @@ async def _verify_chromium_performance_metrics_sample(state: SmokeState) -> None
 async def _verify_cpu_throttling_capability_multiple_pages_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain")
     second_page = await state.context.new_page()
-    second_cdp = await state.context.new_cdp_session(second_page)
+    second_cdp = await new_cdp_session(state.context, second_page)
     try:
         await second_page.goto(
             f"{state.fixture}/plain?cpu-throttle-second",
@@ -586,7 +588,7 @@ async def _verify_chromium_profiler_navigation_profile_continuity_sample(state: 
 
 async def _verify_chromium_profiler_attached_session_navigation_profile_continuity_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-attached-navigation-before")
-    attached_cdp = await state.context.new_cdp_session(state.page)
+    attached_cdp = await new_cdp_session(state.context, state.page)
     await state.cdp.send("Profiler.enable")
     await attached_cdp.send("Profiler.enable")
     await attached_cdp.send("Profiler.setSamplingInterval", {"interval": 100})
@@ -676,12 +678,12 @@ async def _verify_chromium_profiler_attached_session_navigation_profile_continui
 
 async def _verify_chromium_profiler_attached_session_detach_clears_state_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-session-detach")
-    old_cdp = await state.context.new_cdp_session(state.page)
+    old_cdp = await new_cdp_session(state.context, state.page)
     await old_cdp.send("Profiler.enable")
     await old_cdp.send("Profiler.start")
     await old_cdp.detach()
 
-    new_cdp = await state.context.new_cdp_session(state.page)
+    new_cdp = await new_cdp_session(state.context, state.page)
     try:
         start_error = await _send_cdp_expect_optional_error(new_cdp, "Profiler.start", {})
         if not start_error or "Profiler is not enabled" not in str(start_error):
@@ -954,7 +956,6 @@ async def _verify_chromium_profiler_best_effort_with_precise_coverage_sample(sta
     await run_case("Binary", {"detailed": True})
     await run_case("Count", {"callCount": True, "detailed": True})
     state.record("chromium_profiler_best_effort_with_precise_coverage_sample")
-
 
 
 async def run_performance_group(state: SmokeState) -> None:

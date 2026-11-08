@@ -308,6 +308,18 @@ impl PageVmTaskExecutorTestHarness {
         Ok(completed)
     }
 
+    pub(crate) async fn run_one_file_reading_task_executor_turn(
+        &mut self,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<bool> {
+        self.selected_task_local_set
+            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FileReading,
+                loader,
+            ))
+            .await
+    }
+
     pub(crate) async fn run_one_dom_manipulation_task_executor_turn(
         &mut self,
         family: super::PageDomManipulationTestFamily,
@@ -497,18 +509,6 @@ impl PageVmTaskExecutorTestHarness {
         .await
     }
 
-    pub(crate) async fn run_one_webcrypto_task_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
-        self.selected_task_local_set
-            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WebCryptoTask,
-                loader,
-            ))
-            .await
-    }
-
     pub(crate) fn run_one_child_realm_materialization_body_for_test(
         &mut self,
     ) -> anyhow::Result<Option<crate::page_task_queue::PageChildRealmMaterializationTurnOutcome>>
@@ -646,10 +646,21 @@ impl PageVmTaskExecutorTestHarness {
     /// wake. A wake only asks the fixture to re-check stable sources; it never
     /// authorizes terminal admission or task execution.
     pub(crate) async fn wait_for_task_executor_work_arrival(&mut self) -> bool {
-        tokio::select! {
-            wake = self.owner_wake_rx.recv() => wake.is_some(),
-            arrived = self.page_vm.wait_for_initial_page_runtime_wake() => arrived,
-        }
+        let Self {
+            selected_task_local_set,
+            owner_wake_rx,
+            page_vm,
+            ..
+        } = self;
+        // A local producer may need to resume before it can publish the wake.
+        selected_task_local_set
+            .run_until(async {
+                tokio::select! {
+                    wake = owner_wake_rx.recv() => wake.is_some(),
+                    arrived = page_vm.wait_for_initial_page_runtime_wake() => arrived,
+                }
+            })
+            .await
     }
 }
 
@@ -697,5 +708,46 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         wpt_extensions_enabled: false,
         navigation_bootstrap_entry: None,
         reserved_service_worker_client_id: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_for_work_drives_local_producers() {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+            .expect("test request client should initialize");
+        let mut page = PageVmTaskExecutorTestHarness::new(
+            Url::parse("https://local-producer.test/").unwrap(),
+            &loader,
+        );
+        let wake = page
+            .page_vm
+            .runtime_hooks
+            .owner_wake
+            .as_ref()
+            .expect("Page task fixture must have an owner wake route")
+            .clone();
+        let produced = Rc::new(Cell::new(false));
+        let producer_marker = produced.clone();
+        page.selected_task_local_set.spawn_local(async move {
+            tokio::task::yield_now().await;
+            producer_marker.set(true);
+            wake.signal_networking_task();
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !produced.get() {
+                assert!(
+                    page.wait_for_task_executor_work_arrival().await,
+                    "the local producer's wake route must stay open"
+                );
+            }
+        })
+        .await
+        .expect("waiting for work must drive the local producer that publishes its wake");
     }
 }

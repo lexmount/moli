@@ -67,7 +67,7 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
             request_key,
             client,
             FrameDocumentModuleFetchTerminalResult::Fetched(ModuleGraphFetchedSource::new(
-                source_url, false, source,
+                source_url, source,
             )),
         )
     }

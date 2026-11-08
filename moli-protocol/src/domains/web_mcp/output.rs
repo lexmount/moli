@@ -24,7 +24,7 @@ impl WebMcpPreparedOutputSlot {
     }
 }
 
-pub(in crate::domains) async fn project_async(
+pub(in crate::domains) fn project_web_mcp(
     context: &mut ProtocolOutputProjectionContext<'_>,
     payloads: &mut ProtocolOutputPayloads,
 ) {

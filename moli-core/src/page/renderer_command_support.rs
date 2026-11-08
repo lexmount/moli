@@ -183,12 +183,16 @@ impl Page {
     /// `test-support` build, call this before reading `fresh_globals()` when a
     /// current diagnostic snapshot is required. Normal builds do not capture
     /// a realm baseline, so this leaves globals `Uncaptured`.
+    pub fn start_refresh_script_execution_report(&self) -> Result<PendingPageCommand> {
+        self.start_full_page_command(RendererPageCommand::RefreshFullPageState)
+    }
+
     pub async fn refresh_script_execution_report_async(&mut self) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::RefreshFullPageState,
+        let pending = self.start_refresh_script_execution_report()?;
+        self.finish_unit_runtime_page_command(
+            pending.wait().await?,
             "refresh script execution report",
         )
-        .await
     }
 
     pub fn subresource_network_records(&self) -> &[SubresourceNetworkRecord] {
@@ -849,6 +853,7 @@ impl Page {
         object_id: &str,
         depth: i32,
         pierce: bool,
+        bind_frontend_nodes: bool,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::document_node_snapshot_for_object_id(
             inspector_session_id,
@@ -856,7 +861,35 @@ impl Page {
             object_id.to_owned(),
             depth,
             pierce,
+            bind_frontend_nodes,
         ))
+    }
+
+    pub fn start_request_document_node_for_object_id(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        object_id: String,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::request_document_node_for_object_id(
+            inspector_session_id,
+            include_whitespace,
+            object_id,
+        ))
+    }
+
+    pub fn finish_request_document_node_for_object_id(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<(Option<u32>, Option<RendererDocumentChildNodeSnapshotEvents>)> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "request document node page command",
+            "a requested document node reply",
+            RendererPageReply::DocumentNodeRequested { node_id, child_node_snapshot_events } =>
+                Ok((node_id, child_node_snapshot_events)),
+        )
     }
 
     pub fn finish_document_node_snapshot_for_object_id(
@@ -1296,13 +1329,18 @@ impl Page {
     pub fn finish_document_search_results(
         &mut self,
         completion: CompletedPageCommand,
-    ) -> Result<RendererDomSearchResultsResolution> {
+    ) -> Result<(
+        RendererDomSearchResultsResolution,
+        Option<RendererDocumentChildNodeSnapshotEvents>,
+    )> {
         let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "document search results page command",
             "a document search results resolution",
-            RendererPageReply::DocumentSearchResults(result) => Ok(result),
+            RendererPageReply::DocumentSearchResults { resolution, child_node_snapshot_events } => {
+                Ok((resolution, child_node_snapshot_events))
+            },
         )
     }
 
@@ -1384,8 +1422,24 @@ impl Page {
         frontend_node_id: u32,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::DocumentFrontendNodeBinding {
-            inspector_session_id,
-            frontend_node_id,
+            reference: RendererDomNodeReference::FrontendNodeId {
+                inspector_session_id,
+                frontend_node_id,
+            },
+        })
+    }
+
+    /// Resolve an internal automation binding without treating it as a CDP input.
+    pub fn start_document_internal_frontend_node_binding(
+        &self,
+        inspector_session_id: Option<String>,
+        frontend_node_id: u32,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentFrontendNodeBinding {
+            reference: RendererDomNodeReference::InternalFrontendNodeBinding {
+                inspector_session_id,
+                frontend_node_id,
+            },
         })
     }
 

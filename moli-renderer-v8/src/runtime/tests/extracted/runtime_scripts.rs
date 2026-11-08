@@ -28,6 +28,14 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         "<!doctype html><html><body><input id='probe' data-state='before'></body></html>",
     )
     .await;
+    page.run_async_command(RendererPageCommand::DocumentNodeSnapshotForDocument {
+        inspector_session_id: Some("attributes-a".to_owned()),
+        include_whitespace: false,
+        depth: 1,
+        pierce: false,
+    })
+    .await
+    .expect("publish a shallow frontend tree");
     let (reply, _) = page
         .run_async_command(RendererPageCommand::DocumentQuerySelectorForDocument {
             inspector_session_id: Some("attributes-a".to_owned()),
@@ -48,6 +56,38 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
         inspector_session_id: Some("attributes-a".to_owned()),
         frontend_node_id: node.frontend_node_id,
     };
+    let backend = RendererDomNodeReference::BackendNodeId(node.backend_node_id);
+    assert!(matches!(
+        attributes(
+            &page,
+            RendererDomNodeReference::InternalFrontendNodeBinding {
+                inspector_session_id: Some("attributes-a".to_owned()),
+                frontend_node_id: node.frontend_node_id,
+            },
+        )
+        .await,
+        Attributes::Found(_)
+    ));
+    assert_eq!(
+        attributes(&page, frontend.clone()).await,
+        Attributes::MissingNode,
+        "an internal query binding is not a valid frontend input"
+    );
+    assert!(
+        matches!(
+            attributes(&page, backend.clone()).await,
+            Attributes::Found(_)
+        ),
+        "backend references remain independent of frontend publication"
+    );
+    page.run_async_command(
+        RendererPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
+            inspector_session_id: Some("attributes-a".to_owned()),
+            backend_node_ids: vec![node.backend_node_id],
+        },
+    )
+    .await
+    .expect("publish the frontend tree");
     assert_eq!(
         attributes(&page, frontend.clone()).await,
         Attributes::Found(vec![
@@ -74,7 +114,6 @@ async fn typed_attributes_resolve_scoped_references_against_live_nodes() {
     })
     .await
     .expect("mutate the live node");
-    let backend = RendererDomNodeReference::BackendNodeId(node.backend_node_id);
     assert_eq!(
         attributes(&page, frontend.clone()).await,
         attributes(&page, backend.clone()).await,

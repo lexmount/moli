@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from ..diagnostics import new_cdp_session
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..config import is_moli_browser
 from ..helpers import attach_cdp_event_collector
@@ -249,7 +251,7 @@ async def _isolated_page(state: SmokeState) -> AsyncIterator[tuple[Any, Any, Any
         )
         cdp = await await_with_progress(
             "playwright/browser-semantics/isolated-cdp-session-new",
-            context.new_cdp_session(page),
+            new_cdp_session(context, page),
         )
         yield context, page, cdp
     finally:

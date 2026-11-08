@@ -217,24 +217,12 @@ fn child_offset(runtime: &JsContextHost, parent: DomHandle, child: DomHandle) ->
     runtime.dom_host().child_index(parent, child).unwrap_or(0) as u32
 }
 
-fn client_rect_from_quad(quad: moli_layout::LayoutQuad) -> ClientRect {
-    let rect = quad.bounding_rect();
-    ClientRect {
-        left: f64::from(rect.x),
-        top: f64::from(rect.y),
-        right: f64::from(rect.right()),
-        bottom: f64::from(rect.bottom()),
-        width: f64::from(rect.width),
-        height: f64::from(rect.height),
-    }
-}
-
 fn box_rect_for_source(
     source: DomHandle,
     ancestor_boxes: &[(DomHandle, moli_layout::LayoutBoxModel)],
 ) -> Option<ClientRect> {
     ancestor_boxes.iter().find_map(|(candidate, model)| {
-        (*candidate == source).then(|| client_rect_from_quad(model.border))
+        (*candidate == source).then(|| ClientRect::from(model.border))
     })
 }
 
@@ -244,7 +232,7 @@ fn caret_candidate_from_layout(
     x: f64,
     y: f64,
 ) -> (DomHandle, u32, ClientRect) {
-    let caret_rect = client_rect_from_quad(position.rect);
+    let caret_rect = ClientRect::from(position.rect);
     if let Some(offset) = position.utf16_offset {
         return (
             position.source,

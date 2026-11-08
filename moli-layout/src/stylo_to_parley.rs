@@ -13,7 +13,10 @@ use parley::{
     TextWrapMode, WordBreak,
 };
 use style::{
-    computed_values::text_decoration_style::T as StyloTextDecorationStyle,
+    computed_values::{
+        font_optical_sizing::T as FontOpticalSizing,
+        text_decoration_style::T as StyloTextDecorationStyle,
+    },
     properties::ComputedValues,
     values::{
         computed::font::{
@@ -28,7 +31,9 @@ use style::{
     },
 };
 
-use crate::{PaintColor, PaintPoint, PaintTextDecorationStyle, style::absolute_paint_color};
+use crate::{
+    PaintColor, PaintPoint, PaintTextDecorationStyle, PaintTextStroke, style::absolute_paint_color,
+};
 
 // Blink only requests synthetic bold for CSS weights at or above 600. The
 // matched face's synthesis metadata separately records whether its static
@@ -68,6 +73,8 @@ pub(crate) struct TextBrush {
     pub(crate) synthetic_bold: bool,
     pub(crate) decoration: TextDecorationBrush,
     pub(crate) shadows: Arc<[TextShadowBrush]>,
+    /// `-webkit-text-stroke` and its `paint-order` position.
+    pub(crate) stroke: Option<PaintTextStroke>,
 }
 
 impl Default for TextBrush {
@@ -78,6 +85,7 @@ impl Default for TextBrush {
             synthetic_bold: false,
             decoration: TextDecorationBrush::default(),
             shadows: Arc::from([]),
+            stroke: None,
         }
     }
 }
@@ -112,7 +120,9 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         .iter()
         .map(font_family_name)
         .collect::<Vec<_>>();
-    let variations = font_variations(&font.font_variation_settings);
+    let optical_size =
+        (computed.clone_font_optical_sizing() == FontOpticalSizing::Auto).then_some(font_size);
+    let variations = font_variations(&font.font_variation_settings, optical_size);
     let features = font_features(font);
     let decoration_line = computed.clone_text_decoration_line();
     let current_color = computed.clone_color();
@@ -216,6 +226,7 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
                 && font.font_weight.value() >= SYNTHETIC_BOLD_THRESHOLD,
             decoration,
             shadows: shadows.into(),
+            stroke: text_stroke(computed, &current_color),
         },
         has_underline: decoration.underline,
         underline_offset,
@@ -279,15 +290,26 @@ fn font_style(style: StyloFontStyle) -> FontStyle {
     }
 }
 
-fn font_variations(settings: &FontVariationSettings) -> Vec<FontVariation> {
-    settings
+/// Automatic optical sizing supplies the font size in CSS pixels as `opsz`.
+/// Explicit `font-variation-settings` take priority; missing axes are ignored.
+/// Per-face `size-adjust` is not yet propagated to shaping.
+fn font_variations(
+    settings: &FontVariationSettings,
+    optical_size: Option<f32>,
+) -> Vec<FontVariation> {
+    let opsz = Tag::from_bytes(*b"opsz");
+    let mut variations = settings
         .0
         .iter()
         .map(|variation| FontVariation {
             tag: Tag::from_bytes(variation.tag.0.to_be_bytes()),
             value: variation.value,
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(value) = optical_size.filter(|_| variations.iter().all(|v| v.tag != opsz)) {
+        variations.insert(0, FontVariation { tag: opsz, value });
+    }
+    variations
 }
 
 fn feature(tag: &[u8; 4], value: u16) -> FontFeature {
@@ -404,4 +426,34 @@ fn font_features(font: &style::properties::style_structs::Font) -> Vec<FontFeatu
     output.sort_by_key(|value| value.tag);
     output.dedup_by_key(|value| value.tag);
     output
+}
+
+/// Projects `-webkit-text-stroke-{width,color}` and `paint-order`.
+fn text_stroke(
+    computed: &ComputedValues,
+    current_color: &style::color::AbsoluteColor,
+) -> Option<PaintTextStroke> {
+    use style::values::specified::svg::PaintOrder;
+    let width = computed
+        .get_inherited_text()
+        ._webkit_text_stroke_width
+        .to_f32_px();
+    if !width.is_finite() || width <= 0.0 {
+        return None;
+    }
+    let color = absolute_paint_color(
+        computed
+            .clone__webkit_text_stroke_color()
+            .resolve_to_absolute(current_color),
+    );
+    let order = computed.clone_paint_order();
+    let paint_first = (0..3)
+        .map(|position| order.order_at(position))
+        .find(|part| matches!(part, PaintOrder::Fill | PaintOrder::Stroke))
+        == Some(PaintOrder::Stroke);
+    Some(PaintTextStroke {
+        width,
+        color,
+        paint_first,
+    })
 }

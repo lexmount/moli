@@ -10,8 +10,11 @@
       check(this === observer && deliveredObserver === observer, 'callback receiver and observer');
       check(arguments.length === 3, 'callback argument count');
       check(list instanceof PerformanceObserverEntryList, 'native entry list');
-      check(options !== null && typeof options === 'object' && Object.keys(options).length === 0,
-            'callback options');
+      const descriptor = Object.getOwnPropertyDescriptor(options, 'droppedEntriesCount');
+      check(Object.getPrototypeOf(options) === Object.prototype &&
+            Object.keys(options).join() === 'droppedEntriesCount' &&
+            descriptor.value === 0 && descriptor.writable && descriptor.enumerable && descriptor.configurable,
+            'callback options after observe');
       check(observer.takeRecords().length === 0, 'pending batch cleared before callback');
       const entries = list.getEntries();
       batches.push(entries.map(entry => entry.name));

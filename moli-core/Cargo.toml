@@ -22,20 +22,26 @@ moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
 moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-selector = { path = "../moli-selector" }
+moli-sqlite = { path = "../moli-sqlite" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-storage-service = { path = "../moli-storage-service" }
 moli-url = { path = "../moli-url" }
 moli-web-mime = { path = "../moli-web-mime" }
+moli-cookie-db = { path = "../moli-cookie-db" }
+moli-web-storage = { path = "../moli-web-storage" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-fetch = { path = "../moli-fetch" }
 parking_lot = "0.12"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+tempfile = "3.27.0"
 tokio = { version = "1.51.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+thiserror = "2.0.17"
 tracing = "0.1.41"
 url = "2.5.7"
 
 [dev-dependencies]
+moli-indexeddb = { path = "../moli-indexeddb" }
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }
 moli-parser = { path = "../moli-parser", features = ["test-support"] }
 # Integration tests compile moli-core as a normal dependency, so `cfg(test)` in

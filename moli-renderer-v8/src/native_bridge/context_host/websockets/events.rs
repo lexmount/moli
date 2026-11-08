@@ -170,7 +170,19 @@ impl JsContextHost {
         };
         let response_cookie_url = websocket_cookie_url(&state.url);
         let cookie_store = loader.request_client().cookie_store();
-        let mut store = cookie_store.lock();
+        let mut store = match cookie_store.lock() {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(%error, "WebSocket response cookies could not access storage");
+                return response_headers
+                    .iter()
+                    .filter(|(name, _)| {
+                        response_header_name_is(name, &HeaderName::from_static("set-cookie"))
+                    })
+                    .map(|_| StoredCookieSetReport::store_unavailable())
+                    .collect();
+            }
+        };
         store.store_response_headers_with_reports(&response_cookie_url, response_headers)
     }
 }

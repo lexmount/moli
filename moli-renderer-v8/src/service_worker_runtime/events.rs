@@ -510,7 +510,21 @@ pub(crate) fn service_worker_fetch_request_metadata(
 ) -> ServiceWorkerFetchRequestMetadata {
     let subresource_metadata = request.subresource_request_metadata();
     ServiceWorkerFetchRequestMetadata {
-        cache: service_worker_request_cache_label(request.cache_mode()).to_owned(),
+        // Native navigation already implements a soft reload through
+        // BrowserNavigationRequestKind and Cache-Control: max-age=0. Its
+        // Fetch Request representation exposes that policy as no-cache.
+        cache: service_worker_request_cache_label(
+            if request.request_mode == RequestMode::Navigate
+                && request.browser_navigation_kind()
+                    == moli_fetch::BrowserNavigationRequestKind::Reload
+                && request.cache_mode() == RequestCacheMode::Default
+            {
+                RequestCacheMode::Validate
+            } else {
+                request.cache_mode()
+            },
+        )
+        .to_owned(),
         referrer: request
             .referrer_header_value(&request.url)
             .unwrap_or_default(),
@@ -524,11 +538,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
 }
 
 fn service_worker_request_cache_label(cache_mode: RequestCacheMode) -> &'static str {
-    match cache_mode {
-        RequestCacheMode::Default => "default",
-        RequestCacheMode::Validate | RequestCacheMode::Bypass => "reload",
-        RequestCacheMode::NoStore => "no-store",
-    }
+    cache_mode.into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -738,6 +748,37 @@ mod referrer_tests {
     use super::*;
 
     #[test]
+    fn navigation_fetch_metadata_preserves_explicit_cache_modes_on_soft_reload() {
+        use moli_fetch::BrowserNavigationRequestKind as Kind;
+        for mode in [RequestMode::Navigate, RequestMode::Cors] {
+            for kind in [Kind::Navigate, Kind::Reload] {
+                for (cache, label) in [
+                    (RequestCacheMode::Default, "default"),
+                    (RequestCacheMode::Validate, "no-cache"),
+                    (RequestCacheMode::Bypass, "reload"),
+                    (RequestCacheMode::NoStore, "no-store"),
+                ] {
+                    let request = Request::get("https://example.test/document")
+                        .unwrap()
+                        .with_request_mode(mode)
+                        .with_browser_navigation_kind(kind)
+                        .with_cache_mode(cache);
+                    let metadata = service_worker_fetch_request_metadata(&request);
+                    let expected = if mode == RequestMode::Navigate
+                        && kind == Kind::Reload
+                        && cache == RequestCacheMode::Default
+                    {
+                        "no-cache"
+                    } else {
+                        label
+                    };
+                    assert_eq!(metadata.cache, expected, "{mode:?} {kind:?} {cache:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn native_fetch_event_metadata_resolves_referrer_policy_and_source() {
         let source = Url::parse("https://user:password@origin.test/from?q=1#private").unwrap();
         let full = "https://origin.test/from?q=1";
@@ -836,7 +877,7 @@ mod referrer_tests {
                 "{target} {policy:?} {document_policy:?}"
             );
             assert_eq!(metadata.referrer_policy, expected_policy);
-            assert_eq!(metadata.cache, "reload");
+            assert_eq!(metadata.cache, "no-cache");
             assert_eq!(metadata.integrity, "sha384-test");
             assert!(metadata.use_cors_preflight);
         }

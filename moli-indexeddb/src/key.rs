@@ -1,50 +1,103 @@
-use std::cmp::Ordering as CmpOrdering;
+use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Key {
-    String(String),
-    Integer(i64),
-    Array(Vec<Key>),
+/// Maximum array nesting accepted by key conversion and persistent storage.
+/// Keep recursive comparison, cloning, dropping and JS materialization bounded.
+pub const MAX_KEY_DEPTH: usize = 256;
+const KEY_DEPTH_ERROR: &str = "IndexedDB array key exceeds the maximum nesting depth";
+
+/// A Number key cannot contain NaN. Preserve its bits for value roundtrips;
+/// equality and ordering treat positive and negative zero as the same key.
+#[derive(Debug, Clone, Copy)]
+pub struct KeyNumber(u64);
+
+impl KeyNumber {
+    pub fn new(value: f64) -> Option<Self> {
+        (!value.is_nan()).then_some(Self(value.to_bits()))
+    }
+
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
 }
 
-impl Ord for Key {
-    fn cmp(&self, other: &Self) -> CmpOrdering {
-        match (self, other) {
-            (Self::Integer(left), Self::Integer(right)) => left.cmp(right),
-            (Self::String(left), Self::String(right)) => left.cmp(right),
-            (Self::Array(left), Self::Array(right)) => left.cmp(right),
-            (Self::Integer(_), Self::String(_)) => CmpOrdering::Less,
-            (Self::Integer(_), Self::Array(_)) => CmpOrdering::Less,
-            (Self::String(_), Self::Integer(_)) => CmpOrdering::Greater,
-            (Self::String(_), Self::Array(_)) => CmpOrdering::Less,
-            (Self::Array(_), Self::Integer(_) | Self::String(_)) => CmpOrdering::Greater,
+impl PartialEq for KeyNumber {
+    fn eq(&self, other: &Self) -> bool {
+        self.value() == other.value()
+    }
+}
+
+impl Eq for KeyNumber {}
+
+impl Ord for KeyNumber {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self == other {
+            Ordering::Equal
+        } else {
+            self.value().total_cmp(&other.value())
         }
     }
 }
 
-impl PartialOrd for Key {
-    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+impl PartialOrd for KeyNumber {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// Variant order is IndexedDB key order. Strings compare UTF-16 code units,
+/// including unpaired surrogates, and binary keys compare unsigned bytes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Key {
+    Number(KeyNumber),
+    Date(i64),
+    String(Vec<u16>),
+    Binary(Vec<u8>),
+    Array(Vec<Key>),
+}
+
+impl Key {
+    pub fn number(value: f64) -> Option<Self> {
+        KeyNumber::new(value).map(Self::Number)
+    }
+
+    /// Reject nesting that would exceed the supported native key depth.
+    pub fn validate_depth(&self) -> Result<(), &'static str> {
+        self.validate_depth_at(0)
+    }
+
+    fn validate_depth_at(&self, depth: usize) -> Result<(), &'static str> {
+        if let Self::Array(keys) = self {
+            if depth >= MAX_KEY_DEPTH {
+                return Err(KEY_DEPTH_ERROR);
+            }
+            // The depth limit also bounds the native call stack. A wide array
+            // must not allocate another Vec containing all its children merely
+            // to validate an existing payload.
+            for key in keys {
+                key.validate_depth_at(depth + 1)?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl From<&str> for Key {
     fn from(value: &str) -> Self {
-        Self::String(value.to_owned())
+        Self::String(value.encode_utf16().collect())
     }
 }
 
 impl From<String> for Key {
     fn from(value: String) -> Self {
-        Self::String(value)
+        Self::from(value.as_str())
     }
 }
 
 impl From<i64> for Key {
     fn from(value: i64) -> Self {
-        Self::Integer(value)
+        Self::number(value as f64).expect("integer keys cannot be NaN")
     }
 }
 
@@ -104,7 +157,64 @@ impl From<&str> for KeyPath {
 
 #[cfg(test)]
 mod tests {
-    use super::KeyPath;
+    use super::{Key, KeyPath, MAX_KEY_DEPTH};
+
+    #[test]
+    fn key_order_preserves_all_key_types() {
+        let keys = vec![
+            Key::number(f64::NEG_INFINITY).unwrap(),
+            Key::number(-1.5).unwrap(),
+            Key::from(0),
+            Key::number(f64::from_bits(1)).unwrap(),
+            Key::number(1.5).unwrap(),
+            Key::number(f64::INFINITY).unwrap(),
+            Key::Date(-1),
+            Key::Date(0),
+            Key::from(""),
+            Key::from("a"),
+            Key::String(vec![0xd800]),
+            Key::String(vec![0xd800, 0xdc00]),
+            Key::String(vec![0xdc00]),
+            Key::from("\u{fffd}"),
+            Key::Binary(vec![]),
+            Key::Binary(vec![0]),
+            Key::Binary(vec![0, 255]),
+            Key::Binary(vec![1]),
+            Key::Array(vec![]),
+            Key::Array(vec![Key::from(0)]),
+            Key::Array(vec![Key::Array(vec![])]),
+        ];
+        for pair in keys.windows(2) {
+            assert!(pair[0] < pair[1], "{pair:?}");
+        }
+        assert!(Key::number(f64::NAN).is_none());
+        assert_eq!(Key::number(-0.0), Key::number(0.0));
+        assert_eq!(
+            Key::number(-0.0).cmp(&Key::number(0.0)),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn maximum_depth_keys_fit_recursive_operations_on_a_bounded_native_stack() {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut key = Key::from(1);
+                for _ in 0..MAX_KEY_DEPTH {
+                    key = Key::Array(vec![key]);
+                }
+                let copy = key.clone();
+                assert_eq!(key.cmp(&copy), std::cmp::Ordering::Equal);
+                let wire = key.encode_value().unwrap();
+                assert_eq!(Key::decode_value(&wire).unwrap(), copy);
+                drop(key);
+                drop(copy);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn key_paths_accept_unicode_identifiers_without_normalizing_them() {

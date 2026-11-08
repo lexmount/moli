@@ -76,7 +76,7 @@ pub(crate) fn expand_snapshot(
                 ConverterKind::Dictionary => {
                     quote!(::moli_webidl::SnapshotKind::Dictionary(&<#ty as ::moli_webidl::WebIdlDictionarySnapshot>::SNAPSHOT_SCHEMA))
                 }
-                ConverterKind::Raw => {
+                ConverterKind::Raw | ConverterKind::Uint8Array => {
                     quote!(<#ty as ::moli_webidl::WebIdlSnapshotValue>::SNAPSHOT_KIND)
                 }
                 ConverterKind::Interface
@@ -171,7 +171,7 @@ pub(crate) fn expand_snapshot(
             .as_ref()
             .map(|attributes| quote!(#attributes))
             .unwrap_or_else(|| quote!(v8::PropertyAttribute::NONE));
-        let raw_copy = (converter == ConverterKind::Raw && attrs.snapshot_with.is_none()).then(|| {
+        let raw_copy = (matches!(converter, ConverterKind::Raw | ConverterKind::Uint8Array) && attrs.snapshot_with.is_none()).then(|| {
             if attrs.snapshot_state_with.is_some() {
                 quote!(let value = if writer.is_state() { value } else { (#kind).copy(scope, value, writer.prototype)? };)
             } else {

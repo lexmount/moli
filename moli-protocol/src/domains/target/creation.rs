@@ -12,7 +12,7 @@ pub(super) struct DevToolsCreateTargetExecution {
     pub(super) commit: TargetCreationCommit,
 }
 
-pub(super) struct TargetCreationCommit {
+pub(crate) struct TargetCreationCommit {
     page_target_id: String,
     tab_target_id: String,
     activation: Option<TargetActivationTransition>,
@@ -21,6 +21,14 @@ pub(super) struct TargetCreationCommit {
 }
 
 impl TargetCreationCommit {
+    pub(crate) fn emit_automation_creation(
+        self,
+        conn: &mut CdpConnection,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Result<(), DevToolsError> {
+        emit_target_creation_protocol_events(conn, self, out)
+    }
+
     pub(super) fn page_target_id(&self) -> &str {
         &self.page_target_id
     }
@@ -310,6 +318,17 @@ fn execute_devtools_create_target_command_in_window(
         return Err(error);
     }
     conn.ensure_browser_context_for_implicit_target_creation();
+    if conn
+        .browser_context
+        .as_ref()
+        .is_some_and(|context| context.closing)
+    {
+        restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
+        return Err(DevToolsError::new(
+            DevToolsErrorKind::NoSuchTarget,
+            "Browser context is closing",
+        ));
+    }
     let browser_context_id = conn
         .browser_context
         .as_ref()

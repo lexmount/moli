@@ -12,6 +12,7 @@ use crate::native_bridge::element::image_selected_source;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
+use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
     blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
@@ -62,39 +63,41 @@ pub(super) fn install_text_metrics_template_bindings<'s>(
     );
 }
 
-macro_rules! canvas_fill_rect_declaration {
+macro_rules! canvas_rect_declaration {
     ($name:ident, $interface:path) => {
         #[derive(WebApiFunctionTemplate)]
         #[webapi(interface = $interface, enumerable, receiver)]
         struct $name {
             #[webapi(method = "fillRect", length = 4, callback = canvas_context_fill_rect_callback)]
             fill_rect: (),
+            #[webapi(method = "clearRect", length = 4, callback = canvas_context_clear_rect_callback)]
+            clear_rect: (),
         }
     };
 }
 
-canvas_fill_rect_declaration!(
-    CanvasFillRectDeclaration,
+canvas_rect_declaration!(
+    CanvasRectDeclaration,
     web_api_interfaces::CanvasRenderingContext2D
 );
-canvas_fill_rect_declaration!(
-    OffscreenCanvasFillRectDeclaration,
+canvas_rect_declaration!(
+    OffscreenCanvasRectDeclaration,
     web_api_interfaces::OffscreenCanvasRenderingContext2D
 );
 
-pub(crate) fn install_canvas_fill_rect_bindings<'s>(
+pub(crate) fn install_canvas_rect_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     prototype: v8::Local<'s, v8::ObjectTemplate>,
     interface: &str,
 ) {
     match interface {
         "CanvasRenderingContext2D" => {
-            CanvasFillRectDeclaration::initialize_prototype_template(scope, prototype);
+            CanvasRectDeclaration::initialize_prototype_template(scope, prototype);
         }
         "OffscreenCanvasRenderingContext2D" => {
-            OffscreenCanvasFillRectDeclaration::initialize_prototype_template(scope, prototype);
+            OffscreenCanvasRectDeclaration::initialize_prototype_template(scope, prototype);
         }
-        _ => unreachable!("only Canvas 2D contexts have fillRect bindings"),
+        _ => unreachable!("only Canvas 2D contexts have rectangle bindings"),
     }
 }
 
@@ -296,6 +299,19 @@ struct CanvasContextFillRectArgs {
     #[webidl(required)]
     width: f64,
     #[webidl(required)]
+    height: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.clearRect")]
+struct CanvasContextClearRectArgs {
+    #[webidl(required, converter = "unrestricted_double")]
+    x: f64,
+    #[webidl(required, converter = "unrestricted_double")]
+    y: f64,
+    #[webidl(required, converter = "unrestricted_double")]
+    width: f64,
+    #[webidl(required, converter = "unrestricted_double")]
     height: f64,
 }
 
@@ -534,25 +550,6 @@ pub(crate) fn canvas_context_image_smoothing_quality_setter_callback<'s>(
         quality.label(),
     );
     rv.set_undefined();
-}
-
-fn canvas_context_dom_string_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<String> {
-    match webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::member(owner, property),
-    ) {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
 }
 
 fn canvas_required_unrestricted_double_arg<'s>(
@@ -819,15 +816,20 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
     rasterize_canvas_fragment(scope, canvas, fragment);
 }
 
-pub(crate) fn canvas_context_clear_rect_callback<'s>(
+fn canvas_context_clear_rect_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let context = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated clearRect binding validates the receiver");
+    let Some(parsed) = webidl::parse_args::<CanvasContextClearRectArgs>(scope, &args) else {
         return;
     };
-    let Some(rect) = normalized_rect(scope, &args, "CanvasRenderingContext2D.clearRect") else {
+    let Some(rect) = canvas_normalize_rect(parsed.x, parsed.y, parsed.width, parsed.height) else {
+        return;
+    };
+    let Some(canvas) = canvas_owner_from_context(scope, context) else {
         return;
     };
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
@@ -1948,12 +1950,11 @@ fn canvas_context_relevant_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Context>> {
-    canvas_owner_from_context(scope, context)
-        .and_then(|canvas| {
-            crate::context_bootstrap::shared::node_owner_document_or_self(scope, canvas)
-        })
-        .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
-        .or_else(|| context.get_creation_context(scope))
+    // Adoption changes ownerDocument, but the context keeps its original realm.
+    context.get_creation_context(scope).or_else(|| {
+        canvas_owner_from_context(scope, context)
+            .and_then(|canvas| crate::native_bridge::node_relevant_context(scope, canvas))
+    })
 }
 
 pub(crate) fn canvas_context_create_image_data_callback<'s>(
@@ -1971,10 +1972,13 @@ pub(crate) fn canvas_context_create_image_data_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
-    if let Some(image_data) = build_image_data_object(scope, width, height) {
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    if let Some(image_data) = build_image_data_object(target_scope, width, height) {
         rv.set(image_data.into());
     } else {
-        rv.set(v8::undefined(scope).into());
+        rv.set(v8::undefined(target_scope).into());
     }
 }
 
@@ -2064,10 +2068,13 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
     } else {
         blank_image_data(width, height)
     };
-    let Some(image_data) = build_image_data_object_with_bytes(scope, width, height, bytes)
-        .or_else(|| build_image_data_object(scope, width, height))
-    else {
-        rv.set(v8::undefined(scope).into());
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let image_data = build_image_data_object_with_bytes(target_scope, width, height, bytes)
+        .or_else(|| build_image_data_object(target_scope, width, height));
+    let Some(image_data) = image_data else {
+        rv.set(v8::undefined(target_scope).into());
         return;
     };
     rv.set(image_data.into());
@@ -2093,19 +2100,6 @@ fn image_data_dimension_from_long(scope: &mut v8::PinScope<'_, '_>, value: i32) 
         return None;
     }
     Some(value.unsigned_abs())
-}
-
-fn normalized_rect<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    prefix: &'static str,
-) -> Option<(i32, i32, i32, i32)> {
-    canvas_normalize_rect(
-        canvas_unrestricted_double_arg(scope, args, 0, prefix)?,
-        canvas_unrestricted_double_arg(scope, args, 1, prefix)?,
-        canvas_unrestricted_double_arg(scope, args, 2, prefix)?,
-        canvas_unrestricted_double_arg(scope, args, 3, prefix)?,
-    )
 }
 
 fn normalized_draw_image_args<'s>(

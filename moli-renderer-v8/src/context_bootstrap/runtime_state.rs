@@ -1,4 +1,4 @@
-use super::file_api::initialize_file_api_runtime_queues;
+use super::resize_observer_runtime::initialize_resize_observer_runtime_state;
 use super::shared::*;
 use super::webassembly_runtime::install_webassembly_runtime_extensions;
 use super::window_events::*;
@@ -33,7 +33,6 @@ use crate::{
             set_document_cookie_for_receiver,
         },
     },
-    network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
         get_private_value, set_private_value, throw_type_error, v8_string, v8str,
@@ -550,20 +549,33 @@ fn legacy_unforgeable_window_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_window_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window getter called on incompatible receiver.");
+        return None;
+    }
+    let context = scope.get_current_context();
+    let value =
+        object_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into());
+    Some(
+        v8::Local::<v8::Object>::try_from(value)
+            .ok()
+            .and_then(|target| {
+                super::shared_event_targets::window_target_in_realm(scope, target, context)
+            })
+            .map(Into::into)
+            .unwrap_or(value),
+    )
 }
 
 fn document_fullscreen_enabled_getter<'s>(
@@ -697,11 +709,10 @@ fn legacy_unforgeable_self_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_window_alias_set<'s>(
@@ -709,6 +720,10 @@ fn replaceable_window_alias_set<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     name: &'static str,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     define_replaceable_window_property(scope, args.this(), name, args.get(0));
 }
 
@@ -725,11 +740,11 @@ fn legacy_unforgeable_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_PARENT_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_parent_setter<'s>(
@@ -745,11 +760,9 @@ fn legacy_unforgeable_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_TOP_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_frames_getter<'s>(
@@ -757,11 +770,11 @@ fn legacy_unforgeable_frames_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_FRAMES_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_FRAMES_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_frames_setter<'s>(
@@ -872,6 +885,10 @@ fn window_surface_replaceable_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -890,6 +907,10 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
+        return;
+    }
     if child_context_handle_from_owner(scope, receiver).is_none()
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
@@ -909,6 +930,10 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+        return;
+    }
     let next = args
         .get(0)
         .to_string(scope)
@@ -1299,7 +1324,9 @@ fn document_cookie_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    let cookie = document_cookie_for_receiver(scope, receiver).unwrap_or_default();
+    let Some(cookie) = document_cookie_for_receiver(scope, receiver) else {
+        return;
+    };
     let value = v8_string(scope, &cookie).unwrap_or_else(|| v8::String::empty(scope));
     rv.set(value.into());
 }
@@ -1444,8 +1471,14 @@ fn webdriver_delete_all_cookies_callback(
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        unsafe { &mut *host_ptr }.delete_all_cookies_for_wpt();
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Err(error) = unsafe { &mut *host_ptr }.delete_all_cookies_for_wpt()
+    {
+        let Some(message) = v8::String::new(scope, &error.to_string()) else {
+            return;
+        };
+        let exception = v8::Exception::error(scope, message);
+        scope.throw_exception(exception);
     }
     rv.set(v8::undefined(scope).into());
 }
@@ -1612,6 +1645,7 @@ pub(crate) fn finish_context_bootstrap(
         ("OfflineAudioContext", "OfflineAudioContext"),
         ("AudioDestinationNode", "AudioDestinationNode"),
         ("OscillatorNode", "OscillatorNode"),
+        ("PeriodicWave", "PeriodicWave"),
         ("DynamicsCompressorNode", "DynamicsCompressorNode"),
         ("AnalyserNode", "AnalyserNode"),
         ("BiquadFilterNode", "BiquadFilterNode"),
@@ -1792,6 +1826,7 @@ pub(crate) fn finish_context_bootstrap(
         ("IDBCursor", "IDBCursor"),
         ("IDBCursorWithValue", "IDBCursorWithValue"),
         ("IDBKeyRange", "IDBKeyRange"),
+        ("IDBRecord", "IDBRecord"),
         ("IDBVersionChangeEvent", "IDBVersionChangeEvent"),
         ("Window", "Window"),
     ] {
@@ -1803,7 +1838,7 @@ pub(crate) fn finish_context_bootstrap(
     install_window_global_accessors(scope, global);
 
     native_bridge::install_detached_bridge_methods(scope);
-    initialize_file_api_runtime_queues(scope, global)?;
+    initialize_resize_observer_runtime_state(scope, global)?;
     super::exposed_interfaces::capture_eager_intrinsic_interfaces(
         scope,
         global,
@@ -1927,7 +1962,6 @@ fn install_window_runtime_state<'s>(
     install_default_window_performance_seed(scope, global)?;
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
-    network_host::initialize_fetch_realm_helpers(scope)?;
     install_public_window_surface_accessors(scope, global)?;
     super::install_window_bar_props(scope, global, None)?;
 

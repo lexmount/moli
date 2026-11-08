@@ -68,6 +68,9 @@ pub enum RendererOwnerAction {
     SubresourceFetchPause {
         source_document: RendererDocumentLifecycleIdentity,
         info: Box<PendingSubresourceFetchInfo>,
+        /// Set for a child frame navigation, whose Network request id is the
+        /// loader id of the Document it creates.
+        child_document: Option<Box<crate::protocol_types::ChildDocumentFetchRequest>>,
     },
     SubresourceContinue {
         source_document: RendererDocumentLifecycleIdentity,
@@ -91,7 +94,10 @@ pub enum RendererOwnerAction {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
     WebMcp(moli_page_types::RendererWebMcpObservation),
-    MainDocumentCommit(RendererMainDocumentCommit),
+    MainDocumentCommit {
+        source_document: RendererDocumentLifecycleIdentity,
+        commit: RendererMainDocumentCommit,
+    },
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),
     Network {

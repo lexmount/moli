@@ -555,6 +555,7 @@ impl FetchRuntimeHandle {
     pub(crate) fn submit_auth_raw(
         &self,
         request: Request,
+        cancel_handle: FetchCancelHandle,
     ) -> Result<oneshot::Receiver<Result<RawResponse>>> {
         debug_assert!(
             request.auth_requires_buffered_transport(),
@@ -564,7 +565,7 @@ impl FetchRuntimeHandle {
         self.enqueue(RuntimeJob::new(
             request,
             RuntimeResponseTx::Raw(response_tx),
-            FetchCancelHandle::new(),
+            cancel_handle,
         ))?;
         Ok(response_rx)
     }
@@ -807,17 +808,22 @@ impl RuntimeOwner {
                     Err(anyhow!("fetch runtime is shutting down")),
                 );
             }
-            RuntimeCommand::Request(job) => self.start_job_or_reply(state, job),
+            RuntimeCommand::Request(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
+                self.start_job_or_reply(state, job)
+            }
             RuntimeCommand::StreamingHtmlRequest(job) if state.closed => {
                 fail_streaming_job(job, anyhow!("fetch runtime is shutting down"));
             }
             RuntimeCommand::StreamingHtmlRequest(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
                 self.start_streaming_job_or_reply(state, job)
             }
             RuntimeCommand::StreamingRawRequest(job) if state.closed => {
                 fail_raw_streaming_job(job, anyhow!("fetch runtime is shutting down"));
             }
             RuntimeCommand::StreamingRawRequest(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
                 self.start_raw_streaming_job_or_reply(state, job)
             }
             #[cfg(test)]
@@ -864,6 +870,7 @@ impl RuntimeOwner {
         &self,
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
+        job.request.prepare_accept_header(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
         if job.cancel_handle.is_cancelled() {
             return Err((
@@ -872,7 +879,7 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled"),
             ));
         }
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if let Err(error) = job.request.admit_request_url(&job.current_url) {
             return Err((job.response_tx, error));
         }
         let request_cookie_report = if job.request.allows_credentials_for_url(&job.current_url) {
@@ -895,13 +902,44 @@ impl RuntimeOwner {
             &job.request,
             &job.current_url,
         );
+        match load_cached_streaming_response_lookup(
+            &self.config,
+            &prepared_request.request,
+            &job.current_url,
+            cookie_header.as_deref(),
+        ) {
+            Ok(Some(cached)) if !cached_streaming_response_is_stale(&cached) => {
+                if prepared_request
+                    .response_policy
+                    .observe_response(&job.current_url, &cached.headers)
+                    == ClientHintResponseAction::RestartNavigation
+                {
+                    return Ok(JobOutcome::Retry(Box::new(job)));
+                }
+                job.response_progress.mark_response_started();
+                let response = match materialize_cached_response(cached, request_cookie_report) {
+                    Ok(response) => response,
+                    Err(error) => return Err((job.response_tx, error)),
+                };
+                return self.finish_buffered_response(job, response, None);
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => return Err((job.response_tx, error)),
+        }
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((job.response_tx, anyhow::Error::new(crate::FetchCacheMiss)));
+        }
         let mut easy = Easy2::new(FetchTransferHandler::new_buffered(ResponseCollector::new(
             Some(job.cancel_handle.clone()),
         )));
         easy.get_mut()
             .buffered_mut()
             .expect("buffered request should use buffered collector")
-            .begin_request(self.config.http_max_response_size());
+            .begin_request(
+                self.config.http_max_response_size(),
+                job.request.redirect_handling() == crate::RequestRedirectHandling::FollowByCaller
+                    && matches!(&job.response_tx, RuntimeResponseTx::Raw(_)),
+            );
         let proxy_route = match resolve_http_proxy_route(&self.config, &job.current_url) {
             Ok(route) => route,
             Err(error) => return Err((job.response_tx, error)),
@@ -922,9 +960,8 @@ impl RuntimeOwner {
             &job.current_url,
             cookie_header.as_deref(),
             job.http_version,
-            // Buffered transfers are now the auth/compatibility fallback and
-            // do not participate in disk-cache validation. Cache IO stays on
-            // the streaming reader/writer paths.
+            // Buffered auth/compatibility transfers can reuse cache entries,
+            // but validation and cache writes stay on the streaming paths.
             None,
         )
         .with_context(|| anyhow!("failed to configure curl request for {}", job.current_url))
@@ -1012,8 +1049,17 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.request.prepare_accept_header(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if job.cancel_handle.is_cancelled() {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
+        }
+        if let Err(error) = job.request.admit_request_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
@@ -1063,6 +1109,14 @@ impl RuntimeOwner {
             }
             Ok(Some(_)) | Ok(None) => {}
             Err(error) => return Err((Box::new(job), None, error)),
+        }
+
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCacheMiss),
+            ));
         }
 
         let mut easy = job.easy.take().unwrap_or_else(|| {
@@ -1141,6 +1195,7 @@ impl RuntimeOwner {
             cache_plan,
             job.response_progress.clone(),
         );
+        collector.set_corp_origin(job.request.cross_origin_resource_policy_origin());
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
         let label = job.current_url.to_string();
@@ -1217,8 +1272,17 @@ impl RuntimeOwner {
             anyhow::Error,
         ),
     > {
+        job.request.prepare_accept_header(&self.config);
         job.response_progress = job.cancel_handle.begin_response_progress();
-        if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
+        if job.cancel_handle.is_cancelled() {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
+        }
+        if let Err(error) = job.request.admit_request_url(&job.current_url) {
             return Err((Box::new(job), None, error));
         }
         let credentials_allowed = job.request.allows_credentials_for_url(&job.current_url);
@@ -1272,6 +1336,14 @@ impl RuntimeOwner {
             }
             Ok(None) => {}
             Err(error) => return Err((Box::new(job), None, error)),
+        }
+
+        if job.request.effective_cache_mode() == crate::RequestCacheMode::OnlyIfCached {
+            return Err((
+                Box::new(job),
+                None,
+                anyhow::Error::new(crate::FetchCacheMiss),
+            ));
         }
 
         let mut easy = job.easy.take().unwrap_or_else(|| {
@@ -1353,6 +1425,7 @@ impl RuntimeOwner {
             job.response_progress.clone(),
             job.request.redirect_handling(),
         );
+        collector.set_corp_origin(job.request.cross_origin_resource_policy_origin());
         collector.set_client_hint_response_policy(prepared_request.response_policy);
 
         let label = job.current_url.to_string();
@@ -1443,7 +1516,13 @@ impl RuntimeOwner {
                     .context("fetch runtime request cancelled during shutdown"),
             ));
         }
-        if let Err(error) = result {
+        let header_terminated = easy
+            .as_ref()
+            .and_then(|easy| easy.get_ref().buffered())
+            .is_some_and(ResponseCollector::header_terminated);
+        if let Err(error) = result
+            && (!header_terminated || job.cancel_handle.is_cancelled())
+        {
             if job.cancel_handle.is_cancelled() {
                 return Err((
                     job.response_tx,
@@ -1571,6 +1650,15 @@ impl RuntimeOwner {
         response.cookie_set_reports = cookie_set_reports;
         response = response.with_network_request_extra_info(request_extra_info.clone());
 
+        self.finish_buffered_response(job, response, request_extra_info)
+    }
+
+    fn finish_buffered_response(
+        &self,
+        mut job: RuntimeJob,
+        mut response: RawResponse,
+        request_extra_info: Option<NetworkRequestExtraInfo>,
+    ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
         let next_url = match next_followed_redirect_url_from_parts(
             &job.request,
             &response.final_url,
@@ -2361,6 +2449,7 @@ impl RuntimeOwner {
                     redirected: !job.request.redirect_chain.is_empty(),
                     redirect_chain: job.request.redirect_chain,
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version,
                     network_request_extra_info: request_extra_info,
                 }));
@@ -2975,6 +3064,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info,
         }));
@@ -2985,6 +3075,40 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
         let _ = body_tx.send(body);
     }
     let _ = job.completion_tx.send(Ok(()));
+}
+
+fn materialize_cached_response(
+    cached: CachedStreamingResponseLookup,
+    request_cookie_report: Option<StoredCookieQueryReport>,
+) -> Result<RawResponse> {
+    let CachedStreamingResponseLookup {
+        metadata,
+        cache_state,
+        final_url,
+        status,
+        headers,
+        mut body,
+        ..
+    } = cached;
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .context("failed to read cached buffered response body")?;
+    Ok(RawResponse::from_head_and_body(
+        ResponseHead {
+            final_url: Url::parse(&final_url).context("invalid cached response final url")?,
+            status,
+            status_text: metadata.status_text,
+            headers,
+            request_cookie_report,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: true,
+            cache_state,
+            negotiated_http_version: None,
+        },
+        bytes,
+    ))
 }
 
 fn complete_cached_streaming_html_job(
@@ -3005,6 +3129,7 @@ fn complete_cached_streaming_html_job(
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
         metadata,
+        cache_state,
         final_url,
         status,
         headers,
@@ -3039,6 +3164,7 @@ fn complete_cached_streaming_html_job(
             redirected,
             redirect_chain,
             from_cache: true,
+            cache_state,
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3129,6 +3255,7 @@ fn complete_cached_streaming_raw_job(
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
         metadata,
+        cache_state,
         final_url,
         status,
         headers,
@@ -3164,6 +3291,7 @@ fn complete_cached_streaming_raw_job(
             redirected,
             redirect_chain,
             from_cache: true,
+            cache_state,
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3213,6 +3341,7 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::EventSource
                 | crate::BrowserRequestMetadata::Fetch
                 | crate::BrowserRequestMetadata::JsonModule
+                | crate::BrowserRequestMetadata::TextModule
                 | crate::BrowserRequestMetadata::Manifest
                 | crate::BrowserRequestMetadata::StyleModule
                 | crate::BrowserRequestMetadata::Xhr,
@@ -3224,6 +3353,8 @@ fn request_fetch_load_priority(request: &Request) -> crate::ResourceLoadPriority
                 | crate::BrowserRequestMetadata::Image
                 | crate::BrowserRequestMetadata::Ping
                 | crate::BrowserRequestMetadata::Script
+                | crate::BrowserRequestMetadata::SharedWorker
+                | crate::BrowserRequestMetadata::Worker
                 | crate::BrowserRequestMetadata::Style
                 | crate::BrowserRequestMetadata::TextTrack
                 | crate::BrowserRequestMetadata::Video,
@@ -3608,6 +3739,7 @@ fn proxy_connect_response_start(
         redirected: !redirect_chain.is_empty(),
         redirect_chain: redirect_chain.to_vec(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
         network_request_extra_info: None,
     }
@@ -3711,6 +3843,7 @@ fn collect_buffered_response(
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version,
             },
             body,
@@ -3729,6 +3862,14 @@ fn fail_streaming_job_with_easy(
     error: anyhow::Error,
 ) {
     let mut easy = easy.or_else(|| job.easy.take());
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
@@ -3768,6 +3909,14 @@ fn fail_raw_streaming_job_with_easy(
     mut easy: Option<Easy2<FetchTransferHandler>>,
     error: anyhow::Error,
 ) {
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
@@ -4379,6 +4528,7 @@ mod tests {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 "<!doctype html><html><body>cached</body></html>".to_owned(),
@@ -4429,6 +4579,32 @@ mod tests {
             joined.push_str(&chunk);
         }
         assert_eq!(joined, "a\u{20ac}b");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pre_cancelled_html_cache_admission_preserves_cancellation() -> Result<()> {
+        let owner =
+            FetchRuntimeOwner::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let request = Request::get("http://127.0.0.1:9/cancelled")?
+            .with_cache_mode(crate::RequestCacheMode::OnlyIfCached);
+        let cancel = FetchCancelHandle::new();
+        cancel.cancel();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (body_tx, _body_rx) = mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = oneshot::channel();
+        owner.handle().enqueue_streaming(StreamingRuntimeJob::new(
+            request,
+            started_tx,
+            body_tx,
+            completion_tx,
+            cancel,
+        ))?;
+        let error = started_rx
+            .await?
+            .expect_err("cancelled HTML request must fail");
+        assert!(error.is::<crate::FetchCancelled>(), "{error:#}");
+        assert!(completion_rx.await?.is_err());
+        assert!(owner.shutdown().is_clean());
         Ok(())
     }
 }

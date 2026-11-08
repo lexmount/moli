@@ -1,84 +1,96 @@
 use crate::custom_elements;
 use crate::dom::native::ShadowRootInit;
-use crate::util::{throw_type_error, v8str};
+use crate::webidl;
 
 use super::super::super::{
     document::{self, validate_registry_association_for_document},
     node::node_runtime_and_handle_from_args,
     set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
 };
-use super::super::property_string_value;
 
-fn dictionary_boolean(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: v8::Local<'_, v8::Object>,
-    name: &'static str,
-) -> bool {
-    init.get(scope, crate::util::v8str(scope, name).into())
-        .is_some_and(|value| value.boolean_value(scope))
+#[derive(webidl::WebIdlEnum)]
+enum ShadowRootMode {
+    #[webidl(token = "open")]
+    Open,
+    #[webidl(token = "closed")]
+    Closed,
 }
 
-fn dictionary_string(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: v8::Local<'_, v8::Object>,
-    name: &'static str,
-) -> Option<Option<String>> {
-    let value = init.get(scope, crate::util::v8str(scope, name).into())?;
-    if value.is_undefined() {
-        return Some(None);
-    }
-    property_string_value(scope, value).map(Some)
+#[derive(webidl::WebIdlEnum)]
+enum SlotAssignmentMode {
+    #[webidl(token = "named")]
+    Named,
+    #[webidl(token = "manual")]
+    Manual,
 }
 
-fn dictionary_nullable_string(
-    scope: &mut v8::PinScope<'_, '_>,
-    init: v8::Local<'_, v8::Object>,
-    name: &'static str,
-) -> Option<Option<String>> {
-    let value = init.get(scope, crate::util::v8str(scope, name).into())?;
-    if value.is_null_or_undefined() {
-        return Some(None);
-    }
-    property_string_value(scope, value).map(Some)
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ShadowRootInit")]
+struct ShadowRootInitMembers {
+    #[webidl(default = false)]
+    clonable: bool,
+    #[webidl(with = custom_element_registry_member)]
+    custom_element_registry: Option<custom_elements::CustomElementRegistryAssociation>,
+    #[webidl(default = false)]
+    delegates_focus: bool,
+    #[webidl(required, converter = "enum")]
+    mode: ShadowRootMode,
+    #[webidl(nullable)]
+    reference_target: Option<String>,
+    #[webidl(default = false)]
+    serializable: bool,
+    #[webidl(default = SlotAssignmentMode::Named, converter = "enum")]
+    slot_assignment: SlotAssignmentMode,
+}
+
+fn custom_element_registry_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    init: v8::Local<'s, v8::Object>,
+    _: &str,
+) -> Result<Option<custom_elements::CustomElementRegistryAssociation>, webidl::WebIdlError> {
+    let context = webidl::Context::member("ShadowRootInit", "customElementRegistry");
+    let Some(value) = webidl::property_result(scope, init, "customElementRegistry", context)?
+        .filter(|value| !value.is_undefined())
+    else {
+        return Ok(None);
+    };
+    custom_elements::registry_association_from_value(scope, value)
+        .map(Some)
+        .ok_or_else(|| webidl::WebIdlError::cannot_convert(context, "CustomElementRegistry"))
 }
 
 pub(in crate::native_bridge) fn shadow_root_init_from_attach_shadow_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Option<(v8::Local<'s, v8::Object>, ShadowRootInit)> {
-    let Some(init) = value.to_object(scope) else {
-        throw_type_error(scope, "Element.attachShadow requires an init dictionary.");
-        return None;
-    };
-    let Some(Some(mode)) = dictionary_string(scope, init, "mode") else {
-        throw_type_error(scope, "Element.attachShadow init.mode is required.");
-        return None;
-    };
-    if mode != "open" && mode != "closed" {
-        throw_type_error(
-            scope,
-            "Element.attachShadow init.mode must be 'open' or 'closed'.",
-        );
-        return None;
-    }
-    let mut shadow_init = ShadowRootInit::new(&mode);
-    shadow_init.set_delegates_focus(dictionary_boolean(scope, init, "delegatesFocus"));
-    shadow_init.set_clonable(dictionary_boolean(scope, init, "clonable"));
-    shadow_init.set_serializable(dictionary_boolean(scope, init, "serializable"));
-    if let Some(Some(slot_assignment)) = dictionary_string(scope, init, "slotAssignment") {
-        if slot_assignment != "named" && slot_assignment != "manual" {
-            throw_type_error(
-                scope,
-                "Element.attachShadow init.slotAssignment must be 'named' or 'manual'.",
-            );
+) -> Option<(
+    Option<custom_elements::CustomElementRegistryAssociation>,
+    ShadowRootInit,
+)> {
+    let init = match webidl::convert::<webidl::Dictionary<ShadowRootInitMembers>>(
+        scope,
+        value,
+        webidl::Context::argument("Element.attachShadow", 1),
+    ) {
+        Ok(init) => init.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
             return None;
         }
-        shadow_init.set_slot_assignment(&slot_assignment);
-    }
-    if let Some(reference_target) = dictionary_nullable_string(scope, init, "referenceTarget") {
-        shadow_init.set_reference_target(reference_target);
-    }
-    Some((init, shadow_init))
+    };
+    let mode = match init.mode {
+        ShadowRootMode::Open => "open",
+        ShadowRootMode::Closed => "closed",
+    };
+    let mut shadow_init = ShadowRootInit::new(mode);
+    shadow_init.set_clonable(init.clonable);
+    shadow_init.set_delegates_focus(init.delegates_focus);
+    shadow_init.set_serializable(init.serializable);
+    shadow_init.set_slot_assignment(match init.slot_assignment {
+        SlotAssignmentMode::Named => "named",
+        SlotAssignmentMode::Manual => "manual",
+    });
+    shadow_init.set_reference_target(init.reference_target);
+    Some((init.custom_element_registry, shadow_init))
 }
 
 pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
@@ -94,15 +106,13 @@ pub(in crate::native_bridge) fn element_attach_shadow_callback<'s>(
         document::detached_attach_shadow_method_callback(scope, args, rv);
         return;
     }
-    let Some((init, shadow_init)) = shadow_root_init_from_attach_shadow_value(scope, args.get(0))
+    let Some((registry_association, shadow_init)) =
+        shadow_root_init_from_attach_shadow_value(scope, args.get(0))
     else {
         return;
     };
     let available_to_element_internals =
         custom_elements::preserves_custom_element_identity(runtime_ptr, handle);
-    let registry_association = init
-        .get(scope, v8str(scope, "customElementRegistry").into())
-        .and_then(|value| custom_elements::registry_association_from_value(scope, value));
     let runtime = unsafe { &mut *runtime_ptr };
     let Some(document_handle) = runtime.dom_host().owner_document_handle(handle) else {
         rv.set_null();

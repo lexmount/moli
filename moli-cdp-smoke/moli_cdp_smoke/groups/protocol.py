@@ -8,16 +8,21 @@ from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
 from ..config import is_moli_browser
+from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
+from .browser_endpoint import browser_endpoint_discovery
+from .javascript_dialogs import javascript_dialog_subscriptions
 
 
 @dataclass
 class RawPageSession:
     session_id: str
     browser_context_id: str
+    target_id: str
 
 
 async def run_raw_protocol_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
+    await browser_endpoint_discovery(endpoint, results)
     client = await connect_raw_cdp(endpoint)
     page_session: RawPageSession | None = None
     try:
@@ -25,6 +30,7 @@ async def run_raw_protocol_group(endpoint: str, fixture: str, results: list[dict
         await _runtime_unique_context_id_roundtrip(client, page_session.session_id, results)
         await _large_runtime_result_roundtrip(client, page_session.session_id, results)
         await _javascript_dialog_protocol_shape(client, page_session.session_id, results)
+        await javascript_dialog_subscriptions(client, page_session.target_id, page_session.session_id, results)
         await _browser_get_version_keeps_session_route(client, page_session.session_id, results)
         await _navigation_suspension_command_routing_matches_chromium(
             client,
@@ -619,23 +625,7 @@ async def _app_manifest_network_lifecycle_matches_chromium(
 ) -> None:
     page_url = f"{fixture}/chromium-app-manifest-valid/page"
     manifest_url = f"{fixture}/chromium-app-manifests/app.webmanifest"
-    navigate_id = await client.send("Page.navigate", {"url": page_url}, session_id=session_id)
-    saw_navigate_response = False
-    saw_load = False
-    seen: list[dict[str, Any]] = []
-    deadline = asyncio.get_running_loop().time() + 10.0
-    while not (saw_navigate_response and saw_load):
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError(f"timed out navigating to manifest fixture; seen={seen[-20:]}")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        seen.append(message)
-        if message.get("id") == navigate_id:
-            if "error" in message:
-                raise SmokeError(f"manifest fixture Page.navigate failed: {message['error']}")
-            saw_navigate_response = True
-        if message.get("sessionId") == session_id and message.get("method") == "Page.loadEventFired":
-            saw_load = True
+    await navigate_document(client, session_id, {"url": page_url})
 
     manifest_id = await client.send("Page.getAppManifest", session_id=session_id)
     request_id: str | None = None
@@ -756,6 +746,7 @@ async def _navigation_suspension_command_routing_matches_chromium(
             break
         if asyncio.get_running_loop().time() >= deadline:
             raise SmokeError(f"navigation suspension fixture saw no request: {status}")
+        # smoke-timing: poll the fixture gate proving navigation reached the server.
         await asyncio.sleep(0.01)
 
     debugger_id = await client.send("Debugger.enable", session_id=session_id)
@@ -1177,25 +1168,9 @@ async def _create_page_session(client: RawCdpClient, url: str) -> RawPageSession
     page_enable_id = await client.send("Page.enable", session_id=session_id)
     await client.recv_until_id(page_enable_id)
 
-    navigate_id = await client.send("Page.navigate", {"url": url}, session_id=session_id)
-    saw_navigate_response = False
-    saw_load_event = False
-    seen: list[dict[str, Any]] = []
-    deadline = asyncio.get_running_loop().time() + 10.0
-    while not (saw_navigate_response and saw_load_event):
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            raise SmokeError(f"timed out creating raw page session; seen={seen[-20:]}")
-        message = await asyncio.wait_for(client.recv(), timeout=remaining)
-        seen.append(message)
-        if message.get("id") == navigate_id:
-            if "error" in message:
-                raise SmokeError(f"Page.navigate failed: {message['error']}")
-            saw_navigate_response = True
-        if message.get("sessionId") == session_id and message.get("method") == "Page.loadEventFired":
-            saw_load_event = True
+    await navigate_document(client, session_id, {"url": url})
 
-    return RawPageSession(session_id=session_id, browser_context_id=browser_context_id)
+    return RawPageSession(session_id=session_id, browser_context_id=browser_context_id, target_id=target_id)
 
 
 def _profile_function_names(profile: dict[str, Any]) -> set[str]:

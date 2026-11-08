@@ -358,7 +358,7 @@ fn assert_disabled_result(
 
 #[test]
 fn keeps_css_noscript_and_nested_frames_without_fetching_scripts() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled(&server, "/page.html", &[])?;
     let stdout = assert_disabled_result(&output, &server, "direct HTTP navigation");
@@ -382,7 +382,7 @@ fn keeps_css_noscript_and_nested_frames_without_fetching_scripts() -> Result<()>
 
 #[test]
 fn survives_http_redirect() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled(&server, "/redirect.html", &[])?;
     assert_disabled_result(&output, &server, "HTTP redirect navigation");
@@ -391,7 +391,7 @@ fn survives_http_redirect() -> Result<()> {
 
 #[test]
 fn survives_meta_refresh_document_replacement() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled(&server, "/meta-refresh.html", &[])?;
     let stdout = assert_disabled_result(&output, &server, "meta refresh document replacement");
@@ -449,7 +449,7 @@ fn blocks_dynamic_scripts_and_event_handlers() -> Result<()> {
         return false;
     })()"#
         .replace("__BASE_READY__", DISABLED_READY_SCRIPT);
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled_until(&server, "/page.html", &ready_script, &[])?;
     let stdout = assert_disabled_result(
@@ -482,7 +482,7 @@ fn blocks_child_javascript_url_execution() -> Result<()> {
         return true;
     })()"#;
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled_until(&server, "/javascript-url.html", READY_SCRIPT, &[])?;
 
@@ -511,7 +511,7 @@ fn child_javascript_url_fixture_executes_by_default() -> Result<()> {
         return child?.documentElement?.getAttribute('data-javascript-url-ran') === 'yes';
     })()"#;
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/javascript-url.html"),
@@ -570,7 +570,7 @@ fn fragment_parsers_use_the_disabled_document_policy() -> Result<()> {
         return ready;
     })()"#
         .replace("__BASE_READY__", DISABLED_READY_SCRIPT);
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled_until(&server, "/page.html", &ready_script, &[])?;
     let stdout = assert_disabled_result(&output, &server, "document-owned fragment parsing");
@@ -608,7 +608,7 @@ fn applies_to_document_open_replacement_parser() -> Result<()> {
         }
         return ready;
     })()"#;
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled_until(&server, "/document-write.html", READY_SCRIPT, &[])?;
 
@@ -636,7 +636,7 @@ fn applies_to_document_open_replacement_parser() -> Result<()> {
 
 #[test]
 fn composes_with_script_stripping() -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = fetch_disabled(&server, "/page.html", &["--strip-mode", "js"])?;
     let stdout = assert_disabled_result(&output, &server, "script-disabled stripped output");
@@ -724,7 +724,7 @@ fn keeps_script_execution_enabled_by_default() -> Result<()> {
         "/srcdoc.css",
     ];
 
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = super::fixture_runtime()?;
     let server = runtime.block_on(DisableJsFixtureServer::spawn())?;
     let output = run_fetch_cli_with_args(
         &server.url("/page.html"),

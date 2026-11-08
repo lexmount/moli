@@ -166,7 +166,7 @@ impl ProtocolDeliveryRoute {
             return false;
         }
         if let Some(root_document) = capabilities.root_document.as_ref()
-            && !conn.target_root_document_protocol_attachment_identity_is_current(root_document)
+            && !conn.target_root_document_output_identity_is_current(root_document)
         {
             return false;
         }

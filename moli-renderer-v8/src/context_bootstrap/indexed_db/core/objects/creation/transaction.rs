@@ -17,9 +17,11 @@ struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(slot = SIMPLE_EVENT_TARGET_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_DB_SLOT)]
     db: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_MODE_SLOT)]
     mode: &'static str,
-    #[webapi(init = "null")]
+    #[webapi(slot = crate::context_bootstrap::indexed_db::TRANSACTION_ERROR_SLOT, init = "null")]
     error: (),
     object_store_names: v8::Local<'scope, v8::Object>,
     #[webapi(
@@ -59,12 +61,10 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     db: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
-    store_names: &[String],
+    store_names: &[moli_indexeddb::IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let handle_raw = handle.map(|handle| handle.into_raw() as f64);
     let mode_label: &'static str = mode.into();
-    let db_key = object_string_property(scope, db, INDEXED_DB_DATABASE_KEY_SLOT);
-    let object_store_names = new_idb_dom_string_list(scope, store_names);
+    let object_store_names = new_idb_name_list(scope, store_names);
     let tx = IdbTransactionObjectDeclaration::new(db, mode_label, object_store_names)
         .bind(scope)
         .ok()?;
@@ -78,13 +78,6 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(
-        scope,
-        tx,
-        handle,
-        mode,
-        handle_raw.is_some(),
-        db_key,
-    );
+    register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, handle.is_some());
     Some(tx)
 }

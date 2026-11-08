@@ -1,6 +1,7 @@
 //! Import browser cookies and local storage into a Moli browser profile.
 
 mod chrome;
+mod creation_time;
 mod firefox;
 mod sqlite;
 mod storage;
@@ -13,6 +14,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use moli_browser_profile::BrowserProfile;
+use moli_cookie_jar::StoredCookieSetReport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportIncludes(u8);
@@ -83,10 +85,22 @@ pub struct ImportRequest<'a> {
     pub cookie_jars: &'a [PathBuf],
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportSummary {
+    /// Accepted write attempts, including replacements of the same identity.
     pub cookies: usize,
+    pub cookies_rejected: usize,
     pub storage: usize,
+}
+
+impl ImportSummary {
+    fn record_cookie(&mut self, report: StoredCookieSetReport) {
+        if report.is_accepted() {
+            self.cookies += 1;
+        } else {
+            self.cookies_rejected += 1;
+        }
+    }
 }
 
 impl fmt::Display for ImportSummary {
@@ -95,8 +109,11 @@ impl fmt::Display for ImportSummary {
         if self.storage > 0 {
             parts.push(format!("storage={}", self.storage));
         }
-        if self.cookies > 0 {
-            parts.push(format!("cookies={}", self.cookies));
+        if self.cookies > 0 || self.cookies_rejected > 0 {
+            parts.push(format!(
+                "cookies accepted={}, rejected={}",
+                self.cookies, self.cookies_rejected
+            ));
         }
         formatter.write_str(&parts.join(", "))
     }
@@ -146,30 +163,43 @@ pub fn import_session_state(request: &ImportRequest<'_>) -> Result<ImportSummary
         }
     }
 
-    let summary = ImportSummary {
-        cookies: imported_cookies.len(),
+    let mut summary = ImportSummary {
         storage: imported_storage.values().map(|entries| entries.len()).sum(),
+        ..ImportSummary::default()
     };
-    // Read and merge every source and existing destination before writing.
-    // Each file is replaced atomically; the two files are not a transaction.
+    // Read all sources and validate the destination before accepting changes.
+    // Each database commits independently; this is not a cross-file transaction.
+    let mut runtime = moli_sqlite::Runtime::new()?;
     let cookies = if imported_cookies.is_empty() {
         None
     } else {
-        let mut cookies = moli_cookie_cache::load_cookie_cache(partition.cookies_path())?;
-        cookies.extend(imported_cookies);
-        Some(cookies)
+        Some(moli_cookie_db::CookieDatabase::open(
+            partition.cookies_path().to_owned(),
+            moli_sqlite::OpenMode::Create,
+            runtime.handle(),
+        )?)
     };
-    let storage = storage::prepare(partition.local_storage_path(), imported_storage)?;
-    if let Some(bytes) = storage {
-        moli_browser_profile::write_profile_file(
-            partition.local_storage_path(),
-            &bytes,
-            "localStorage import",
+    if imported_storage.values().any(|entries| !entries.is_empty()) {
+        moli_web_storage::import_sqlite_web_storage(
+            partition.local_storage_path().to_owned(),
+            runtime.handle(),
+            storage::into_sqlite_areas(imported_storage),
         )?;
     }
-    if let Some(cookies) = cookies {
-        moli_cookie_cache::save_cookie_cache(partition.cookies_path(), cookies)?;
+    if let Some((store, owner)) = cookies {
+        {
+            let mut store = store.lock()?;
+            for cookie in imported_cookies {
+                summary.record_cookie(store.upsert_with_request_url_report(
+                    cookie,
+                    None,
+                    moli_cookie_jar::CookieSource::Cdp,
+                ));
+            }
+        }
+        owner.close()?;
     }
+    runtime.shutdown()?;
 
     Ok(summary)
 }

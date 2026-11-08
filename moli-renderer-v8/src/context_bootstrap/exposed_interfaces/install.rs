@@ -311,6 +311,25 @@ pub(in crate::context_bootstrap) fn install_interface_template_metadata<'s>(
 }
 
 #[cfg(test)]
+pub(crate) fn realm_interface_is_materialized(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+) -> bool {
+    let Some(templates) = ExposedInterfaceTemplateRegistry::current(scope) else {
+        return false;
+    };
+    let Some(id) = templates.id_by_name(name) else {
+        return false;
+    };
+    let Ok(realm) = IntrinsicInterfaceRegistry::for_current_context(scope, templates.len()) else {
+        return false;
+    };
+    realm
+        .entry(id)
+        .is_some_and(|entry| matches!(*entry, RealmInterfaceEntry::Ready))
+}
+
+#[cfg(test)]
 pub(crate) fn interface_materialization_count(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,

@@ -12,6 +12,53 @@ use super::shared::compile_event_attribute_handler;
 
 const BODY_ONLOAD_COMPILED_SLOT: &str = "__moliBodyOnloadCompiled";
 
+/// Resolve native inline Window source at dispatch, without observing the
+/// page's document/body/onload JavaScript getters.
+pub(crate) fn compile_window_body_event_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut crate::native_bridge::JsContextHost,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
+    let host = unsafe { &*host_ptr };
+    let handle = host.event_handler_content_attribute_node(
+        crate::document_runtime::EventTargetHandle::Window,
+        event_type,
+    )?;
+    let name = super::generic::event_handler_content_attribute_name(event_type)?;
+    if event_type == "load" && body_window_event_handler_is_compiled(scope, "onload") == Some(true)
+    {
+        return None;
+    }
+    let source = element_attribute(host, handle, &name)?;
+    if event_type == "load" {
+        set_body_window_event_handler_compiled(scope, "onload", true);
+    }
+    // A parse error can report another event synchronously. Do not recompile
+    // the same handler while its original compilation is in progress.
+    unsafe { &mut *host_ptr }.set_registered_event_handler_property(
+        scope,
+        crate::document_runtime::EventTargetHandle::Window,
+        event_type,
+        None,
+    );
+    let event = v8_string(scope, "event")?;
+    let handler = compile_event_attribute_handler(scope, host_ptr, handle, &source, &[event], &[]);
+    if let Some(handler) = handler
+        && let Some(name) = v8_string(scope, &name)
+    {
+        handler.set_name(name);
+    }
+    let context = scope.get_current_context();
+    unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        crate::document_runtime::EventTargetHandle::Window,
+        event_type,
+        handler,
+        context,
+    );
+    handler
+}
+
 fn body_window_event_handler_is_compiled(
     scope: &mut v8::PinScope<'_, '_>,
     handler_name: &str,
@@ -200,14 +247,14 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
     }
     for name in ["onload", "onerror"] {
         if runtime.dom_host().get_attribute(handle, name).is_some() {
-            invalidate_body_window_event_attribute_handler(scope, runtime, handle, name);
+            super::invalidate_event_handler_content_attribute(scope, runtime_ptr, handle, name);
         }
     }
 }
 
 pub(super) fn invalidate_body_window_event_attribute_handler(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &mut crate::native_bridge::JsContextHost,
     handle: crate::document_runtime::DomHandle,
     name: &str,
 ) {
@@ -221,5 +268,13 @@ pub(super) fn invalidate_body_window_event_attribute_handler(
         _ => return,
     };
     let _ = set_body_window_event_handler_compiled(scope, handler_name, false);
+    if handler_name == "onload"
+        && runtime.owner_dispatch_scope_for_node(handle)
+            == Some(crate::native_bridge::OwnerDispatchScope::Top)
+    {
+        // The shared attribute mutation entry has invalidated the Window
+        // registration. Only the legacy compilation flag needs resetting here.
+        return;
+    }
     body_window_event_handler_set(scope, handler_name, v8::null(scope).into());
 }

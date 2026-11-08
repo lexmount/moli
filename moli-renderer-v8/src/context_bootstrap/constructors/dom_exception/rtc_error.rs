@@ -1,6 +1,6 @@
 use super::*;
 use crate::util::apply_webidl_constructor_prototype_fallback;
-use webidl::{WebIdlDictionary, WebIdlDictionarySerialize};
+use webidl::WebIdlDictionarySerialize;
 
 const ERROR_DETAIL: &str = "__moliRtcErrorDetail";
 const SDP_LINE_NUMBER: &str = "__moliRtcErrorSdpLineNumber";
@@ -40,28 +40,10 @@ struct ErrorInit {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "RTCError")]
 struct ConstructorArgs {
-    #[webidl(required, with = parse_init_arg)]
+    #[webidl(required, dictionary)]
     init: ErrorInit,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw")]
     message: webidl::DomString16,
-}
-
-fn parse_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ErrorInit, webidl::WebIdlError> {
-    let object = webidl::dictionary_value(
-        args.get(index),
-        webidl::Context::argument("RTCError", (index + 1) as usize),
-    )?
-    .ok_or_else(|| {
-        webidl::WebIdlError::missing_required(webidl::Context::member(
-            "RTCErrorInit",
-            "errorDetail",
-        ))
-    })?;
-    ErrorInit::parse_dictionary(scope, object)
 }
 
 #[derive(WebApiObject)]
@@ -121,7 +103,6 @@ pub(crate) fn rtc_error_constructor_callback<'s>(
         .is_some()
         && declaration.initialize(scope, args.this()).is_ok()
     {
-        capture_dom_exception_stack(scope, args.this());
         apply_webidl_constructor_prototype_fallback(
             scope,
             args.this(),

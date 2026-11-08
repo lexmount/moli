@@ -1514,7 +1514,7 @@ pub(super) fn svg_length_getter<'s>(
         }
         "value" => {
             let value = svg_length_value_in_user_units(scope, args.this());
-            rv.set(v8::Number::new(scope, value).into());
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueInSpecifiedUnits" => {
             let value = svg_length_number_slot(
@@ -1523,7 +1523,7 @@ pub(super) fn svg_length_getter<'s>(
                 SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
             )
             .unwrap_or(0.0);
-            rv.set(v8::Number::new(scope, value).into());
+            rv.set(v8::Number::new(scope, f64::from(value as f32)).into());
         }
         "valueAsString" => {
             rv.set(
@@ -1664,7 +1664,7 @@ pub(super) fn svg_length_setter<'s>(
     }
     match name {
         "value" | "valueInSpecifiedUnits" => {
-            let value = match webidl::convert::<webidl::Double>(
+            let value = match webidl::convert::<webidl::Float>(
                 scope,
                 args.get(0),
                 webidl::Context::member("SVGLength", name),
@@ -3437,7 +3437,7 @@ pub(super) fn svg_transform_set_translate_callback<'s>(
     set_svg_transform_state(
         scope,
         args.this(),
-        SvgTransform::translate(parsed.tx, parsed.ty),
+        SvgTransform::translate(f64::from(parsed.tx), f64::from(parsed.ty)),
     );
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
@@ -3454,7 +3454,7 @@ pub(super) fn svg_transform_set_scale_callback<'s>(
     set_svg_transform_state(
         scope,
         args.this(),
-        SvgTransform::scale(parsed.sx, parsed.sy),
+        SvgTransform::scale(f64::from(parsed.sx), f64::from(parsed.sy)),
     );
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
@@ -3471,7 +3471,11 @@ pub(super) fn svg_transform_set_rotate_callback<'s>(
     set_svg_transform_state(
         scope,
         args.this(),
-        SvgTransform::rotate(parsed.angle, parsed.cx, parsed.cy),
+        SvgTransform::rotate(
+            f64::from(parsed.angle),
+            f64::from(parsed.cx),
+            f64::from(parsed.cy),
+        ),
     );
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
@@ -3482,10 +3486,14 @@ pub(super) fn svg_transform_set_skew_x_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<SvgTransformSkewArgs>(scope, &args) else {
         return;
     };
-    set_svg_transform_state(scope, args.this(), SvgTransform::skew_x(parsed.angle));
+    set_svg_transform_state(
+        scope,
+        args.this(),
+        SvgTransform::skew_x(f64::from(parsed.angle)),
+    );
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
 }
@@ -3495,10 +3503,14 @@ pub(super) fn svg_transform_set_skew_y_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgAngleArg>(scope, &args) else {
+    let Some(parsed) = webidl::parse_args::<SvgTransformSkewArgs>(scope, &args) else {
         return;
     };
-    set_svg_transform_state(scope, args.this(), SvgTransform::skew_y(parsed.angle));
+    set_svg_transform_state(
+        scope,
+        args.this(),
+        SvgTransform::skew_y(f64::from(parsed.angle)),
+    );
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
 }

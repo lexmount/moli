@@ -13,7 +13,7 @@ from ..png_image import decode_png
 from ..process import run_captured_process
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 from ..serve import start_browser, start_moli_serve, stop_browser, wait_for_browser_endpoint
-from .layout_screenshot import _capture, _open_target, _response_for_id, _success, _wait_for_load
+from .layout_screenshot import _capture, _navigate, _open_target, _response_for_id, _success
 
 
 REPRO = """<!doctype html><style>
@@ -175,15 +175,13 @@ async def _assert_emulation(
         await _assert_snapshot(client, peer, startup_visible)
     finally:
         await _success(client, "Target.closeTarget", {"targetId": other})
-    _, _, seen = await _success(client, "Page.navigate", {"url": URL}, session_id=session)
-    await _wait_for_load(client, session, seen)
+    await _navigate(client, session, {"url": URL})
     assert_equal(await _evaluate(client, session, "firstClient"), 800, "scrollbar emulation before navigation scripts")
     await _assert_snapshot(client, session, False)
     await _success(client, "Emulation.setScrollbarsHidden", {"hidden": False}, session_id=session)
     if not is_moli_browser():
         await _assert_metrics(client, session, False)
-        _, _, seen = await _success(client, "Page.navigate", {"url": URL}, session_id=session)
-        await _wait_for_load(client, session, seen)
+        await _navigate(client, session, {"url": URL})
     await _assert_metrics(client, session, startup_visible)
     await _assert_snapshot(client, session, startup_visible)
     await _success(client, "Emulation.setScrollbarsHidden", {"hidden": True}, session_id=session)
@@ -217,8 +215,7 @@ async def _serve_case(
             await _assert_input(client, session, visible)
             record(results, f"scrollbar_input_{name}")
             # Reload clears the scroll offsets and DOM event probe.
-            _, _, seen = await _success(client, "Page.navigate", {"url": URL}, session_id=session)
-            await _wait_for_load(client, session, seen)
+            await _navigate(client, session, {"url": URL})
             await _assert_emulation(client, target, session, visible)
             record(results, f"scrollbar_emulation_{name}")
     finally:
@@ -307,8 +304,7 @@ async def run_scrollbar_visibility_group(
                 metrics = await _assert_snapshot(client, session, visible)
                 record(results, "scrollbar_chromium_startup_" + name, {"visible": visible, "metrics": metrics})
                 await _assert_input(client, session, visible)
-                _, _, seen = await _success(client, "Page.navigate", {"url": URL}, session_id=session)
-                await _wait_for_load(client, session, seen)
+                await _navigate(client, session, {"url": URL})
                 await _assert_emulation(client, target, session, visible)
                 record(results, "scrollbar_chromium_input_and_emulation_" + name)
             finally:

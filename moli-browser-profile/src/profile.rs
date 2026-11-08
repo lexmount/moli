@@ -53,6 +53,17 @@ pub struct BrowserProfilePartition<'a> {
 }
 
 impl<'a> BrowserProfilePartition<'a> {
+    /// Prepare the partition namespace before initializing durable backends.
+    pub fn ensure_directory(&self) -> Result<()> {
+        crate::profile_file::create_durable_profile_directory(&self.paths.partition_root)
+            .with_context(|| {
+                format!(
+                    "failed to initialize storage partition `{}`",
+                    self.paths.partition_root.display()
+                )
+            })
+    }
+
     pub fn id(&self) -> &'static str {
         DEFAULT_PROFILE_PARTITION_ID
     }

@@ -187,10 +187,6 @@ fn prepare(
             } else {
                 params.depth
             };
-            let frontend = matches!(
-                params.reference,
-                DevToolsDomNodeReference::FrontendNodeId(_)
-            );
             Ok(Operation::new(
                 Command::DocumentChildNodeSnapshotEventsForNode {
                     reference: params.reference.into_renderer_reference(session.clone()),
@@ -200,19 +196,15 @@ fn prepare(
                     pierce: params.pierce,
                 },
                 move |reply| match reply {
-                    Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(Some(mut snapshots))) => {
-                        snapshots.events.truncate(1);
+                    Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(Some(snapshots))) => {
                         let mut response = Response::success(json!({}));
                         response.notifications =
                             child_notifications(snapshots, top_frame.as_deref());
                         response
                     }
+                    // Like Chromium, missing or unpublished targets are a no-op.
                     Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(None)) => {
-                        if frontend {
-                            node_not_found()
-                        } else {
-                            Response::error(-32000, "InvalidNode")
-                        }
+                        Response::success(json!({}))
                     }
                     Err(error) => Response::error(
                         -32000,
@@ -230,9 +222,11 @@ fn prepare(
                     inspector_session_id: session,
                 },
                 |reply| match reply {
-                    Ok(Reply::OptionalDocumentNodeReference(Some(node))) => Response::success(
-                        json!({"backendNodeId": node.backend_node_id, "nodeId": node.node_id}),
-                    ),
+                    Ok(Reply::OptionalDocumentNodeReference(Some(node))) => {
+                        Response::success(get_frame_owner_result_value(
+                            &get_frame_owner_result_from_node_reference(node),
+                        ))
+                    }
                     Ok(Reply::OptionalDocumentNodeReference(None)) => Response::error(
                         -32000,
                         "Frame with the given id does not belong to the target.",
@@ -253,7 +247,7 @@ fn prepare(
                 .object_id
                 .as_deref()
                 .and_then(|id| cached_dom_remote_object_node_for_owner(conn, &owner, id));
-            let project = move |reply| project_node_snapshot(reply, top_frame, cached, false);
+            let project = move |reply| project_node_snapshot(reply, top_frame, cached);
             if let Some(object) = params.reference.object_id {
                 let object = dom_object_reference_id_for_owner(conn, &owner, &object.into());
                 Ok(Operation::new(
@@ -263,6 +257,7 @@ fn prepare(
                         object,
                         params.depth,
                         params.pierce,
+                        false,
                     ),
                     project,
                 ))
@@ -291,7 +286,7 @@ fn prepare(
                 .flatten()
                 .ok_or_else(StartError::invalid_params)?;
             Ok(Operation::new(
-                Command::document_node_snapshot_for_object_id(
+                Command::request_document_node_for_object_id(
                     session,
                     whitespace,
                     dom_object_reference_id_for_owner(
@@ -299,10 +294,26 @@ fn prepare(
                         &owner,
                         &params.object_id.inner().to_owned().into(),
                     ),
-                    0,
-                    false,
                 ),
-                move |reply| project_node_snapshot(reply, top_frame, None, true),
+                move |reply| match reply {
+                    Ok(Reply::DocumentNodeRequested {
+                        node_id,
+                        child_node_snapshot_events,
+                    }) => {
+                        let mut response = node_id
+                            .map(|id| Response::success(json!({"nodeId": id})))
+                            .unwrap_or_else(node_not_found);
+                        if let Some(events) = child_node_snapshot_events {
+                            response.notifications =
+                                child_notifications(events, top_frame.as_deref());
+                        }
+                        response
+                    }
+                    Err(error) => {
+                        Response::error(-32000, format!("Could not request node object: {error}"))
+                    }
+                    _ => unreachable!("DOM request node reply"),
+                },
             ))
         }
         DomAction::GetOuterHtml => {
@@ -442,17 +453,25 @@ fn prepare(
                     from_index: params.from_index,
                     to_index: params.to_index,
                 },
-                |reply| match reply {
-                    Ok(Reply::DocumentSearchResults(
-                        RendererDomSearchResultsResolution::Found(nodes),
-                    )) => Response::success(
-                        json!({"nodeIds": nodes.into_iter().map(|node| node.frontend_node_id).collect::<Vec<_>>()}),
-                    ),
-                    Ok(Reply::DocumentSearchResults(
-                        RendererDomSearchResultsResolution::SearchResultNotFound,
-                    )) => Response::error(-32000, "No search session with given id found"),
-                    Ok(Reply::DocumentSearchResults(_)) => {
-                        Response::error(-32000, "Invalid search result range")
+                move |reply| match reply {
+                    Ok(Reply::DocumentSearchResults {
+                        resolution,
+                        child_node_snapshot_events,
+                    }) => {
+                        let mut response = match resolution {
+                            RendererDomSearchResultsResolution::Found(nodes) => Response::success(
+                                json!({"nodeIds": nodes.into_iter().map(|node| node.frontend_node_id).collect::<Vec<_>>()}),
+                            ),
+                            RendererDomSearchResultsResolution::SearchResultNotFound => {
+                                Response::error(-32000, "No search session with given id found")
+                            }
+                            _ => Response::error(-32000, "Invalid search result range"),
+                        };
+                        if let Some(snapshots) = child_node_snapshot_events {
+                            response.notifications =
+                                child_notifications(snapshots, top_frame.as_deref());
+                        }
+                        response
                     }
                     Err(error) => Response::error(
                         -32000,
@@ -493,13 +512,9 @@ fn project_node_snapshot(
     reply: anyhow::Result<Reply>,
     top_frame: Option<String>,
     cached: Option<Value>,
-    request: bool,
 ) -> Response {
     match reply {
         Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot)) => match *snapshot {
-            Some(snapshot) if request => frontend_node_id_for_snapshot(&snapshot.snapshot)
-                .map(|id| Response::success(json!({"nodeId": id})))
-                .unwrap_or_else(node_not_found),
             Some(snapshot) => node_for_describe_node_object_snapshot(
                 &snapshot.snapshot,
                 snapshot.frame_id.as_deref(),
@@ -511,13 +526,7 @@ fn project_node_snapshot(
                 .map(|node| Response::success(json!({"node": node})))
                 .unwrap_or_else(node_not_found),
         },
-        Err(error) => Response::error(
-            -32000,
-            format!(
-                "Could not {} node object: {error}",
-                if request { "request" } else { "describe" }
-            ),
-        ),
+        Err(error) => Response::error(-32000, format!("Could not describe node object: {error}")),
         _ => unreachable!("DOM node snapshot reply"),
     }
 }

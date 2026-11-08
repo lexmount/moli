@@ -120,7 +120,7 @@ pub(crate) use styles::{
     STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
     STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT,
     StyleObservation, computed_style_target_context, iframe_handle_viewport,
-    marker_pseudo_element_is_generated_for_document_snapshot,
+    marker_pseudo_element_is_generated_for_document_snapshot, style_viewport_for_document,
 };
 mod stylesheets;
 mod template_install;
@@ -166,8 +166,9 @@ pub(crate) use shadow_dom::{
     ensure_shadow_root_adopted_style_sheets_initialized,
 };
 pub(crate) use styles::{
-    ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode,
-    active_css_animation_transform_value, computed_style_properties_for_inspector_handle,
+    ComputedStyleExportValues, ComputedStyleRead, PreparedAnonymousStyleContext, StyleMode,
+    active_css_animation_transform_value, computed_style_export_values_for_document_snapshot,
+    computed_style_properties_for_inspector_handle,
     computed_style_property_values_for_document_snapshot, css_animation_start_applies,
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_mutation_affected_names_with_pdb,
@@ -194,13 +195,14 @@ pub(crate) use activation::{
     navigate_named_iframe_target,
 };
 pub(crate) use activation::{
-    activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,
-    activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
-    activate_handle_via_synthetic_click, dispatched_click_activation_target,
-    finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
-    perform_click_default_action_for_dispatched_event, perform_drop_default_action,
-    prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_url_fragment_or_top, select_contenteditable_contents,
+    accepts_drop_default_action, activate_default_submit_button_via_keyboard,
+    activate_handle_after_pointer_release, activate_handle_via_click,
+    activate_handle_via_click_with_detail_and_modifiers, activate_handle_via_synthetic_click,
+    dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
+    perform_auxiliary_link_default_action, perform_click_default_action_for_dispatched_event,
+    perform_drop_default_action, prepare_legacy_activation_for_dispatched_click,
+    replace_contenteditable_selection, scroll_to_url_fragment_or_top,
+    select_contenteditable_contents,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
@@ -259,8 +261,11 @@ pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
+    compile_node_content_attribute_for_dispatch, compile_window_body_event_attribute,
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
-    node_event_handler_getter_function, node_event_handler_setter_function,
+    invalidate_event_handler_content_attribute, is_body_window_event_handler_attribute,
+    is_global_event_handler_attribute, node_event_handler_getter_function,
+    node_event_handler_setter_function, node_event_handler_value_from_wrapper,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
@@ -270,15 +275,15 @@ use event_handlers::{
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
-    NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint, construct_command_event,
-    construct_drag_event, construct_input_event, construct_interest_event,
-    construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
-    construct_mouse_event_with_modifiers, construct_mouse_event_with_related_target_and_modifiers,
-    construct_pointer_event, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target,
+    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
+    construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
+    construct_input_event, construct_interest_event, construct_keyboard_event,
+    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
+    construct_mouse_event_with_related_target_for_target, construct_pointer_event,
+    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
-    construct_touch_event_with_points, construct_wheel_event, dispatch_beforeinput,
+    construct_touch_event_with_points, construct_wheel_event_for_target, dispatch_beforeinput,
     dispatch_public_event,
 };
 use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
@@ -540,11 +545,11 @@ pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
     MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_text_track_load_task,
     dispatch_media_load_event_phase, dispatch_media_seek_completion, dispatch_media_seeking_event,
-    dispatch_text_track_list_event, queue_default_text_track_mode_if_needed,
-    queue_media_canplay_after_text_tracks, queue_media_load_if_needed,
-    queue_media_load_if_source_or_loading_change, queue_media_load_network_terminal_followup,
-    queue_revealed_lazy_media_loads, queue_text_track_load_if_needed,
-    queue_text_track_terminal_followup,
+    dispatch_media_volume_change, dispatch_text_track_list_event,
+    queue_default_text_track_mode_if_needed, queue_media_canplay_after_text_tracks,
+    queue_media_load_if_needed, queue_media_load_if_source_or_loading_change,
+    queue_media_load_network_terminal_followup, queue_revealed_lazy_media_loads,
+    queue_text_track_load_if_needed, queue_text_track_terminal_followup,
 };
 pub(super) use media::{
     apply_default_text_track_modes_for_media, media_add_text_track_callback,
@@ -704,14 +709,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
-    if did_set {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
-    }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
         runtime_ptr,
@@ -768,14 +765,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
-    if did_set && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
-    }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
         runtime_ptr,
@@ -823,14 +812,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
-    }
-    if did_remove {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
     }
     did_remove
 }
@@ -904,14 +885,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
-    }
-    if did_remove && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
     }
     did_remove
 }
@@ -1719,7 +1692,10 @@ fn aria_element_reference_attribute_getter_callback<'s>(
         return;
     };
     let slot = aria_element_reference_slot(&attribute);
-    if let Some(value) = get_private_value(scope, args.this(), &slot) {
+    let Some(backing) = super::node::node_backing_object(scope, args.this()) else {
+        return;
+    };
+    if let Some(value) = get_private_value(scope, backing, &slot) {
         rv.set(value);
         return;
     }
@@ -1740,7 +1716,10 @@ fn aria_element_reference_attribute_setter_callback<'s>(
         return;
     };
     let slot = aria_element_reference_slot(&attribute);
-    set_private_value(scope, args.this(), &slot, args.get(0));
+    let Some(backing) = super::node::node_backing_object(scope, args.this()) else {
+        return;
+    };
+    set_private_value(scope, backing, &slot, args.get(0));
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {

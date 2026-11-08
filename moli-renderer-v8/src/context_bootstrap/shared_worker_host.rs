@@ -1,17 +1,15 @@
 use crate::content_security_policy::ContentSecurityPolicy;
+use crate::webidl;
 
 use super::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
     ensure_message_port_wrapper_for_id_in_realm,
-    events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
-    invoke_simple_event_listener,
+    events::construct_original_event,
     navigation_serialize::{
         current_document_content_security_policies, current_document_referrer_policy,
         document_referrer_policy_for_native_document,
     },
     shared::SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-    simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
-    simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler,
     worker_host::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
@@ -36,7 +34,7 @@ use crate::{
     types::SubresourcePolicyContext,
     util::{
         context_host_ptr_from_global_bridge, get_private_value, set_private_value,
-        throw_type_error, v8_string, v8str,
+        throw_type_error, v8str,
     },
     worker::{WorkerNetworkPolicy, WorkerScriptKind, worker_secure_context_for_script_url},
 };
@@ -59,19 +57,6 @@ struct SharedWorkerObjectDeclaration<'scope> {
 
     #[webapi(slot = SHARED_WORKER_ONERROR_SLOT, init = "null")]
     onerror_slot: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        enumerable,
-        callback = simple_event_target_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, enumerable, callback = simple_event_target_dispatch_event_callback)]
-    dispatch_event: (),
 
     #[webapi(
         accessor_property,
@@ -564,106 +549,76 @@ fn child_context_handle_from_global<'s>(
     }
 }
 
-fn parse_shared_worker_options(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "SharedWorkerOptions")]
+struct SharedWorkerOptionsMembers {
+    #[webidl(inherit)]
+    worker: super::worker_host::WorkerOptionsMembers,
+    #[webidl(default = false)]
+    extended_lifetime: bool,
+    #[webidl(converter = "enum")]
+    same_site_cookies: Option<SameSiteCookies>,
+}
+
+#[derive(webidl::WebIdlEnum)]
+#[webidl(name = "SharedWorkerSameSiteCookies")]
+enum SameSiteCookies {
+    #[webidl(token = "all")]
+    All,
+    #[webidl(token = "none")]
+    None,
+}
+
+fn parse_shared_worker_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<SharedWorkerOptions> {
-    if args.length() < 2 {
-        return Some(SharedWorkerOptions::default());
-    }
     let value = args.get(1);
-    if value.is_undefined() || value.is_null() {
-        return Some(SharedWorkerOptions::default());
-    }
-    if value.is_string() {
-        return Some(SharedWorkerOptions {
-            name: value.to_string(scope)?.to_rust_string_lossy(scope),
-            ..SharedWorkerOptions::default()
-        });
-    }
-    if !value.is_object() {
-        return Some(SharedWorkerOptions {
-            name: value.to_string(scope)?.to_rust_string_lossy(scope),
-            ..SharedWorkerOptions::default()
-        });
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        throw_type_error(
+    // The legacy DOMString-or-dictionary union chooses strings for primitives.
+    // Nullish values choose an empty dictionary, whose defaults come from derive.
+    if !value.is_object() && !value.is_null_or_undefined() {
+        return match webidl::convert::<webidl::DomString>(
             scope,
-            "Failed to construct 'SharedWorker': options must be a string or object.",
-        );
-        return None;
-    };
-    let name = optional_string_property(scope, object, "name")?.unwrap_or_default();
-    let script_kind = match optional_string_property(scope, object, "type")? {
-        Some(value) if value == "classic" => WorkerScriptKind::Classic,
-        Some(value) if value == "module" => WorkerScriptKind::Module,
-        Some(_) => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'SharedWorker': the provided worker type is invalid.",
-            );
+            value,
+            webidl::Context::argument("SharedWorker", 2),
+        ) {
+            Ok(name) => Some(SharedWorkerOptions {
+                name: name.0,
+                ..Default::default()
+            }),
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                None
+            }
+        };
+    }
+    let options = match webidl::convert::<webidl::Dictionary<SharedWorkerOptionsMembers>>(
+        scope,
+        value,
+        webidl::Context::argument("SharedWorker", 2),
+    ) {
+        Ok(options) => options.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
             return None;
         }
-        None => WorkerScriptKind::Classic,
-    };
-    let credentials_mode = match optional_string_property(scope, object, "credentials")? {
-        Some(value) if value == "omit" => SharedWorkerCredentialsMode::Omit,
-        Some(value) if value == "same-origin" => SharedWorkerCredentialsMode::SameOrigin,
-        Some(value) if value == "include" => SharedWorkerCredentialsMode::Include,
-        Some(_) => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'SharedWorker': the provided credentials mode is invalid.",
-            );
-            return None;
-        }
-        None => SharedWorkerCredentialsMode::SameOrigin,
-    };
-    let extended_lifetime = boolean_property(scope, object, "extendedLifetime")?;
-    let same_site_cookies = match optional_string_property(scope, object, "sameSiteCookies")? {
-        Some(value) if value == "all" => Some(SharedWorkerSameSiteCookies::All),
-        Some(value) if value == "none" => Some(SharedWorkerSameSiteCookies::None),
-        Some(_) => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'SharedWorker': the provided sameSiteCookies mode is invalid.",
-            );
-            return None;
-        }
-        None => None,
     };
     Some(SharedWorkerOptions {
-        name,
-        script_kind,
-        credentials_mode,
-        extended_lifetime,
-        same_site_cookies,
+        name: options.worker.name,
+        script_kind: options.worker.worker_type,
+        credentials_mode: match options.worker.credentials_mode.0 {
+            moli_fetch::RequestCredentialsMode::Omit => SharedWorkerCredentialsMode::Omit,
+            moli_fetch::RequestCredentialsMode::SameOrigin => {
+                SharedWorkerCredentialsMode::SameOrigin
+            }
+            moli_fetch::RequestCredentialsMode::Include => SharedWorkerCredentialsMode::Include,
+        },
+        extended_lifetime: options.extended_lifetime,
+        same_site_cookies: options.same_site_cookies.map(|value| match value {
+            SameSiteCookies::All => SharedWorkerSameSiteCookies::All,
+            SameSiteCookies::None => SharedWorkerSameSiteCookies::None,
+        }),
     })
-}
-
-fn boolean_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<bool> {
-    let key = v8_string(scope, key)?;
-    object
-        .get(scope, key.into())
-        .map(|value| value.boolean_value(scope))
-}
-
-fn optional_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<Option<String>> {
-    let key = v8_string(scope, key)?;
-    let value = object.get(scope, key.into())?;
-    if value.is_undefined() {
-        return Some(None);
-    }
-    Some(Some(value.to_string(scope)?.to_rust_string_lossy(scope)))
 }
 
 fn prepare_shared_worker_script_load(
@@ -756,39 +711,10 @@ fn dispatch_shared_worker_error_event<'s>(
     };
     let Some(event) = event else { return false };
     crate::context_bootstrap::mark_event_trusted(scope, event);
-    set_event_dispatch_fields(scope, worker, event);
-
-    let listeners = simple_object_event_listeners_snapshot(scope, worker, "error");
-    let mut dispatched = false;
-    for listener in listeners {
-        let Some(listener) = listener.prepare_for_invocation(scope, worker, "error") else {
-            continue;
-        };
-        dispatched = true;
-        let callback_result = invoke_simple_event_listener(
-            scope,
-            "error",
-            "SharedWorker error listener",
-            &listener,
-            worker.into(),
-            &[event.into()],
-            event,
-        );
-        if event_kind == crate::worker::WorkerParentErrorEventKind::ErrorEvent
-            && listener.handler_slot.as_deref() == Some(SHARED_WORKER_ONERROR_SLOT)
-            && let Some(returned) = callback_result
-            && v8::Local::new(scope, &returned).boolean_value(scope)
-        {
-            let _ = crate::context_bootstrap::event_backing(scope, event).set(
-                scope,
-                v8str(scope, "defaultPrevented").into(),
-                v8::Boolean::new(scope, true).into(),
-            );
-        }
-    }
-
-    clear_event_dispatch_fields(scope, event);
-    dispatched
+    crate::context_bootstrap::dispatch_simple_event_target_event_collecting_errors(
+        scope, worker, "error", event, None,
+    )
+    .dispatched
 }
 
 fn new_error_event<'s>(

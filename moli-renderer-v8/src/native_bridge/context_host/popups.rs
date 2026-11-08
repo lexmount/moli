@@ -9,7 +9,7 @@ use crate::{
         SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
         apply_local_window_location_navigation, clear_simple_window_event_handler_values,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
-        install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
+        initialize_simple_event_target, install_navigation_bootstrap_entry_for_holder,
         install_simple_window_event_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
         scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
@@ -803,6 +803,9 @@ impl JsContextHost {
             .bridge
             .bindings
             .instantiate_window_shell(scope, host_ptr);
+        crate::web_api_interfaces::Window::DESCRIPTOR
+            .initialize(scope, window)
+            .ok()?;
         if let Some(dom_exception) = global_constructor_object(scope, "DOMException") {
             // Lightweight popups share the opener's V8 realm, so their
             // synthetic Window shell must expose the same realm constructor
@@ -866,7 +869,7 @@ impl JsContextHost {
             }
         }
         let _ = install_storage_aliases_for_window(scope, window);
-        install_simple_event_target_methods(scope, window);
+        initialize_simple_event_target(scope, window);
         install_simple_window_event_handlers(scope, window);
         let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);
@@ -1249,7 +1252,7 @@ impl JsContextHost {
             return target_store;
         }
         let entries = {
-            let mut source = source_store.lock();
+            let source = &source_store;
             source
                 .sorted_keys_utf16(source_scope.area_key())
                 .into_iter()
@@ -1261,7 +1264,7 @@ impl JsContextHost {
                 .collect::<Vec<_>>()
         };
         {
-            let mut target = target_store.lock();
+            let target = &target_store;
             for (key, value) in entries {
                 let _ = target.set_item_utf16(target_scope.area_key(), &key, &value);
             }
@@ -1418,11 +1421,6 @@ impl JsContextHost {
     ) -> Option<&str> {
         self.active_lightweight_popup_policy_container(scope)
             .and_then(|policy| policy.referrer_policy.as_deref())
-    }
-
-    pub(crate) fn lightweight_popup_referrer_policy(&self, popup_id: u64) -> Option<&str> {
-        self.lightweight_popup_document_record(popup_id)
-            .and_then(|document| document.state.policy_container.referrer_policy.as_deref())
     }
 
     pub(crate) fn lightweight_popup_cross_origin_embedder_policy(
@@ -2422,32 +2420,27 @@ impl JsContextHost {
         let opener_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
-            let result = async {
+            use anyhow::Context as _;
+
+            let result: Result<PopupDocumentLoadOutcome> = async {
                 let response = match response {
                     Some(receiver) => {
                         let response = receiver
                             .await
-                            .map_err(|_| "auxiliary navigation was cancelled".to_owned())??;
-                        task_resource_loader
-                            .note_external_response_ready()
-                            .map_err(|error| error.to_string())?;
+                            .context("auxiliary navigation was cancelled")??;
+                        task_resource_loader.note_external_response_ready()?;
                         response
                     }
-                    None => task_resource_loader
-                        .fetch(
+                    None => {
+                        crate::network::navigation::NavigationInterception::new(
+                            task_resource_loader.clone(),
                             request
                                 .with_request_origin(request_origin)
-                                .with_page_network_policy()
                                 .with_top_level_navigation_cookie_context(),
                         )
-                        .await
-                        .map(|response| {
-                            moli_fetch::RawResponse::from_head_and_body(
-                                response.head(),
-                                response.body_bytes().to_vec(),
-                            )
-                        })
-                        .map_err(|error| error.to_string())?,
+                        .fetch_raw()
+                        .await?
+                    }
                 };
                 let head = response.head();
                 if popup_document_response_should_ignore_navigation(response.status, &head.headers)
@@ -2458,8 +2451,7 @@ impl JsContextHost {
                     response.final_url.as_str(),
                     response.status,
                     false,
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 let content_type =
                     super::child_documents::child_document_content_type_from_headers(&head.headers);
                 let fallback = if content_type
@@ -2701,7 +2693,7 @@ impl JsContextHost {
                     popup_id,
                     navigation_id = task.navigation_id(),
                     url = %pending.target_url,
-                    error,
+                    error = %error,
                     "lightweight popup document load failed"
                 );
                 let Some(current_owner) = self.current_lightweight_popup_document_owner(popup_id)
@@ -2826,6 +2818,10 @@ impl JsContextHost {
                 scope, document,
             )
         {
+            // This projection now represents a framed Window Document. Its
+            // lifetime follows the popup owner, rather than its parser's
+            // former inert-document association with the opener.
+            self.forget_inert_document_execution_context(document_handle);
             if self.lightweight_popup_document_handle(popup_id) != Some(document_handle) {
                 self.forget_lightweight_popup_document_handle(popup_id);
             }

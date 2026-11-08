@@ -1,18 +1,23 @@
+use anyhow::{Context as _, Result};
+
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
+use crate::conn::IoStreamState;
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
 use crate::conn::{
     CapturedBody, CommandOwnerScope, CompletedFetchResponseBodyStreamReadDispatch,
-    FetchInterceptionPattern, FetchRequestStage, InFlightSubresourceFetchRequest,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadStart,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
+    FetchInterceptionPattern, FetchRequestStage, PausedDocumentTransfer,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
 };
-use crate::domains::network::TargetIoStreamRead;
+
+#[derive(Debug, thiserror::Error)]
+#[error("RequestNotFound")]
+struct SubresourceRequestNotFound;
 
 pub(crate) type SessionOwnerPendingFetchState = (
     Vec<PendingFetchNavigation>,
@@ -63,7 +68,7 @@ impl SessionFetchBodyStreamOwner<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let handle = target_scoped_stream_handle(
             &self.owner_key,
             self.runtime_slot.allocate_io_stream_handle(),
@@ -122,10 +127,10 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
 }
 
 impl TargetSessionOwnerMut<'_> {
-    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
+    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String> {
         let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
         let Some(target) = self.browser_context.page_target_mut(&self.target_id) else {
-            return Err("NoDocumentLoaded".to_owned());
+            return Err(crate::conn::NoDocumentLoaded.into());
         };
         let handle = target_scoped_stream_handle(
             &owner_key,
@@ -185,7 +190,7 @@ fn target_scoped_stream_owner_matches_session(
 fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
-) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
+) -> Result<Option<Option<moli_core::page::PendingPageCommand>>> {
     let target = browser_context.active_page_target_mut();
     if target.fetch_owner.remove_network_intercept(intercept_id) {
         let (subresource_enabled, subresource_resource_type) =
@@ -200,7 +205,7 @@ fn remove_network_intercept_from_browser_context(
             )
             .map(Some)
             .map(Some)
-            .map_err(|error| format!("failed to update page fetch interception: {error}"));
+            .context("failed to update page fetch interception");
     }
 
     let target_ids = browser_context
@@ -222,6 +227,14 @@ fn remove_network_intercept_from_browser_context(
 }
 
 impl CdpConnection {
+    pub(crate) fn fetch_command_wait_lifetime_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<crate::conn::CommandWaitLifetime> {
+        self.target_session_owner_aggregate_fetch_config_for_owner(owner)?
+            .command_wait_lifetime(owner.session_id())
+    }
+
     pub(crate) fn target_fetch_subresource_interception_snapshot_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -350,7 +363,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         bytes: Vec<u8>,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         self.open_io_stream_body_source_for_session_owner(
             session_id,
             CapturedBody::from_bytes_spooled(bytes),
@@ -361,7 +374,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         body: CapturedBody,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.open_io_stream_body_source_for_owner(&owner, body)
     }
@@ -370,31 +383,28 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         body: CapturedBody,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) else {
-            return Err("NoDocumentLoaded".to_owned());
+            return Err(crate::conn::NoDocumentLoaded.into());
         };
         owner.open_scoped_io_stream_body_source(body)
     }
 
-    pub(crate) fn read_io_stream_for_stream_owner(
+    pub(crate) fn io_stream_for_stream_owner(
         &mut self,
         session_id: Option<&str>,
         handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> Option<TargetIoStreamRead> {
+    ) -> Option<IoStreamState> {
         let Some(owner) = target_scoped_stream_owner_from_handle(handle) else {
             return self
-                .runtime_session_owner_slot_mut(session_id)
-                .and_then(|runtime_slot| runtime_slot.read_io_stream(handle, offset, size));
+                .runtime_session_owner_slot(session_id)
+                .and_then(|slot| slot.io_stream(handle));
         };
         if !target_scoped_stream_owner_matches_session(self, session_id, &owner) {
             return None;
         }
-        let browser_context = self.browser_context_by_id_mut(&owner.browser_context_id)?;
-        runtime_slot_for_target_scoped_stream_mut(browser_context, &owner.target_id)?
-            .read_io_stream(handle, offset, size)
+        let context = self.browser_context_by_id_mut(&owner.browser_context_id)?;
+        runtime_slot_for_target_scoped_stream_mut(context, &owner.target_id)?.io_stream(handle)
     }
 
     pub(crate) fn register_synthetic_websocket_request_for_owner(
@@ -443,22 +453,57 @@ impl CdpConnection {
             .find_map(|browser_context| pending_fetch_request_route(browser_context, request_id))
     }
 
+    pub(crate) fn start_subresource_document_command(
+        &self,
+        owner: &CommandOwnerScope,
+        page_owner: &crate::conn::TargetPageResidenceIdentity,
+        target: Option<&moli_core::page::PageDocumentCommandTarget>,
+        command: moli_core::RendererPageCommand,
+    ) -> Result<moli_core::page::PendingPageCommand> {
+        let target = target.context(SubresourceRequestNotFound)?;
+        if !self.subresource_document_is_current_for_owner(
+            owner,
+            page_owner,
+            Some(target.document()),
+        ) {
+            return Err(SubresourceRequestNotFound.into());
+        }
+        target.start(command)
+    }
+
+    pub(crate) fn subresource_document_is_current(
+        &self,
+        page_owner: &crate::conn::TargetPageResidenceIdentity,
+        document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+    ) -> bool {
+        self.target_page_output_residence_is_current(page_owner)
+            && document.is_none_or(|document| {
+                let owner = CommandOwnerScope::for_page_residence(page_owner);
+                self.target_root_document_output_identity_for_owner(&owner, document)
+                    .is_some_and(|binding| binding.attachment().page_owner() == page_owner)
+            })
+    }
+
+    pub(crate) fn subresource_document_is_current_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        page: &crate::conn::TargetPageResidenceIdentity,
+        document: Option<moli_core::RendererDocumentLifecycleIdentity>,
+    ) -> bool {
+        self.target_owner_identity_for_owner(owner)
+            .is_some_and(|(context, target)| {
+                context == page.browser_context_id() && target.as_deref() == page.target_id()
+            })
+            && self.subresource_document_is_current(page, document)
+    }
+
     pub(crate) fn pending_subresource_fetch_request_residence_is_current(
         &self,
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
-        pending
-            .installed_page_owner()
-            .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
-    }
-
-    fn installed_subresource_fetch_request_is_current(
-        &self,
-        pending: &PendingSubresourceFetchRequest,
-    ) -> bool {
-        pending
-            .installed_page_owner()
-            .is_some_and(|owner| self.target_page_residence_identity_is_current(owner))
+        pending.page_owner().is_none_or(|page| {
+            self.subresource_document_is_current(page, pending.source_document())
+        })
     }
 
     pub(crate) fn claim_subresource_continue_request_for_owner(
@@ -468,7 +513,7 @@ impl CdpConnection {
         internal_id: u64,
         allow_pending_completion: bool,
     ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {
-        if !self.target_page_residence_identity_is_current(expected_page_owner) {
+        if !self.target_page_output_residence_is_current(expected_page_owner) {
             return None;
         }
         self.target_session_owner_mut_for_owner(owner)?
@@ -531,25 +576,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn register_pending_fetch_response_navigation_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| {
-                owner.register_pending_fetch_response_navigation(
-                    request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                )
-            })
-    }
-
     pub(crate) fn take_fetch_response_transfer_for_cancellation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -594,7 +620,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         completed: crate::conn::CompletedDocumentBodyRead<T>,
-    ) -> Option<anyhow::Result<T>> {
+    ) -> Option<Result<T>> {
         self.target_session_owner_mut_for_owner(owner)?
             .pending_fetch_owner_mut()?
             .finish_pending_fetch_response_body_read(completed)
@@ -629,7 +655,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
             return Ok(None);
         };
@@ -802,7 +828,7 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_auth_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_document_is_current(&pending.page_owner, pending.source_document())
             .then_some(pending)
     }
 
@@ -815,20 +841,21 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_response_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_document_is_current(&pending.page_owner, pending.source_document())
             .then_some(pending)
     }
 
-    pub(crate) fn take_in_flight_subresource_fetch_request_for_owner(
+    pub(crate) fn rollback_in_flight_subresource_fetch_request_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         internal_id: u64,
-    ) -> Option<InFlightSubresourceFetchRequest> {
-        let in_flight = self
-            .target_session_owner_mut_for_owner(owner)?
-            .take_in_flight_subresource_fetch_request(internal_id)?;
-        self.installed_subresource_fetch_request_is_current(&in_flight.pending)
-            .then_some(in_flight)
+        network_request_id: &str,
+    ) {
+        if let Some(mut owner) = self.target_session_owner_mut_for_owner(owner)
+            && let Some(mut fetch) = owner.pending_fetch_owner_mut()
+        {
+            fetch.rollback_in_flight_subresource_fetch_request(internal_id, network_request_id);
+        }
     }
 
     pub(crate) fn in_flight_subresource_fetch_request_id_for_owner(
@@ -875,7 +902,7 @@ impl CdpConnection {
         request_id: Option<String>,
         pending: PendingSubresourceFetchRequest,
     ) -> bool {
-        if !self.installed_subresource_fetch_request_is_current(&pending) {
+        if !self.pending_subresource_fetch_request_residence_is_current(&pending) {
             return false;
         }
         self.record_pending_subresource_network_request_identity_for_owner(owner, &pending);
@@ -892,7 +919,7 @@ impl CdpConnection {
         pending: PendingSubresourceFetchRequest,
         response_stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     ) -> bool {
-        if !self.installed_subresource_fetch_request_is_current(&pending) {
+        if !self.pending_subresource_fetch_request_residence_is_current(&pending) {
             return false;
         }
         self.record_pending_subresource_network_request_identity_for_owner(owner, &pending);
@@ -913,7 +940,7 @@ impl CdpConnection {
         request_id: Option<String>,
         pending: PendingSubresourceFetchRequest,
     ) -> bool {
-        if !self.installed_subresource_fetch_request_is_current(&pending) {
+        if !self.pending_subresource_fetch_request_residence_is_current(&pending) {
             return false;
         }
         self.record_pending_subresource_network_request_identity_for_owner(owner, &pending);
@@ -943,7 +970,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchAuthRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_document_is_current(&pending.page_owner, pending.source_document()) {
             return false;
         }
         self.record_pending_subresource_auth_network_request_identity_for_owner(owner, &pending);
@@ -971,7 +998,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchResponseRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_document_is_current(&pending.page_owner, pending.source_document()) {
             return false;
         }
         self.record_pending_subresource_response_network_request_identity_for_owner(
@@ -1036,7 +1063,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_enable_fetch_for_owner(&owner, handle_auth_requests, patterns)
     }
@@ -1046,24 +1073,31 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let (subresource_enabled, subresource_resource_type) = owner.configure_fetch(
             command_owner.session_id().map(str::to_owned),
             handle_auth_requests,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1075,9 +1109,9 @@ impl CdpConnection {
         handle_auth_requests: bool,
         auth_url_patterns: Vec<String>,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let (subresource_enabled, subresource_resource_type) = owner.add_network_intercept(
             intercept_id,
@@ -1086,15 +1120,22 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     pub(crate) fn start_remove_network_intercept_for_owner(
@@ -1102,9 +1143,9 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         intercept_id: &str,
         allow_global_lookup: bool,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Err("BrowserContextNotLoaded".to_owned());
+            return Err(crate::conn::BrowserContextNotLoaded.into());
         };
         let Some((subresource_enabled, subresource_resource_type)) =
             owner.remove_network_intercept(intercept_id)
@@ -1112,23 +1153,30 @@ impl CdpConnection {
             if allow_global_lookup {
                 return self.start_remove_network_intercept_from_any_target(intercept_id);
             }
-            return Err("NetworkInterceptNotFound".to_owned());
+            return Err(crate::conn::NetworkInterceptNotFound.into());
         };
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_page_policy_update(
+                &owner.target_id,
+                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                    enabled: subresource_enabled,
+                    resource_type: subresource_resource_type,
+                },
+                |page| {
+                    page.start_set_fetch_subresource_interception(
+                        subresource_enabled,
+                        subresource_resource_type,
+                    )
+                },
+            )
+            .context("failed to update page fetch interception")
     }
 
     fn start_remove_network_intercept_from_any_target(
         &mut self,
         intercept_id: &str,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<moli_core::page::PendingPageCommand>> {
         if let Some(browser_context) = self.browser_context.as_mut()
             && let Some(pending) =
                 remove_network_intercept_from_browser_context(browser_context, intercept_id)?
@@ -1142,19 +1190,16 @@ impl CdpConnection {
                 return Ok(pending);
             }
         }
-        Err("NetworkInterceptNotFound".to_owned())
+        Err(crate::conn::NetworkInterceptNotFound.into())
     }
 
     pub(crate) fn start_disable_fetch_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_disable_fetch_for_owner(&owner)
     }
@@ -1162,33 +1207,71 @@ impl CdpConnection {
     pub(crate) fn start_disable_fetch_for_owner(
         &mut self,
         command_owner: &CommandOwnerScope,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
-        let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Ok(None);
-        };
-        let (pending, (subresource_enabled, subresource_resource_type), page_update_required) =
-            owner
-                .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
-        let page_command = if page_update_required
-            && let Some(page) = owner.runtime_slot_mut().loaded_page_mut()
-        {
-            Some(
-                page.start_set_fetch_subresource_interception(
-                    subresource_enabled,
-                    subresource_resource_type,
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
+        let (pending, (enabled, resource_type), update_required) = self
+            .target_session_owner_mut_for_owner(command_owner)?
+            .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
+        let policy =
+            self.start_fetch_cleanup_policy(command_owner, update_required, enabled, resource_type);
+        Some((pending, policy))
+    }
+
+    pub(crate) fn start_disable_target_fetch_for_owner(
+        &mut self,
+        command_owner: &CommandOwnerScope,
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Option<Result<moli_core::page::PendingPageCommand>>,
+    )> {
+        let (pending, (enabled, resource_type), update_required) = self
+            .target_session_owner_mut_for_owner(command_owner)?
+            .disable_target_fetch_and_drain_pending_state();
+        let policy =
+            self.start_fetch_cleanup_policy(command_owner, update_required, enabled, resource_type);
+        Some((pending, policy))
+    }
+
+    fn start_fetch_cleanup_policy(
+        &mut self,
+        owner: &CommandOwnerScope,
+        update_required: bool,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) -> Option<Result<moli_core::page::PendingPageCommand>> {
+        if !update_required {
+            return None;
+        }
+        let source = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .page_slot()
+            .prepared_document_output_binding()
+            .map(|(page, binding)| (page, binding.renderer_document_identity()));
+        if let Some((renderer_page, document)) = source {
+            let target: Result<_> = (|| {
+                let attachment = self
+                    .target_page_output_attachment_for_renderer_page(owner, renderer_page)
+                    .ok_or(crate::conn::NoDocumentLoaded)?;
+                self.capture_document_output_command_target(
+                    owner,
+                    attachment.page_owner(),
+                    renderer_page,
+                    document,
                 )
-                .map_err(|error| error.to_string())?,
-            )
-        } else {
-            None
-        };
-        Ok(Some((pending, page_command)))
+            })();
+            return Some(target.and_then(|target| {
+                target.start(
+                    moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                        enabled,
+                        resource_type,
+                    },
+                )
+            }));
+        }
+        self.loaded_page_mut_for_owner(owner)
+            .map(|page| page.start_set_fetch_subresource_interception(enabled, resource_type))
     }
 
     pub(crate) fn take_pending_fetch_state_for_owner(
@@ -1198,6 +1281,20 @@ impl CdpConnection {
         Some(
             self.target_session_owner_mut_for_owner(owner)?
                 .drain_fetch_pending_state(),
+        )
+    }
+
+    pub(crate) fn target_fetch_pending_state_is_empty_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<bool> {
+        let (context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
+        Some(
+            self.browser_context_by_id(&context_id)?
+                .page_target(target_id.as_deref()?)?
+                .fetch_owner
+                .pending_state()
+                .is_empty(),
         )
     }
 
@@ -1222,8 +1319,7 @@ impl CdpConnection {
                         .finish_renderer_document_navigation(&token)
                         .expect("a newly admitted navigation keeps the renderer channel open");
                     // The replacement was registered before retiring its predecessors.
-                    // Finishing old work must not release output or replay calls yet.
-                    debug_assert!(finish.released_output.is_empty());
+                    // Finishing old work must not replay calls yet.
                     debug_assert!(finish.renderer_call_replacements.is_none());
                 }
                 navigation
@@ -1315,34 +1411,6 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn register_pending_fetch_response_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        if let Some(token) = document_navigation_token.as_ref()
-            && let crate::conn::DocumentBodySource::StreamingRaw { response, .. } = &body
-        {
-            // Navigation cancellation also covers a response already handed
-            // to a body reader or a continuation outside the Fetch owner.
-            self.runtime_slot_mut()
-                .page_slot_mut()
-                .add_document_navigation_cancellation(token, response.cancellation_handle());
-        }
-        let Some(mut owner) = self.pending_fetch_owner_mut() else {
-            return false;
-        };
-        owner.register_pending_fetch_response_navigation(
-            request_id,
-            document_navigation_token,
-            navigation,
-            body,
-        );
-        true
-    }
-
     fn take_fetch_response_transfer_for_cancellation(
         &mut self,
         request_id: &str,
@@ -1364,6 +1432,13 @@ impl TargetSessionOwnerMut<'_> {
         request_id: String,
         transfer: PausedDocumentTransfer,
     ) -> bool {
+        if let Some(token) = transfer.navigation_token()
+            && let Some(cancellation) = transfer.cancellation_handle()
+        {
+            self.runtime_slot_mut()
+                .page_slot_mut()
+                .add_document_navigation_cancellation(token, cancellation);
+        }
         let Some(mut owner) = self.pending_fetch_owner_mut() else {
             return false;
         };
@@ -1418,14 +1493,6 @@ impl TargetSessionOwnerMut<'_> {
     ) -> Option<PendingSubresourceFetchResponseRequest> {
         self.pending_fetch_owner_mut()?
             .take_pending_subresource_fetch_response_request(request_id, session_id)
-    }
-
-    fn take_in_flight_subresource_fetch_request(
-        &mut self,
-        internal_id: u64,
-    ) -> Option<InFlightSubresourceFetchRequest> {
-        self.pending_fetch_owner_mut()?
-            .take_in_flight_subresource_fetch_request(internal_id)
     }
 
     fn claim_subresource_continue_request(
@@ -1573,7 +1640,7 @@ impl TargetSessionOwnerMut<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> Result<Option<String>> {
         let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
             return Ok(None);
         };

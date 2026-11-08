@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 import base64
 from typing import Any
 from uuid import UUID
+from ..diagnostics import new_cdp_session
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..helpers import attach_cdp_event_collector
@@ -80,8 +82,8 @@ async def _verify_chromium_input_session_state_sample(state: SmokeState) -> None
         await page.goto(f"{state.fixture}/plain?chromium-input-session-state")
 
         await install_input_fixture()
-        primary = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        primary = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
 
         assert_equal(
             await peer.send("Input.setIgnoreInputEvents", {"ignore": True}),
@@ -153,9 +155,9 @@ async def _verify_chromium_log_domain_sample(state: SmokeState) -> None:
     page = await state.context.new_page()
     await page.goto(f"{state.fixture}/plain?chromium-log-domain")
 
-    primary = await state.context.new_cdp_session(page)
-    peer = await state.context.new_cdp_session(page)
-    controls = await state.context.new_cdp_session(page)
+    primary = await new_cdp_session(state.context, page)
+    peer = await new_cdp_session(state.context, page)
+    controls = await new_cdp_session(state.context, page)
     primary_log_events = attach_cdp_event_collector(primary, ["Log.entryAdded"])
     peer_log_events = attach_cdp_event_collector(peer, ["Log.entryAdded"])
     network_events = attach_cdp_event_collector(
@@ -378,8 +380,8 @@ async def _verify_chromium_audits_domain_sample(state: SmokeState) -> None:
     try:
         await page.goto(f"{state.fixture}/chromium-audits-quirks-page")
 
-        primary = await state.context.new_cdp_session(page)
-        peer = await state.context.new_cdp_session(page)
+        primary = await new_cdp_session(state.context, page)
+        peer = await new_cdp_session(state.context, page)
         primary_events = attach_cdp_event_collector(primary, ["Audits.issueAdded"])
         peer_events = attach_cdp_event_collector(peer, ["Audits.issueAdded"])
 
@@ -527,7 +529,7 @@ async def _verify_chromium_audits_domain_sample(state: SmokeState) -> None:
 
         await page.goto(f"{state.fixture}/plain?chromium-audits-storage-reset")
 
-        late = await state.context.new_cdp_session(page)
+        late = await new_cdp_session(state.context, page)
         late_events = attach_cdp_event_collector(late, ["Audits.issueAdded"])
         assert_equal(await late.send("Audits.enable"), {}, "late Audits.enable result")
         await late.send("Runtime.evaluate", {"expression": "0"})
@@ -650,8 +652,8 @@ async def _verify_chromium_io_resolve_blob_sample(state: SmokeState) -> None:
     if not released_error or "Could not find object with given id" not in str(released_error):
         raise SmokeError(f"IO.resolveBlob released object error should match Chromium: {released_error}")
 
-    non_blob_session = await state.context.new_cdp_session(state.page)
-    blob_session = await state.context.new_cdp_session(state.page)
+    non_blob_session = await new_cdp_session(state.context, state.page)
+    blob_session = await new_cdp_session(state.context, state.page)
     try:
         await non_blob_session.send(
             "Runtime.evaluate",
@@ -680,7 +682,6 @@ async def _verify_chromium_io_resolve_blob_sample(state: SmokeState) -> None:
         await blob_session.detach()
 
     state.record("chromium_io_resolve_blob_sample")
-
 
 
 async def run_audits_sample(state: SmokeState) -> None:

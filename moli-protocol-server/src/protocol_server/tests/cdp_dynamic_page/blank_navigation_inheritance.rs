@@ -11,10 +11,13 @@ async fn assert_named_blank_navigation_inherits_accepted_initiator(cross_origin:
     let first = format!("http://{first_addr}");
     let second = format!("http://{second_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
@@ -150,10 +153,13 @@ async fn named_blank_navigation_discards_the_targets_old_response_sandbox() {
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
@@ -208,10 +214,13 @@ async fn named_blank_navigation_keeps_fixed_auxiliary_sandbox_from_its_creator()
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;
@@ -305,10 +314,13 @@ async fn assert_repeated_named_blank_history(
     );
     let base = format!("http://{fixture_addr}");
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
             .await
-            .unwrap();
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
     let parent_id = create_dynamic_target(&mut browser, 1).await;
     let mut parent = connect_dynamic_page(addr, &parent_id).await;
     send_cdp_command(&mut parent, 1, "Page.enable", None, json!({})).await;

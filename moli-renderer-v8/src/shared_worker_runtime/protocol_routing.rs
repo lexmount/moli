@@ -1,3 +1,5 @@
+use crate::runtime::WorkerInspectorError;
+use anyhow::Result;
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
@@ -10,9 +12,9 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         inspector_session_id: Option<String>,
         raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(host) = self.running_host_for_instance(instance_id) else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::SharedUnavailable.into());
         };
         host.dispatch_runtime_protocol_message(inspector_session_id, raw_json)
             .await
@@ -24,9 +26,9 @@ impl SharedWorkerRuntimeService {
         inspector_session_id: Option<String>,
         raw_json: String,
         deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
+    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
         let Some(host) = self.running_host_for_instance(instance_id) else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::SharedUnavailable.into());
         };
         host.dispatch_runtime_protocol_message_with_deferred_response(
             inspector_session_id,
@@ -42,9 +44,9 @@ impl SharedWorkerRuntimeService {
         inspector_session_id: String,
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch> {
         let Some(host) = self.running_host_for_instance(instance_id) else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+            return Err(WorkerInspectorError::SharedUnavailable.into());
         };
         let response = response.route_to_worker_devtools_session_output(
             inspector_session_id.clone(),

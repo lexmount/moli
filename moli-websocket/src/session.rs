@@ -6,6 +6,7 @@ use crate::{
     },
     events::{EventResult, EventSender, send_event},
     frames::{Assembler, Received, close_payload},
+    payload::Payload,
 };
 use moli_curl::websocket::{
     CurlWebSocketConnection, CurlWebSocketEvent, CurlWebSocketSend, MAX_SEND_FRAME_BYTES, WsFlags,
@@ -25,7 +26,7 @@ mod pong_tests;
 mod tests;
 
 struct Outgoing {
-    data: Vec<u8>,
+    data: Payload,
     opcode: FrameOpcode,
     offset: usize,
     _reservation: Reservation,
@@ -48,6 +49,7 @@ struct Closing {
 
 enum Activity {
     Sent(Result<Flight, String>),
+    Prepared(Result<(), String>),
     Delivered(EventResult),
     Command(Option<QueuedCommand>),
     Native(Option<CurlWebSocketEvent>),
@@ -114,17 +116,23 @@ pub(super) async fn run_open_session(
             .closing
             .deadline
             .unwrap_or_else(|| Instant::now() + CLOSE_TIMEOUT);
+        let preparing = session
+            .outgoing
+            .front()
+            .is_some_and(|message| message.data.is_reading());
+        let close_waiting = session.closing.deadline.is_some();
         let activity = tokio::select! {
             // Already completed writes precede newly observed incoming messages.
             // Other sources remain fair; completed message residence is bounded.
             biased;
             result = async { sending.as_mut().expect("send exists").await }, if sending.is_some() => Activity::Sent(result),
+            result = async { session.outgoing.front_mut().expect("preparing message").data.finish_read().await }, if preparing => Activity::Prepared(result),
             activity = async {
                 tokio::select! {
                     result = async { delivery.as_mut().expect("delivery exists").await }, if delivery.is_some() => Activity::Delivered(result),
                     command = commands.recv() => Activity::Command(command),
                     event = connection.recv(), if should_read => Activity::Native(event),
-                    _ = tokio::time::sleep_until(deadline), if session.closing.deadline.is_some() => Activity::CloseTimeout,
+                    _ = tokio::time::sleep_until(deadline), if close_waiting => Activity::CloseTimeout,
                 }
             } => activity,
         };
@@ -148,6 +156,11 @@ pub(super) async fn run_open_session(
             }
         }
         match activity {
+            Activity::Prepared(result) => {
+                if let Err(error) = result {
+                    session.fail(error);
+                }
+            }
             Activity::Sent(result) => {
                 sending = None;
                 match result {
@@ -218,7 +231,7 @@ impl Session {
         match command {
             Command::SendText(text) if self.closing.requested.is_none() => {
                 self.outgoing.push_back(Outgoing {
-                    data: text.into_bytes(),
+                    data: Payload::Bytes(text.into_bytes()),
                     opcode: FrameOpcode::Text,
                     offset: 0,
                     _reservation: reservation,
@@ -226,7 +239,15 @@ impl Session {
             }
             Command::SendBinary(data) if self.closing.requested.is_none() => {
                 self.outgoing.push_back(Outgoing {
-                    data,
+                    data: Payload::Bytes(data),
+                    opcode: FrameOpcode::Binary,
+                    offset: 0,
+                    _reservation: reservation,
+                })
+            }
+            Command::SendBlob(data) if self.closing.requested.is_none() => {
+                self.outgoing.push_back(Outgoing {
+                    data: Payload::Blob(data),
                     opcode: FrameOpcode::Binary,
                     offset: 0,
                     _reservation: reservation,
@@ -264,7 +285,7 @@ impl Session {
                 Flight::Pong,
             ));
         }
-        if let Some(message) = self.outgoing.front() {
+        if let Some(message) = self.outgoing.front_mut() {
             // Native completion releases the data reservation, but its browser
             // notifications can still be blocked. Bound that separate residence
             // at message boundaries so a fragmented message always finishes.
@@ -278,8 +299,10 @@ impl Session {
             {
                 return None;
             }
-            let end = (message.offset + MAX_SEND_FRAME_BYTES).min(message.data.len());
-            let last = end == message.data.len();
+            message.data.start_read();
+            let bytes = message.data.bytes()?;
+            let end = (message.offset + MAX_SEND_FRAME_BYTES).min(bytes.len());
+            let last = end == bytes.len();
             let mut flags = match message.opcode {
                 FrameOpcode::Text => WsFlags::TEXT,
                 FrameOpcode::Binary => WsFlags::BINARY,
@@ -287,7 +310,7 @@ impl Session {
             if !last {
                 flags |= WsFlags::CONT;
             }
-            let data = message.data[message.offset..end].to_vec();
+            let data = bytes[message.offset..end].to_vec();
             return Some((
                 CurlWebSocketSend { flags, data },
                 Flight::Data {

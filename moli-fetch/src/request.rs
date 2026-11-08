@@ -24,6 +24,17 @@ enum RequestContext {
     Browser(WebOrigin),
 }
 
+/// How explicit Cookie headers coexist with cookies selected from the store.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CookieHeaderPolicy {
+    /// Chromium's browser behavior gives a generated Cookie header precedence.
+    #[default]
+    PreferStore,
+    /// curl-style HTTP clients retain generated cookies and send explicit Cookie
+    /// headers only to the initial origin, including after returning to it.
+    PreserveExplicit,
+}
+
 #[derive(Debug, Clone)]
 pub struct Request {
     pub url: Url,
@@ -33,6 +44,8 @@ pub struct Request {
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
     redirect_headers: Option<crate::RequestHeaders>,
+    additional_cookies: Option<String>,
+    cookie_header_policy: CookieHeaderPolicy,
     cache_mode: RequestCacheMode,
     pub resource_type: RequestResourceType,
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
@@ -50,11 +63,38 @@ pub struct Request {
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
     network_partition_key: Option<String>,
-    auth: Option<RequestAuth>,
+    auth: Option<ScopedRequestAuth>,
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+    redirect_policy: Option<RequestRedirectPolicy>,
+}
+
+/// Request-owned admission check, run before following each redirect target.
+/// The callback runs on the Fetch thread and must not enter the renderer VM.
+/// Its second argument is the target's one-based redirect ordinal. A target
+/// can be checked again before dispatch, so reporting should deduplicate by hop.
+#[derive(Clone)]
+pub struct RequestRedirectPolicy(std::sync::Arc<dyn Fn(&Url, usize) -> Result<()> + Send + Sync>);
+
+impl std::fmt::Debug for RequestRedirectPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestRedirectPolicy")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RequestRedirectPolicy {
+    pub fn new(check: impl Fn(&Url, usize) -> Result<()> + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(check))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScopedRequestAuth {
+    credentials: RequestAuth,
+    origin: WebOrigin,
 }
 
 /// The lifetime of request headers supplied by an interception command.
@@ -108,14 +148,39 @@ pub enum BrowserRequestMetadata {
     Font,
     Image,
     JsonModule,
+    TextModule,
     Manifest,
     Ping,
     Script,
+    SharedWorker,
     Style,
     StyleModule,
     TextTrack,
     Video,
+    Worker,
     Xhr,
+}
+
+impl BrowserRequestMetadata {
+    /// Fetch destination token used in browser request headers and cache keys.
+    pub const fn fetch_destination(self) -> &'static str {
+        match self {
+            Self::Audio => "audio",
+            Self::AudioWorklet => "audioworklet",
+            Self::Font => "font",
+            Self::Image => "image",
+            Self::JsonModule => "json",
+            Self::TextModule => "text",
+            Self::Manifest => "manifest",
+            Self::Script => "script",
+            Self::SharedWorker => "sharedworker",
+            Self::Worker => "worker",
+            Self::Style | Self::StyleModule => "style",
+            Self::TextTrack => "track",
+            Self::Video => "video",
+            Self::Beacon | Self::EventSource | Self::Fetch | Self::Ping | Self::Xhr => "empty",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -125,22 +190,47 @@ pub enum BrowserNavigationRequestKind {
     Reload,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
 pub enum RequestCacheMode {
     #[default]
     Default,
+    #[strum(serialize = "no-cache")]
     Validate,
+    #[strum(serialize = "reload")]
     Bypass,
     NoStore,
+    ForceCache,
+    OnlyIfCached,
 }
 
 impl RequestCacheMode {
+    fn for_fetch_headers(self, headers: &crate::RequestHeaders) -> Self {
+        if self == Self::Default
+            && headers.iter().any(|(name, _)| {
+                [
+                    "if-modified-since",
+                    "if-none-match",
+                    "if-unmodified-since",
+                    "if-match",
+                    "if-range",
+                ]
+                .iter()
+                .any(|conditional| name.eq_ignore_ascii_case(conditional))
+            })
+        {
+            Self::NoStore
+        } else {
+            self
+        }
+    }
+
     pub fn requires_http_cache_validation(self) -> bool {
         matches!(self, Self::Validate)
     }
 
     pub fn allows_memory_cache_lookup(self) -> bool {
-        matches!(self, Self::Default)
+        matches!(self, Self::Default | Self::ForceCache | Self::OnlyIfCached)
     }
 
     pub fn allows_memory_cache_store(self) -> bool {
@@ -153,6 +243,10 @@ impl RequestCacheMode {
 
     pub fn allows_http_cache_lookup(self) -> bool {
         !matches!(self, Self::Bypass | Self::NoStore)
+    }
+
+    pub fn allows_stale_http_cache_response(self) -> bool {
+        matches!(self, Self::ForceCache | Self::OnlyIfCached)
     }
 }
 
@@ -463,6 +557,26 @@ impl RequestAuth {
 }
 
 impl Request {
+    pub fn with_cookie_header_policy(mut self, policy: CookieHeaderPolicy) -> Self {
+        self.cookie_header_policy = policy;
+        self
+    }
+
+    pub fn cookie_header_policy(&self) -> CookieHeaderPolicy {
+        self.cookie_header_policy
+    }
+
+    /// Literal Cookie option data, kept separate from the browser cookie store.
+    /// It follows this HTTP exchange's redirects without entering stored state.
+    pub fn with_additional_cookies(mut self, cookies: Option<String>) -> Self {
+        self.additional_cookies = cookies;
+        self
+    }
+
+    pub fn additional_cookies(&self) -> Option<&str> {
+        self.additional_cookies.as_deref()
+    }
+
     /// Constructs a plain HTTP GET. Browser callers must supply an environment
     /// origin using `new_browser` or `with_request_origin`.
     pub fn get(raw_url: &str) -> Result<Self> {
@@ -474,6 +588,8 @@ impl Request {
             body: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -496,6 +612,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         })
     }
 
@@ -507,6 +624,8 @@ impl Request {
             body: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -529,6 +648,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         }
     }
 
@@ -573,6 +693,8 @@ impl Request {
             body,
             request_headers: request_headers.into(),
             redirect_headers: None,
+            additional_cookies: None,
+            cookie_header_policy: CookieHeaderPolicy::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -595,6 +717,7 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            redirect_policy: None,
         }
     }
 
@@ -684,6 +807,13 @@ impl Request {
         self.cache_mode
     }
 
+    /// Cache policy for executing this request. Conditional author headers turn
+    /// default into no-store without changing the cache mode exposed to script
+    /// or a service worker.
+    pub fn effective_cache_mode(&self) -> RequestCacheMode {
+        self.cache_mode.for_fetch_headers(&self.request_headers)
+    }
+
     pub fn with_fetch_priority_hint(mut self, fetch_priority: Option<FetchPriorityHint>) -> Self {
         self.priority_hints.fetch_priority = fetch_priority;
         self
@@ -710,6 +840,46 @@ impl Request {
 
     pub fn script_scheduler_priority(&self) -> Option<ScriptFetchSchedulerPriority> {
         self.script_scheduler_priority
+    }
+
+    /// Finalize Accept once the caller has selected the request's resource kind.
+    /// Repeated admission (including ServiceWorker fallback) preserves the
+    /// original value, including an explicitly empty header.
+    pub(crate) fn prepare_accept_header(&mut self, config: &FetchConfig) {
+        let has_accept = |headers: &crate::RequestHeaders| {
+            headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
+        };
+        if !matches!(self.url.scheme(), "http" | "https") || has_accept(&self.request_headers) {
+            return;
+        }
+        self.request_headers.extend(
+            config
+                .default_request_headers()
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                .map(|(name, value)| (name.clone(), value.as_bytes().to_vec())),
+        );
+        if has_accept(&self.request_headers) {
+            return;
+        }
+        let kind = if self.is_navigation_request() {
+            crate::DefaultAcceptKind::Navigation
+        } else {
+            match self.browser_request_metadata {
+                Some(BrowserRequestMetadata::Image) => crate::DefaultAcceptKind::Image,
+                Some(BrowserRequestMetadata::EventSource) => crate::DefaultAcceptKind::EventSource,
+                Some(BrowserRequestMetadata::TextTrack) => crate::DefaultAcceptKind::TextTrack,
+                Some(BrowserRequestMetadata::TextModule) => crate::DefaultAcceptKind::TextModule,
+                Some(_) => crate::DefaultAcceptKind::Other,
+                None => return,
+            }
+        };
+        self.request_headers.push((
+            "Accept".to_owned(),
+            crate::default_accept_header(kind).as_bytes().to_vec(),
+        ));
     }
 
     pub fn with_browser_request_metadata(mut self, metadata: BrowserRequestMetadata) -> Self {
@@ -940,8 +1110,26 @@ impl Request {
     }
 
     pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
-        self.redirect_headers = headers;
+        self.set_redirect_headers(headers);
         self
+    }
+
+    pub fn set_redirect_headers(&mut self, headers: Option<crate::RequestHeaders>) {
+        self.redirect_headers = headers;
+    }
+
+    /// A request-scoped replacement is complete, including omitted defaults.
+    /// Browser-wide defaults still belong to the baseline restored on redirect.
+    pub fn apply_default_headers(&mut self, defaults: &crate::RequestHeaders) {
+        if let Some(redirect_headers) = &mut self.redirect_headers {
+            let mut headers = defaults.clone();
+            headers.overlay(std::mem::take(redirect_headers));
+            *redirect_headers = headers;
+        } else {
+            let mut headers = defaults.clone();
+            headers.overlay(std::mem::take(&mut self.request_headers));
+            self.request_headers = headers;
+        }
     }
 
     pub fn with_credentials_mode(mut self, credentials_mode: RequestCredentialsMode) -> Self {
@@ -961,6 +1149,12 @@ impl Request {
         &self.redirect_chain
     }
 
+    pub(crate) fn initial_url(&self) -> &Url {
+        self.redirect_chain
+            .first()
+            .map_or(&self.url, |redirect| &redirect.from_url)
+    }
+
     /// Records a followed redirect. The caller controls method and current URL
     /// updates so this also supports transports that retain the original URL.
     pub fn record_redirect(&mut self, redirect: RedirectInfo) {
@@ -970,9 +1164,22 @@ impl Request {
     /// Follows an authorized redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
         self.validate_request_mode_for_url(&redirect.to_url)?;
+        self.check_redirect_policy(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
         self.url = redirect.to_url.clone();
         self.record_redirect(redirect);
+        Ok(())
+    }
+
+    pub fn with_redirect_policy(mut self, policy: RequestRedirectPolicy) -> Self {
+        self.redirect_policy = Some(policy);
+        self
+    }
+
+    pub(crate) fn check_redirect_policy(&self, url: &Url) -> Result<()> {
+        if let Some(policy) = &self.redirect_policy {
+            (policy.0)(url, self.redirect_chain.len() + 1)?;
+        }
         Ok(())
     }
 
@@ -984,17 +1191,31 @@ impl Request {
         FetchUrlList::new(request_url, &self.redirect_chain)
     }
 
-    /// Checks mode restrictions before using a cache entry or starting a hop.
+    /// Applies request policy before cache lookup or dispatch, including retries.
+    pub fn admit_request_url(&self, request_url: &Url) -> Result<()> {
+        // Recheck the effective URL before dispatch/cache lookup, including
+        // internal HTTPS upgrades. The hop ordinal lets report producers avoid
+        // duplicating the earlier redirect-target check.
+        if let Some(current) = self.redirect_chain.last()
+            && &current.to_url == request_url
+            && let Some(policy) = &self.redirect_policy
+        {
+            (policy.0)(request_url, self.redirect_chain.len())?;
+        }
+        self.validate_request_mode_for_url(request_url)
+    }
+
+    /// Checks Fetch mode restrictions without invoking stateful redirect policy.
     pub fn validate_request_mode_for_url(&self, request_url: &Url) -> Result<()> {
         if self.request_mode != RequestMode::SameOrigin || request_url.scheme() == "data" {
             return Ok(());
         }
         let origin = self
             .request_origin()
-            .context("same-origin request mode requires an initiating origin")?;
+            .context(crate::RequestModeError::MissingOrigin)?;
         self.url_list(request_url)
             .validate_request_mode(self.request_mode, origin)
-            .map_err(anyhow::Error::msg)
+            .map_err(Into::into)
     }
 
     /// Checks one network response against the request's state before that
@@ -1022,6 +1243,25 @@ impl Request {
             response_headers,
             self.credentials_mode,
         )
+    }
+
+    pub(crate) fn cross_origin_resource_policy_origin(&self) -> Option<&WebOrigin> {
+        (self.request_mode == RequestMode::NoCors)
+            .then(|| self.request_origin())
+            .flatten()
+    }
+
+    pub(crate) fn validate_cross_origin_resource_policy_for_url(
+        &self,
+        response_url: &Url,
+        headers: &[(String, Vec<u8>)],
+    ) -> Result<(), String> {
+        if let Some(origin) = self.cross_origin_resource_policy_origin()
+            && let Some(policy) = crate::CrossOriginResourcePolicy::from_headers(headers)
+        {
+            policy.check(origin, response_url)?;
+        }
+        Ok(())
     }
 
     /// Whether the URL list has left the initiating origin. For subresource
@@ -1091,29 +1331,39 @@ impl Request {
     }
 
     pub fn auth(&self) -> Option<&RequestAuth> {
-        self.auth.as_ref()
+        self.auth.as_ref().map(|auth| &auth.credentials)
+    }
+
+    pub(crate) fn auth_for_url(&self, request_url: &Url) -> Option<&RequestAuth> {
+        let auth = self.auth.as_ref()?;
+        (auth.credentials.target != RequestAuthTarget::Server
+            || auth.origin.same_origin(&WebOrigin::from_url(request_url)))
+        .then_some(&auth.credentials)
     }
 
     pub fn auth_requires_buffered_transport(&self) -> bool {
-        self.auth
-            .as_ref()
+        self.auth()
             .is_some_and(|auth| !auth.can_use_header_transport())
     }
 
     pub fn preemptive_server_basic_auth_for_url(&self, request_url: &Url) -> Option<(&str, &str)> {
-        let auth = self.auth.as_ref()?;
-        (auth.target == RequestAuthTarget::Server
-            && auth.scheme == RequestAuthScheme::Basic
-            && same_origin(&self.url, request_url))
-        .then_some((auth.username.as_str(), auth.password.as_str()))
+        let auth = self.auth_for_url(request_url)?;
+        (auth.target == RequestAuthTarget::Server && auth.scheme == RequestAuthScheme::Basic)
+            .then_some((auth.username.as_str(), auth.password.as_str()))
     }
 
     pub fn set_auth(&mut self, auth: Option<RequestAuth>) {
-        self.auth = auth;
+        // Pin credentials to where they were supplied, rather than the mutable
+        // current URL. A later CDP auth response grants new credentials only to
+        // that challenged origin, without authorizing subsequent redirects.
+        self.auth = auth.map(|credentials| ScopedRequestAuth {
+            credentials,
+            origin: WebOrigin::from_url(&self.url),
+        });
     }
 
     pub fn with_auth(mut self, auth: RequestAuth) -> Self {
-        self.auth = Some(auth);
+        self.set_auth(Some(auth));
         self
     }
 

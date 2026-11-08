@@ -178,7 +178,6 @@ fn webcrypto_task_rejects_a_real_page_vm_replacement_identity_collision() {
                             MainDocumentMetaRefreshNavigationTask::new(
                                 current_document_owner,
                                 0,
-                                Url::parse("https://example.test/refresh").unwrap(),
                             ),
                             ),
                             Instant::now(),

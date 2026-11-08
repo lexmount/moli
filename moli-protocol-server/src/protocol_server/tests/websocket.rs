@@ -1,8 +1,12 @@
 use super::*;
-use std::path::Path;
 
 mod browser_close;
+mod captured_document_navigation;
+mod child_navigation_wait;
+mod dialog_sessions;
 mod navigation_debugger;
+mod prepared_document_actions;
+mod target_message;
 
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
@@ -21,28 +25,6 @@ fn assert_cdp_event_precedes_response(
         event_index < response_index,
         "{method} must precede CDP response {response_id}: {messages:?}"
     );
-}
-
-async fn wait_for_cookie_profile(
-    path: &Path,
-    predicate: impl Fn(&[StoredCookie]) -> bool,
-) -> Vec<StoredCookie> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let cookies = if path.exists() {
-            cookie_cache::load_cookie_cache(path).expect("profiled cookie cache should load")
-        } else {
-            Vec::new()
-        };
-        if predicate(&cookies) {
-            return cookies;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for cookie profile predicate; last cookies: {cookies:?}"
-        );
-        sleep(Duration::from_millis(25)).await;
-    }
 }
 
 async fn wait_for_profile_lock_release(paths: &BrowserProfilePaths) {
@@ -119,11 +101,13 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     let page_url = format!("{page_origin}/page");
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("connect to profiled cookie cdp websocket: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -162,14 +146,12 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
         command.label()
     );
     let _ = socket.close(None).await;
-    let persisted = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies
-            .iter()
-            .any(|cookie| cookie.name == "sid" && cookie.value == "keep")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let persisted = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         persisted
             .iter()
@@ -179,11 +161,13 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     );
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("reconnect to profiled cookie cdp websocket: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;
@@ -209,12 +193,12 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
         command.label()
     );
     let _ = socket.close(None).await;
-    let after_clear = wait_for_cookie_profile(&paths.cookies_path, |cookies| {
-        cookies.iter().all(|cookie| cookie.name != "sid")
-    })
-    .await;
     abort_test_cdp_server(cdp_server).await;
     wait_for_profile_lock_release(&paths).await;
+    let after_clear = StoragePartitionState::open(Some(&profile.path))
+        .expect("reopen cleared cookie SQLite after shutdown")
+        .cookies()
+        .unwrap();
     assert!(
         after_clear.iter().all(|cookie| cookie.name != "sid"),
         "{} should remove sid from profile: {after_clear:?}",
@@ -222,11 +206,13 @@ async fn assert_profile_cookie_delete_command_persists_across_restart(
     );
 
     let (cdp_addr, cdp_server) =
-        spawn_profiled_test_protocol_server_with_cookie_profile(profile.path.clone(), Vec::new())
+        spawn_profiled_test_protocol_server_with_initial_cookies(profile.path.clone(), Vec::new())
             .await;
-    let (mut socket, _) = connect_async(format!(
-        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
-    ))
+    let (mut socket, _) = connect_async(
+        discover_browser_websocket_url(cdp_addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
     .await
     .unwrap_or_else(|error| panic!("reconnect after cookie clear: {error}"));
     let session_id = cdp_create_default_session_and_navigate(&mut socket, &page_url).await;

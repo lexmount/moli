@@ -216,7 +216,7 @@ pub(super) fn complete_get_search_results_live(
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let resolution = {
+    let (resolution, snapshot_events) = {
         let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
             out.push_error(-32000, "NoDocumentLoaded");
             return DomCommandTaskStep::Complete;
@@ -229,6 +229,19 @@ pub(super) fn complete_get_search_results_live(
             }
         }
     };
+    if let Some(snapshot_events) = snapshot_events {
+        let top_frame_id = super::top_frame_id_for_owner(conn, owner);
+        for event in snapshot_events.events {
+            super::resolve::push_set_child_nodes_event_from_snapshots(
+                owner.session_id(),
+                event.parent_frontend_node_id,
+                &event.snapshots,
+                snapshot_events.top_snapshot_node_id,
+                top_frame_id.as_deref(),
+                out,
+            );
+        }
+    }
     match resolution {
         RendererDomSearchResultsResolution::Found(nodes) => {
             let node_ids = nodes

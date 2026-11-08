@@ -1,15 +1,42 @@
 use super::page_surface::RendererInspectorPageCommand;
 use super::*;
 
+#[derive(Debug, thiserror::Error)]
+pub(super) enum DocumentCommandError {
+    #[error("Document command belongs to another renderer owner")]
+    WrongOwner,
+    #[error("Document command belongs to another renderer Page")]
+    WrongPage,
+    #[cfg(debug_assertions)]
+    #[error("Renderer owner is unavailable")]
+    OwnerUnavailable,
+}
+
 impl PageVm {
     pub(in crate::runtime) fn dispatch_renderer_page_command(
         &mut self,
         command: RendererPageCommand,
     ) -> Result<RendererPageReply> {
+        let (source_document, command) = match command {
+            RendererPageCommand::ForDocument {
+                source_document,
+                command,
+            } => (Some(source_document), *command),
+            command => (None, command),
+        };
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         if let Some(barrier) = renderer_page_command_action_barrier(&command) {
             self.flush_page_action_window(barrier)?;
         }
+        // Flushing queued input can run script, including document.open().
+        // Recheck immediately before touching a Document's native request IDs.
+        if source_document.is_some_and(|source| self.document_lifecycle.identity() != source) {
+            return Err(RendererPageAccessError::DocumentReplaced.into());
+        }
         match command {
+            command @ RendererPageCommand::ForDocument { .. } => self.dispatch_renderer_page_command(command),
             RendererPageCommand::Native(command) => {
                 Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
             }
@@ -95,6 +122,7 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
+                intercept_drags: _,
             } if event_name == "wheel" => self
                 .queue_wheel_event(
                     x,
@@ -119,8 +147,9 @@ impl PageVm {
                 delta_y,
                 pointer,
                 modifiers,
-            } => self
-                .dispatch_mouse_event_at_point_with_pointer(
+                intercept_drags,
+            } => {
+                self.dispatch_mouse_event_at_point_with_pointer(
                     x,
                     y,
                     &event_name,
@@ -131,8 +160,10 @@ impl PageVm {
                     delta_y,
                     pointer,
                     modifiers,
+                    intercept_drags,
                 )
-                .map(RendererPageReply::InputDispatchOutcome),
+                .map(RendererPageReply::InputDispatchOutcome)
+            }
             RendererPageCommand::DispatchTouchEvent {
                 points,
                 event_name,
@@ -153,6 +184,9 @@ impl PageVm {
                 self.clear_active_drag_data_transfer()?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::CancelDragging => self
+                .cancel_dragging()
+                .map(RendererPageReply::InputDispatchOutcome),
             RendererPageCommand::MutateDocumentNodeAttribute {
                 reference,
                 mutation,
@@ -302,14 +336,14 @@ impl PageVm {
                 );
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::DefaultExecutionContextId => Ok(
-                RendererPageReply::OptionalExecutionContextId(self.default_execution_context_id()),
-            ),
-            RendererPageCommand::DefaultOrInitialExecutionContextId => Ok(
-                RendererPageReply::OptionalExecutionContextId(
-                    self.default_or_initial_execution_context_id(),
-                ),
-            ),
+            RendererPageCommand::DefaultExecutionContextId => {
+                self.vm_mut().ensure_main_world()?;
+                Ok(RendererPageReply::OptionalExecutionContextId(self.default_execution_context_id()))
+            }
+            RendererPageCommand::DefaultOrInitialExecutionContextId => {
+                self.vm_mut().ensure_main_world()?;
+                Ok(RendererPageReply::OptionalExecutionContextId(self.default_or_initial_execution_context_id()))
+            }
             RendererPageCommand::HasIsolatedWorldNamed { name, frame_id } => {
                 Ok(RendererPageReply::Bool(match frame_id {
                     Some(frame_id) => self.has_isolated_world_named_for_frame(&frame_id, &name),
@@ -335,9 +369,10 @@ impl PageVm {
             ) => Ok(RendererPageReply::OptionalExecutionContextId(
                 self.isolated_execution_context_id_for_inspector_context(execution_context_id),
             )),
-            RendererPageCommand::RuntimeRealmInventory => Ok(
-                RendererPageReply::RuntimeRealmInventory(self.runtime_realm_inventory()),
-            ),
+            RendererPageCommand::RuntimeRealmInventory => {
+                self.vm_mut().ensure_main_world()?;
+                Ok(RendererPageReply::RuntimeRealmInventory(self.runtime_realm_inventory()))
+            }
             RendererPageCommand::LiveChildDefaultRuntimeRealmInventory => {
                 let realms = self.live_child_default_runtime_realm_inventory();
                 Ok(RendererPageReply::RuntimeRealmInventory(realms))
@@ -647,14 +682,19 @@ impl PageVm {
                 search_id,
                 from_index,
                 to_index,
-            } => Ok(RendererPageReply::DocumentSearchResults(
-                self.document_search_results(
+            } => {
+                let (resolution, child_node_snapshot_events) = self
+                    .document_search_results_with_child_node_snapshot_events(
                     inspector_session_id.as_deref(),
                     &search_id,
                     from_index,
                     to_index,
-                ),
-            )),
+                );
+                Ok(RendererPageReply::DocumentSearchResults {
+                    resolution,
+                    child_node_snapshot_events,
+                })
+            }
             RendererPageCommand::DocumentDiscardSearchResults {
                 inspector_session_id,
                 search_id,
@@ -681,15 +721,15 @@ impl PageVm {
                     frontend_node_id,
                 ),
             )),
-            RendererPageCommand::DocumentFrontendNodeBinding {
-                inspector_session_id,
-                frontend_node_id,
-            } => Ok(RendererPageReply::DocumentFrontendNodeBinding(
-                self.document_frontend_node_binding(
-                    inspector_session_id.as_deref(),
-                    frontend_node_id,
-                ),
-            )),
+            RendererPageCommand::DocumentFrontendNodeBinding { reference } => {
+                let binding = self.backend_node_id_for_document_node_reference(reference);
+                Ok(RendererPageReply::DocumentFrontendNodeBinding(
+                    binding.map_or(
+                        crate::RendererDomFrontendNodeBindingResolution::NotFound,
+                        crate::RendererDomFrontendNodeBindingResolution::BackendNodeId,
+                    ),
+                ))
+            }
             RendererPageCommand::RegisterDocumentBidiNodeBinding {
                 inspector_session_id,
                 shared_id,
@@ -1008,11 +1048,6 @@ impl PageVm {
                 self.set_fetch_subresource_interception(enabled, resource_type);
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::SetJavaScriptDialogHandlerEnabled(enabled) => {
-                self.vm_mut()
-                    .set_javascript_dialog_handler_enabled(enabled);
-                Ok(RendererPageReply::Unit)
-            }
             RendererPageCommand::ReplaceBrowserResourceRuntime {
                 resource_runtime,
                 navigator_identity,
@@ -1326,6 +1361,7 @@ impl PageVm {
                 object_id,
                 depth,
                 pierce,
+                bind_frontend_nodes,
             } => {
                 self.configure_document_dom_agent_session(
                     inspector_session_id,
@@ -1337,8 +1373,21 @@ impl PageVm {
                         &object_id,
                         depth,
                         pierce,
+                        bind_frontend_nodes,
                     )?),
                 ))
+            }
+            RendererInspectorPageCommand::RequestDocumentNodeForObjectId {
+                include_whitespace,
+                object_id,
+            } => {
+                self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
+                let (node_id, child_node_snapshot_events) =
+                    self.request_document_node_for_object_id(inspector_session_id, &object_id)?;
+                Ok(RendererPageReply::DocumentNodeRequested {
+                    node_id,
+                    child_node_snapshot_events,
+                })
             }
             RendererInspectorPageCommand::AccessibilityTreePayloadsForObjectId { object_id } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(

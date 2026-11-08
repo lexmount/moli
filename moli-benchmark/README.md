@@ -107,9 +107,13 @@ TEDS adapter issue make the raw composite score unsuitable as a CI threshold.
 ### Script-authored semantic WPT
 
 The default semantic profile includes both Window and DedicatedWorker variants
-of `streams/` and `compression/`, plus their `.window.js` and `.worker.js`
-cases. Secure-context `.any.js` cases use the fixture's trustworthy loopback
-origin. To run the complete compression suite through the CLI path:
+of `IndexedDB/`, `streams/` and `compression/`, plus their `.window.js` and
+`.worker.js` cases. The `all` profile keeps these script cases when adding
+layout coverage. SharedWorker and ServiceWorker globals require separate runner
+support. IndexedDB's `.https.html` and `.sub.html` cases also use the fixture's
+secure-context routing and template substitutions in the default profile.
+Secure-context `.any.js` cases use the fixture's trustworthy loopback
+origin. To run the compression Window and DedicatedWorker cases through the CLI path:
 
 ```bash
 uv run python -m moli_benchmark.wpt_cross \
@@ -129,6 +133,23 @@ them. The runner waits for load, fonts, two animation frames, and removal of
 `test-wait`, dispatching `TestRendered` when needed. Reports record these as
 `crashtest` with zero subtests. An outstanding wait remains a timeout, and a
 renderer crash is reported even when the browser process stays alive.
+
+Explicit cases that reference `testdriver.js` use CDP in `--mode auto`.
+The CDP runner delivers trusted keyboard and mouse/pen input on an independent
+connection, so input can finish while a harness probe awaits a JavaScript
+promise. It supports `click`, ASCII and WebDriver special keys in `send_keys`,
+and keyboard, mouse/pen, wheel, and pause actions. Unsupported touch sources,
+pointer geometry properties, and cross-origin or transformed frame pointer
+coordinates reject the automation request. CLI mode cannot run these input
+cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
+
+The fixture requires `openssl` and serves HTTP and HTTPS on independent ports.
+WSS uses the HTTPS listeners. `.https` tests and HTTPS/WSS template URLs retain
+those transports. Each run creates an ephemeral certificate authority: Moli
+uses `--ca-cert` with normal certificate and hostname verification; Chrome trusts
+only the fixture server public key, following upstream wptrunner's SPKI setup.
+No system trust store is modified. Engines without a fixture trust configuration
+report a setup error rather than silently substituting HTTP for HTTPS.
 
 ### Cross-engine layout WPT
 

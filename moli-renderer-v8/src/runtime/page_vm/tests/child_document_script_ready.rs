@@ -1,5 +1,97 @@
 use super::*;
 
+#[test]
+fn iframe_javascript_attribute_navigation_completes_the_parent_load_once() {
+    run_page_vm_large_stack_async_test("iframe-javascript-attribute-load", || async move {
+        for (before_insertion, javascript_url, expected) in [
+            (
+                false,
+                "javascript:parent.__javascriptAttributeLoadOrder.push('javascript'); void 0",
+                "frame-load|javascript|parent-load",
+            ),
+            (
+                true,
+                "javascript:parent.__javascriptAttributeLoadOrder.push('javascript'); void 0",
+                "javascript|frame-load|parent-load",
+            ),
+            (
+                false,
+                "javascript:throw new Error('boom')",
+                "frame-load|parent-load",
+            ),
+            (
+                true,
+                "javascript:throw new Error('boom')",
+                "frame-load|parent-load",
+            ),
+            (
+                false,
+                r#"javascript:{"foo": "bar"}"#,
+                "frame-load|parent-load",
+            ),
+            (
+                true,
+                r#"javascript:{"foo": "bar"}"#,
+                "frame-load|parent-load",
+            ),
+        ] {
+            let mut page_vm = test_page_vm();
+            let local_executor = page_vm.local_executor.clone();
+            local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(&format!(
+                        r#"
+globalThis.__javascriptAttributeLoadOrder = [];
+addEventListener('load', () => __javascriptAttributeLoadOrder.push('parent-load'));
+const frame = document.createElement('iframe');
+frame.onload = () => __javascriptAttributeLoadOrder.push('frame-load');
+const source = {javascript_url:?};
+if ({before_insertion}) frame.src = source;
+document.body.appendChild(frame);
+if (!{before_insertion}) frame.src = source;
+"#,
+                    ))?;
+                    // Drive the real lifecycle owner: initial about:blank and
+                    // javascript navigation can have separate commit tasks.
+                    // The assertions below retain the browser-visible load order.
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        while page_vm
+                            .run_next_child_frame_task_source_for_semantic_test()
+                            .await
+                            .is_some()
+                        {}
+                    })
+                    .await
+                    .expect("initial iframe realm and script tasks should finish");
+                    let outcome = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        page_vm.finish_post_parse_execution_on_named_owner_lane(
+                            Vec::new(),
+                            PageVmInitStage::Load,
+                            Instant::now(),
+                        ),
+                    )
+                    .await
+                    .expect("javascript URL without a replacement must release the parent load")?;
+                    let PageVmNavigationTurnOutcome::Completed(mut page_vm) = outcome else {
+                        panic!("javascript URL must retain the current parent document");
+                    };
+                    assert_eq!(
+                        page_vm
+                            .vm_mut()
+                            .eval("__javascriptAttributeLoadOrder.join('|')")?,
+                        expected,
+                        "the initial iframe load must finish once, before the parent load: {javascript_url:?}, before_insertion={before_insertion}"
+                    );
+                    assert_eq!(page_vm.vm_mut().eval("document.readyState")?, "complete");
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await
+                .expect("javascript attribute navigation should complete its parent load");
+        }
+    });
+}
+
 async fn install_child_classic_script_ready_fixture(
     page_vm: &mut PageVm,
     frame_id: &str,

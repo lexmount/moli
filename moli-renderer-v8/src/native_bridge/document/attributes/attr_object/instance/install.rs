@@ -11,6 +11,7 @@ use crate::definitions::{
     define_native_data_property as define_attr_instance_native_data_property,
     define_native_data_property_with_setter as define_attr_instance_native_data_property_with_setter,
 };
+use crate::native_bridge::document::attributes::nullable_state_string as nullable_attr_state_string;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
@@ -157,20 +158,4 @@ pub(super) fn install_attr_instance_properties<'s>(
     AttrInstanceMethodsDeclaration::new()
         .initialize(scope, object)
         .expect("Attr instance method declaration should initialize");
-}
-
-fn nullable_attr_state_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    state: v8::Local<'s, v8::Object>,
-    property: &str,
-) -> Option<String> {
-    let key = v8_string(scope, property)?;
-    let value = state.get(scope, key.into())?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
 }

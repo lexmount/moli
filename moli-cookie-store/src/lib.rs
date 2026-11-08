@@ -13,6 +13,7 @@
 pub use ::cookie::{Cookie as RawCookie, ParseError as RawCookieParseError, SameSite};
 
 mod cookie;
+pub mod cookie_creation_time;
 mod cookie_date;
 pub use crate::cookie::Error as CookieError;
 pub use crate::cookie::{
@@ -29,12 +30,13 @@ mod cookie_store;
 pub use crate::cookie_store::{
     BrowserSiteContext, CookieAccessQueryResult, CookieAccessResult, CookieAccessSemantics,
     CookieAccessSource, CookieDeleteFilter, CookieEffectiveSameSite, CookieExclusionReason,
-    CookieInclusionStatus, CookieQueryResult, CookieScopeSemantics, CookieSetAccessResult,
-    CookieSetRejectionReason, CookieSetResult, CookieSetWarningReason, CookieStore,
-    CookieStoreLimits, CookieWarningReason, CookieWithAccessResult, ExcludedCookie,
-    HttpRequestType, InsertContext, QueryContext, SameSiteContext, SameSiteContextDowngradeType,
-    SameSiteContextHttpMethod, SameSiteContextMetadata, SameSiteContextRedirectType,
-    SameSiteContextTrackMetadata, SameSiteRequestContext, StorageAccessStatus, StoreAction,
+    CookieInclusionStatus, CookiePartitionMatch, CookieQueryResult, CookieScopeSemantics,
+    CookieSetAccessResult, CookieSetRejectionReason, CookieSetResult, CookieSetWarningReason,
+    CookieStore, CookieStoreKey, CookieStoreLimits, CookieStoreMutation, CookieStoreObserver,
+    CookieWarningReason, CookieWithAccessResult, ExcludedCookie, HttpRequestType, InsertContext,
+    QueryContext, SameSiteContext, SameSiteContextDowngradeType, SameSiteContextHttpMethod,
+    SameSiteContextMetadata, SameSiteContextRedirectType, SameSiteContextTrackMetadata,
+    SameSiteRequestContext, StorageAccessStatus, StoreAction,
 };
 #[cfg(feature = "public_suffix")]
 mod public_suffix;

@@ -1,6 +1,7 @@
 mod support;
 
 use moli_html2md::{Converter, Options, convert};
+use std::collections::HashSet;
 use support::{Tree, rendered_html};
 
 fn markdown(html: &str) -> String {
@@ -11,6 +12,105 @@ fn markdown(html: &str) -> String {
     result
 }
 
+// Compare browser-parsed cell nesting, spans and text, independently of the
+// serializer's spelling, indentation or Markdown representation.
+fn table_signature(html: &str) -> Vec<String> {
+    let tree = Tree::parse(html);
+    let headers: HashSet<_> = tree
+        .nodes
+        .iter()
+        .flat_map(|node| {
+            node.attrs
+                .iter()
+                .filter(|(name, _)| name == "headers")
+                .flat_map(|(_, value)| value.split_ascii_whitespace())
+        })
+        .collect();
+    let mut result = Vec::new();
+    let mut stack = vec![(tree.root, false)];
+    while let Some((id, close)) = stack.pop() {
+        let node = &tree.nodes[id];
+        let table_tag = node.tag.as_deref().filter(|tag| {
+            matches!(
+                *tag,
+                "table"
+                    | "thead"
+                    | "tbody"
+                    | "tfoot"
+                    | "tr"
+                    | "td"
+                    | "th"
+                    | "caption"
+                    | "colgroup"
+                    | "col"
+            )
+        });
+        if close {
+            if let Some(tag) = table_tag {
+                result.push(format!("/{tag}"));
+            }
+            continue;
+        }
+        if let Some(tag) = table_tag {
+            result.push(tag.to_owned());
+            let mut attributes: Vec<_> = node
+                .attrs
+                .iter()
+                .filter(|(key, value)| {
+                    matches!(
+                        key.as_str(),
+                        "rowspan" | "colspan" | "scope" | "headers" | "span"
+                    ) || (key == "id" && headers.contains(value.as_str()))
+                })
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect();
+            attributes.sort_unstable();
+            result.extend(attributes);
+        }
+        if let Some(text) = &node.text {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !text.is_empty() {
+                result.push(text);
+            }
+        }
+        stack.push((id, true));
+        let mut children = Vec::new();
+        let mut child = node.first;
+        while let Some(id) = child {
+            children.push(id);
+            child = tree.nodes[id].next;
+        }
+        stack.extend(children.into_iter().rev().map(|id| (id, false)));
+    }
+    result
+}
+
+fn assert_preserves_table(source: &str) {
+    assert_eq!(
+        table_signature(&rendered_html(&markdown(source))),
+        table_signature(source)
+    );
+}
+
+#[test]
+fn structured_tables_preserve_column_group_header_relationships() {
+    for columns in [
+        "<colgroup span='2'></colgroup><colgroup span='2'></colgroup>",
+        "<colgroup><col span='2'></colgroup><colgroup><col><col></colgroup>",
+        "<colgroup span='2'></colgroup><colgroup><col span='2'></colgroup>",
+    ] {
+        let source = format!(
+            "<table>{columns}\
+             <thead><tr><th scope='colgroup' colspan='2'>First</th>\
+             <th scope='colgroup' colspan='2'>Second</th></tr></thead>\
+             <tbody><tr><td>A</td><td>B</td><td>C</td><td>D</td></tr></tbody></table>"
+        );
+        assert_preserves_table(&source);
+        let result = markdown(&source);
+        assert!(!result.contains("</col>"), "{result}");
+    }
+}
+
 #[test]
 fn hacker_news_layout_tables_preserve_story_and_metadata_order() {
     let result = markdown(include_str!("fixtures/hacker-news-layout.html"));
@@ -19,25 +119,20 @@ fn hacker_news_layout_tables_preserve_story_and_metadata_order() {
         include_str!("fixtures/hacker-news-layout.md").trim_end()
     );
     let html = rendered_html(&result);
-    // The simple navigation row becomes a table; nested/spanning story layout
-    // still expands into blocks in the original content order.
-    assert_eq!(html.matches("<table>").count(), 1);
-    assert!(!html.contains("<br>"));
+    assert_eq!(html.matches("<table").count(), 2);
     assert_eq!(html.matches("<a ").count(), 14);
 }
 
 #[test]
-fn nested_data_table_survives_an_expanded_layout_table() {
+fn nested_data_table_survives_its_layout_wrapper() {
     let html = "<table><tr><td>before</td></tr><tr><td><table><tr><th>Key</th><th>Value</th></tr><tr><td>a|b</td><td><code>c|d</code></td></tr></table></td></tr><tr><td>after</td></tr></table>";
-    let actual = markdown(html);
-    assert_eq!(
-        actual,
-        "before\n\n| Key | Value |\n| --- | --- |\n| a\\|b | `c\\|d` |\n\nafter"
+    let result = markdown(html);
+    assert_eq!(rendered_html(&result).matches("<table>").count(), 1);
+    assert!(
+        result.starts_with("before\n\n") && result.ends_with("\n\nafter"),
+        "{result}"
     );
-    assert_eq!(
-        rendered_html(&actual),
-        "<p>before</p>\n<table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>\n<tr><td>a|b</td><td><code>c|d</code></td></tr>\n</tbody></table>\n<p>after</p>\n"
-    );
+    assert!(rendered_html(&result).contains("<code>c|d</code>"));
 }
 
 #[test]
@@ -117,10 +212,13 @@ fn other_table_roles_do_not_change_conversion() {
 
 #[test]
 fn table_cells_preserve_block_syntax_and_code_whitespace() {
-    let html = "<table><tr><td>intro</td><td><h2>Heading</h2><pre><code>  a\n  b\n</code></pre><blockquote>quote</blockquote><ul><li>item</li></ul></td><td>end</td></tr></table>";
-    assert_eq!(
-        markdown(html),
-        "intro\n\n## Heading\n\n```\n  a\n  b\n```\n\n> quote\n\n- item\n\nend"
+    let html = "<table><caption>Structured content</caption><tr><td>intro</td><td><h2>Heading</h2><pre><code>  a\n  b\n</code></pre><blockquote>quote</blockquote><ul><li>item</li></ul></td><td>end</td></tr></table>";
+    assert_preserves_table(html);
+    let tree = Tree::parse(&rendered_html(&markdown(html)));
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| node.text.as_deref() == Some("  a\n  b\n"))
     );
 }
 
@@ -277,7 +375,7 @@ fn literal_pipes_survive_in_text_code_links_and_image_attributes() {
 }
 
 #[test]
-fn unrepresentable_tables_expand_without_losing_or_duplicating_content() {
+fn complex_tables_keep_cell_associations_without_duplicate_content() {
     for row in [
         "<tr><td colspan='2'>one</td><td>two</td></tr>",
         "<tr><td rowspan='2'>one</td><td>two</td></tr>",
@@ -285,15 +383,8 @@ fn unrepresentable_tables_expand_without_losing_or_duplicating_content() {
         "<tr><td colspan='999999999999999999999'>one</td><td>two</td></tr>",
         "<tr><td>one</td><td>two</td><td>extra</td></tr>",
     ] {
-        let actual = markdown(&format!(
-            "<table><tr><th>A</th><th>B</th></tr>{row}</table>"
-        ));
-        let extra = if row.contains("extra") {
-            "\n\nextra"
-        } else {
-            ""
-        };
-        assert_eq!(actual, format!("A\n\nB\n\none\n\ntwo{extra}"));
+        let source = format!("<table><tr><th>A</th><th>B</th></tr>{row}</table>");
+        assert_preserves_table(&source);
     }
     for content in [
         "<pre>  code\nnext\n</pre>",
@@ -303,14 +394,15 @@ fn unrepresentable_tables_expand_without_losing_or_duplicating_content() {
         "<table><tr><td>nested</td></tr></table>",
     ] {
         for cell in ["th", "td"] {
-            let actual = markdown(&format!(
-                "<table><tr><{cell}>A</{cell}><{cell}>B</{cell}></tr><tr><td>one</td><td>{content}</td></tr></table>"
-            ));
-            assert_eq!(
-                actual,
-                format!("A\n\nB\n\none\n\n{}", markdown(content)),
-                "{cell}: {content}"
+            let caption = if cell == "td" {
+                "<caption>Data</caption>"
+            } else {
+                ""
+            };
+            let source = format!(
+                "<table>{caption}<tr><{cell}>A</{cell}><{cell}>B</{cell}></tr><tr><td>one</td><td>{content}</td></tr></table>"
             );
+            assert_preserves_table(&source);
         }
     }
 }
@@ -349,12 +441,9 @@ fn table_blocks_preserve_surrounding_inline_styles() {
 }
 
 #[test]
-fn multiple_heading_rows_fall_back_to_blocks() {
-    assert_eq!(
-        markdown(
-            "<table><thead><tr><th>A</th><th>B</th></tr><tr><th>one</th><th>two</th></tr></thead><tbody><tr><td>three</td><td>four</td></tr></tbody></table>"
-        ),
-        "A\n\nB\n\none\n\ntwo\n\nthree\n\nfour"
+fn multiple_heading_rows_keep_their_hierarchy() {
+    assert_preserves_table(
+        "<table><thead><tr><th>A</th><th>B</th></tr><tr><th>one</th><th>two</th></tr></thead><tbody><tr><td>three</td><td>four</td></tr></tbody></table>",
     );
 }
 
@@ -444,10 +533,11 @@ fn nested_tables_obey_the_conversion_depth_limit() {
             max_depth,
             ..Options::default()
         });
-        assert_eq!(converter.convert(&dom, dom.root), expected);
+        let result = converter.convert(&dom, dom.root);
+        assert_eq!(result, expected);
     }
-    assert_eq!(
-        convert(&dom, dom.root),
-        "visible\n\n|  |\n| --- |\n| too deep |"
+    let full = markdown(
+        "<table><tr><td>visible<div><table><tr><td>too deep</td></tr></table></div></td></tr></table>",
     );
+    assert_eq!(full, "visible\n\n|  |\n| --- |\n| too deep |");
 }

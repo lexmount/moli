@@ -10,7 +10,7 @@ impl ScriptVm {
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
-        let context_ptr = self.native_module_default_context_ptr();
+        let context_ptr = self.native_module_default_context_ptr(ModuleLoadStage::Compile)?;
         self.compile_native_module_record_in_context(
             context_ptr,
             key,
@@ -41,8 +41,15 @@ impl ScriptVm {
             fetch_metadata,
         )
     }
-    pub(super) fn native_module_default_context_ptr(&self) -> *const v8::Global<v8::Context> {
-        &self.page_default_runtime.context as *const _
+    pub(super) fn native_module_default_context_ptr(
+        &mut self,
+        stage: ModuleLoadStage,
+    ) -> std::result::Result<*const v8::Global<v8::Context>, ModuleLoadError> {
+        self.ensure_main_world()
+            .map(WindowRealmRuntime::context_ptr)
+            .map_err(|error| {
+                ModuleLoadError::new(stage, format!("main world initialization failed: {error}"))
+            })
     }
     pub(super) fn compile_native_module_record_in_context(
         &mut self,
@@ -68,7 +75,7 @@ impl ScriptVm {
                     fetch_metadata,
                 )
             }
-            ModuleKind::Json | ModuleKind::Css => {
+            ModuleKind::Json | ModuleKind::Css | ModuleKind::Text => {
                 let ModuleSource::Text(source) = source else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
@@ -91,10 +98,6 @@ impl ScriptVm {
                 };
                 self.compile_wasm_module_record_in_context(context_ptr, key, bytes, source_url)
             }
-            ModuleKind::ModulePreloadText => Err(ModuleLoadError::new(
-                ModuleLoadStage::Compile,
-                format!("modulepreload text `{source_url}` is not a module graph record"),
-            )),
         }
     }
     pub(super) fn compile_javascript_module_record_in_context(
@@ -280,7 +283,7 @@ impl ScriptVm {
         &mut self,
         graph: &crate::module_runtime::ModuleGraphHandle,
     ) -> std::result::Result<(), ModuleLoadError> {
-        let context_ptr = self.native_module_default_context_ptr();
+        let context_ptr = self.native_module_default_context_ptr(ModuleLoadStage::Instantiate)?;
         self.instantiate_native_module_graph_in_context(context_ptr, graph)
     }
     pub(super) fn instantiate_native_module_graph_in_context(
@@ -363,7 +366,7 @@ impl ScriptVm {
         &mut self,
         root_entry: crate::module_runtime::ModuleEntryId,
     ) -> std::result::Result<Option<v8::Global<v8::Promise>>, ModuleLoadError> {
-        let context_ptr = self.native_module_default_context_ptr();
+        let context_ptr = self.native_module_default_context_ptr(ModuleLoadStage::Evaluate)?;
         self.evaluate_native_module_graph_with_owner_in_context(
             context_ptr,
             root_entry,
@@ -375,7 +378,7 @@ impl ScriptVm {
         &mut self,
         root_entry: crate::module_runtime::ModuleEntryId,
     ) -> std::result::Result<NativeDynamicModuleEvaluation, ModuleLoadError> {
-        let context_ptr = self.native_module_default_context_ptr();
+        let context_ptr = self.native_module_default_context_ptr(ModuleLoadStage::Evaluate)?;
         self.evaluate_native_module_graph_with_owner_in_context(
             context_ptr,
             root_entry,
