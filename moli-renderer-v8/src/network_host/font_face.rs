@@ -4,7 +4,7 @@ use crate::{
     native_bridge::{JsContextHost, WindowExecutionContextIdentity},
     types::{SubresourceRequestInitiatorType, SubresourceResourceType},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 
 pub(crate) enum FontFaceFetchStart {
     Local(Vec<u8>),
@@ -59,20 +59,20 @@ pub(crate) fn start_font_face_fetch(
     source: &str,
 ) -> Result<FontFaceFetchStart> {
     let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope)
-        .context(ResourceFetchError::NoFontFaceRealm)?;
+        .context("FontFace URL loader is unavailable in this realm")?;
     // SAFETY: the current live realm owns the bridge. No author callback runs
     // while the host is used except its existing CSP notification boundary.
     let host: &mut JsContextHost = unsafe { &mut *host_ptr };
     let identity = request_context
         .filter(|identity| host.window_execution_context_identity_is_current(*identity))
-        .context(ResourceFetchError::StaleOwner)?;
+        .context("resource request owner is stale")?;
     let owner = identity.dispatch_scope();
     let resource_loader = host
         .document_resource_loader_for_dispatch_scope(owner)
-        .context(ResourceFetchError::NoResourceLoader)?;
+        .context("Document resource loader is unavailable")?;
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context(ResourceFetchError::NoRequestEnvironment)?;
+        .context("Document request environment is unavailable")?;
     let request_url = environment.base_url.join(source)?;
     ensure!(
         host.font_request_allowed_by_csp(
@@ -82,17 +82,17 @@ pub(crate) fn start_font_face_fetch(
             &request_url,
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
         ),
-        ResourceFetchError::ContentSecurityPolicyBlocked
+        "resource request blocked by Content Security Policy"
     );
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::types::NavigationResponse = response.into();
         let result = if (200..300).contains(&response.status) {
             Ok(FontFaceFetchStart::Local(response.body_bytes().to_vec()))
         } else {
-            Err(ResourceFetchError::HttpStatus {
-                status: response.status,
-            }
-            .into())
+            Err(anyhow!(
+                "resource request returned HTTP {}",
+                response.status
+            ))
         };
         host.record_get_subresource_network_result_with_initiator(
             environment.frame_id,

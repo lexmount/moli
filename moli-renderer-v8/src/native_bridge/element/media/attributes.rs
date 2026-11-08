@@ -470,7 +470,7 @@ fn start_media_load(
         return;
     }
     let start = selected_source
-        .context(crate::network_host::ResourceFetchError::NoMediaSource)
+        .context("media resource selection found no supported URL")
         .and_then(|selected_source| {
             let request_url = selected_source.request_url;
             if unsafe { &mut *runtime_ptr }

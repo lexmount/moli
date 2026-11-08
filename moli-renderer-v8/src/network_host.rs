@@ -18,8 +18,6 @@ mod media;
 mod preflight_events;
 mod request;
 mod request_scope;
-mod resource_fetch_error;
-pub(crate) use resource_fetch_error::ResourceFetchError;
 mod response;
 mod stylesheet_subresource;
 mod subresource;
