@@ -857,4 +857,5 @@ pub(super) enum PageVmRuntimeExpressionAwaitAdvance {
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::page_vm::AuthorizedCurrentPageWebRtc;
 pub(crate) use page_surface::AuxiliaryDocumentResponseReceiver;
