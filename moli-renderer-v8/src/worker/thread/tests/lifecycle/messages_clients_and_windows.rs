@@ -1,4 +1,5 @@
 use super::*;
+use crate::service_worker_runtime::ServiceWorkerClientType;
 
 #[tokio::test]
 async fn service_worker_messageerror_dispatches_when_payload_cannot_deserialize() {
@@ -1224,26 +1225,57 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
 
 #[tokio::test]
 async fn service_worker_worker_client_query_builds_base_client_object() {
+    assert_service_worker_base_client_query_shape(
+        ServiceWorkerClientType::DedicatedWorker,
+        "https://example.test/app/dedicated-worker.js",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn service_worker_shared_worker_client_queries_expose_readonly_frame_type() {
+    assert_service_worker_base_client_query_shape(
+        ServiceWorkerClientType::SharedWorker,
+        "https://example.test/app/shared-worker.js",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn service_worker_blob_worker_client_queries_expose_readonly_frame_type() {
+    assert_service_worker_base_client_query_shape(
+        ServiceWorkerClientType::DedicatedWorker,
+        "blob:https://example.test/ee2e7b58-0000-4000-8000-000000000000",
+    )
+    .await;
+}
+
+async fn assert_service_worker_base_client_query_shape(
+    client_type: ServiceWorkerClientType,
+    creation_url: &str,
+) {
     ensure_v8();
-    let mut handle = spawn_service_worker_for_test(
-        r#"
+    let script = r#"
+        const expectedType = __CLIENT_TYPE__;
+        const expectedURL = __CLIENT_URL__;
         self.addEventListener("install", event => {
             event.waitUntil((async () => {
                 const workerClients = await clients.matchAll({
                     includeUncontrolled: true,
-                    type: "worker"
+                    type: expectedType
                 });
                 if (workerClients.length !== 1) {
                     throw new Error("unexpected worker client length:" + workerClients.length);
                 }
                 const first = workerClients[0];
                 if (first.id !== "client-000000000000004d" ||
-                    first.url !== "https://example.test/app/dedicated-worker.js" ||
-                    first.type !== "worker" ||
+                    first.url !== expectedURL ||
+                    first.type !== expectedType ||
+                    first.frameType !== "none" ||
+                    !(first instanceof Client) ||
                     typeof first.postMessage !== "function" ||
                     typeof first.focus !== "undefined" ||
                     typeof first.navigate !== "undefined" ||
-                    "frameType" in first ||
                     "visibilityState" in first ||
                     "focused" in first) {
                     throw new Error("unexpected worker client:" + JSON.stringify({
@@ -1253,24 +1285,61 @@ async fn service_worker_worker_client_query_builds_base_client_object() {
                         postMessage: typeof first.postMessage,
                         focus: typeof first.focus,
                         navigate: typeof first.navigate,
-                        hasFrameType: "frameType" in first,
+                        frameType: first.frameType,
                         hasVisibilityState: "visibilityState" in first,
                         hasFocused: "focused" in first
                     }));
                 }
+                first.frameType = "nested";
+                if (first.frameType !== "none") {
+                    throw new Error("frameType should be readonly");
+                }
+                let strictAssignmentRejected = false;
+                try {
+                    (function() { "use strict"; first.frameType = "nested"; })();
+                } catch (error) {
+                    strictAssignmentRejected = error instanceof TypeError;
+                }
+                if (!strictAssignmentRejected || first.frameType !== "none") {
+                    throw new Error("strict frameType assignment should reject");
+                }
                 const fetched = await clients.get(first.id);
-                if (fetched.id !== first.id ||
+                if (fetched === first ||
+                    fetched.id !== first.id ||
                     fetched.url !== first.url ||
                     fetched.type !== first.type ||
+                    fetched.frameType !== "none" ||
                     typeof fetched.postMessage !== "function" ||
-                    typeof fetched.focus !== "undefined" ||
-                    "frameType" in fetched) {
+                    typeof fetched.focus !== "undefined") {
                     throw new Error("unexpected fetched worker client");
                 }
             })());
         });
-        "#,
+        "#
+    .replace(
+        "__CLIENT_TYPE__",
+        &serde_json::to_string(client_type.as_webidl_str()).unwrap(),
+    )
+    .replace(
+        "__CLIENT_URL__",
+        &serde_json::to_string(creation_url).unwrap(),
     );
+    let mut handle = spawn_service_worker_for_test(&script);
+    let expected_query_type = match client_type {
+        ServiceWorkerClientType::DedicatedWorker => {
+            crate::runtime::ServiceWorkerClientQueryType::Worker
+        }
+        ServiceWorkerClientType::SharedWorker => {
+            crate::runtime::ServiceWorkerClientQueryType::SharedWorker
+        }
+        ServiceWorkerClientType::Window => unreachable!(),
+    };
+    let snapshot = |controlled| {
+        let mut client = worker_client_snapshot_for_test(controlled);
+        client.client_type = client_type;
+        client.url = url::Url::parse(creation_url).unwrap();
+        client
+    };
     handle.dispatch_service_worker_lifecycle_event(ServiceWorkerLifecycleEvent {
         event_id: ServiceWorkerEventId::from_u64_for_worker(31),
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
@@ -1293,15 +1362,12 @@ async fn service_worker_worker_client_query_builds_base_client_object() {
                     assert!(!saw_match_all_query);
                     assert_eq!(query.request_id, 1);
                     assert!(options.include_uncontrolled);
-                    assert_eq!(
-                        options.client_type,
-                        crate::runtime::ServiceWorkerClientQueryType::Worker
-                    );
+                    assert_eq!(options.client_type, expected_query_type);
                     saw_match_all_query = true;
                     handle.dispatch_service_worker_client_query_result(
                         crate::runtime::ServiceWorkerClientQueryResult {
                             request_id: query.request_id,
-                            clients: vec![worker_client_snapshot_for_test(false)],
+                            clients: vec![snapshot(false)],
                         },
                     );
                 }
@@ -1314,7 +1380,7 @@ async fn service_worker_worker_client_query_builds_base_client_object() {
                     handle.dispatch_service_worker_client_query_result(
                         crate::runtime::ServiceWorkerClientQueryResult {
                             request_id: query.request_id,
-                            clients: vec![worker_client_snapshot_for_test(true)],
+                            clients: vec![snapshot(true)],
                         },
                     );
                 }

@@ -1809,6 +1809,7 @@ pub(in crate::worker) fn build_service_worker_client_object<'s>(
             id: exposed_client_id.to_owned(),
             url,
             client_type,
+            frame_type,
             post_message: (),
         }
         .bind(scope)
@@ -2321,6 +2322,9 @@ pub(in crate::worker) struct ServiceWorkerBaseClientDeclaration<'scope> {
 
     #[webapi(data_property = "type", readonly)]
     client_type: &'static str,
+
+    #[webapi(data_property = "frameType", readonly)]
+    frame_type: &'static str,
 
     #[webapi(method = "postMessage", callback = service_worker_client_post_message_callback, length = 1)]
     post_message: (),
