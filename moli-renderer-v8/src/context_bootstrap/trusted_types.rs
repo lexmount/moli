@@ -778,11 +778,7 @@ fn trusted_type_policy_create_callback<'s>(
     let Some(input) = crate::util::v8_string_from_utf16_units(scope, &input.0) else {
         return;
     };
-    let mut callback_arguments = Vec::with_capacity(args.length().max(1) as usize);
-    callback_arguments.push(input.into());
-    for index in 1..args.length() {
-        callback_arguments.push(args.get(index));
-    }
+    let callback_arguments = moli_v8_util::callback_arguments_with_first(&args, input.into());
     let value = match invoke_policy_callback(scope, policy, kind, &callback_arguments) {
         TrustedTypePolicyCallbackOutcome::Missing => {
             throw_type_error(
