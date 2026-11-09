@@ -155,18 +155,7 @@ impl<T> OwnerTaskSource<T> {
     }
 
     pub async fn wait_for_local_wake_arrival(&mut self) -> bool {
-        self.drain_wake();
-        if !self.tasks.is_empty() {
-            return true;
-        }
-        match self.wake.recv().await {
-            Some(task) => {
-                self.tasks.push_back(task);
-                self.drain_wake();
-                true
-            }
-            None => false,
-        }
+        self.wait_for_arrival().await
     }
 
     fn drain_wake(&mut self) {
