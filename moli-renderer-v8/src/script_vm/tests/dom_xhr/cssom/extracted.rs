@@ -6,6 +6,7 @@ mod attr_container;
 mod attr_fallback;
 mod attr_number_units;
 mod attr_security;
+mod container_conditions;
 mod css_text_and_detached;
 mod cssom_interfaces;
 mod declaration_aliases;
@@ -19,4 +20,3 @@ mod stylesheet_decoding;
 mod stylesheets_and_at_rules;
 mod typed_values;
 
-mod container_conditions;
