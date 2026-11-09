@@ -1118,6 +1118,20 @@ impl Request {
         self.redirect_headers = headers;
     }
 
+    /// A request-scoped replacement is complete, including omitted defaults.
+    /// Browser-wide defaults still belong to the baseline restored on redirect.
+    pub fn apply_default_headers(&mut self, defaults: &crate::RequestHeaders) {
+        if let Some(redirect_headers) = &mut self.redirect_headers {
+            let mut headers = defaults.clone();
+            headers.overlay(std::mem::take(redirect_headers));
+            *redirect_headers = headers;
+        } else {
+            let mut headers = defaults.clone();
+            headers.overlay(std::mem::take(&mut self.request_headers));
+            self.request_headers = headers;
+        }
+    }
+
     pub fn with_credentials_mode(mut self, credentials_mode: RequestCredentialsMode) -> Self {
         self.credentials_mode = credentials_mode;
         self
@@ -1201,7 +1215,6 @@ impl Request {
             .context("same-origin request mode requires an initiating origin")?;
         self.url_list(request_url)
             .validate_request_mode(self.request_mode, origin)
-            .map_err(anyhow::Error::msg)
     }
 
     /// Checks one network response against the request's state before that

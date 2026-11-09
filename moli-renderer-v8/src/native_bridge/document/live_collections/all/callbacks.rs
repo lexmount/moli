@@ -1,3 +1,4 @@
+pub(super) use self::document_all_item_callback as document_all_call_callback;
 use crate::native_bridge::collections;
 use crate::util::{v8_string, v8str};
 use crate::webidl;
@@ -61,39 +62,6 @@ fn resolve_document_all_value<'s>(
                 .filter(|value| !value.is_null_or_undefined())?;
             fresh_named_value(scope, value)
         }
-    }
-}
-
-pub(super) fn document_all_call_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(items) = data
-        .get(scope, v8str(scope, "items").into())
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-    else {
-        rv.set_null();
-        return;
-    };
-    let Some(named) = data
-        .get(scope, v8str(scope, "named").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        rv.set_null();
-        return;
-    };
-    let Some(name_or_index) = document_all_name_or_index(scope, &args) else {
-        rv.set_null();
-        return;
-    };
-    match resolve_document_all_value(scope, items, named, name_or_index) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
     }
 }
 

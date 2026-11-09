@@ -41,6 +41,9 @@ from .groups.document_content import run_document_content_group
 from .groups.emulation_storage import run_emulation_storage_group
 from .groups.error_document import run_error_document_group
 from .groups.fetch_runtime_teardown import run_fetch_runtime_teardown_group
+from .groups.fetch_font import run_fetch_font_group
+from .groups.fetch_media import run_fetch_media_group
+from .groups.fetch_resource_dispatch import run_fetch_resource_dispatch_group
 from .groups.history_worlds import run_history_worlds_group
 from .groups.inspector_routing import run_inspector_routing_group
 from .groups.iframe_input import run_iframe_input_group
@@ -393,6 +396,24 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "fetch-resource-dispatch",
+        "SW routing and page policy after automatic and explicit resource continuation.",
+        "browser",
+        run_fetch_resource_dispatch_group,
+    ),
+    SmokeGroup(
+        "fetch-media",
+        "Media and TextTrack Fetch interception through real element loads and mixed patterns.",
+        "browser",
+        run_fetch_media_group,
+    ),
+    SmokeGroup(
+        "fetch-font",
+        "Font Fetch interception, mixed resource patterns, request actions, and response bodies.",
+        "browser",
+        run_fetch_font_group,
+    ),
     SmokeGroup(
         "webgl-viewport",
         "WebGL viewport state and HTML/OffscreenCanvas context lifetime.",

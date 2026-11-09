@@ -875,7 +875,9 @@ pub(crate) fn ensure_detached_document_implementation<'s>(
         .bind(scope)
         .ok()?;
     if let Some(prototype) = singleton.get_prototype(scope) {
-        let _ = implementation.set_prototype(scope, prototype);
+        implementation
+            .set_prototype(scope, prototype)?
+            .then_some(())?;
     }
     set_private_value(
         scope,

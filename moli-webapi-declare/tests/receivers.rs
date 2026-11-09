@@ -251,14 +251,15 @@ fn object_and_template_declarations_use_the_same_receiver_policy() {
     let scope = &mut v8::ContextScope::new(scope, context);
     let global = context.global(scope);
     let constructor = PlainInterface::build(scope).get_function(scope).unwrap();
-    global
-        .define_own_property(
+    assert_eq!(
+        global.define_own_property(
             scope,
             v8str(scope, "PlainInterface").into(),
             constructor.into(),
             v8::PropertyAttribute::DONT_ENUM,
-        )
-        .unwrap();
+        ),
+        Some(true)
+    );
     let object = PlainObject::new(true).bind(scope).unwrap();
     global
         .set(scope, v8str(scope, "object").into(), object.into())

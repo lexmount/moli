@@ -3009,6 +3009,7 @@ dependencies = [
  "rcgen",
  "serde",
  "strum 0.28.0",
+ "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

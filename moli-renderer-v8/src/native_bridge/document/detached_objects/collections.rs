@@ -1,3 +1,4 @@
+pub(in crate::native_bridge::document) use self::detached_document_all_item_callback as detached_document_all_call_callback;
 use crate::native_bridge::collections::{
     STATIC_COLLECTION_LENGTH_SLOT, initialize_collection_identity,
 };
@@ -437,33 +438,6 @@ fn collect_detached_document_all_values<'s>(
     }
 }
 
-pub(in crate::native_bridge::document) fn detached_document_all_call_callback<'a>(
-    scope: &mut v8::PinScope<'a, '_>,
-    args: v8::FunctionCallbackArguments<'a>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let Some(items) = object_property_as_object(scope, data, "items") else {
-        rv.set_null();
-        return;
-    };
-    let Some(named) = object_property_as_object(scope, data, "named") else {
-        rv.set_null();
-        return;
-    };
-    let Some(name_or_index) = detached_document_all_name_or_index(scope, &args) else {
-        rv.set_null();
-        return;
-    };
-    match resolve_detached_document_all_value(scope, items, named, name_or_index) {
-        Some(value) => rv.set(value),
-        None => rv.set_null(),
-    }
-}
-
 pub(in crate::native_bridge::document) fn build_detached_document_all<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -491,7 +465,9 @@ pub(in crate::native_bridge::document) fn build_detached_document_all<'s>(
         Some(data.into()),
     );
     let collection = object_template.new_instance(scope)?;
-    let _ = collection.set_prototype(scope, prototype.into());
+    collection
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     DetachedDocumentAllCollectionDeclaration::new(data, values.len() as f64)
         .initialize(scope, collection)
         .ok()?;

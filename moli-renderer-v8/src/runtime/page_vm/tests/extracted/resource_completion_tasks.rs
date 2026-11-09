@@ -160,7 +160,7 @@ async fn page_resource_completion_rejects_stale_document_before_application() {
     .await;
 }
 #[tokio::test(flavor = "current_thread")]
-async fn stale_child_unusable_stylesheet_preserves_physical_output_without_document_effect() {
+async fn stale_child_stylesheet_graph_preserves_all_physical_output_without_document_effect() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -171,35 +171,51 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
             DocumentId(9),
         );
         let request_url = Url::parse("https://stale-child.test/style.css").unwrap();
+        let failed_url = Url::parse("https://stale-child.test/failed.css").unwrap();
         let physical_response = crate::protocol_types::NavigationResponse::from_text_body(
             request_url.clone(),
             200,
             vec![("Content-Type".to_owned(), b"text/html".to_vec())],
             "<html>not a stylesheet</html>".to_owned(),
         );
-        let mut queue = RendererPageNetworkingSource::new_for_test();
-        queue.enqueue_local_for_test(RendererPageResourceCompletion::child_blocking_stylesheet(
-            root_document,
-            ChildBlockingStylesheetLoadCompletion {
-                import_graph: None,
-                load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
-                child_handle,
-                owner: stale_owner,
-                signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {
-                    urls: Vec::new(),
-                },
-                network_results: vec![ChildBlockingStylesheetNetworkResult {
-                    frame_id: Some("stale-child-frame".to_owned()),
-                    document_url: Url::parse("https://stale-child.test/document").unwrap(),
-                    request_url,
-                    initiator_type: SubresourceRequestInitiatorType::Parser,
-                    terminal:
+        let import_urls = vec![request_url.clone(), failed_url.clone()];
+        let graph = Arc::new(
+            crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
+                false,
+                vec![
+                    crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                        request_url,
+                        0.0,
                         crate::stylesheet_blocking::StylesheetFetchTerminal::unusable_response(
                             physical_response,
                             false,
                             "stylesheet MIME validation failed",
                         ),
-                }],
+                    ),
+                    crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                        failed_url,
+                        0.0,
+                        crate::stylesheet_blocking::StylesheetFetchTerminal::network_error(
+                            "import failed",
+                        ),
+                    ),
+                ],
+            ),
+        );
+        let mut queue = RendererPageNetworkingSource::new_for_test();
+        queue.enqueue_local_for_test(RendererPageResourceCompletion::child_blocking_stylesheet(
+            root_document,
+            ChildBlockingStylesheetLoadCompletion {
+                csp_violations: Vec::new(),
+                load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
+                child_handle,
+                owner: stale_owner,
+                signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {
+                    urls: import_urls,
+                },
+                frame_id: Some("stale-child-frame".to_owned()),
+                document_url: Url::parse("https://stale-child.test/document").unwrap(),
+                graph,
             },
         ));
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
@@ -238,8 +254,8 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
         assert!(websocket_lifecycle_events.is_empty());
         assert_eq!(
             network_records.len(),
-            1,
-            "stale child Document must not suppress or duplicate the completed Network fact"
+            2,
+            "stale child Document must preserve every Network fact in a failed graph"
         );
         let network_record = &network_records[0];
         assert_eq!(network_record.frame_id(), Some("stale-child-frame"));
@@ -257,12 +273,29 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
         );
         assert_eq!(
             network_record.request_initiator_type(),
-            SubresourceRequestInitiatorType::Parser
+            SubresourceRequestInitiatorType::Css
         );
         assert!(matches!(
             network_record.outcome(),
             SubresourceNetworkOutcome::Success { status: 200, .. }
         ));
+        let failed_record = &network_records[1];
+        assert_eq!(failed_record.frame_id(), Some("stale-child-frame"));
+        assert_eq!(failed_record.document_url(), network_record.document_url());
+        assert_eq!(
+            failed_record.url().as_str(),
+            "https://stale-child.test/failed.css"
+        );
+        assert_eq!(
+            failed_record.request_initiator_type(),
+            SubresourceRequestInitiatorType::Css
+        );
+        assert_eq!(
+            failed_record.outcome(),
+            &SubresourceNetworkOutcome::Failure {
+                error_text: "import failed".to_owned(),
+            }
+        );
     })
     .await;
 }

@@ -722,6 +722,8 @@ impl RendererResourceCompletionTestHarness {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use moli_module_script_tree as module_tree;
     use url::Url;
 
@@ -1026,14 +1028,18 @@ mod tests {
         owner: FrameDocumentTaskOwner,
     ) -> ChildBlockingStylesheetLoadCompletion {
         ChildBlockingStylesheetLoadCompletion {
-            import_graph: None,
+            csp_violations: Vec::new(),
+            graph: Arc::new(
+                crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(true, Vec::new()),
+            ),
             load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
             child_handle,
             owner,
             signature: crate::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport {
                 urls: Vec::new(),
             },
-            network_results: Vec::new(),
+            frame_id: None,
+            document_url: Url::parse("https://example.test/document").unwrap(),
         }
     }
 

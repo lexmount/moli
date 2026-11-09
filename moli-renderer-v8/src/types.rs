@@ -10,6 +10,21 @@ pub(crate) type NetworkBodySourceId = u64;
 pub(crate) type SharedNavigationResponseResult =
     std::sync::Arc<std::result::Result<NavigationResponse, String>>;
 
+#[derive(Clone)]
+pub(crate) enum SubresourceFetchRegistration {
+    Intercepted,
+    Direct(moli_fetch::FetchCancelHandle),
+}
+
+impl SubresourceFetchRegistration {
+    pub(crate) fn cancel_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match self {
+            Self::Intercepted => None,
+            Self::Direct(cancel_handle) => Some(cancel_handle.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct DedicatedWorkerId(u64);
 
@@ -232,6 +247,7 @@ impl PendingSubresourceContinuation {
 pub(super) struct PendingWindowFetchContinuation {
     promise: PendingWindowFetchPromise,
     keepalive: bool,
+    cache_mode: moli_fetch::RequestCacheMode,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
 }
@@ -245,15 +261,21 @@ impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
         keepalive: bool,
+        cache_mode: moli_fetch::RequestCacheMode,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
+            cache_mode,
             connect_policy,
             csp_report_context,
         }
+    }
+
+    pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
+        self.cache_mode
     }
 
     pub(super) fn keepalive(&self) -> bool {
@@ -522,6 +544,9 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    // Element and CSS loads retain the original request and SW client across
+    // interception; resuming must not reconstruct them from the current Page.
+    pub(super) dispatch: Option<Box<crate::network_host::SubresourceRequestDispatch>>,
     pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
@@ -570,6 +595,10 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct PendingSubresourceAuthState {
@@ -581,6 +610,10 @@ pub(super) struct PendingSubresourceAuthState {
     pub(super) intercept_response: bool,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) response: NavigationResponse,
+    pub(super) encoded: Option<moli_parkable_image::ParkableImage>,
+    pub(super) response_status_text: Option<String>,
+    pub(super) skip_fetch_security_validation: bool,
+    pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
 }
 
 pub(super) struct RunningSubresourceFetchState {
@@ -610,6 +643,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response_status_text: Option<String>,
+    /// Successful SW responses are already validated; network fallback keeps this false.
     pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) network_error_text: Option<String>,
@@ -650,6 +684,7 @@ impl AsyncSubresourceFetchResult {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
@@ -1215,35 +1250,28 @@ pub(super) struct ChildClassicScriptLoadCompletion {
 }
 
 #[derive(Debug)]
-pub(super) struct ChildBlockingStylesheetNetworkResult {
-    pub(super) frame_id: Option<String>,
-    pub(super) document_url: Url,
-    pub(super) request_url: Url,
-    pub(super) initiator_type: SubresourceRequestInitiatorType,
-    pub(super) terminal: crate::stylesheet_blocking::StylesheetFetchTerminal,
-}
-
-#[derive(Debug)]
 pub(super) struct ChildBlockingStylesheetLoadCompletion {
     pub(super) child_handle: NativeNodeId,
     pub(super) owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     pub(super) signature: crate::DocumentBlockingStylesheetSignature,
     pub(super) load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
-    pub(super) network_results: Vec<ChildBlockingStylesheetNetworkResult>,
-    pub(super) import_graph:
-        Option<std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>>,
+    pub(super) frame_id: Option<String>,
+    pub(super) document_url: Url,
+    pub(super) graph: std::sync::Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
+    pub(super) csp_violations: Vec<crate::document_runtime::DocumentContentSecurityPolicyViolation>,
 }
 
 impl ChildBlockingStylesheetLoadCompletion {
-    pub(super) fn successful(&self) -> bool {
-        self.import_graph.as_ref().map_or_else(
-            || {
-                self.network_results
-                    .iter()
-                    .all(|result| result.terminal.is_ready())
-            },
-            |graph| graph.successful(),
-        )
+    pub(super) fn request_initiator_type(
+        &self,
+        request_url: &Url,
+    ) -> SubresourceRequestInitiatorType {
+        if matches!(&self.signature, crate::DocumentBlockingStylesheetSignature::Link { url, .. } if url == request_url)
+        {
+            SubresourceRequestInitiatorType::Parser
+        } else {
+            SubresourceRequestInitiatorType::Css
+        }
     }
 }
 

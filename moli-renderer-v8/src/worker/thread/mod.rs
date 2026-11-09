@@ -1,6 +1,7 @@
 //! Worker thread — owns a V8 isolate and Tokio `LocalRuntime`, runs the
 //! worker event loop, and handles message dispatch.
 
+use super::module_runtime::worker_bootstrap_error;
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use std::cell::RefCell;
@@ -777,25 +778,19 @@ fn start_worker_module_graph_fetch_batch(
     }
 }
 
-fn drain_worker_file_reading_queue(
-    isolate: &mut v8::OwnedIsolate,
-    context: &v8::Global<v8::Context>,
-) {
-    loop {
-        let scope = pin!(v8::HandleScope::new(isolate));
-        let scope = &mut scope.init();
-        let ctx = v8::Local::new(scope, context);
-        let scope = &mut v8::ContextScope::new(scope, ctx);
-        if super::global_scope::get_worker_state(scope)
-            .is_some_and(|state| !state.borrow().callback_task_delivery_allowed())
-        {
-            break;
-        }
-        if !super::global_scope::drain_one_worker_blob_read(scope)
-            && !flush_one_pending_file_reading_task(scope)
-        {
-            break;
-        }
+fn run_worker_file_reading_task(isolate: &mut v8::OwnedIsolate, context: &v8::Global<v8::Context>) {
+    let scope = pin!(v8::HandleScope::new(isolate));
+    let scope = &mut scope.init();
+    let ctx = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, ctx);
+    if super::global_scope::get_worker_state(scope)
+        .is_some_and(|state| !state.borrow().callback_task_delivery_allowed())
+    {
+        return;
+    }
+    if super::global_scope::drain_one_worker_blob_read(scope)
+        || flush_one_pending_file_reading_task(scope)
+    {
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
     }
 }
@@ -1890,7 +1885,6 @@ async fn worker_main(
             trace!(url = %script_url, "worker termination won before the next task");
             break;
         }
-        drain_worker_file_reading_queue(worker_isolate.worker_isolate_mut(), &context);
 
         if state.borrow().closed {
             trace!(url = %script_url, "worker closed via self.close()");
@@ -1935,7 +1929,13 @@ async fn worker_main(
         let has_pending_indexed_db_tasks =
             worker_has_pending_indexed_db_tasks(worker_isolate.worker_isolate_mut(), &context);
 
+        let has_ready_file_reading_tasks = {
+            let state = state.borrow();
+            !state.file_reading_tasks.is_empty() || !state.ready_blob_reads.lock().is_empty()
+        };
+
         enum WorkerLoopWake {
+            FileReading,
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
             Xhr(Option<WorkerXhrCompletion>),
@@ -1969,6 +1969,7 @@ async fn worker_main(
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
+                _ = async {}, if has_ready_file_reading_tasks => WorkerLoopWake::FileReading,
                 _ = tokio::time::sleep_until(deadline) => WorkerLoopWake::Timer,
             }
         } else {
@@ -1983,6 +1984,7 @@ async fn worker_main(
                 completion = webcrypto_completion_rx.recv() => WorkerLoopWake::WebCrypto(completion),
                 completion = opfs_completion_rx.recv() => WorkerLoopWake::Opfs(completion),
                 _ = async {}, if has_pending_indexed_db_tasks => WorkerLoopWake::IndexedDb,
+                _ = async {}, if has_ready_file_reading_tasks => WorkerLoopWake::FileReading,
             }
         };
 
@@ -1997,6 +1999,23 @@ async fn worker_main(
 
         // Process wake if any.
         match wake {
+            WorkerLoopWake::FileReading => {
+                // One FileReading task per turn, with its cleanup checkpoint.
+                // Replenishing this source must not postpone timers or messages.
+                run_worker_file_reading_task(worker_isolate.worker_isolate_mut(), &context);
+                if !state.borrow().callback_task_delivery_allowed() {
+                    break;
+                }
+                drain_worker_dynamic_module_imports_for_context(
+                    worker_isolate.worker_isolate_mut(),
+                    &context,
+                    &state,
+                    &module_graph_fetch_tx,
+                );
+                // The ready source above does not await I/O. Participate in
+                // Tokio's budget so other worker-runtime futures also progress.
+                tokio::task::consume_budget().await;
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::Post(payload))) => {
                 if pending_module_bootstrap.is_some() {
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
@@ -3466,30 +3485,6 @@ fn worker_bootstrap_success<'s>(
     WorkerBootstrapSuccess {
         service_worker_fetch_handler_type,
     }
-}
-
-fn worker_bootstrap_error(
-    scope: &mut v8::PinScope<'_, '_>,
-    script_url: &str,
-    summary: &str,
-    event_kind: WorkerParentErrorEventKind,
-) -> WorkerBootstrapError {
-    let exception =
-        v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
-    (
-        V8ExceptionReport {
-            summary: summary.to_owned(),
-            source: Some(script_url.to_owned()),
-            line: Some(1),
-            column: Some(1),
-            source_line: None,
-            stack: None,
-            callback_context: None,
-            exception: None,
-        },
-        exception.map(|value| v8::Global::new(scope, value)),
-        event_kind,
-    )
 }
 
 enum WorkerBootstrapStart {

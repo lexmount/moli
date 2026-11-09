@@ -83,7 +83,8 @@ pub(crate) fn validate_fetch_response_security_policy(
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
     head.url_list()
-        .validate_request_mode(request_mode, &request_origin)?;
+        .validate_request_mode(request_mode, &request_origin)
+        .map_err(|error| error.to_string())?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
@@ -135,7 +136,7 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
     let request_origin = request_origin.into();
     head.url_list()
         .validate_request_mode(request_mode, &request_origin)
-        .map_err(FetchResponseSecurityViolation::Rejected)?;
+        .map_err(|error| FetchResponseSecurityViolation::Rejected(error.to_string()))?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }

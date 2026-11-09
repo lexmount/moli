@@ -776,7 +776,7 @@ impl ScriptVm {
                             track_handle,
                             sequence,
                             pending.info.internal_id,
-                            crate::network_host::text_track_response_result(
+                            crate::network_host::text_track_response_terminal(
                                 response_status,
                                 observable_response.body_text(),
                             ),
@@ -924,7 +924,7 @@ impl ScriptVm {
                             track_handle,
                             sequence,
                             pending.info.internal_id,
-                            Err(error_text.clone()),
+                            PendingTextTrackLoadTerminal::FetchFailed,
                         ),
                         PendingSubresourceContinuation::FontFace(face) => {
                             let face = v8::Local::new(scope, face);

@@ -63,9 +63,13 @@ use super::super::{
     url_form::build_url_constructor_template,
     url_search_params_runtime::build_url_search_params_constructor_template,
     web_audio_runtime::{
+        audio_buffer_constructor, audio_buffer_source_constructor_callback,
         build_audio_context_constructor_template, build_audio_worklet_node_constructor_template,
-        gain_node_constructor_callback, media_element_source_constructor_callback,
-        offline_audio_context_constructor_callback,
+        channel_merger_constructor, channel_splitter_constructor,
+        constant_source_constructor_callback, convolver_constructor, delay_constructor,
+        gain_node_constructor_callback, iir_constructor, media_element_source_constructor_callback,
+        offline_audio_context_constructor_callback, oscillator_constructor,
+        periodic_wave_constructor, stereo_panner_constructor, wave_shaper_constructor,
     },
     webrtc::{
         rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
@@ -1022,22 +1026,116 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
             .length(2)
             .build(scope)
         }
+        ConstructorKind::AudioBufferSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::AudioBufferSourceNode,
+                audio_buffer_source_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ConstantSourceNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ConstantSourceNode,
+                constant_source_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ConvolverNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ConvolverNode,
+                convolver_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::IIRFilterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::IIRFilterNode,
+                iir_constructor
+            ))
+            .length(2)
+            .build(scope)
+        }
+        ConstructorKind::PeriodicWave => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::PeriodicWave,
+                periodic_wave_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::OscillatorNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::OscillatorNode,
+                oscillator_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::WaveShaperNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::WaveShaperNode,
+                wave_shaper_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelMergerNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelMergerNode,
+                channel_merger_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::ChannelSplitterNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::ChannelSplitterNode,
+                channel_splitter_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::DelayNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DelayNode,
+                delay_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::StereoPannerNode => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::StereoPannerNode,
+                stereo_panner_constructor
+            ))
+            .length(1)
+            .build(scope)
+        }
         ConstructorKind::OfflineAudioContext => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::OfflineAudioContext,
                 offline_audio_context_constructor_callback
             ))
-            .length(3)
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::AudioBuffer => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::AudioBuffer,
+                audio_buffer_constructor
+            ))
+            .length(1)
             .build(scope)
         }
         ConstructorKind::BaseAudioContext
         | ConstructorKind::AudioDestinationNode
-        | ConstructorKind::OscillatorNode
         | ConstructorKind::DynamicsCompressorNode
         | ConstructorKind::AnalyserNode
         | ConstructorKind::BiquadFilterNode
-        | ConstructorKind::AudioParam
-        | ConstructorKind::AudioBuffer => {
+        | ConstructorKind::AudioParam => {
             v8::FunctionTemplate::builder(illegal_constructor_callback)
                 .length(0)
                 .build(scope)

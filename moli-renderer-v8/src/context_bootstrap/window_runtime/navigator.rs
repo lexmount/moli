@@ -2,6 +2,7 @@ use super::*;
 use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_storage_service::SqlBucketOperation;
+use moli_v8_util::reject_promise_with_type_error as reject_type_error;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
@@ -3291,17 +3292,6 @@ fn reject_storage_bucket_quota_exceeded<'s>(
         Some(quota as f64),
         Some(requested as f64),
     );
-    let _ = resolver.reject(scope, error);
-}
-
-fn reject_type_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    message: &str,
-) {
-    let error = v8_string(scope, message)
-        .map(|message| v8::Exception::type_error(scope, message))
-        .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.reject(scope, error);
 }
 

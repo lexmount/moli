@@ -279,6 +279,7 @@ impl DocumentRuntime {
         connected_roots: &[DomHandle],
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
     ) {
+        self.process_connected_meta_content_security_policies(connected_roots);
         let mut checked_attributes = HashSet::new();
         for mutation in attribute_mutations {
             let target = mutation.target();
@@ -364,9 +365,6 @@ impl DocumentRuntime {
 
         for owner in stylesheet_owners {
             if self.dom_host.is_inline_style_sheet_owner(owner) {
-                if self.dom_host.is_style_element_parsing_children(owner) {
-                    continue;
-                }
                 self.apply_inline_style_element_csp_check(scope, host_ptr, owner);
             } else {
                 self.apply_link_style_element_csp_check(scope, host_ptr, owner);
@@ -432,13 +430,15 @@ impl DocumentRuntime {
         }
     }
 
-    fn apply_inline_style_element_csp_check<'s>(
+    pub(crate) fn apply_inline_style_element_csp_check<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         owner: DomHandle,
     ) {
-        if !self.dom_host.is_connected(owner) {
+        if !self.dom_host.is_connected(owner)
+            || self.dom_host.is_style_element_parsing_children(owner)
+        {
             return;
         }
         let Some(element) = self.dom_host.node(owner).and_then(Node::as_element) else {
@@ -448,26 +448,35 @@ impl DocumentRuntime {
         let nonce = element.cryptographic_nonce().map(str::to_owned);
         let is_declarative_css_module =
             super::stylesheet_runtime::is_declarative_css_module_style_element(element);
-        let (style_report_only_violation, style_enforced_violation) = self
-            .inline_style_element_csp_check(
-                &source,
-                ContentSecurityPolicyStyleElementRequest {
-                    nonce: nonce.as_deref(),
-                },
-            )
-            .into_violations();
+        let host = unsafe { &*host_ptr };
+        let Some(policy_owner) = host.owner_dispatch_scope_for_node(owner) else {
+            return;
+        };
+        let Some(style_check) = host.inline_style_element_csp_check_for_owner(
+            policy_owner,
+            &source,
+            ContentSecurityPolicyStyleElementRequest {
+                nonce: nonce.as_deref(),
+            },
+        ) else {
+            return;
+        };
+        let (style_report_only_violation, style_enforced_violation) = style_check.into_violations();
         let (script_report_only_violation, script_enforced_violation) = if is_declarative_css_module
         {
             // A declarative CSS module is not a script element and carries no
             // creator-script trust to propagate through `strict-dynamic`.
             // Use the parser-inserted request shape even when script created.
-            self.inline_script_element_csp_check(
+            let Some(check) = host.inline_script_element_csp_check_for_owner(
+                policy_owner,
                 &source,
                 ContentSecurityPolicyScriptElementRequest::parser_inserted_with_nonce(
                     nonce.as_deref(),
                 ),
-            )
-            .into_violations()
+            ) else {
+                return;
+            };
+            check.into_violations()
         } else {
             (None, None)
         };
@@ -836,6 +845,79 @@ impl DocumentRuntime {
         )
     }
 
+    pub(crate) fn stylesheet_fetch_csp_context_for_document(
+        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        container: &DocumentPolicyContainer,
+        origin_url: Option<Url>,
+    ) -> crate::content_security_policy::StylesheetFetchCspContext {
+        if self.bypass_content_security_policy() {
+            return crate::content_security_policy::StylesheetFetchCspContext::new(|| {
+                |_, _, _| (None, None)
+            });
+        }
+        let enforce = document_response_content_security_policies(
+            &container.response_content_security_policies,
+            &container.content_security_reporting_endpoints,
+        );
+        if let Some(document) = document_handle {
+            self.meta_content_security_policies_for_document(document);
+        }
+        let meta_policies = self.delivered_meta_content_security_policies.clone();
+        let reporting_endpoints = container.content_security_reporting_endpoints.clone();
+        let report = document_response_content_security_policies(
+            &container.response_content_security_report_only_policies,
+            &container.content_security_reporting_endpoints,
+        );
+        let document_uri = origin_url.as_ref().map(|_| {
+            crate::content_security_policy::content_security_policy_source_file_for_report(
+                document_url.as_str(),
+            )
+        });
+        let policy_url = origin_url.unwrap_or_else(|| document_url.clone());
+        crate::content_security_policy::StylesheetFetchCspContext::new(move || {
+            let mut enforce = enforce.clone();
+            if let Some(document) = document_handle
+                && let Some(meta_policies) = meta_policies.read().get(&document)
+            {
+                enforce.extend(meta_policies.iter().cloned().map(|policy| {
+                    DocumentContentSecurityPolicy {
+                        policy,
+                        report_uri_enabled: false,
+                        reporting_endpoints: reporting_endpoints.clone(),
+                    }
+                }));
+            }
+            let report = report.clone();
+            let policy_url = policy_url.clone();
+            let document_uri = document_uri.clone();
+            move |url: &Url, nonce: Option<&str>, redirect_status| {
+                let check = |policies: &[DocumentContentSecurityPolicy], disposition| {
+                    document_style_element_url_policy_violation_from_document_policies(
+                        policies,
+                        &policy_url,
+                        url,
+                        redirect_status,
+                        disposition,
+                        ContentSecurityPolicyStyleElementRequest { nonce },
+                    )
+                    .map(|mut violation| {
+                        if let Some(uri) = &document_uri {
+                            violation.document_uri.clone_from(uri);
+                            violation.source_file.clone_from(uri);
+                        }
+                        violation
+                    })
+                };
+                (
+                    check(&report, ContentSecurityPolicyDisposition::Report),
+                    check(&enforce, ContentSecurityPolicyDisposition::Enforce),
+                )
+            }
+        })
+    }
+
     pub(crate) fn module_fetch_csp_context_for_document(
         &self,
         document_handle: Option<DomHandle>,
@@ -954,34 +1036,24 @@ impl DocumentRuntime {
         )
     }
 
-    pub(crate) fn inline_script_element_csp_check(
+    pub(crate) fn inline_style_element_csp_check_for_document(
         &self,
-        source: &str,
-        request: ContentSecurityPolicyScriptElementRequest<'_>,
-    ) -> DocumentContentSecurityPolicyCheck {
-        self.inline_script_element_csp_check_for_document(
-            Some(self.document_handle()),
-            self.document_url(),
-            &self.policy_container.response_content_security_policies,
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
-            source,
-            request,
-        )
-    }
-
-    pub(crate) fn inline_style_element_csp_check(
-        &self,
+        document_handle: Option<DomHandle>,
+        document_url: &Url,
+        policy_container: &DocumentPolicyContainer,
         source: &str,
         request: ContentSecurityPolicyStyleElementRequest<'_>,
     ) -> DocumentContentSecurityPolicyCheck {
-        let document_url = self.document_url();
+        if self.bypass_content_security_policy() {
+            return DocumentContentSecurityPolicyCheck {
+                report_only_violation: None,
+                enforced_violation: None,
+            };
+        }
         let enforced_policies = self.document_content_security_policies_for_optional_document(
-            Some(self.document_handle()),
-            &self.policy_container.response_content_security_policies,
-            &self.policy_container.content_security_reporting_endpoints,
+            document_handle,
+            &policy_container.response_content_security_policies,
+            &policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation =
             document_inline_style_element_policy_violation_from_document_policies(
@@ -992,10 +1064,8 @@ impl DocumentRuntime {
                 ContentSecurityPolicyDisposition::Enforce,
             );
         let report_only_policies = document_response_content_security_policies(
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
+            &policy_container.response_content_security_report_only_policies,
+            &policy_container.content_security_reporting_endpoints,
         );
         let report_only_violation =
             document_inline_style_element_policy_violation_from_document_policies(
@@ -1023,7 +1093,7 @@ impl DocumentRuntime {
             &self.policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation = document_style_element_url_policy_violation_from_document_policies(
-            enforced_policies,
+            &enforced_policies,
             document_url,
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1038,7 +1108,7 @@ impl DocumentRuntime {
         );
         let report_only_violation =
             document_style_element_url_policy_violation_from_document_policies(
-                report_only_policies,
+                &report_only_policies,
                 document_url,
                 request_url,
                 ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1062,7 +1132,7 @@ impl DocumentRuntime {
             &self.policy_container.content_security_reporting_endpoints,
         );
         let enforced_violation = document_style_element_url_policy_violation_from_document_policies(
-            enforced_policies,
+            &enforced_policies,
             document_url,
             request_url,
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1077,7 +1147,7 @@ impl DocumentRuntime {
         );
         let report_only_violation =
             document_style_element_url_policy_violation_from_document_policies(
-                report_only_policies,
+                &report_only_policies,
                 document_url,
                 request_url,
                 ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1699,11 +1769,32 @@ impl DocumentRuntime {
         violation: &DocumentContentSecurityPolicyViolation,
         send_report: bool,
     ) -> anyhow::Result<()> {
-        self.record_content_security_policy_inspector_issue(target, violation);
         let host = unsafe { &mut *host_ptr };
         let document_owner = host
             .current_main_document_task_owner()
             .ok_or_else(|| anyhow::anyhow!("main CSP violation document owner is unavailable"))?;
+        if send_report
+            && let Some(element) = target
+            && let Some(owner) = host.owner_dispatch_scope_for_node(element)
+            && !matches!(owner, crate::native_bridge::OwnerDispatchScope::Top)
+        {
+            let window_target = host
+                .current_window_document_task_target_for_dispatch_scope(owner)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("element CSP violation document owner is unavailable")
+                })?;
+            // Parser admission cannot run author code. Reuse the queued exact
+            // Window target so a retired child cannot receive this event later.
+            self.enqueue_content_security_policy_violation_event_task(
+                crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
+                    document_owner,
+                    window_target,
+                    violation.clone(),
+                ),
+            );
+            return Ok(());
+        }
+        self.record_content_security_policy_inspector_issue(target, violation);
         if send_report {
             let fields = ContentSecurityPolicyViolationEventFields::from(violation);
             crate::network_host::send_content_security_policy_reports_for_window(
@@ -1819,10 +1910,24 @@ impl DocumentRuntime {
             self.process_meta_content_security_policy_handle(document_handle, handle);
         }
         self.delivered_meta_content_security_policies
-            .borrow()
+            .read()
             .get(&document_handle)
             .cloned()
             .unwrap_or_default()
+    }
+
+    pub(crate) fn process_connected_meta_content_security_policies(&self, roots: &[DomHandle]) {
+        for &root in roots {
+            let mut stack = vec![root];
+            while let Some(handle) = stack.pop() {
+                if self.dom_host.is_html_element_named(handle, "meta")
+                    && let Some(document) = self.dom_host.owner_document_handle(handle)
+                {
+                    self.process_meta_content_security_policy_handle(document, handle);
+                }
+                stack.extend(self.dom_host.child_handles(handle));
+            }
+        }
     }
 
     pub(crate) fn process_parser_meta_content_security_policy(&self, handle: DomHandle) {
@@ -1874,7 +1979,7 @@ impl DocumentRuntime {
         }
         if let Some(policy) = policy {
             self.delivered_meta_content_security_policies
-                .borrow_mut()
+                .write()
                 .entry(document_handle)
                 .or_default()
                 .push(ContentSecurityPolicy::from_meta(policy));
@@ -2120,14 +2225,14 @@ fn document_script_element_url_policy_violation_from_document_policies(
 }
 
 fn document_style_element_url_policy_violation_from_document_policies(
-    policies: Vec<DocumentContentSecurityPolicy>,
+    policies: &[DocumentContentSecurityPolicy],
     document_url: &Url,
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
     request: ContentSecurityPolicyStyleElementRequest<'_>,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
-    policies.into_iter().find_map(|policy| {
+    policies.iter().find_map(|policy| {
         let single_policy = [policy.policy.clone()];
         let mut violation = document_style_element_url_policy_violation(
             &single_policy,
@@ -2138,7 +2243,7 @@ fn document_style_element_url_policy_violation_from_document_policies(
             disposition,
             request,
         )?;
-        apply_document_policy_reporting_flags(&mut violation, &policy);
+        apply_document_policy_reporting_flags(&mut violation, policy);
         Some(violation)
     })
 }

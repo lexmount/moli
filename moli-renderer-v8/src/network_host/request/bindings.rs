@@ -1,3 +1,4 @@
+use crate::network_host::request_scope::callback_child_handle;
 mod init;
 
 use self::init::{
@@ -173,22 +174,4 @@ fn callback_base_url(
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
         .and_then(|value| url::Url::parse(&value).ok())
-}
-
-fn callback_child_handle(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<crate::document_runtime::DomHandle> {
-    if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-        let (index, lossless) = big.u64_value();
-        return lossless
-            .then_some(index)
-            .and_then(|index| usize::try_from(index).ok())
-            .map(crate::document_runtime::DomHandle::new);
-    }
-    value
-        .integer_value(scope)
-        .filter(|index| *index >= 0)
-        .and_then(|index| usize::try_from(index).ok())
-        .map(crate::document_runtime::DomHandle::new)
 }

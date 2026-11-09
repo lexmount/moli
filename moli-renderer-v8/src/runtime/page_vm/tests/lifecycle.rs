@@ -3368,32 +3368,37 @@ document.body.appendChild(replacementFrame);
                         "dynamic import must retain script initiator attribution after replacement"
                     );
 
+                    let request_url = Url::parse("https://old-document.test/child.css").unwrap();
+                    let graph = Arc::new(
+                        crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
+                            false,
+                            vec![crate::stylesheet_blocking::StylesheetImportNetworkResult::new(
+                                request_url.clone(),
+                                0.0,
+                                crate::stylesheet_blocking::StylesheetFetchTerminal::network_error(
+                                    "retired child stylesheet failed",
+                                ),
+                            )],
+                        ),
+                    );
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_blocking_stylesheet(
                             old_root_document,
                             ChildBlockingStylesheetLoadCompletion {
-                                import_graph: None,
+                                csp_violations: Vec::new(),
                                 load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId(1),
-            child_handle: old_child_handle,
+                                child_handle: old_child_handle,
                                 owner: old_child_owner,
-                                signature: crate::DocumentBlockingStylesheetSignature::
-                                    ParserCreatedStyleImport { urls: Vec::new() },
-                                network_results: vec![ChildBlockingStylesheetNetworkResult {
-                                    frame_id: Some("retired-child-frame".to_owned()),
-                                    document_url: Url::parse(
-                                        "https://old-document.test/child",
-                                    )
-                                    .unwrap(),
-                                    request_url: Url::parse(
-                                        "https://old-document.test/child.css",
-                                    )
-                                    .unwrap(),
-                                    initiator_type: SubresourceRequestInitiatorType::Parser,
-                                    terminal: crate::stylesheet_blocking::
-                                        StylesheetFetchTerminal::network_error(
-                                            "retired child stylesheet failed",
-                                        ),
-                                }],
+                                signature: crate::DocumentBlockingStylesheetSignature::Link {
+                                    url: request_url,
+                                    options: Default::default(),
+                                },
+                                frame_id: Some("retired-child-frame".to_owned()),
+                                document_url: Url::parse(
+                                    "https://old-document.test/child",
+                                )
+                                .unwrap(),
+                                graph,
                             },
                         ),
                     );

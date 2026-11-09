@@ -1,3 +1,4 @@
+use crate::css_style::compress_box_components;
 use crate::web_api_interfaces;
 use std::{
     cell::RefCell,
@@ -1931,22 +1932,6 @@ fn box_shorthand_property_value<'s>(
         return keyword;
     }
     compress_box_components(&values).unwrap_or_default()
-}
-
-fn compress_box_components(values: &[String]) -> Option<String> {
-    match values {
-        [start, end] if start == end => Some(start.clone()),
-        [start, end] => Some(format!("{start} {end}")),
-        [top, right, bottom, left] if top == right && top == bottom && top == left => {
-            Some(top.clone())
-        }
-        [top, right, bottom, left] if top == bottom && right == left => {
-            Some(format!("{top} {right}"))
-        }
-        [top, right, bottom, left] if right == left => Some(format!("{top} {right} {bottom}")),
-        [top, right, bottom, left] => Some(format!("{top} {right} {bottom} {left}")),
-        _ => None,
-    }
 }
 
 fn raw_style_property_value<'s>(

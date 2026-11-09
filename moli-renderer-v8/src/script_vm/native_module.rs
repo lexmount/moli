@@ -1,3 +1,4 @@
+use crate::module_runtime::module_request_attributes;
 use std::pin::pin;
 
 use anyhow::Result;
@@ -1245,30 +1246,6 @@ fn collect_module_requests(
         ));
     }
     Ok(records)
-}
-
-fn module_request_attributes(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::ModuleRequest>,
-) -> ModuleAttributesKey {
-    let attributes = request.get_import_attributes();
-    let mut pairs = Vec::with_capacity(attributes.length() / 3);
-    let mut index = 0;
-    while index + 1 < attributes.length() {
-        let key = attributes
-            .get(scope, index)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let value = attributes
-            .get(scope, index + 1)
-            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-            .map(|value| value.to_rust_string_lossy(scope));
-        if let (Some(key), Some(value)) = (key, value) {
-            pairs.push((key, value));
-        }
-        index += 3;
-    }
-    ModuleAttributesKey::from_pairs(pairs)
 }
 
 fn module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase {

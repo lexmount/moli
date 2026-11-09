@@ -55,6 +55,66 @@ fn divs_in_subtree(host: &JsContextHost, root: DomHandle) -> Vec<DomHandle> {
     nodes
 }
 
+fn shadow_inheritance_fixture(mode: &str) -> (StandaloneScriptVmHarness, DomHandle) {
+    let mut vm = fixture(
+        "<main id=host style='font-weight:700;letter-spacing:3px;font-style:italic;text-transform:uppercase'></main>",
+    );
+    vm.eval(&format!(
+        "const root = document.getElementById('host').attachShadow({{mode:'{mode}'}}); root.innerHTML = '<span>Hello</span>'; globalThis.styleTarget = root.firstElementChild",
+    ))
+    .unwrap();
+    let handle = {
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let shadow_host = host.dom_host().element_handle_by_id("host").unwrap();
+        let root = host.dom_host().shadow_root_handle(shadow_host).unwrap();
+        host.dom_host().child_handles(root).next().unwrap()
+    };
+    (vm, handle)
+}
+
+#[test]
+fn cold_document_export_inherits_from_shadow_host_like_single_node_resolution() {
+    let properties = [
+        "font-weight",
+        "letter-spacing",
+        "font-style",
+        "text-transform",
+    ]
+    .map(str::to_owned);
+    for mode in ["open", "closed"] {
+        let expected = {
+            let (vm, node) = shadow_inheritance_fixture(mode);
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let host = host.borrow();
+            let mut observation = StyleObservation::new(&host);
+            let style = observation.read(node);
+            properties
+                .iter()
+                .map(|property| style.property(property))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(expected, ["700", "3px", "italic", "uppercase"]);
+
+        // A separate DOM must reach the batch resolver with no styles warmed
+        // by getComputedStyle or the single-node control above.
+        let (mut vm, node) = shadow_inheritance_fixture(mode);
+        {
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let host = host.borrow();
+            let values =
+                computed_style_export_values_for_document_snapshot(&host, [node], &properties);
+            assert_eq!(values[0].values, expected, "cold {mode} shadow tree");
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(['font-weight','letter-spacing','font-style','text-transform'].map(name => getComputedStyle(styleTarget).getPropertyValue(name)))")
+                .unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+            "the batch result must also leave the canonical cache correct",
+        );
+    }
+}
+
 #[test]
 fn document_export_checks_flat_tree_membership_linearly_in_either_node_order() {
     let depth = 256;
@@ -247,6 +307,181 @@ fn document_export_membership_cache_does_not_survive_tree_or_slot_changes() {
                     assert_eq!(value.values, ["block", "visible"]);
                 }
             }
+        }
+    }
+}
+
+fn export_values(
+    vm: &StandaloneScriptVmHarness,
+    nodes: impl IntoIterator<Item = DomHandle>,
+    properties: &[String],
+) -> Vec<Vec<String>> {
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let host = host.borrow();
+    computed_style_export_values_for_document_snapshot(&host, nodes, properties)
+        .into_iter()
+        .map(|style| style.values)
+        .collect()
+}
+
+// Observable values below were calibrated against Chromium 145.0.7632.6.
+#[test]
+fn cold_document_export_matches_single_reads_across_contents_and_selector_branches() {
+    let body = "<style>#scope {display:flex;--weight:700;--spacing:3px} #scope > .contents {display:contents;font-weight:var(--weight);letter-spacing:var(--spacing)} #scope > .contents > span {font-style:italic} #scope > .other > span {font-weight:600;letter-spacing:5px}</style><main id=scope><section id=contents class=contents><span id=first>A</span><span id=second>B</span></section><section class=other><span id=third>C</span></section></main>";
+    let properties = ["font-weight", "letter-spacing", "font-style", "display"].map(str::to_owned);
+    for reverse in [false, true] {
+        let mut ids = ["first", "third", "second", "contents"];
+        let mut expected = vec![
+            vec!["700", "3px", "italic", "block"],
+            vec!["600", "5px", "normal", "inline"],
+            vec!["700", "3px", "italic", "block"],
+            vec!["700", "3px", "normal", "contents"],
+        ];
+        if reverse {
+            ids.reverse();
+            expected.reverse();
+        }
+        for batch in [false, true] {
+            // Each resolver/order gets a new, completely cold document.
+            let vm = fixture(body);
+            let nodes = {
+                let host = vm.context_host_weak_for_test().upgrade().unwrap();
+                let host = host.borrow();
+                ids.map(|id| host.dom_host().element_handle_by_id(id).unwrap())
+            };
+            let values = if batch {
+                export_values(&vm, nodes, &properties)
+            } else {
+                let host = vm.context_host_weak_for_test().upgrade().unwrap();
+                let host = host.borrow();
+                let mut observation = StyleObservation::new(&host);
+                nodes
+                    .into_iter()
+                    .map(|node| {
+                        let style = observation.read(node);
+                        properties.iter().map(|name| style.property(name)).collect()
+                    })
+                    .collect::<Vec<Vec<String>>>()
+            };
+            assert_eq!(values, expected, "batch={batch}, reverse={reverse}");
+            assert_eq!(export_values(&vm, nodes, &properties), expected);
+        }
+    }
+}
+
+#[test]
+fn document_export_and_explicit_pseudo_queries_share_invalidation_in_either_order() {
+    let body = "<style>main {display:flex;--weight:700;--spacing:3px;--ink:rgb(10,20,30)} section {display:contents;font-weight:var(--weight);letter-spacing:var(--spacing)} span::before {color:var(--ink);font-weight:600;content:none} .generated span::before {content:'before';font-weight:800}</style><main><section><span id=target>Hello</span></section></main>";
+    let properties = ["font-weight", "letter-spacing", "display"].map(str::to_owned);
+    for batch_first in [true, false] {
+        let mut vm = fixture(body);
+        let target = {
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let host = host.borrow();
+            host.dom_host().element_handle_by_id("target").unwrap()
+        };
+        for (mutation, content, weight, color) in [
+            ("void 0", "none", "600", "rgb(10, 20, 30)"),
+            (
+                "document.body.className='generated'",
+                "\"before\"",
+                "800",
+                "rgb(10, 20, 30)",
+            ),
+            (
+                "document.querySelector('main').style.setProperty('--ink','rgb(40,50,60)')",
+                "\"before\"",
+                "800",
+                "rgb(40, 50, 60)",
+            ),
+            (
+                "document.body.className=''",
+                "none",
+                "600",
+                "rgb(40, 50, 60)",
+            ),
+        ] {
+            vm.eval(mutation).unwrap();
+            if batch_first {
+                assert_eq!(
+                    export_values(&vm, [target], &properties),
+                    [["700", "3px", "block"]]
+                );
+            }
+            let actual = vm.eval("JSON.stringify((() => { const target=document.getElementById('target'), style=getComputedStyle(target), before=getComputedStyle(target,'::before'); return [style.fontWeight,style.letterSpacing,style.display,before.content,before.fontWeight,before.color]; })())").unwrap();
+            assert_eq!(
+                actual,
+                serde_json::to_string(&["700", "3px", "block", content, weight, color]).unwrap(),
+                "batch_first={batch_first}, after {mutation}",
+            );
+            if !batch_first {
+                assert_eq!(
+                    export_values(&vm, [target], &properties),
+                    [["700", "3px", "block"]]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn document_export_refreshes_shadow_inheritance_after_slot_and_connection_changes() {
+    let mut vm = fixture(
+        "<main id=host style='--weight:700;--spacing:3px'><article id=assigned slot=content style='font-weight:var(--weight);letter-spacing:var(--spacing)'>Assigned</article></main>",
+    );
+    vm.eval("globalThis.exportHost=document.getElementById('host'); globalThis.exportRoot=exportHost.attachShadow({mode:'closed'}); exportRoot.innerHTML='<slot name=content style=\"font-weight:var(--weight);letter-spacing:var(--spacing)\"><span>Fallback</span></slot>'; globalThis.exportFallback=exportRoot.firstElementChild.firstElementChild").unwrap();
+    let nodes = {
+        let host = vm.context_host_weak_for_test().upgrade().unwrap();
+        let host = host.borrow();
+        let assigned = host.dom_host().element_handle_by_id("assigned").unwrap();
+        let shadow_host = host.dom_host().element_handle_by_id("host").unwrap();
+        let root = host.dom_host().shadow_root_handle(shadow_host).unwrap();
+        let slot = host.dom_host().child_handles(root).next().unwrap();
+        let fallback = host.dom_host().child_handles(slot).next().unwrap();
+        [assigned, fallback, slot]
+    };
+    let properties = ["font-weight", "letter-spacing"].map(str::to_owned);
+    for (mutation, selected, expected) in [
+        ("void 0", 0, Some(["700", "3px"])),
+        (
+            "exportHost.style.setProperty('--weight','900')",
+            0,
+            Some(["900", "3px"]),
+        ),
+        (
+            "exportRoot.firstElementChild.name='other'",
+            1,
+            Some(["900", "3px"]),
+        ),
+        (
+            "exportRoot.firstElementChild.style.setProperty('--spacing','5px')",
+            1,
+            Some(["900", "5px"]),
+        ),
+        ("exportHost.remove()", 1, None),
+        (
+            "document.body.appendChild(exportHost)",
+            1,
+            Some(["900", "5px"]),
+        ),
+    ] {
+        vm.eval(mutation).unwrap();
+        // Live Markdown traversal supplies the slot and its current assigned
+        // or fallback child, never the inactive fallback subtree.
+        for order in [[2, selected], [selected, 2]] {
+            let values = export_values(&vm, order.map(|i| nodes[i]), &properties);
+            for value in values {
+                if let Some(expected) = expected {
+                    assert_eq!(value, expected, "after {mutation}");
+                } else {
+                    assert!(value.is_empty(), "after {mutation}");
+                }
+            }
+        }
+        if selected == 1
+            && let Some(expected) = expected
+        {
+            assert_eq!(vm.eval("JSON.stringify([getComputedStyle(exportFallback).fontWeight,getComputedStyle(exportFallback).letterSpacing])").unwrap(), serde_json::to_string(&expected).unwrap());
         }
     }
 }

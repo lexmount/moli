@@ -438,14 +438,13 @@ impl PageNetworkPolicySnapshot {
     /// Existing request fields, including empty values, take precedence.
     pub(crate) fn apply_request_headers(&self, request: &mut Request) {
         if !self.extra_http_headers.is_empty() {
-            let mut headers = moli_fetch::RequestHeaders::from_bytes(
+            let headers = moli_fetch::RequestHeaders::from_bytes(
                 self.extra_http_headers
                     .iter()
                     .map(|(name, value)| (name.to_string(), value.to_vec()))
                     .collect(),
             );
-            headers.overlay(std::mem::take(&mut request.request_headers));
-            request.request_headers = headers;
+            request.apply_default_headers(&headers);
         }
     }
 
@@ -582,6 +581,35 @@ mod tests {
         );
         assert!(policy.snapshot().network_offline());
         assert!(policy.revision() > snapshot.revision());
+    }
+
+    #[test]
+    fn page_headers_survive_request_scoped_override_restoration_on_redirect() {
+        let policy = PageNetworkPolicy::default();
+        policy.set_extra_http_headers(&vec![("x-page".to_owned(), "page".to_owned())].into());
+        let mut request = policy
+            .snapshot()
+            .apply_to_request(
+                Request::new(
+                    "GET",
+                    "https://example.test/redirect",
+                    None,
+                    vec![("x-hop".to_owned(), "initial-only".to_owned())],
+                )
+                .unwrap()
+                .with_page_network_policy()
+                .with_redirect_headers(Some(Vec::new().into())),
+            )
+            .unwrap();
+        assert_eq!(
+            request.request_headers.to_byte_strings(),
+            vec![("x-hop".to_owned(), "initial-only".to_owned())],
+        );
+        request.apply_redirect_status(302);
+        assert_eq!(
+            request.request_headers.to_byte_strings(),
+            vec![("x-page".to_owned(), "page".to_owned())],
+        );
     }
 
     #[test]

@@ -861,6 +861,20 @@ pub(super) fn context_host_ptr_from_window_object(
     if ptr.is_null() { None } else { Some(ptr) }
 }
 
+pub(crate) fn context_host_ptr_for_navigation_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner: v8::Local<'_, v8::Object>,
+) -> Option<*mut JsContextHost> {
+    context_host_ptr_from_global_bridge(scope)
+        .or_else(|| context_host_ptr_from_window_object(scope, owner))
+        .or_else(|| {
+            owner
+                .get(scope, v8str(scope, "parent").into())
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                .and_then(|parent| context_host_ptr_from_window_object(scope, parent))
+        })
+}
+
 pub(super) fn node_wrapper_from_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     handle: DomHandle,

@@ -2281,11 +2281,10 @@ impl ScriptVmPageRealmBootstrap {
             page_runtime_wake_tx,
             storage_bucket_store,
             renderer_page_script_environment,
-            reuse_main_window_proxy,
+            reuse_main_window_proxy: _,
         } = self;
         let pending = Box::new(main_world::PendingMainWorld {
             inherited_security_token,
-            reuse_main_window_proxy,
             ..Default::default()
         });
         let main_world = if initialize_main_world {
@@ -2421,7 +2420,7 @@ impl ScriptVmDefaultWorldBootstrap {
         .bootstrap_default_world()
     }
 
-    fn attach_context_and_capture_baseline_globals(
+    fn capture_baseline_globals_and_attach_context(
         renderer_document_isolate: RendererDocumentIsolateHandle,
         isolate: &mut v8::OwnedIsolate,
         inspector: &mut RendererInspectorIsolateBackend,
@@ -2436,6 +2435,9 @@ impl ScriptVmDefaultWorldBootstrap {
         let default_context = v8::Global::new(scope.as_ref(), local_context);
         let registered_context = v8::Global::new(scope.as_ref(), local_context);
         let scope = &mut v8::ContextScope::new(scope, local_context);
+        // Preparation may be interrupted. Publish the Inspector registration
+        // only after all fallible bootstrap work has completed.
+        let baseline = Self::capture_baseline_globals_in_scope(scope)?;
         page_inspector.attach_context(
             renderer_document_isolate,
             inspector,
@@ -2446,7 +2448,7 @@ impl ScriptVmDefaultWorldBootstrap {
             root_frame_id,
         );
 
-        Self::capture_baseline_globals_in_scope(scope)
+        Ok(baseline)
     }
 
     fn capture_baseline_globals_in_scope(

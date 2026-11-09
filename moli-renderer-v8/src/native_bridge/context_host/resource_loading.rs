@@ -12,18 +12,13 @@ use crate::{
         PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
         PendingSubresourceResponseState, PendingWebSocketConnection, PendingWebSocketResponseState,
         RunningSubresourceFetchState, ScriptNetworkOutput, ScriptNetworkOutputItem,
-        StreamingSubresourceFetchState, SubresourceBodyFinished, SubresourceNetworkRecord,
-        SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+        StreamingSubresourceFetchState, SubresourceBodyFinished, SubresourceFetchRegistration,
+        SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
         SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
         SubresourceResponseStarted,
     },
 };
 use moli_shared_worker::SharedWorkerInstanceId;
-
-enum ImageSubresourceFetchRegistration {
-    Intercepted,
-    Dispatched(moli_fetch::FetchCancelHandle),
-}
 
 fn navigation_response_from_subresource_body(
     body: &SubresourceResponseBody,
@@ -570,6 +565,27 @@ impl JsContextHost {
         );
     }
 
+    fn record_subresource_admission(
+        &mut self,
+        registration: &SubresourceFetchRegistration,
+        info: &PendingSubresourceFetchInfo,
+        initiator: SubresourceRequestInitiatorType,
+        disposition: ResourceLoadDisposition,
+    ) {
+        match registration {
+            SubresourceFetchRegistration::Intercepted => {
+                self.push_pending_subresource_fetch_info(info.clone());
+            }
+            SubresourceFetchRegistration::Direct(_) => {
+                self.record_pending_subresource_request_started_with_initiator(
+                    info,
+                    initiator,
+                    disposition,
+                );
+            }
+        }
+    }
+
     pub(crate) fn record_deferred_pending_subresource_request_started(
         &mut self,
         pending: &mut PendingSubresourceFetchState,
@@ -590,6 +606,7 @@ impl JsContextHost {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        cache_mode: moli_fetch::RequestCacheMode,
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -611,6 +628,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -624,6 +642,7 @@ impl JsContextHost {
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         keepalive,
+                        cache_mode,
                         connect_policy,
                         csp_report_context,
                     ),
@@ -650,6 +669,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -687,6 +707,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -722,6 +743,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -760,6 +782,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -797,6 +820,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -835,6 +859,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
@@ -867,6 +892,7 @@ impl JsContextHost {
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
+        cache_mode: moli_fetch::RequestCacheMode,
         request_origin: moli_url::WebOrigin,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
@@ -892,6 +918,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -905,6 +932,7 @@ impl JsContextHost {
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         keepalive,
+                        cache_mode,
                         connect_policy,
                         csp_report_context,
                     ),
@@ -947,6 +975,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -965,13 +994,14 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_media_subresource_fetch(
+    pub(crate) fn record_media_subresource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         media_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::MediaLoadSequenceId,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -991,9 +1021,12 @@ impl JsContextHost {
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+            registration.cancel_handle(),
         );
-        self.record_pending_subresource_request_started_with_initiator(
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
+        self.record_subresource_admission(
+            &registration,
             &info,
             SubresourceRequestInitiatorType::Other,
             load.disposition(),
@@ -1001,6 +1034,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1029,7 +1063,7 @@ impl JsContextHost {
         sequence: crate::native_bridge::ImageLoadEventId,
         owner: OwnerDispatchScope,
         request_initiator_type: SubresourceRequestInitiatorType,
-        registration: ImageSubresourceFetchRegistration,
+        registration: SubresourceFetchRegistration,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1045,33 +1079,22 @@ impl JsContextHost {
         ) {
             return None;
         }
-        let registry_cancel_handle = match &registration {
-            ImageSubresourceFetchRegistration::Intercepted => None,
-            ImageSubresourceFetchRegistration::Dispatched(cancel_handle) => {
-                Some(cancel_handle.clone())
-            }
-        };
         let (load, request_origin) = self.require_document_resource_load_for_dispatch_scope(
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            registry_cancel_handle,
+            registration.cancel_handle(),
         );
-        match registration {
-            ImageSubresourceFetchRegistration::Intercepted => {
-                self.push_pending_subresource_fetch_info(info.clone());
-            }
-            ImageSubresourceFetchRegistration::Dispatched(_) => {
-                self.record_pending_subresource_request_started_with_initiator(
-                    &info,
-                    request_initiator_type,
-                    load.disposition(),
-                );
-            }
-        }
+        self.record_subresource_admission(
+            &registration,
+            &info,
+            request_initiator_type,
+            load.disposition(),
+        );
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1113,7 +1136,7 @@ impl JsContextHost {
             sequence,
             owner,
             request_initiator_type,
-            ImageSubresourceFetchRegistration::Intercepted,
+            SubresourceFetchRegistration::Intercepted,
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -1143,7 +1166,7 @@ impl JsContextHost {
             sequence,
             owner,
             request_initiator_type,
-            ImageSubresourceFetchRegistration::Dispatched(cancel_handle),
+            SubresourceFetchRegistration::Direct(cancel_handle),
             credentials_mode,
             request_mode,
             network_partition_key,
@@ -1153,13 +1176,14 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_text_track_subresource_fetch(
+    pub(crate) fn record_text_track_subresource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         track_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1179,9 +1203,12 @@ impl JsContextHost {
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+            registration.cancel_handle(),
         );
-        self.record_pending_subresource_request_started_with_initiator(
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
+        self.record_subresource_admission(
+            &registration,
             &info,
             SubresourceRequestInitiatorType::Other,
             load.disposition(),
@@ -1189,6 +1216,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1210,12 +1238,13 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_stylesheet_subresource_fetch(
+    pub(crate) fn record_stylesheet_subresource_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         credentials_mode: moli_fetch::RequestCredentialsMode,
         request_mode: moli_fetch::RequestMode,
         network_partition_key: Option<String>,
@@ -1233,10 +1262,13 @@ impl JsContextHost {
                 crate::native_bridge::WindowDocumentOwner::Frame(binding.owner()),
                 info.resource_type,
                 ResourceLoadDisposition::Ordinary,
-                Some(cancel_handle.clone()),
+                registration.cancel_handle(),
             )
             .expect("current stylesheet owner must have a Document resource authority");
-        self.record_pending_subresource_request_started_with_initiator(
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
+        self.record_subresource_admission(
+            &registration,
             &info,
             SubresourceRequestInitiatorType::Css,
             load.disposition(),
@@ -1244,6 +1276,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1265,12 +1298,13 @@ impl JsContextHost {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_async_font_face_fetch(
+    pub(crate) fn record_font_face_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
         face: v8::Global<v8::Object>,
         owner: OwnerDispatchScope,
-        cancel_handle: moli_fetch::FetchCancelHandle,
+        registration: SubresourceFetchRegistration,
+        dispatch: &crate::network_host::SubresourceRequestDispatch,
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
@@ -1281,9 +1315,12 @@ impl JsContextHost {
             owner,
             info.resource_type,
             ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle),
+            registration.cancel_handle(),
         );
-        self.record_pending_subresource_request_started_with_initiator(
+        let dispatch = matches!(registration, SubresourceFetchRegistration::Intercepted)
+            .then(|| Box::new(dispatch.clone()));
+        self.record_subresource_admission(
+            &registration,
             &info,
             SubresourceRequestInitiatorType::Script,
             load.disposition(),
@@ -1291,6 +1328,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch,
                 info,
                 load,
                 execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
@@ -1327,6 +1365,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1368,6 +1407,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1405,6 +1445,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1446,6 +1487,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1488,6 +1530,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1528,6 +1571,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1563,6 +1607,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -1606,6 +1651,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                dispatch: None,
                 redirect_headers: None,
                 request_origin,
                 info,
@@ -2996,6 +3042,10 @@ impl JsContextHost {
                 request_method: in_flight.request_method,
                 request_headers: in_flight.request_headers,
                 request_body: in_flight.request_body,
+                encoded: None,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {
@@ -3042,6 +3092,10 @@ impl JsContextHost {
                 request_body: info.request_body.clone(),
                 intercept_response: info.intercept_response,
                 initial_network_request_headers: info.network_request_headers.clone(),
+                encoded: None,
+                response_status_text: None,
+                skip_fetch_security_validation: false,
+                response_filter: None,
                 response: navigation_response_from_subresource_body(
                     &info.response_body,
                     moli_fetch::ResponseHead {

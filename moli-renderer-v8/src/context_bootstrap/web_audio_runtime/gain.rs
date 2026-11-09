@@ -95,13 +95,11 @@ fn initialize<'s>(
     value: f32,
 ) -> bool {
     let gain = audio_param(scope, 1.0, f32::MIN as f64, f32::MAX as f64);
-    if gain
-        .create_data_property(
-            scope,
-            v8str(scope, "value").into(),
-            v8::Number::new(scope, f64::from(value)).into(),
-        )
-        .is_none()
+    if gain.create_data_property(
+        scope,
+        v8str(scope, "value").into(),
+        v8::Number::new(scope, f64::from(value)).into(),
+    ) != Some(true)
         || GainNodeObjectDeclaration::new(gain)
             .initialize(scope, node)
             .is_err()

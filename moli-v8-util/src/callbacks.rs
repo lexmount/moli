@@ -34,3 +34,16 @@ pub fn callback_data_index_value<'s>(
     let index = i32::try_from(index).expect("callback data index exceeds i32");
     Integer::new(scope, index).into()
 }
+
+/// Forward a converted first argument while retaining the original trailing values.
+pub fn callback_arguments_with_first<'s>(
+    args: &FunctionCallbackArguments<'s>,
+    first: Local<'s, Value>,
+) -> Vec<Local<'s, Value>> {
+    let mut values = Vec::with_capacity(args.length().max(1) as usize);
+    values.push(first);
+    for index in 1..args.length() {
+        values.push(args.get(index));
+    }
+    values
+}

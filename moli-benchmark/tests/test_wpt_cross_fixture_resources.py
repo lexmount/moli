@@ -63,7 +63,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                     response = b""
                     while b"\r\n\r\n" not in response:
                         response += connection.recv(4096)
-                    self.assertTrue(response.startswith(b"HTTP/1.0 101"))
+                    self.assertTrue(response.startswith(b"HTTP/1.1 101"))
                     self.assertIn(b"Upgrade: websocket\r\n", response)
                     self.assertIn(
                         b"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n",
@@ -373,22 +373,24 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                 body,
                 port=12345,
                 alternate_port=23456,
+                https_port=34567,
+                alternate_https_port=45678,
                 request_path="/secure-contexts/server-locations.sub.js",
                 request_hostname="example.test",
             ),
             b"http://www2.localhost:12345/ location=12345 scheme=http hostname=example.test"
             b" server=http://example.test:12345 path=/secure-contexts/server-locations.sub.js"
             b" alt=23456 same=www.localhost host=example.test"
-            b" hosts=localhost/www.localhost/alt.localhost/www.alt.localhost https=12345/23456"
-            b" https-url=http://example.test:12345/secure/"
-            b" https-remote=http://example.test:23456/remote/"
-            b" https-hosts-remote=http://www.localhost:23456/cross/"
-            b" https-hosts-bare=http://localhost:12345/bare/"
-            b" https-hosts-alt=http://alt.localhost:12345/alt/"
-            b" https-hosts-alt-www=http://www.alt.localhost:23456/alt-www/"
-            b" ws=12345/23456 wss=12345/23456"
+            b" hosts=localhost/www.localhost/alt.localhost/www.alt.localhost https=34567/45678"
+            b" https-url=https://www.localhost:34567/secure/"
+            b" https-remote=https://www1.localhost:34567/remote/"
+            b" https-hosts-remote=https://www.localhost:45678/cross/"
+            b" https-hosts-bare=https://localhost:34567/bare/"
+            b" https-hosts-alt=https://alt.localhost:34567/alt/"
+            b" https-hosts-alt-www=https://www.alt.localhost:45678/alt-www/"
+            b" ws=12345/23456 wss=34567/45678"
             b" ws-url=ws://example.test:12345/socket"
-            b" wss-url=ws://example.test:12345/socket",
+            b" wss-url=wss://example.test:34567/socket",
         )
 
     def test_fixture_server_substitutes_idna_domain_aliases(self) -> None:
@@ -587,10 +589,11 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             _substitute_wpt_template_variables(
                 body,
                 port=12345,
+                https_port=23456,
                 request_hostname="[2001:db8::1]",
             ),
             b"ws=ws://[2001:db8::1]:12345/echo"
-            b" wss=ws://[2001:db8::1]:12345/echo",
+            b" wss=wss://[2001:db8::1]:23456/echo",
         )
 
     def test_fixture_server_wasm_status_handler_normalizes_status_codes(self) -> None:
@@ -673,17 +676,14 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b"\nHTTP_REMOTE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
             b"('http://' + REMOTE_HOST + ':23456') : ('http://' + REMOTE_HOST + HTTP_PORT_ELIDED),"
             b"\nREMOTE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + REMOTE_HOST + ':23456') : (PROTOCOL + \"//\" + REMOTE_HOST + PORT_ELIDED),"
+            b"(PROTOCOL + '//' + REMOTE_HOST + ':23456') : (PROTOCOL + \"//\" + REMOTE_HOST + PORT_ELIDED),"
             b"\nOTHER_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + ORIGINAL_HOST + ':34567') : (PROTOCOL + \"//\" + OTHER_HOST + PORT_ELIDED),"
+            b"(PROTOCOL + '//' + ORIGINAL_HOST + ':34567') : (PROTOCOL + \"//\" + OTHER_HOST + PORT_ELIDED),"
             b"\nHTTP_NOTSAMESITE_ORIGIN: 'http://' + NOTSAMESITE_HOST + HTTP_PORT_ELIDED,"
-            b"\nHTTPS_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT2_ELIDED,"
-            b"\nHTTPS_ORIGIN_WITH_CREDS: 'http://foo:bar@' + ORIGINAL_HOST + HTTP_PORT2_ELIDED,"
-            b"\nHTTPS_REMOTE_ORIGIN: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://' + REMOTE_HOST + ':34567') : ('http://' + REMOTE_HOST + HTTP_PORT2_ELIDED),"
-            b"\nHTTPS_REMOTE_ORIGIN_WITH_CREDS: (ORIGINAL_HOST.indexOf(':') !== -1) ? "
-            b"('http://foo:bar@' + REMOTE_HOST + ':34567') : "
-            b"('http://foo:bar@' + REMOTE_HOST + HTTP_PORT2_ELIDED),",
+            b"\nHTTPS_ORIGIN: 'https://' + ORIGINAL_HOST + HTTPS_PORT_ELIDED,"
+            b"\nHTTPS_ORIGIN_WITH_CREDS: 'https://foo:bar@' + ORIGINAL_HOST + HTTPS_PORT_ELIDED,"
+            b"\nHTTPS_REMOTE_ORIGIN: 'https://' + REMOTE_HOST + HTTPS_PORT_ELIDED,"
+            b"\nHTTPS_REMOTE_ORIGIN_WITH_CREDS: 'https://foo:bar@' + REMOTE_HOST + HTTPS_PORT_ELIDED,",
         )
 
     def test_fixture_server_uses_configured_primary_hostname_for_aliases(self) -> None:

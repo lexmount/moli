@@ -12,6 +12,7 @@ use crate::{
     },
     webidl,
 };
+use moli_v8_util::reject_promise_with_type_error as reject_type_error;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const IDLE_DETECTOR_STARTED_SLOT: &str = "__lmIdleDetectorStarted";
@@ -579,17 +580,6 @@ fn dispatch_idle_detector_change_event<'s>(
     };
     mark_event_trusted(scope, event);
     let _ = dispatch_simple_event_target_event(scope, detector, "change", event);
-}
-
-fn reject_type_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    message: &str,
-) {
-    let error = v8_string(scope, message)
-        .map(|message| v8::Exception::type_error(scope, message))
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.reject(scope, error);
 }
 
 fn reject_dom_exception<'s>(

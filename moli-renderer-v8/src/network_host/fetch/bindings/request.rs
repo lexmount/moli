@@ -79,6 +79,10 @@ pub(super) struct PreparedWindowFetchRequest {
 }
 
 impl PreparedWindowFetchRequest {
+    pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
+        self.cache.parse().unwrap_or_default()
+    }
+
     pub(super) fn request_scope(&self) -> crate::native_bridge::OwnerDispatchScope {
         self.fetch_context.request_target().dispatch_scope()
     }

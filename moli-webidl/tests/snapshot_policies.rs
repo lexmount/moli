@@ -299,9 +299,10 @@ fn snapshot_callback_contexts_are_traced_and_owner_cycles_are_collectible() {
         let owner = v8::Object::new(scope);
         snapshot.store_private(scope, owner, "Callbacks").unwrap();
         let key = v8::String::new(scope, "owner").unwrap();
-        function
-            .create_data_property(scope, key.into(), owner.into())
-            .unwrap();
+        assert_eq!(
+            function.create_data_property(scope, key.into(), owner.into()),
+            Some(true)
+        );
         let incumbent_anchor = incumbent.get_extras_binding_object(scope);
         (
             v8::Global::new(scope, owner),

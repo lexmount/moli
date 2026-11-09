@@ -731,7 +731,7 @@ fn remove_live_attribute_node_native(
     }
 }
 
-fn nullable_state_string<'s>(
+pub(super) fn nullable_state_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Object>,
     property: &str,

@@ -333,7 +333,7 @@ mod tests {
             scaled,
             vec![
                 255, 0, 0, 255, //
-                85, 170, 0, 255, //
+                128, 128, 0, 255, // Pixel centers map halfway; channels round to nearest.
                 0, 255, 0, 255,
             ]
         );

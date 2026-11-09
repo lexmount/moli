@@ -62,7 +62,9 @@ pub(super) fn build_document_all_collection<'s>(
     object_template
         .set_call_as_function_handler_with_data(document_all_call_callback, Some(data.into()));
     let collection = object_template.new_instance(scope)?;
-    let _ = collection.set_prototype(scope, prototype.into());
+    collection
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     let _ = data.set(scope, v8str(scope, "self").into(), collection.into());
 
     for index in 0..items.length() {
@@ -98,13 +100,15 @@ pub(super) fn build_document_all_collection<'s>(
             continue;
         }
         if collections::is_document_all_named_collection_value(scope, value) {
-            let _ = collection.set_native_data_property_with_configuration(
-                scope,
-                key_name,
-                v8::NativeDataPropertyConfiguration::new(document_all_named_collection_getter)
-                    .data(value)
-                    .property_attribute(v8::PropertyAttribute::DONT_ENUM),
-            );
+            collection
+                .set_native_data_property_with_configuration(
+                    scope,
+                    key_name,
+                    v8::NativeDataPropertyConfiguration::new(document_all_named_collection_getter)
+                        .data(value)
+                        .property_attribute(v8::PropertyAttribute::DONT_ENUM),
+                )?
+                .then_some(())?;
             continue;
         }
         define_collection_value_property(

@@ -2748,11 +2748,12 @@ impl SubresourceResourceType {
     /// Returns the resource type exposed by the CDP Fetch interception domain.
     ///
     /// Chromium's loader interception receives Fetch, EventSource, and XHR as
-    /// Blink's shared `kXhr` resource type. The Network domain still reports
-    /// their higher-level types through `as_cdp_type`.
+    /// Blink's shared `kXhr` resource type, and text tracks as `kMedia`. The
+    /// Network domain still reports their higher-level types through `as_cdp_type`.
     pub fn as_cdp_fetch_interception_type(self) -> &'static str {
         match self {
             Self::Fetch | Self::EventSource | Self::Xhr => "XHR",
+            Self::TextTrack => "Media",
             _ => self.as_cdp_type(),
         }
     }
@@ -3775,6 +3776,29 @@ mod tests {
             "EventSource"
         );
         assert_eq!(SubresourceResourceType::Xhr.as_cdp_type(), "XHR");
+    }
+
+    #[test]
+    fn cdp_fetch_interception_groups_audio_video_and_text_tracks() {
+        let media = [
+            SubresourceResourceType::Audio,
+            SubresourceResourceType::Video,
+            SubresourceResourceType::Media,
+            SubresourceResourceType::TextTrack,
+        ];
+        for resource_type in media {
+            assert_eq!(resource_type.as_cdp_fetch_interception_type(), "Media");
+            for other in media {
+                assert!(resource_type.has_same_cdp_fetch_interception_type(other));
+            }
+            assert!(
+                !resource_type.has_same_cdp_fetch_interception_type(SubresourceResourceType::Font)
+            );
+        }
+        assert_eq!(
+            SubresourceResourceType::TextTrack.as_cdp_type(),
+            "TextTrack"
+        );
     }
 
     #[test]

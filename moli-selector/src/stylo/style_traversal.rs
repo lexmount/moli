@@ -1891,6 +1891,12 @@ impl<'a> TElement for StyleElement<'a> {
         StyleNode(self.0, PhantomData)
     }
 
+    fn inheritance_parent(&self) -> Option<Self> {
+        // Shadow-tree roots inherit from their host. Keep this separate from
+        // the selector parent, which must not cross a ShadowRoot boundary.
+        self.traversal_parent()
+    }
+
     fn traversal_children(&self) -> LayoutIterator<Self::TraversalChildrenIterator> {
         let children = self
             .host()

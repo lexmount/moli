@@ -11,6 +11,28 @@ pub(super) use entry::install_resize_observer_entry_template_bindings;
 use moli_webapi_declare::WebApiObject;
 use webidl::WebIdlDictionarySerialize;
 
+const RESIZE_OBSERVER_QUEUE_SLOT: &str = "__moliResizeObserverQueue";
+const RESIZE_OBSERVER_REGISTRY_SLOT: &str = "__moliResizeObservers";
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain)]
+struct ResizeObserverRuntimeQueuesDeclaration {
+    #[webapi(slot = RESIZE_OBSERVER_QUEUE_SLOT, init = "array")]
+    resize_observer_queue: (),
+    #[webapi(slot = RESIZE_OBSERVER_REGISTRY_SLOT, init = "array")]
+    resize_observer_registry: (),
+}
+
+pub(in crate::context_bootstrap) fn initialize_resize_observer_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> anyhow::Result<()> {
+    ResizeObserverRuntimeQueuesDeclaration::default()
+        .initialize(scope, global)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    Ok(())
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ResizeObserver)]
 struct ResizeObserverObjectDeclaration<'s> {

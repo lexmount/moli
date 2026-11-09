@@ -103,7 +103,8 @@ use stylesheet_runtime::{ConnectedLinkReadinessFetchOptions, ConnectedLoadParame
 pub(crate) use stylesheet_runtime::{
     ConnectedLoadCompletion, LinkedStylesheetImportGraphCompletion,
     LiveStylesheetImportLoadCompletion, StylesheetImportCompletionAuthority,
-    fetch_complete_stylesheet_import_graph, live_stylesheet_import_responses,
+    fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,
+    live_stylesheet_import_responses,
 };
 use stylesheet_runtime::{
     ConnectedLoadOperation, LinkedStylesheetImportGraphs, QueuedConnectedStyleLoad,
@@ -405,6 +406,8 @@ pub(crate) struct ConnectedStyleImportRoot {
     pub(crate) stylesheet_id: crate::live_stylesheet::StylesheetId,
     pub(crate) contents_revision: u64,
     pub(crate) import_generation: u64,
+    /// Original resource URL; the live stylesheet retains the final parser base.
+    /// Inline roots have no resource identity to exclude from their imports.
     pub(crate) root_resource_url: Option<Url>,
 }
 
@@ -412,14 +415,14 @@ impl ConnectedStyleImportRoot {
     pub(crate) fn new(
         owner: DomHandle,
         stylesheet: &crate::live_stylesheet::LiveStylesheetRef,
-        root_is_external_resource: bool,
+        root_resource_url: Option<Url>,
     ) -> Self {
         Self {
             owner,
             stylesheet_id: stylesheet.id(),
             contents_revision: stylesheet.contents_revision(),
             import_generation: stylesheet.import_generation(),
-            root_resource_url: root_is_external_resource.then(|| stylesheet.base_url().clone()),
+            root_resource_url,
         }
     }
 
@@ -741,7 +744,7 @@ pub(super) struct DocumentRuntime {
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies:
-        RefCell<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>,
+        Arc<parking_lot::RwLock<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>>,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,

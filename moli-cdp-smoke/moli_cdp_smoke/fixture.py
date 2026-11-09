@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import wave
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -165,7 +167,24 @@ self.onconnect = event => {
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
 )
+FETCH_DISPATCH_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg=="
+)
 RESOURCE_MEDIA_BYTES = b"\x00\xffmoli-media"
+
+
+def _silent_wav() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"\x00\x00" * 800)
+    return output.getvalue()
+
+
+FETCH_MEDIA_WAV = _silent_wav()
+FETCH_MEDIA_CAPTIONS = b"WEBVTT\n\n00:00.000 --> 00:01.000\nintercepted caption\n"
 RESOURCE_XHR_BYTES = b"\x00\xffmoli-xhr"
 
 LAYOUT_SCREENSHOT_FIXTURE = (
@@ -490,6 +509,7 @@ class FixtureServer:
         self.profile_requests: dict[str, dict[str, Any]] = {}
         self._counter_lock = threading.Lock()
         self._request_counts: dict[str, int] = {}
+        self._resource_request_headers: dict[str, dict[str, str]] = {}
         self.document_content_stylesheet_gate = FixtureResponseGate()
         self.fetch_runtime_teardown_gate = FixtureResponseGate()
         self.navigation_suspension_gate = FixtureResponseGate()
@@ -530,6 +550,17 @@ class FixtureServer:
             self._request_counts[route] = count
             return count
 
+    def _record_resource_request(self, route: str, headers: Any) -> None:
+        with self._counter_lock:
+            self._request_counts[route] = self._request_counts.get(route, 0) + 1
+            self._resource_request_headers[route] = {
+                name.lower(): value for name, value in headers.items()
+            }
+
+    def resource_request_headers(self, route: str) -> dict[str, str]:
+        with self._counter_lock:
+            return dict(self._resource_request_headers.get(route, {}))
+
     def _handler_class(self) -> type[BaseHTTPRequestHandler]:
         outer = self
 
@@ -548,6 +579,16 @@ class FixtureServer:
 
             def do_HEAD(self) -> None:
                 self._dispatch()
+
+            def do_OPTIONS(self) -> None:
+                if urllib.parse.urlparse(self.path).path.startswith("/fetch-dispatch/network/"):
+                    self._send_common(HTTPStatus.NO_CONTENT, "text/plain", b"", {
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET, POST",
+                        "Access-Control-Allow-Headers": "*",
+                    })
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND)
 
             def _dispatch(self) -> None:
                 parsed = urllib.parse.urlparse(self.path)
@@ -660,6 +701,112 @@ class FixtureServer:
                     return
                 if route == "/plain":
                     self._send_html("<!doctype html><main>plain ok</main>")
+                elif route == "/fetch-dispatch/page":
+                    self._send_html("<!doctype html><main>resource dispatch</main>")
+                elif route == "/fetch-dispatch/sw.js":
+                    resources = {
+                        "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
+                        "image.png": ("image/png", FETCH_DISPATCH_PNG),
+                        "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
+                        "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
+                    }
+                    encoded = {name: [mime, base64.b64encode(body).decode("ascii")]
+                               for name, (mime, body) in resources.items()}
+                    self._send_js("const resources=" + json.dumps(encoded) + ";" + """
+                      self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
+                      self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+                      self.addEventListener('fetch', event => {
+                        const url = new URL(event.request.url);
+                        if (url.pathname.startsWith('/fetch-dispatch/sw-auth/')) {
+                          const status = Number(url.searchParams.get('status') || 401);
+                          const header = status === 407 ? 'Proxy-Authenticate' : 'WWW-Authenticate';
+                          event.respondWith(new Response(`synthetic SW ${status}`, {
+                            status, headers: {[header]:'Basic realm="sw-only"'}
+                          }));
+                          return;
+                        }
+                        if (!url.pathname.startsWith('/fetch-dispatch/sw/')) return;
+                        let name = url.pathname.split('/').pop();
+                        if (name === 'continued.woff2') {
+                          event.respondWith(event.request.text().then(body => {
+                            if (event.request.method !== 'POST' || body !== 'font override'
+                                || event.request.headers.get('X-Fetch-Override') !== 'kept') {
+                              return new Response('override lost', {status:400});
+                            }
+                            const font = resources['font.woff2'];
+                            return new Response(Uint8Array.from(atob(font[1]), char => char.charCodeAt(0)),
+                                                {headers:{'Content-Type':font[0]}});
+                          }));
+                          return;
+                        }
+                        const resource = resources[name];
+                        if (!resource) return;
+                        const bytes = Uint8Array.from(atob(resource[1]), char => char.charCodeAt(0));
+                        event.respondWith(new Response(bytes, {headers:{'Content-Type':resource[0]}}));
+                      });
+                    """)
+                elif route == "/fetch-dispatch/status":
+                    path = query.get("path", [""])[0]
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path)})
+                elif route.startswith("/fetch-dispatch/sw/"):
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_text("resource is only available from the service worker", status=HTTPStatus.NOT_FOUND)
+                elif route.startswith(("/fetch-dispatch/network/", "/fetch-dispatch/cache/", "/fetch-dispatch/auth/", "/fetch-dispatch/sw-auth/")):
+                    outer._record_resource_request(self.path, self.headers)
+                    if route.startswith("/fetch-dispatch/auth/") and self.headers.get("Authorization") != "Basic Zm9udDpzZWNyZXQ=":
+                        self._send_common(HTTPStatus.UNAUTHORIZED, "text/plain", b"font authentication required",
+                                          {"WWW-Authenticate": 'Basic realm="fetch-font"'})
+                        return
+                    name = route.rsplit("/", 1)[-1]
+                    if name == "redirect-font.woff2":
+                        self._send_common(HTTPStatus.FOUND, "text/plain", b"",
+                                          {"Location": self.path.replace("redirect-font.woff2", "font.woff2")})
+                        return
+                    mime, body = {
+                        "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),
+                        "image.png": ("image/png", FETCH_DISPATCH_PNG),
+                        "tone.wav": ("audio/wav", FETCH_MEDIA_WAV),
+                        "captions.vtt": ("text/vtt", FETCH_MEDIA_CAPTIONS),
+                    }[name]
+                    if route.startswith("/fetch-dispatch/cache/"):
+                        self._send_cacheable(mime, body)
+                    else:
+                        self._send_common(HTTPStatus.OK, mime, body, {"Access-Control-Allow-Origin": "*"})
+                elif route == "/fetch-font.woff2":
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_common(
+                        HTTPStatus.OK, "font/woff2",
+                        (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes(),
+                    )
+                elif route == "/fetch-font/status":
+                    case = query.get("case", [""])[0]
+                    path = f"/fetch-font.woff2?case={case}"
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path),
+                                     "imageHeaders": outer.resource_request_headers(
+                                         f"/chromium-resource-image.png?case={case}")})
+                elif route == "/fetch-font/style.css":
+                    image_query = urllib.parse.urlencode({"case": query.get("case", [""])[0]})
+                    if query.get("resource", [""])[0] == "font":
+                        self._send_css('@font-face{font-family:FetchPaint;src:url("/fetch-font.woff2?'
+                                       + image_query + '")}body{font-family:FetchPaint}')
+                    else:
+                        self._send_css('body{background-image:url("/chromium-resource-image.png?'
+                                       + image_query + '")}')
+                elif route in ("/fetch-media/tone.wav", "/fetch-media/captions.vtt"):
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_common(
+                        HTTPStatus.OK,
+                        "audio/wav" if route.endswith(".wav") else "text/vtt; charset=utf-8",
+                        FETCH_MEDIA_WAV if route.endswith(".wav") else FETCH_MEDIA_CAPTIONS,
+                    )
+                elif route == "/fetch-media/status":
+                    name = query.get("name", [""])[0]
+                    case = query.get("case", [""])[0]
+                    path = f"/fetch-media/{name}?case={case}"
+                    self._send_json({"requests": outer.request_count(path),
+                                     "headers": outer.resource_request_headers(path)})
                 elif route == "/retained-window-timing":
                     # Measurement interval before commit, so a reset Document
                     # clock is distinguishable from the retained Window clock.
@@ -1580,6 +1727,7 @@ class FixtureServer:
                 elif route == "/chromium-resource-script.js":
                     self._send_js("globalThis.__smokeChromiumResourceScript = true;")
                 elif route == "/chromium-resource-image.png":
+                    outer._record_resource_request(self.path, self.headers)
                     self._send_png(TRANSPARENT_PNG)
                 elif route == "/chromium-resource-audio.wav":
                     self._send_common(HTTPStatus.OK, "audio/wav", RESOURCE_MEDIA_BYTES)

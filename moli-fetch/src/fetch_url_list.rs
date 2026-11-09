@@ -1,3 +1,4 @@
+use anyhow::{Result, ensure};
 use moli_cookie_jar::same_site_urls;
 use moli_url::{WebOrigin, same_origin};
 use url::Url;
@@ -35,20 +36,14 @@ impl<'a> FetchUrlList<'a> {
     /// Enforces same-origin mode before dispatch, including after redirects.
     /// Main fetch permits data URLs regardless of mode. CORS response checks
     /// are separate: permission from a server cannot relax same-origin mode.
-    pub fn validate_request_mode(
-        self,
-        mode: RequestMode,
-        origin: &WebOrigin,
-    ) -> Result<(), String> {
-        if mode == RequestMode::SameOrigin
-            && self.current_url.scheme() != "data"
-            && self.has_cross_origin_url(origin)
-        {
-            return Err(format!(
-                "same-origin request mode blocked a cross-origin URL in the fetch of {}",
-                self.current_url
-            ));
-        }
+    pub fn validate_request_mode(self, mode: RequestMode, origin: &WebOrigin) -> Result<()> {
+        ensure!(
+            mode != RequestMode::SameOrigin
+                || self.current_url.scheme() == "data"
+                || !self.has_cross_origin_url(origin),
+            "same-origin request mode blocked a cross-origin URL in the fetch of {}",
+            self.current_url
+        );
         Ok(())
     }
 

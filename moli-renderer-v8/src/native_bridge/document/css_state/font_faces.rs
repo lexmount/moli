@@ -87,7 +87,9 @@ fn construct_font_face_from_parts<'s>(
     let family = v8_string(scope, family)?;
     let source = v8_string(scope, source)?;
     let descriptors = v8::Object::new(scope);
-    let _ = descriptors.set_prototype(scope, v8::null(scope).into());
+    descriptors
+        .set_prototype(scope, v8::null(scope).into())?
+        .then_some(())?;
     if let Some(rule) = rule_css.and_then(moli_css_parse::parse_font_face_rule_view_with_stylo) {
         for entry in moli_css_parse::parse_declaration_list(
             &rule.style_text,
@@ -110,11 +112,9 @@ fn construct_font_face_from_parts<'s>(
             };
             let value = v8_string(scope, &entry.value)?;
             // Define data properties rather than invoking author Object.prototype setters.
-            let _ = descriptors.create_data_property(
-                scope,
-                crate::util::v8str(scope, name).into(),
-                value.into(),
-            );
+            descriptors
+                .create_data_property(scope, crate::util::v8str(scope, name).into(), value.into())?
+                .then_some(())?;
         }
     }
     ctor.new_instance(scope, &[family.into(), source.into(), descriptors.into()])

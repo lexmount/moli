@@ -1568,6 +1568,50 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioScheduledSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioBufferSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::AudioBufferSourceNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ConstantSourceNode::DESCRIPTOR,
+        kind: ConstructorKind::ConstantSourceNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ConvolverNode::DESCRIPTOR,
+        kind: ConstructorKind::ConvolverNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::IIRFilterNode::DESCRIPTOR,
+        kind: ConstructorKind::IIRFilterNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PeriodicWave::DESCRIPTOR,
+        kind: ConstructorKind::PeriodicWave,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WaveShaperNode::DESCRIPTOR,
+        kind: ConstructorKind::WaveShaperNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChannelMergerNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelMergerNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ChannelSplitterNode::DESCRIPTOR,
+        kind: ConstructorKind::ChannelSplitterNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DelayNode::DESCRIPTOR,
+        kind: ConstructorKind::DelayNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::StereoPannerNode::DESCRIPTOR,
+        kind: ConstructorKind::StereoPannerNode,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },

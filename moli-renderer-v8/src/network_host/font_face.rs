@@ -65,18 +65,15 @@ pub(crate) fn start_font_face_fetch(
     let host: &mut JsContextHost = unsafe { &mut *host_ptr };
     let identity = request_context
         .filter(|identity| host.window_execution_context_identity_is_current(*identity))
-        .context("FontFace creation Window is no longer available")?;
+        .context("resource request owner is stale")?;
     let owner = identity.dispatch_scope();
     let resource_loader = host
         .document_resource_loader_for_dispatch_scope(owner)
-        .context("Font request has no live document resource loader")?;
+        .context("Document resource loader is unavailable")?;
     let environment = host
         .subresource_request_environment(&resource_loader, owner)
-        .context("Font request has no live document request environment")?;
-    let request_url = environment
-        .base_url
-        .join(source)
-        .context("failed to resolve FontFace source URL")?;
+        .context("Document request environment is unavailable")?;
+    let request_url = environment.base_url.join(source)?;
     ensure!(
         host.font_request_allowed_by_csp(
             scope,
@@ -85,14 +82,17 @@ pub(crate) fn start_font_face_fetch(
             &request_url,
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect,
         ),
-        "Font request blocked by Content Security Policy"
+        "resource request blocked by Content Security Policy"
     );
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::types::NavigationResponse = response.into();
         let result = if (200..300).contains(&response.status) {
             Ok(FontFaceFetchStart::Local(response.body_bytes().to_vec()))
         } else {
-            Err(anyhow!("Font request failed"))
+            Err(anyhow!(
+                "resource request returned HTTP {}",
+                response.status
+            ))
         };
         host.record_get_subresource_network_result_with_initiator(
             environment.frame_id,
@@ -112,20 +112,17 @@ pub(crate) fn start_font_face_fetch(
         environment,
         request_url,
         SubresourceFetchOptions::FONT,
-    )?;
-    let internal_id = host.record_async_font_face_fetch(
+    );
+    let internal_id = host.record_font_face_fetch(
         v8::Global::new(scope, scope.get_current_context()),
         v8::Global::new(scope, face),
         owner,
-        prepared.cancel_handle.clone(),
+        prepared.registration.clone(),
+        &prepared.dispatch,
         prepared.network_partition_key.clone(),
         prepared.network_context.policy_context,
         prepared.pending_info.clone(),
     );
-    prepared.dispatch(
-        host,
-        internal_id,
-        "service worker font request dispatch failed",
-    );
+    prepared.dispatch(host, internal_id);
     Ok(FontFaceFetchStart::Pending)
 }

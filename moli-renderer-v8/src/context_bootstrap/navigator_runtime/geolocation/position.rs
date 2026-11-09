@@ -176,7 +176,9 @@ fn coordinate_json<'s>(
     for index in [3, 0, 1, 2, 4, 5, 6] {
         let name = COORDINATE_NAMES[index];
         let value = values.get_index(scope, index as u32)?;
-        let _ = result.create_data_property(scope, v8str(scope, name).into(), value);
+        result
+            .create_data_property(scope, v8str(scope, name).into(), value)?
+            .then_some(())?;
     }
     Some(result)
 }

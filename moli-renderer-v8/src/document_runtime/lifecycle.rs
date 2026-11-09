@@ -301,9 +301,7 @@ impl DocumentRuntime {
         self.document_write_script_preloads.clear();
         self.pending_parser_blocking_work = None;
         self.root_document_parser = None;
-        self.delivered_meta_content_security_policies
-            .get_mut()
-            .clear();
+        self.delivered_meta_content_security_policies = Arc::default();
         self.processed_meta_content_security_policy_handles
             .get_mut()
             .clear();

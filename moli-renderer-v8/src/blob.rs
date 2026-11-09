@@ -2,6 +2,7 @@ use crate::web_api_interfaces;
 use moli_file_api::{
     BlobData, BlobId, BlobStore, blob_slice_relative_index, normalize_blob_mime_type,
 };
+pub(super) use moli_v8_util::buffer_source_bytes_from_value;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
 
@@ -327,7 +328,10 @@ pub(super) fn build_blob_object_unpublished<'s>(
             release_blob_wrapper_ref(blob_id);
             None
         })?;
-    let _ = object.set_prototype(scope, prototype.into());
+    if object.set_prototype(scope, prototype.into()) != Some(true) {
+        release_blob_wrapper_ref(blob_id);
+        return None;
+    }
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     Some((object, blob_id))
 }
@@ -358,7 +362,9 @@ pub(crate) fn world_wrapper<'s>(
         .ok()?;
     let prototype =
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
-    object.set_prototype(scope, prototype.into())?;
+    object
+        .set_prototype(scope, prototype.into())?
+        .then_some(())?;
     Some(object)
 }
 
@@ -496,26 +502,6 @@ fn track_blob_ref_lifetime(
     finalizer: impl FnOnce() + 'static,
 ) {
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, object, finalizer);
-}
-
-pub(super) fn buffer_source_bytes_from_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<Vec<u8>> {
-    if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
-        let view = v8::Uint8Array::new(scope, buffer, 0, buffer.byte_length())?;
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
-        let mut bytes = vec![0; view.byte_length()];
-        let written = view.copy_contents(&mut bytes);
-        bytes.truncate(written);
-        return Some(bytes);
-    }
-    None
 }
 
 pub(super) fn buffer_source_has_shared_or_resizable_backing_store(

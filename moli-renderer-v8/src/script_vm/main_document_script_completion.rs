@@ -19,19 +19,11 @@
 use anyhow::Result;
 
 use super::ScriptVm;
-use crate::style_engine::StyleInvalidationTurnExitBoundary;
 
 impl ScriptVm {
     pub(crate) fn finish_main_page_owned_document_script_callback_checkpoint(
         &mut self,
     ) -> Result<()> {
-        let result = self.perform_owner_lane_task_microtask_checkpoints();
-        if result.is_ok() {
-            self.sync_child_browsing_context_records();
-        }
-        self.finish_runtime_turn_with_style_drain(
-            StyleInvalidationTurnExitBoundary::SelectedPageTask,
-            result,
-        )
+        self.finish_selected_page_script_callback_checkpoint()
     }
 }

@@ -1,3 +1,4 @@
+pub(super) use self::parse_html_integer_prefix as parse_tab_index_attribute;
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
 use crate::util::v8_string;
@@ -2653,7 +2654,7 @@ pub(in crate::native_bridge) fn node_tab_index_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(super) fn parse_tab_index_attribute(value: &str) -> Option<i32> {
+pub(super) fn parse_html_integer_prefix(value: &str) -> Option<i32> {
     let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let mut chars = value.chars();
     let (sign, rest) = match chars.next() {

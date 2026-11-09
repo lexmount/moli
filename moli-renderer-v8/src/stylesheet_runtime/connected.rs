@@ -1208,15 +1208,10 @@ impl DocumentRuntime {
             ConnectedStyleImportReadiness::Ready(mut successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {
-                        if let Some(graph_successful) = unsafe { &*host_ptr }
-                            .install_live_stylesheet_import_graph(root.clone(), &[])
+                        if let Some(graph_successful) = unsafe { &mut *host_ptr }
+                            .install_and_refresh_live_stylesheet_import_graph(root.clone(), &[])
                         {
                             successful &= graph_successful;
-                            let _ = unsafe { &mut *host_ptr }
-                                .refresh_live_stylesheet_after_import_graph(
-                                    root.owner,
-                                    root.stylesheet_id,
-                                );
                         }
                     }
                 }
@@ -1317,7 +1312,7 @@ impl DocumentRuntime {
         let owner = source.owner();
         unsafe { &*host_ptr }
             .owner_live_stylesheet(owner)
-            .map(|stylesheet| ConnectedStyleImportRoot::new(owner, &stylesheet, false))
+            .map(|stylesheet| ConnectedStyleImportRoot::new(owner, &stylesheet, None))
             .into_iter()
             .collect()
     }
@@ -1337,16 +1332,19 @@ impl DocumentRuntime {
         if urls.is_empty() {
             return;
         }
-        let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_is_external_resource);
+        let root_resource_url = root_is_external_resource.then(|| {
+            unsafe { &*host_ptr }
+                .linked_stylesheet_source_for_owner(owner)
+                .map_or_else(
+                    || stylesheet.base_url().clone(),
+                    |source| source.sheet_url().clone(),
+                )
+        });
+        let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_resource_url);
         let urls = match connected_style_import_readiness(urls) {
             ConnectedStyleImportReadiness::Ready(_) => {
-                if unsafe { &*host_ptr }
-                    .install_live_stylesheet_import_graph(root.clone(), &[])
-                    .is_some()
-                {
-                    let _ = unsafe { &mut *host_ptr }
-                        .refresh_live_stylesheet_after_import_graph(owner, stylesheet.id());
-                }
+                let _ = unsafe { &mut *host_ptr }
+                    .install_and_refresh_live_stylesheet_import_graph(root, &[]);
                 return;
             }
             ConnectedStyleImportReadiness::Pending(urls) => urls,
