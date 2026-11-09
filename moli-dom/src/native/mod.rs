@@ -918,6 +918,8 @@ fn split_qualified_name(qualified_name: &str) -> Option<(Option<&str>, &str)> {
     }
 }
 
+pub use host::is_builtin_reassociateable_form_associated_element;
+
 #[cfg(test)]
 mod tests {
     use std::mem::size_of;

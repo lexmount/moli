@@ -53,7 +53,7 @@ fn is_html_frame_owner_candidate(local_name: &str, namespace: &str) -> bool {
             .any(|name| local_name.eq_ignore_ascii_case(name))
 }
 
-fn is_builtin_reassociateable_form_associated_element(element: &Element) -> bool {
+pub fn is_builtin_reassociateable_form_associated_element(element: &Element) -> bool {
     element.namespace() == "http://www.w3.org/1999/xhtml"
         && matches!(
             element.local_name(),
