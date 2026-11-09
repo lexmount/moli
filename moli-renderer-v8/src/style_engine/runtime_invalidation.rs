@@ -98,6 +98,7 @@ impl MoliStyleEngine {
             no_cached_style_us += no_cached_style_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
+            self.invalidate_attribute_references_for_mutations(host, document_effects, &world);
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
                 world.document_state.note_style_input_change();
@@ -143,6 +144,36 @@ impl MoliStyleEngine {
                     total_us,
                 );
             }
+        }
+    }
+
+    fn invalidate_attribute_references_for_mutations(
+        &self,
+        host: &DomHost,
+        effects: &[StyleMutationEffect],
+        world: &DocumentStyleWorld,
+    ) {
+        let roots = effects
+            .iter()
+            .filter_map(|effect| {
+                let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                    return None;
+                };
+                let uses_attribute = self
+                    .dom_adapter
+                    .element_styles_reference_attribute(host, *element, name)
+                    || world
+                        .pseudo_style_cache
+                        .references_attribute(*element, name);
+                uses_attribute.then_some(*element)
+            })
+            .collect::<IndexSet<_>>();
+        if !roots.is_empty() {
+            // Selector dependency maps do not cover attr() in declarations.
+            // Include descendants because computed custom properties and
+            // inherited values can depend on this originating element.
+            self.invalidation_cleanup_for_world(world)
+                .invalidate_subtrees(host, roots);
         }
     }
 

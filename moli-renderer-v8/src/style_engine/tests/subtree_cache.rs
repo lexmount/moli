@@ -80,6 +80,8 @@ fn element_style_is_dirty_for_test(
     })
 }
 
+#[path = "subtree_cache/attr_dependencies.rs"]
+mod attr_dependencies;
 #[path = "subtree_cache/consumed_fragments.rs"]
 mod consumed_fragments;
 #[path = "subtree_cache/detached_sources.rs"]

@@ -23,7 +23,9 @@ use style::{
     data::{ElementDataMut, ElementDataRef, ElementDataWrapper},
     dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot},
     invalidation::{element::restyle_hints::RestyleHint, stylesheets::StylesheetInvalidationSet},
-    properties::{PropertyDeclarationBlock, longhands::display::computed_value::T as Display},
+    properties::{
+        ComputedValues, PropertyDeclarationBlock, longhands::display::computed_value::T as Display,
+    },
     selector_parser::{AttrValue as SelectorAttrValue, Lang, PseudoElement, SelectorImpl},
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
@@ -187,6 +189,45 @@ impl StyloDomStyleAdapter {
     /// them unavailable for the next style observation.
     pub fn mark_element_style_dirty(&self, handle: NodeId) -> bool {
         self.state.mark_element_style_dirty(handle)
+    }
+
+    /// Inspect stored attribute dependencies without a traversal binding,
+    /// whose teardown retires transient shadow cascade data.
+    pub fn element_styles_reference_attribute(
+        &self,
+        host: &DomHost,
+        handle: NodeId,
+        name: &str,
+    ) -> bool {
+        let Some(document) = self
+            .state
+            .element_data
+            .note_owner_document_for_host(host, handle)
+        else {
+            return false;
+        };
+        let Some(data) = self
+            .state
+            .element_data
+            .borrow_for_document(document, handle)
+        else {
+            return false;
+        };
+        let name = LocalName::from(name);
+        let references_attribute = |style: &Arc<ComputedValues>| {
+            style
+                .attribute_references
+                .as_ref()
+                .is_some_and(|references| references.contains_key(&name))
+        };
+        data.styles.get_primary().is_some_and(references_attribute)
+            || data
+                .styles
+                .pseudos
+                .as_array()
+                .iter()
+                .flatten()
+                .any(references_attribute)
     }
 
     pub fn clear_element_data_for_document(&self, document: NodeId) {

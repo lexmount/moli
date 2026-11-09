@@ -7,7 +7,8 @@ use std::{
 use std::cell::Cell;
 
 use style::{
-    properties::ComputedValues, selector_parser::PseudoElement, servo_arc::Arc as ServoArc,
+    LocalName, properties::ComputedValues, selector_parser::PseudoElement,
+    servo_arc::Arc as ServoArc,
 };
 
 use crate::document_runtime::DomHandle;
@@ -68,6 +69,19 @@ impl PseudoStyleCache {
         key: &ComputedElementStyleCacheKey,
     ) -> Option<ServoArc<ComputedValues>> {
         self.pseudo_entries.borrow().get(key).cloned()
+    }
+
+    pub(super) fn references_attribute(&self, handle: DomHandle, name: &str) -> bool {
+        let keys_by_handle = self.keys_by_handle.borrow();
+        let Some(keys) = keys_by_handle.get(&handle) else {
+            return false;
+        };
+        let entries = self.pseudo_entries.borrow();
+        keys.iter().any(|key| {
+            entries
+                .get(key)
+                .is_some_and(|style| computed_style_references_attribute(style, name))
+        })
     }
 
     pub(super) fn insert_pseudo(
@@ -154,4 +168,13 @@ impl PseudoStyleCache {
             .map(HashSet::len)
             .unwrap_or(0)
     }
+}
+
+fn computed_style_references_attribute(style: &ComputedValues, name: &str) -> bool {
+    // Mutation effects carry local names but no namespace. Matching any
+    // referenced namespace is conservative without losing case sensitivity.
+    style
+        .attribute_references
+        .as_ref()
+        .is_some_and(|references| references.contains_key(&LocalName::from(name)))
 }
