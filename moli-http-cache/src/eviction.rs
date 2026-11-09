@@ -65,14 +65,4 @@ fn cache_entry_for_eviction(
     })
 }
 
-fn directory_size(path: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| entry.metadata().ok())
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.len())
-        .sum()
-}
+use crate::store::directory_size;
