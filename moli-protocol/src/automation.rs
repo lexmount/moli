@@ -1914,7 +1914,7 @@ impl DevToolsRemoteValue {
     }
 }
 
-fn cdp_remote_object_value(remote: &Value) -> Value {
+pub(crate) fn cdp_remote_object_value(remote: &Value) -> Value {
     if let Some(value) = remote.get("value") {
         return value.clone();
     }
