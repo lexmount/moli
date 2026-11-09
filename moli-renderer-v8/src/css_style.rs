@@ -256,7 +256,6 @@ pub(crate) fn mask_compat_property_name(property: &str) -> bool {
             | "-webkit-mask-clip"
             | "-webkit-mask-origin"
             | "-webkit-mask-composite"
-            | "-webkit-mask-position"
             | "-webkit-mask-repeat"
     )
 }
@@ -264,10 +263,8 @@ pub(crate) fn mask_compat_property_name(property: &str) -> bool {
 /// Standard mask properties parsed and cascaded by the pinned Stylo world
 /// once the same `layout.unimplemented` gate used by Blitz is enabled.
 ///
-/// Keep the legacy `-webkit-mask-*` CSSOM surface on its existing narrow
-/// compatibility path. Stylo accepts some of those names as stylesheet
-/// aliases, but our CSSOM alias contract is not backed by the same declaration
-/// metadata and must not be opened implicitly.
+/// The public position axes are the prefixed names, sharing these native
+/// declarations. Other legacy mask properties retain their compatibility path.
 pub(crate) fn stylo_mask_property_name(property: &str) -> bool {
     matches!(
         canonical_style_property_name(property).as_str(),
@@ -281,6 +278,8 @@ pub(crate) fn stylo_mask_property_name(property: &str) -> bool {
             | "mask-position"
             | "mask-position-x"
             | "mask-position-y"
+            | "-webkit-mask-position-x"
+            | "-webkit-mask-position-y"
             | "mask-size"
     )
 }
@@ -308,7 +307,6 @@ pub(crate) fn mask_compat_value_is_supported(property: &str, value: &str) -> boo
         "-webkit-mask-box-image-width" | "-webkit-mask-size" => value == "auto",
         "-webkit-mask-clip" | "-webkit-mask-origin" => value == "border-box",
         "-webkit-mask-composite" => value == "source-over",
-        "-webkit-mask-position" => value == "0% 0%",
         "-webkit-mask-repeat" => value == "repeat",
         _ => false,
     }
@@ -2681,6 +2679,48 @@ fn collect_fixed_shorthand_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cssom_mask_axis_metadata_preserves_native_nodes_and_typed_units() {
+        crate::style_engine::ensure_stylo_browser_compat_prefs();
+        let names = ["-webkit-mask-position-x", "-webkit-mask-position-y"];
+        let mut block = moli_css_parse::CssDeclarationBlock::default();
+        let projection = block.set_property_with_projection("mask-position", "10px 20px", true);
+        assert_eq!(
+            projection.affected_names,
+            ["mask-position", names[0], names[1]]
+        );
+        assert_eq!(projection.stored_names, names);
+        assert_eq!(
+            projection
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        assert_eq!(stylo_declaration_block_property_names(&block), names);
+        assert!(block.retain_typed_unit_value(
+            names[0],
+            moli_css_parse::CssDeclaredUnitValue {
+                value: 10.0,
+                unit: "px".to_owned(),
+            }
+        ));
+        let selected = block.select_properties([names[0]]).unwrap();
+        assert_eq!(
+            selected.css_text(),
+            "-webkit-mask-position-x: 10px !important;"
+        );
+        assert_eq!(selected.typed_unit_value(names[0]).unwrap().value, 10.0);
+        block.set_property("mask-position", "1px 2px", false);
+        assert!(block.typed_unit_value(names[0]).is_none());
+        block.set_property("mask-position", "var(--pending)", true);
+        let selected = block.select_properties([names[0]]).unwrap();
+        assert!(selected.property_has_unparsed_value(names[0]));
+        assert!(selected.property_priority(names[0]));
+        assert_eq!(selected.property_value(names[0]).as_deref(), Some(""));
+    }
 
     fn style_entry(name: &str, value: &str) -> CssStyleEntry {
         CssStyleEntry {

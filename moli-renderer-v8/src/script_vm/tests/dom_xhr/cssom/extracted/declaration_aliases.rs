@@ -319,8 +319,10 @@ fn css_style_declaration_webkit_mask_compat_writes_use_narrow_gate() {
       style[idl] = valid;
       eq(`${label}-${property}-value`, style.getPropertyValue(property), valid);
       eq(`${label}-${property}-idl-get`, style[idl], valid);
-      ok(`${label}-${property}-name`, names(style).includes(property));
-      ok(`${label}-${property}-cssText`, style.cssText.includes(`${property}: ${valid};`));
+      const canonicalName = property === '-webkit-mask-position' ? '-webkit-mask-position-x' : property;
+      const serializedName = property === '-webkit-mask-position' ? 'mask-position' : property;
+      ok(`${label}-${property}-name`, names(style).includes(canonicalName));
+      ok(`${label}-${property}-cssText`, style.cssText.includes(`${serializedName}: ${valid};`));
 
       style.setProperty(property, 'banana', 'important');
       eq(`${label}-${property}-invalid-preserves-value`, style.getPropertyValue(property), valid);

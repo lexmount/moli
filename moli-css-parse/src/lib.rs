@@ -93,7 +93,7 @@ pub use util::{
     camel_case_style_property_name, camel_to_kebab, canonical_style_property_identifier,
     canonical_style_property_name, decapitalize_ascii_head, escape_top_level_semicolons,
     is_cssom_custom_property_name, serialize_style_property_name, split_important_priority,
-    unescape_top_level_semicolons, unquote_css_string,
+    stylo_cssom_property_name, unescape_top_level_semicolons, unquote_css_string,
 };
 pub use value::{
     css_declaration_value_has_valid_env_functions, css_value_is_eof_open_var_function,

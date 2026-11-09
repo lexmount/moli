@@ -42,15 +42,28 @@ impl CssDeclarationBlock {
     }
 
     pub fn css_text(&self) -> String {
-        self.native.css_text()
+        let text = self.native.css_text();
+        if self.native.property_is_declared("mask-position-x")
+            || self.native.property_is_declared("mask-position-y")
+        {
+            project_cssom_declaration_names(text)
+        } else {
+            text
+        }
     }
 
     pub fn item(&self, index: usize) -> Option<String> {
-        self.native.item(index)
+        self.native
+            .item(index)
+            .map(|name| crate::stylo_cssom_property_name(&name).to_owned())
     }
 
     pub fn entries(&self) -> Vec<CssDeclarationEntry> {
-        self.native.entries()
+        let mut entries = self.native.entries();
+        for entry in &mut entries {
+            project_cssom_name(&mut entry.name);
+        }
+        entries
     }
 
     /// Copy longhand and custom declarations in the requested order without
@@ -107,7 +120,9 @@ impl CssDeclarationBlock {
     }
 
     pub fn affected_names_for_property(name: &str) -> Option<Vec<String>> {
-        NativeDeclarationBlock::affected_names_for_property(name)
+        let mut names = NativeDeclarationBlock::affected_names_for_property(name)?;
+        names.iter_mut().for_each(project_cssom_name);
+        Some(names)
     }
 
     pub fn set_property(&mut self, name: &str, value: &str, priority: bool) -> CssSetResult {
@@ -121,19 +136,27 @@ impl CssDeclarationBlock {
         value: &str,
         priority: bool,
     ) -> CssMutationProjection {
-        let result = self
+        let mut result = self
             .native
             .set_property_with_projection(name, value, priority);
         if result.set_result != CssSetResult::ParseError {
             self.forget_typed_units(&result.affected_names);
         }
+        for entry in &mut result.entries {
+            project_cssom_name(&mut entry.name);
+        }
+        result
+            .affected_names
+            .iter_mut()
+            .for_each(project_cssom_name);
+        result.stored_names.iter_mut().for_each(project_cssom_name);
         result
     }
 
     pub fn remove_property(&mut self, name: &str) -> CssRemoveResult {
         let result = self.native.remove_property(name);
         if !self.typed_units.is_empty()
-            && let Some(affected) = Self::affected_names_for_property(name)
+            && let Some(affected) = NativeDeclarationBlock::affected_names_for_property(name)
         {
             self.forget_typed_units(&affected);
         }
@@ -178,7 +201,8 @@ impl CssDeclarationBlock {
         if previous.typed_units.is_empty() {
             return;
         }
-        let affected = Self::affected_names_for_property(changed_property).unwrap_or_default();
+        let affected = NativeDeclarationBlock::affected_names_for_property(changed_property)
+            .unwrap_or_default();
         for (&name, value) in &previous.typed_units {
             if name != changed_property
                 && !affected.iter().any(|affected| affected == name)
@@ -195,7 +219,7 @@ impl CssDeclarationBlock {
     pub fn invalidate_typed_units_for_property(&mut self, name: &str) -> bool {
         let before = self.typed_units.len();
         if before != 0
-            && let Some(affected) = Self::affected_names_for_property(name)
+            && let Some(affected) = NativeDeclarationBlock::affected_names_for_property(name)
         {
             self.forget_typed_units(&affected);
         }
@@ -212,6 +236,44 @@ impl CssDeclarationBlock {
     }
 }
 
+fn project_cssom_name(name: &mut String) {
+    let public = crate::stylo_cssom_property_name(name);
+    if public != name.as_str() {
+        *name = public.to_owned();
+    }
+}
+
+/// Change only declaration-name token ranges in native serialization. Values
+/// stay byte-for-byte intact, including custom tokens and pending substitution.
+fn project_cssom_declaration_names(mut text: String) -> String {
+    let mut parser = cssparser::Parser::new(&text);
+    let mut declaration_start = true;
+    let mut replacements = Vec::new();
+    loop {
+        let start = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        match token {
+            cssparser::Token::WhiteSpace(_) | cssparser::Token::Comment(_) => {}
+            cssparser::Token::Semicolon => declaration_start = true,
+            cssparser::Token::Ident(name) if declaration_start => {
+                let public = crate::stylo_cssom_property_name(&name);
+                if public != name.as_ref() {
+                    replacements.push((start..parser.position().byte_index(), public.to_owned()));
+                }
+                declaration_start = false;
+            }
+            _ => declaration_start = false,
+        }
+    }
+    drop(parser);
+    for (range, name) in replacements.into_iter().rev() {
+        text.replace_range(range, &name);
+    }
+    text
+}
+
 pub fn parse_declaration_block(css_text: &str) -> CssDeclarationBlock {
     CssDeclarationBlock {
         native: style::moli_declaration_block::parse_declaration_block(css_text),
@@ -222,6 +284,15 @@ pub fn parse_declaration_block(css_text: &str) -> CssDeclarationBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cssom_mask_axis_names_leave_value_tokens_intact() {
+        let text = "mask-position-x: 10px !important; --tokens: \"mask-position-y: keep; mask-position-x: keep\"; mask-position-y: var(--y); --nested: fn(mask-position-x; mask-position-y);";
+        assert_eq!(
+            project_cssom_declaration_names(text.to_owned()),
+            "-webkit-mask-position-x: 10px !important; --tokens: \"mask-position-y: keep; mask-position-x: keep\"; -webkit-mask-position-y: var(--y); --nested: fn(mask-position-x; mask-position-y);"
+        );
+    }
 
     #[test]
     fn selecting_declarations_preserves_pending_values_and_typed_units() {

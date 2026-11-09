@@ -110,7 +110,9 @@ pub(super) fn prefixed_style_entry_is_independent_of_unprefixed_property(
     entry_name: &str,
     property: &str,
 ) -> bool {
-    entry_name.starts_with("-webkit-") && !property.starts_with("-webkit-")
+    entry_name.starts_with("-webkit-")
+        && !stylo_mask_property_name(entry_name)
+        && !property.starts_with("-webkit-")
 }
 
 pub(super) fn pdb_block_from_style_entries(

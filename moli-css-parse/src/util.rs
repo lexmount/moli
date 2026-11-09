@@ -48,6 +48,7 @@ pub fn canonical_style_property_name(property: &str) -> String {
         "-webkit-order" => "order".to_owned(),
         "-webkit-perspective" => "perspective".to_owned(),
         "-webkit-perspective-origin" => "perspective-origin".to_owned(),
+        "-webkit-mask-position" => "mask-position".to_owned(),
         "-webkit-transform" => "transform".to_owned(),
         "-webkit-transform-style" => "transform-style".to_owned(),
         "-webkit-transition" => "transition".to_owned(),
@@ -57,6 +58,17 @@ pub fn canonical_style_property_name(property: &str) -> String {
         "-webkit-transition-timing-function" => "transition-timing-function".to_owned(),
         "-webkit-user-select" => "user-select".to_owned(),
         _ => lowered,
+    }
+}
+
+/// Project native declaration identifiers onto their public CSSOM names.
+/// This is an output projection, not an input alias: the unprefixed mask axes
+/// remain unavailable on the public property surface.
+pub fn stylo_cssom_property_name(name: &str) -> &str {
+    match name {
+        "mask-position-x" => "-webkit-mask-position-x",
+        "mask-position-y" => "-webkit-mask-position-y",
+        _ => name,
     }
 }
 

@@ -144,6 +144,24 @@ pub(crate) fn set_lightweight_css_style_stylo_declaration_block_id<'s>(
     true
 }
 
+/// Initialize a fresh wrapper from its rule's existing native owner. Replaying
+/// native CSS text through public setters can lose private names and pending
+/// declarations whose individual values cannot be serialized.
+pub(crate) fn initialize_lightweight_css_style_from_stylo_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(block) = stored_stylo_declaration_block(scope, style) else {
+        return false;
+    };
+    set_style_names(
+        scope,
+        style,
+        &stylo_declaration_block_property_names(&block),
+    );
+    true
+}
+
 #[derive(WebApiObject)]
 #[webapi(
     interface = web_api_interfaces::CSSStyleProperties,
@@ -1465,6 +1483,9 @@ fn style_property_value<'s>(
     style: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> String {
+    if matches!(name, "mask-position-x" | "mask-position-y") {
+        return String::new();
+    }
     let stylo_value = stylo_style_property_value_for_query(scope, style, name);
     style_property_value_with_stylo_value(scope, style, name, stylo_value)
 }
@@ -1728,7 +1749,9 @@ fn prefixed_style_entry_is_independent_of_unprefixed_property(
     entry_name: &str,
     property: &str,
 ) -> bool {
-    entry_name.starts_with("-webkit-") && !property.starts_with("-webkit-")
+    entry_name.starts_with("-webkit-")
+        && !stylo_mask_property_name(entry_name)
+        && !property.starts_with("-webkit-")
 }
 
 fn animation_shorthand_property_value<'s>(
@@ -2256,7 +2279,7 @@ fn set_style_entry<'s>(
     priority: bool,
 ) {
     let name = canonical_style_property_name(name);
-    if name.is_empty() {
+    if name.is_empty() || matches!(name.as_str(), "mask-position-x" | "mask-position-y") {
         return;
     }
     if style_interface(scope, style) == "CSSFontFaceDescriptors" {
@@ -3038,6 +3061,9 @@ fn style_property_priority_for_query<'s>(
     style: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> bool {
+    if matches!(name, "mask-position-x" | "mask-position-y") {
+        return false;
+    }
     let stylo_priority = stylo_style_property_priority_for_query(scope, style, name);
     style_property_priority_for_query_with_stylo_priority(scope, style, name, stylo_priority)
 }
