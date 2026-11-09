@@ -2503,7 +2503,7 @@ async fn stylesheet_gated_set_document_content_restores_parser_insertion_point()
         )
         .await,
         json!({
-            "order": ["script", "style-load"],
+            "order": ["style-load", "script"],
             "writtenColor": "rgb(11, 12, 13)",
             "bodyChildren": ["SCRIPT", "gate", "gated-script", "gated-written", "gated-tail"],
         }),
@@ -2596,7 +2596,7 @@ async fn failed_stylesheet_releases_set_document_content_parser_script() {
         )
         .await,
         json!({
-            "order": ["script", "style-error"],
+            "order": ["style-error", "script"],
             "ran": true,
             "tail": "tail",
             "sheets": 1,
@@ -2730,7 +2730,7 @@ async fn set_document_content_waits_for_all_prior_stylesheets_but_dispatches_eac
         )
         .await,
         json!({
-            "order": ["first-load", "script", "second-load"],
+            "order": ["first-load", "second-load", "script"],
             "ran": true,
             "tail": "tail",
             "color": "rgb(21, 22, 23)",
@@ -3186,7 +3186,7 @@ async fn stylesheet_blocked_external_set_document_content_script_fetches_in_para
         )
         .await,
         json!({
-            "order": ["script-1", "script-1-load", "style-load"],
+            "order": ["style-load", "script-1", "script-1-load"],
             "color": "rgb(61, 62, 63)",
             "tail": null,
         }),
@@ -3234,9 +3234,9 @@ async fn stylesheet_blocked_external_set_document_content_script_fetches_in_para
         .await,
         json!({
             "order": [
+                "style-load",
                 "script-1",
                 "script-1-load",
-                "style-load",
                 "script-2",
                 "script-2-load",
             ],
@@ -4034,7 +4034,7 @@ async fn document_written_stylesheet_pauses_set_document_content_parser_tail() {
         )
         .await,
         json!({
-            "order": ["script-end", "external-script", "external-load", "style-load"],
+            "order": ["script-end", "style-load", "external-script", "external-load"],
             "after": "after",
             "color": "rgb(101, 102, 103)",
             "scriptColor": "rgb(101, 102, 103)",

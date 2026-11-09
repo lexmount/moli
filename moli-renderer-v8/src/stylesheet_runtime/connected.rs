@@ -1978,12 +1978,7 @@ impl DocumentRuntime {
                     .consume_operation_event(operation);
                 None
             }
-            ReadyConnectedStyleLoadOperation::StylesheetLink(load) => {
-                self.stylesheet_lifecycle
-                    .owner_states
-                    .consume_link_event(load);
-                None
-            }
+            ReadyConnectedStyleLoadOperation::StylesheetLink(_) => None,
             ReadyConnectedStyleLoadOperation::NativeModulepreload(client) => {
                 self.stylesheet_lifecycle
                     .owner_states
@@ -1994,7 +1989,29 @@ impl DocumentRuntime {
         let load_succeeded = native_modulepreload
             .and_then(|client| self.native_modulepreload_style_result(host_ptr, client))
             .unwrap_or_else(|| ready.successful());
+        let had_pending_blocker = !self.parser_blocking_stylesheet_release_is_ready();
+        let document_owner = ready.document_owner().or_else(|| {
+            if host_ptr.is_null() {
+                None
+            } else {
+                unsafe { &*host_ptr }.current_main_document_task_owner()
+            }
+        });
         self.dispatch_style_or_link_load_event(scope, host_ptr, handle, load_succeeded);
+        if let ReadyConnectedStyleLoadOperation::StylesheetLink(load) = ready.operation()
+            && self
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(load)
+            && !host_ptr.is_null()
+            && document_owner.is_some_and(|owner| {
+                unsafe { &*host_ptr }.connected_style_document_owner_is_current(owner)
+            })
+        {
+            // A handler can replace the Document or start a successor load. Its
+            // predecessor must not release that replacement's parser gate.
+            self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
+        }
         true
     }
 
@@ -4836,7 +4853,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_ownerless_failure_releases_parser_before_link_error_dispatch() {
+    async fn completed_ownerless_failure_waits_for_link_error_before_releasing_parser() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("stylesheet server");
@@ -4898,8 +4915,8 @@ mod tests {
             "the completed failure must settle the physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "a terminal stylesheet failure must release script execution before its error task"
+            runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+            "a terminal stylesheet failure must keep scripts blocked through its error task"
         );
 
         let load = runtime
@@ -4910,17 +4927,19 @@ mod tests {
             .expect("late client admission should publish its exact error task");
         assert_eq!(ready.owner(), link);
         assert!(!ready.successful());
-        runtime
-            .stylesheet_lifecycle
-            .owner_states
-            .consume_link_event(&load);
+        assert!(
+            runtime
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(&load)
+        );
         assert!(
             !runtime.has_pending_document_owned_blocking_stylesheet_signatures(signatures.iter()),
             "dispatch must not recreate the settled physical stylesheet blocker"
         );
         assert!(
             !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "dispatching the exact link error task must not recreate the released script gate"
+            "finishing the exact link error task must release its script gate"
         );
         assert!(
             runtime.pop_ready_connected_style_load().is_none(),

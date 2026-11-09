@@ -711,6 +711,13 @@ async fn resume_after_stylesheet_completion(
         crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion,
     )
     .await;
+    let pending = run_standalone_selected_page_task(
+        pending,
+        crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
+            crate::runtime::page_vm::PageDomManipulationTestFamily::ConnectedStyleEvent,
+        ),
+    )
+    .await;
     let PendingStandaloneDocumentWritePage {
         runtime,
         started,
@@ -945,8 +952,18 @@ globalThis.__tailAtScript = !!document.getElementById('parser-tail');
             ).await;
             assert_eq!(
                 pending.runtime.state.parser_session.run_state(), suspended_state,
-                "CSS completion must leave resumption to the selected parser continuation",
+                "CSS completion must leave the parser suspended through the link event",
             );
+            assert!(!pending.runtime.page_vm.has_ready_page_networking_task());
+            pending = run_standalone_selected_page_task(
+                pending,
+                crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
+                    crate::runtime::page_vm::PageDomManipulationTestFamily::ConnectedStyleEvent,
+                ),
+            ).await;
+            assert_eq!(pending.runtime.state.parser_session.run_state(), suspended_state,
+                "the link event must leave resumption to the selected parser continuation");
+            assert!(pending.runtime.page_vm.has_ready_page_networking_task());
             let PendingStandaloneDocumentWritePage { runtime, started, owner_wake_rx } = pending;
             let (outcome, _) = resume_standalone_main_parser_continuation_if_ready(
                 ParseTimePageVmCreationOutcome::PendingPhaseOne(
@@ -1086,9 +1103,9 @@ globalThis.__completedPreloadEvents.push('inline-after');
                 assert_eq!(
                     result.get("value").and_then(serde_json::Value::as_str),
                     Some(
-                        r#"{"events":["inline-before","inline-after","external","script-load","tail"],"linkConnected":true,"sheet":"[object CSSStyleSheet]"}"#,
+                        r#"{"events":["inline-before","inline-after","external","script-load"],"linkConnected":true,"sheet":"[object CSSStyleSheet]"}"#,
                     ),
-                    "the completed-preload client must install synchronously and release the following parser script independently of its event"
+                    "the completed-preload client must install synchronously while its event still blocks the following parser script"
                 );
                 assert!(
                     pending
@@ -1105,16 +1122,29 @@ globalThis.__completedPreloadEvents.push('inline-after');
                     ),
                 )
                 .await;
-                let (_, result) = evaluate_pending_on_owner_local_task(
+                let (pending, result) = evaluate_pending_on_owner_local_task(
                     pending,
                     "__completedPreloadEvents.join('|')",
                 )
                 .await;
                 assert_eq!(
                     result.get("value").and_then(serde_json::Value::as_str),
-                    Some("inline-before|inline-after|external|script-load|tail|style-load"),
-                    "the adopted stylesheet event must remain asynchronous after parser execution resumes"
+                    Some("inline-before|inline-after|external|script-load|style-load"),
+                    "the adopted stylesheet event must finish before parser execution resumes"
                 );
+                let PendingStandaloneDocumentWritePage { runtime, started, owner_wake_rx } = pending;
+                let (outcome, _) = resume_standalone_main_parser_continuation_if_ready(
+                    ParseTimePageVmCreationOutcome::PendingPhaseOne(
+                        PendingPhaseOneResidence::ClosedInputPageWork { runtime, started },
+                    ),
+                    owner_wake_rx,
+                ).await;
+                let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } = outcome else {
+                    panic!("the link event's parser continuation must finish the document");
+                };
+                let result = evaluate_on_owner_local_task(page_vm, "__completedPreloadEvents.join('|')").await;
+                assert_eq!(result.get("value").and_then(serde_json::Value::as_str),
+                    Some("inline-before|inline-after|external|script-load|style-load|tail"));
                 server
                     .await
                     .expect("document.write stylesheet preload server should finish");
