@@ -1,5 +1,6 @@
 use super::*;
 
+mod attr_arguments;
 mod attr_fallback;
 mod attr_invalidation;
 mod attr_security;
