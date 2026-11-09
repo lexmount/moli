@@ -133,13 +133,7 @@ impl ComputedStylePseudoKey {
     }
 }
 
-fn functional_pseudo_name<'a>(pseudo_element: &'a str, function_name: &str) -> Option<&'a str> {
-    pseudo_element
-        .strip_prefix(function_name)?
-        .strip_prefix('(')?
-        .strip_suffix(')')
-        .filter(|name| !name.is_empty())
-}
+use moli_css_parse::functional_pseudo_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ComputedStyleTargetKey {
