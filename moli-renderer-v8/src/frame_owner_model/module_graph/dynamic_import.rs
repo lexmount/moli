@@ -255,23 +255,6 @@ impl ChildDocumentModulatorStore {
         FrameDocumentDynamicImportSourceWasmRecordLookup::Found(wasm_record)
     }
 
-    pub(crate) fn mark_dynamic_module_graph_evaluated(
-        &mut self,
-        owner: FrameDocumentOwner,
-        realm_id: FrameRealmId,
-        root_entry: ModuleEntryId,
-    ) -> bool {
-        let Some(document_modulator_entry) =
-            self.current_document_modulator_entry_mut(owner, realm_id)
-        else {
-            return false;
-        };
-        document_modulator_entry
-            .document_modulator
-            .mark_evaluated(root_entry);
-        true
-    }
-
     pub(crate) fn continue_dynamic_module_import_fetch(
         &mut self,
         owner: FrameDocumentOwner,

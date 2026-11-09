@@ -620,7 +620,7 @@ impl ScriptVm {
         root_entry: ModuleEntryId,
     ) -> bool {
         self.child_document_modulator_store
-            .mark_parser_module_graph_evaluated(owner.document_owner(), realm_id, root_entry)
+            .mark_module_graph_evaluated(owner.document_owner(), realm_id, root_entry)
     }
 
     pub(super) fn take_child_parser_module_tree_job(

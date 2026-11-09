@@ -160,7 +160,7 @@ fn parser_module_graph_evaluated_mark_stays_in_owner_store() {
         parser_root_load_delay_token(8),
     );
 
-    assert!(store.mark_parser_module_graph_evaluated(document_owner, realm_id, entry_id));
+    assert!(store.mark_module_graph_evaluated(document_owner, realm_id, entry_id));
     let current_entry = store
         .current_document_modulator_entry(document_owner, realm_id)
         .expect("current document modulator entry should exist");
@@ -170,7 +170,7 @@ fn parser_module_graph_evaluated_mark_stays_in_owner_store() {
             .module_entry_state(entry_id),
         crate::document_module_graph::ModuleMapEntryState::Evaluated
     );
-    assert!(!store.mark_parser_module_graph_evaluated(document_owner, stale_realm_id, entry_id));
+    assert!(!store.mark_module_graph_evaluated(document_owner, stale_realm_id, entry_id));
     let current_entry_after_stale = store
         .current_document_modulator_entry(document_owner, realm_id)
         .expect("current document modulator entry should still exist");
