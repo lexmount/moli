@@ -1312,17 +1312,7 @@ async fn drain_and_send_bidi_navigation_after_response(
     transport_is_live
 }
 
-fn bidi_message_with_channel(
-    mut message: serde_json::Value,
-    channel: Option<&str>,
-) -> serde_json::Value {
-    if let Some(channel) = channel
-        && let Some(message) = message.as_object_mut()
-    {
-        message.insert("goog:channel".to_owned(), json!(channel));
-    }
-    message
-}
+use moli_protocol_webdriver_bidi::bidi_message_with_channel;
 
 fn bidi_command_channel_from_message(message: &serde_json::Value) -> Result<Option<String>, &str> {
     match message.get("goog:channel") {

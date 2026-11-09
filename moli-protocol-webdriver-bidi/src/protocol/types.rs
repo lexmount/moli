@@ -349,7 +349,7 @@ pub fn parse_bidi_command(message: Value) -> Result<BidiCommand, BidiError> {
     })
 }
 
-pub(super) fn bidi_message_with_channel(mut message: Value, channel: Option<&str>) -> Value {
+pub fn bidi_message_with_channel(mut message: Value, channel: Option<&str>) -> Value {
     if let Some(channel) = channel
         && let Some(message) = message.as_object_mut()
     {

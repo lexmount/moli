@@ -17,3 +17,5 @@ pub use types::{
     BidiError, BidiErrorCode, BidiInputCommand, BidiInputCommandDispatch, BidiSessionRegistry,
     parse_bidi_command,
 };
+
+pub use types::bidi_message_with_channel;
