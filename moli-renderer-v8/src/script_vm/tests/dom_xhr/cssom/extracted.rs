@@ -1,6 +1,7 @@
 mod attr_invalidation;
 use super::*;
 
+mod attr_security;
 mod css_text_and_detached;
 mod cssom_interfaces;
 mod declaration_aliases;
