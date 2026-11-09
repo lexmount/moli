@@ -11,6 +11,7 @@ mod kdf;
 mod limits;
 mod okp;
 mod rsa;
+mod symmetric;
 mod x25519;
 
 pub use aes::{
