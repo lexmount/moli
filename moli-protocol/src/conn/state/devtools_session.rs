@@ -1203,6 +1203,35 @@ impl DevToolsDomStorageSessionState {
     }
 }
 
+impl DevToolsSessionState {
+    pub(crate) fn pending_console_domain_messages<'a>(
+        &self,
+        messages: &'a [moli_core::page::RuntimeConsoleMessageSnapshot],
+    ) -> &'a [moli_core::page::RuntimeConsoleMessageSnapshot] {
+        if !self.console_output_session_state.console_enabled {
+            return &[];
+        }
+        &messages[self
+            .console_output_session_state
+            .console_domain_entries
+            .min(messages.len())..]
+    }
+
+    pub(crate) fn pending_runtime_console_messages<'a>(
+        &self,
+        messages: &'a [moli_core::page::RuntimeConsoleMessageSnapshot],
+        has_execution_context: bool,
+    ) -> &'a [moli_core::page::RuntimeConsoleMessageSnapshot] {
+        if !self.runtime_session_state.runtime_frontend_enabled || !has_execution_context {
+            return &[];
+        }
+        &messages[self
+            .console_output_session_state
+            .runtime_console_entries
+            .min(messages.len())..]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
