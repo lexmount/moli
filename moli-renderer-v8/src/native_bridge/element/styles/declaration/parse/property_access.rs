@@ -232,9 +232,9 @@ pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(
     if property == "text-decoration"
         && text_decoration_property_query_uses_pdb_supplemental_side_entries(property, side_entries)
     {
-        return pdb_text_decoration_shorthand_value(block, side_entries);
+        return Some(pdb_text_decoration_shorthand_value(block, side_entries).unwrap_or_default());
     }
-    if matches!(property, "overflow" | "overflow-x" | "overflow-y") {
+    if overflow_property_query_uses_pdb_supplemental_side_entries(property, side_entries) {
         return pdb_overflow_property_value(block, property, side_entries);
     }
     if !pdb_property_is_declared_for_cssom_query(block, property) {
@@ -244,7 +244,11 @@ pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(
     if value.is_empty() && moli_css_parse::is_cssom_custom_property_name(property) {
         return Some(" ".to_owned());
     }
-    if value.is_empty() && !moli_css_parse::is_cssom_custom_property_name(property) {
+    // An empty native serialization is a result: an incomplete shorthand or
+    // incompatible longhands must not be reconstructed by the legacy adapter.
+    // Supplemental declarations still need that adapter when they affect this
+    // query, since the native block does not contain their values.
+    if value.is_empty() && pdb_query_has_relevant_side_entries(property, side_entries) {
         return None;
     }
     if css_color_value_property_requires_stylo_parser(property)
@@ -263,19 +267,32 @@ pub(crate) fn pdb_property_priority_for_cssom_query_with_side_entries(
     if property == "text-decoration"
         && text_decoration_property_query_uses_pdb_supplemental_side_entries(property, side_entries)
     {
-        return pdb_text_decoration_shorthand_priority(block, side_entries);
+        return Some(pdb_text_decoration_shorthand_priority(block, side_entries).unwrap_or(false));
     }
-    if matches!(property, "overflow" | "overflow-x" | "overflow-y") {
+    if overflow_property_query_uses_pdb_supplemental_side_entries(property, side_entries) {
         return pdb_overflow_property_priority(block, property, side_entries);
     }
     if !pdb_property_is_declared_for_cssom_query(block, property) {
         return None;
     }
     let value = block.property_value(property)?;
-    if value.is_empty() && !moli_css_parse::is_cssom_custom_property_name(property) {
+    if value.is_empty() && pdb_query_has_relevant_side_entries(property, side_entries) {
         return None;
     }
+    // Importance depends on the declarations, not on whether their values can
+    // be serialized together (for example, mixed CSS-wide keywords).
     Some(block.property_priority(property))
+}
+
+fn pdb_query_has_relevant_side_entries(property: &str, side_entries: &[StyleEntry]) -> bool {
+    let Some(affected_names) = style_property_affected_names_with_pdb(property) else {
+        return true;
+    };
+    side_entries.iter().any(|entry| {
+        style_entry_affects_property_query(entry, property, &affected_names)
+            && (style_entry_is_pdb_supplemental_side_entry(entry)
+                || !style_entry_is_pdb_safe(entry))
+    })
 }
 
 pub(super) fn pdb_property_is_declared_for_cssom_query(
@@ -309,8 +326,17 @@ pub(super) fn pdb_overflow_property_value(
     match property {
         "overflow-x" | "overflow-y" => pdb_overflow_longhand_value(block, property, side_entries),
         "overflow" => {
-            let x = pdb_overflow_longhand_value(block, "overflow-x", side_entries)?;
-            let y = pdb_overflow_longhand_value(block, "overflow-y", side_entries)?;
+            let Some(x) = pdb_overflow_longhand_value(block, "overflow-x", side_entries) else {
+                return Some(String::new());
+            };
+            let Some(y) = pdb_overflow_longhand_value(block, "overflow-y", side_entries) else {
+                return Some(String::new());
+            };
+            if pdb_overflow_property_priority(block, property, side_entries).is_none()
+                || x != y && (css_wide_keyword(&x).is_some() || css_wide_keyword(&y).is_some())
+            {
+                return Some(String::new());
+            }
             if x == y {
                 Some(x)
             } else {
