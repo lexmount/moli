@@ -4,12 +4,8 @@ use crate::dom::native::Node;
 use crate::webidl;
 
 use super::super::super::{
-    JsContextHost, document,
-    node::{
-        node_runtime_and_handle_from_args_or_detached, require_element_method_receiver,
-        throw_incompatible_method_receiver,
-    },
-    throw_dom_exception, validate_attribute_name, validate_qualified_name_and_namespace,
+    JsContextHost, document, throw_dom_exception, validate_attribute_name,
+    validate_qualified_name_and_namespace,
 };
 use super::super::{
     element_has_attribute, remove_live_element_attribute_appending_to_current_reaction_queue,
@@ -32,21 +28,7 @@ fn throw_invalid_attribute_name(scope: &mut v8::PinScope<'_, '_>) {
     );
 }
 
-fn element_method_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    method: &str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, args)
-    else {
-        throw_incompatible_method_receiver(scope, "Element", method);
-        return None;
-    };
-    if !require_element_method_receiver(scope, unsafe { &*runtime_ptr }, handle, method) {
-        return None;
-    }
-    Some((runtime_ptr, handle))
-}
+use super::getters::element_method_receiver;
 
 pub(super) fn attribute_target_for_remove_name(
     runtime: &JsContextHost,
