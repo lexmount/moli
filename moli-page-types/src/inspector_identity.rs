@@ -167,7 +167,7 @@ impl fmt::Display for RendererCallIdOutOfRange {
 
 impl std::error::Error for RendererCallIdOutOfRange {}
 
-fn allocate_nonzero_u64(counter: &AtomicU64, name: &str) -> NonZeroU64 {
+pub fn allocate_nonzero_u64(counter: &AtomicU64, name: &str) -> NonZeroU64 {
     let raw = counter
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
