@@ -7,6 +7,7 @@ use moli_selector::{
     html_directionality,
 };
 use smallvec::SmallVec;
+use style::{LocalName, stylesheets::container_rule::ContainerAttributeDependencyKind};
 
 use crate::{
     document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
@@ -304,7 +305,41 @@ impl MoliStyleEngine {
                     .element_styles_reference_attribute(host, *element, name)
                 || world
                     .pseudo_style_cache
-                    .references_attribute(*element, name);
+                    .references_attribute(*element, name)
+                || world
+                    .document_state
+                    .try_with_retained_style_system(|retained| {
+                        let mut names = SmallVec::<[LocalName; 4]>::new();
+                        for candidate in [
+                            Some(name.as_str()),
+                            name.rsplit_once(':').map(|(_, local)| local),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            names.push(LocalName::from(candidate));
+                            if candidate.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                                names.push(LocalName::from(
+                                    candidate.to_ascii_lowercase().as_str(),
+                                ));
+                            }
+                        }
+                        let references_attribute = |data: &style::stylist::CascadeData| {
+                            names.iter().any(|name| {
+                                data.might_have_attribute_dependency_in_container(name)
+                                    != ContainerAttributeDependencyKind::None
+                            })
+                        };
+                        retained
+                            .stylist
+                            .iter_origins()
+                            .any(|(data, _)| references_attribute(data))
+                            || retained
+                                .shadow_cascade_data
+                                .iter()
+                                .any(|(_, data)| references_attribute(data))
+                    })
+                    .unwrap_or(false);
             invalidates_subtree.then_some(*element)
         }));
         if !roots.is_empty() {

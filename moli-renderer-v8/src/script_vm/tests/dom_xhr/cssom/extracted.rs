@@ -2,6 +2,7 @@ mod attr_invalidation;
 use super::*;
 
 mod attr_arguments;
+mod attr_container;
 mod attr_fallback;
 mod attr_security;
 mod css_text_and_detached;

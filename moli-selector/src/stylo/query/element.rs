@@ -131,15 +131,17 @@ impl<'a> TElement for QueryElement<'a> {
 
     fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String> {
         let local_name: &str = attr.as_ref();
-        let namespace = &**namespace;
-        self.element()
-            .attributes()
-            .iter()
-            .find(|attribute| {
-                attribute.local_name() == local_name
-                    && (namespace.is_empty() || attribute.namespace() == namespace)
-            })
-            .map(|attribute| attribute.value().to_owned())
+        let lowercase;
+        let local_name = if self.is_html_element_in_html_document()
+            && local_name.bytes().any(|byte| byte.is_ascii_uppercase())
+        {
+            lowercase = local_name.to_ascii_lowercase();
+            lowercase.as_str()
+        } else {
+            local_name
+        };
+        self.attr_value(local_name, Some(&**namespace))
+            .map(str::to_owned)
     }
 
     fn as_node(&self) -> Self::ConcreteNode {
