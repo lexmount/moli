@@ -19,7 +19,7 @@ pub(super) fn redirect_with_cookies(location: &str, cookies: &[&str]) -> Respons
     response
 }
 
-pub(super) fn javascript_response(source: &'static str) -> Response {
+pub(super) fn javascript_response(source: impl IntoResponse) -> Response {
     let mut response = source.into_response();
     response.headers_mut().insert(
         CONTENT_TYPE,
@@ -28,14 +28,7 @@ pub(super) fn javascript_response(source: &'static str) -> Response {
     response
 }
 
-pub(super) fn javascript_string_response(source: String) -> Response {
-    let mut response = source.into_response();
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/javascript"),
-    );
-    response
-}
+pub(super) use self::javascript_response as javascript_string_response;
 
 pub(super) fn css_response(source: &'static str) -> Response {
     let mut response = source.into_response();
