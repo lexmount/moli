@@ -4,6 +4,7 @@ mod attr_arguments;
 mod attr_container;
 mod attr_fallback;
 mod attr_invalidation;
+mod attr_number_units;
 mod attr_security;
 mod css_text_and_detached;
 mod cssom_interfaces;
