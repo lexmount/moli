@@ -8,6 +8,7 @@ mod media_devices;
 mod media_session;
 mod navigator;
 mod navigator_subobjects;
+mod promises;
 mod screen;
 mod visual_viewport;
 mod window_state;
