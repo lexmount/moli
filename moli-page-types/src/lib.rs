@@ -3537,6 +3537,8 @@ pub enum ScriptSkipReason {
 
 pub use inspector_identity::allocate_nonzero_u64;
 
+pub use renderer_transport_memory::transport_headers_charge_bytes;
+
 #[cfg(test)]
 mod tests {
     use super::*;

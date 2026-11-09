@@ -267,7 +267,7 @@ fn request_headers_charge(headers: &moli_fetch::RequestHeaders) -> usize {
     )
 }
 
-fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
+pub fn transport_headers_charge_bytes<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
     headers.iter().fold(
         headers
             .len()
@@ -279,6 +279,8 @@ fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
         },
     )
 }
+
+use self::transport_headers_charge_bytes as headers_charge;
 
 fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
     request
