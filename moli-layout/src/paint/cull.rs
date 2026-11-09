@@ -463,14 +463,7 @@ fn offset_rect(rect: LayoutRect, offset: LayoutPoint) -> LayoutRect {
     )
 }
 
-fn outset_rect(rect: LayoutRect, top: f32, right: f32, bottom: f32, left: f32) -> LayoutRect {
-    LayoutRect::new(
-        rect.x - left,
-        rect.y - top,
-        (rect.width + left + right).max(0.0),
-        (rect.height + top + bottom).max(0.0),
-    )
-}
+use crate::overflow::outset_rect;
 
 #[cfg(test)]
 mod tests {
