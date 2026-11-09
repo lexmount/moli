@@ -1326,7 +1326,7 @@ fn resolve_computed_width(
     context: StyleComputationContext,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<String> {
-    if element_has_no_used_width(runtime, handle, resolution) {
+    if element_has_no_used_box_size(runtime, handle, resolution) {
         return None;
     }
     let viewport = context.viewport();
@@ -1362,20 +1362,7 @@ fn resolve_computed_width_with_inline_fallback(
     }
 }
 
-fn element_has_no_used_width(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    resolution: StyleResolutionContext<'_>,
-) -> bool {
-    matches!(
-        resolution
-            .computed_property(runtime, handle, "display")
-            .as_str(),
-        "none" | "contents" | "inline"
-    )
-}
-
-fn element_has_no_used_height(
+fn element_has_no_used_box_size(
     runtime: &JsContextHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
@@ -1435,7 +1422,7 @@ fn resolve_computed_height(
     context: StyleComputationContext,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<String> {
-    if element_has_no_used_height(runtime, handle, resolution) {
+    if element_has_no_used_box_size(runtime, handle, resolution) {
         return None;
     }
     if value.eq_ignore_ascii_case("auto") {
