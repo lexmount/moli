@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use url::Url;
@@ -772,6 +774,11 @@ impl RawResponse {
 pub struct NetworkRequestExtraInfo {
     pub headers: Vec<(String, String)>,
     pub cookie_report: StoredCookieQueryReport,
+    /// Actual dispatched method, when captured by the transport. A renderer's
+    /// request-start event can precede an interception override.
+    pub request_method: Option<Arc<str>>,
+    /// Upload for that dispatched method; shared without copying the payload.
+    pub request_body: Option<Arc<bytes::Bytes>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

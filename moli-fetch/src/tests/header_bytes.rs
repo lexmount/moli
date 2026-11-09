@@ -348,6 +348,28 @@ async fn current_hop_headers_expire_before_redirect_method_rewrite_in_all_transp
             };
             body.into_materialized_bytes().await?;
             assert!(head.redirected, "{mode} {status}");
+            let next_request = head.redirect_chain[0]
+                .request_extra_info
+                .as_ref()
+                .expect("subresource redirects must retain the dispatched next-hop headers");
+            assert_eq!(
+                header_value(&next_request.headers, "X-Raw"),
+                Some("éÿ"),
+                "{mode} {status} must restore the original header bytes"
+            );
+            assert_eq!(
+                next_request.request_method.as_deref(),
+                Some(if status == 302 { "GET" } else { "POST" }),
+                "{mode} {status} must capture the dispatched method"
+            );
+            assert_eq!(
+                next_request
+                    .request_body
+                    .as_deref()
+                    .map(bytes::Bytes::as_ref),
+                (status == 307).then_some(b"body".as_slice()),
+                "{mode} {status} must capture the dispatched upload"
+            );
             let requests = server.await??;
             assert_eq!(requests.len(), 2, "{mode} {status}");
             assert!(

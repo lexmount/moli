@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use moli_core::page::{SubresourceBodyFinishedResult, SubresourceResponseBody};
 
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
@@ -76,6 +78,34 @@ impl<'a> NetworkBacklogProjectionContext<'a> {
         self.prepared_outputs = prepared_outputs;
         self
     }
+}
+
+// Match Fetch's per-hop method rewrite; later 307/308 hops retain an earlier GET.
+fn method_after_redirect(method: &str, status: u16) -> &str {
+    if matches!(status, 301 | 302) && method.eq_ignore_ascii_case("POST")
+        || status == 303
+            && !method.eq_ignore_ascii_case("GET")
+            && !method.eq_ignore_ascii_case("HEAD")
+    {
+        "GET"
+    } else {
+        method
+    }
+}
+
+fn strip_redirect_body_headers(headers: &mut Cow<'_, [(String, String)]>) {
+    const BODY_HEADERS: [&str; 5] = [
+        "content-encoding",
+        "content-language",
+        "content-length",
+        "content-location",
+        "content-type",
+    ];
+    headers.to_mut().retain(|(name, _)| {
+        !BODY_HEADERS
+            .iter()
+            .any(|body_header| name.eq_ignore_ascii_case(body_header))
+    });
 }
 
 fn emit_subresource_network_delivery_record(
@@ -287,7 +317,27 @@ fn emit_complete_subresource_network_delivery_record(
             response_headers,
             response_body_len,
         } => {
+            let mut method = output.method();
+            let mut request_body = output.request_body().map(Cow::Borrowed);
+            let mut request_headers: Cow<'_, [(String, String)]> =
+                Cow::Borrowed(output.request_headers());
             for redirect in redirect_chain {
+                let next_method = method_after_redirect(method, redirect.status);
+                if next_method != method {
+                    request_body = None;
+                    strip_redirect_body_headers(&mut request_headers);
+                }
+                method = next_method;
+                if let Some(extra_info) = redirect.request_extra_info.as_ref() {
+                    request_headers = Cow::Borrowed(&extra_info.headers);
+                    if let Some(dispatched_method) = extra_info.request_method.as_deref() {
+                        method = dispatched_method;
+                        request_body = extra_info
+                            .request_body
+                            .as_deref()
+                            .map(|body| String::from_utf8_lossy(body.as_ref()));
+                    }
+                }
                 for event_session_id in event_session_ids {
                     emit_request_will_be_sent(
                         out,
@@ -298,9 +348,9 @@ fn emit_complete_subresource_network_delivery_record(
                         timestamp,
                         record_document_url,
                         &redirect.to_url,
-                        output.method(),
-                        output.request_body(),
-                        output.request_headers(),
+                        method,
+                        request_body.as_deref(),
+                        request_headers.as_ref(),
                         resource_type,
                         output.request_initiator_type(),
                         Some((
@@ -505,7 +555,26 @@ fn emit_staged_subresource_response_started(
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = request.resource_type().into();
+    let mut method = request.method();
+    let mut request_body = request.request_body().map(Cow::Borrowed);
+    let mut request_headers: Cow<'_, [(String, String)]> = Cow::Borrowed(request.request_headers());
     for redirect in output.redirect_chain() {
+        let next_method = method_after_redirect(method, redirect.status);
+        if next_method != method {
+            request_body = None;
+            strip_redirect_body_headers(&mut request_headers);
+        }
+        method = next_method;
+        if let Some(extra_info) = redirect.request_extra_info.as_ref() {
+            request_headers = Cow::Borrowed(&extra_info.headers);
+            if let Some(dispatched_method) = extra_info.request_method.as_deref() {
+                method = dispatched_method;
+                request_body = extra_info
+                    .request_body
+                    .as_deref()
+                    .map(|body| String::from_utf8_lossy(body.as_ref()));
+            }
+        }
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,
@@ -516,9 +585,9 @@ fn emit_staged_subresource_response_started(
                 timestamp,
                 request.document_url(),
                 &redirect.to_url,
-                request.method(),
-                request.request_body(),
-                request.request_headers(),
+                method,
+                request_body.as_deref(),
+                request_headers.as_ref(),
                 resource_type,
                 request.request_initiator_type(),
                 Some((
@@ -1041,8 +1110,8 @@ fn emit_websocket_network_delivery_record(
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        ScriptNetworkOutputItem, SubresourceBodyFinished, SubresourceNetworkRecord,
-        SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+        NavigationRedirect, ScriptNetworkOutputItem, SubresourceBodyFinished,
+        SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
         SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
         SubresourceResponseStarted,
     };
@@ -1078,7 +1147,9 @@ mod tests {
         }
     }
 
-    fn emitted_terminal_for(items: Vec<ScriptNetworkOutputItem>) -> crate::BackgroundProtocolEvent {
+    fn emitted_events_for(
+        items: Vec<ScriptNetworkOutputItem>,
+    ) -> Vec<crate::BackgroundProtocolEvent> {
         let mut queue = TargetNetworkOutputQueue::default();
         for item in items {
             queue.append_renderer_output_item_for_loader(&item, "LOADER-1");
@@ -1098,6 +1169,10 @@ mod tests {
         let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
         emit_network_delivery_snapshot(&mut conn, &mut events, &owner, "FRAME-1", 1.0, snapshot);
         events
+    }
+
+    fn emitted_terminal_for(items: Vec<ScriptNetworkOutputItem>) -> crate::BackgroundProtocolEvent {
+        emitted_events_for(items)
             .into_iter()
             .find(|event| event.protocol_method() == Some("Network.loadingFinished"))
             .expect("successful XHR should emit loadingFinished")
@@ -1123,6 +1198,306 @@ mod tests {
             Some(AutomationEvent::NetworkResponseCompleted(event))
                 if event.resource_type == Some(DevToolsNetworkResourceType::Xhr)
         ));
+    }
+
+    #[test]
+    fn complete_and_staged_redirects_report_effective_method_and_body_per_hop() {
+        let cases: &[(&str, &[u16], &[&str])] = &[
+            ("POST", &[301], &["POST", "GET"]),
+            ("POST", &[302], &["POST", "GET"]),
+            ("PATCH", &[303], &["PATCH", "GET"]),
+            ("HEAD", &[303], &["HEAD", "HEAD"]),
+            ("GET", &[302, 303], &["GET", "GET", "GET"]),
+            ("POST", &[307, 308], &["POST", "POST", "POST"]),
+            ("POST", &[307, 302, 308], &["POST", "POST", "GET", "GET"]),
+        ];
+        for &(method, statuses, expected) in cases {
+            let document_url = Url::parse("https://example.test/").unwrap();
+            let request_url = document_url.join("api-0").unwrap();
+            let final_url = document_url
+                .join(&format!("api-{}", statuses.len()))
+                .unwrap();
+            let body = (!matches!(method, "GET" | "HEAD")).then(|| "payload".to_owned());
+            let headers: Vec<(String, String)> = [
+                ("Content-Encoding", "gzip"),
+                ("content-language", "de"),
+                ("CONTENT-LENGTH", "7"),
+                ("Content-Location", "/payload"),
+                ("content-type", "text/plain"),
+                ("X-Keep", "value"),
+            ]
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
+            let redirects = statuses
+                .iter()
+                .enumerate()
+                .map(|(index, &status)| NavigationRedirect {
+                    source: moli_fetch::RedirectSource::Network,
+                    from_url: document_url.join(&format!("api-{index}")).unwrap(),
+                    to_url: document_url.join(&format!("api-{}", index + 1)).unwrap(),
+                    status,
+                    headers: Vec::new(),
+                    network_extra_info_available: false,
+                    request_extra_info: None,
+                    response_extra_info: None,
+                    redirect_has_extra_info: false,
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                })
+                .collect::<Vec<_>>();
+            let complete = SubresourceNetworkRecord::success_with_body(
+                Some("FRAME-1".to_owned()),
+                document_url.clone(),
+                request_url.clone(),
+                method.to_owned(),
+                headers.clone().into(),
+                body.clone(),
+                SubresourceResourceType::Xhr,
+                None,
+                redirects.clone(),
+                final_url.clone(),
+                200,
+                Vec::new(),
+                SubresourceResponseBody::from_bytes(b"complete".to_vec()),
+                Vec::new(),
+            );
+            let handle = SubresourceNetworkRequestHandle::new(1);
+            let request = SubresourceRequestStarted::new(
+                handle,
+                Some("FRAME-1".to_owned()),
+                document_url,
+                request_url,
+                method.to_owned(),
+                headers.clone().into(),
+                body.clone(),
+                SubresourceResourceType::Xhr,
+                SubresourceRequestInitiatorType::Script,
+                None,
+            );
+            let response = SubresourceResponseStarted::new(
+                handle,
+                redirects,
+                final_url,
+                200,
+                Vec::new(),
+                Vec::new(),
+            );
+            let finished = SubresourceBodyFinished::ready(
+                handle,
+                SubresourceResponseBody::from_bytes(b"staged".to_vec()),
+            );
+            let variants = [
+                vec![ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                    complete,
+                ))],
+                vec![
+                    ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+                    ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+                    ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(finished)),
+                ],
+            ];
+            for items in variants {
+                let requests = emitted_events_for(items)
+                    .into_iter()
+                    .filter_map(|event| {
+                        let (message, _) = event.into_parts();
+                        (message["method"] == "Network.requestWillBeSent").then_some(message)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(requests.len(), expected.len());
+                for (message, &expected_method) in requests.iter().zip(expected) {
+                    let request = &message["params"]["request"];
+                    assert_eq!(
+                        request["method"].as_str(),
+                        Some(expected_method),
+                        "{method} {statuses:?}"
+                    );
+                    let expected_body = body
+                        .as_deref()
+                        .filter(|_| !matches!(expected_method, "GET" | "HEAD"));
+                    assert_eq!(
+                        request["hasPostData"].as_bool(),
+                        Some(expected_body.is_some())
+                    );
+                    assert_eq!(
+                        request.get("postData").and_then(|value| value.as_str()),
+                        expected_body
+                    );
+                    let emitted_headers = request["headers"].as_object().expect("request headers");
+                    for (name, value) in &headers {
+                        let actual = emitted_headers
+                            .iter()
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                            .and_then(|(_, value)| value.as_str());
+                        let expected = (name == "X-Keep" || method == expected_method)
+                            .then_some(value.as_str());
+                        assert_eq!(actual, expected, "{method} {statuses:?} header {name}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn redirects_project_dispatched_interception_metadata_in_complete_and_staged_outputs() {
+        use axum::{Router, body::Bytes, http::StatusCode};
+        use moli_cookie_jar::new_shared_browser_cookie_store;
+        use moli_fetch::{FetchClient, FetchConfig, Request};
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let observations = received.clone();
+        let app = Router::new().fallback(move |request: axum::extract::Request| {
+            let observations = observations.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let body = axum::body::to_bytes(body, 1024).await.unwrap();
+                observations
+                    .lock()
+                    .push((parts.method, parts.headers, body));
+                match parts.uri.path() {
+                    "/api-0" => (StatusCode::TEMPORARY_REDIRECT, [("location", "/api-1")], ""),
+                    "/api-1" => (StatusCode::FOUND, [("location", "/api-2")], ""),
+                    "/api-2" => (StatusCode::PERMANENT_REDIRECT, [("location", "/api-3")], ""),
+                    _ => (StatusCode::OK, [("content-type", "text/plain")], "done"),
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let document_url =
+            Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let request_url = document_url.join("api-0").unwrap();
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let response = client
+            .fetch(
+                Request::new(
+                    "POST",
+                    request_url.as_str(),
+                    Some("overridden".into()),
+                    vec![
+                        ("X-Once".into(), "temporary".into()),
+                        ("Content-Type".into(), "application/json".into()),
+                    ],
+                )
+                .unwrap()
+                .with_redirect_headers(Some(
+                    vec![
+                        ("X-Persistent".into(), "restored".into()),
+                        ("Content-Type".into(), "text/plain".into()),
+                    ]
+                    .into(),
+                )),
+            )
+            .await
+            .unwrap();
+        assert!(client.shutdown().is_clean());
+        server.abort();
+        let requests = received.lock();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(method, _, _)| method.as_str())
+                .collect::<Vec<_>>(),
+            ["POST", "POST", "GET", "GET"]
+        );
+        assert_eq!(requests[1].2, Bytes::from_static(b"overridden"));
+        assert!(requests[2].2.is_empty());
+        assert!(!requests[1].1.contains_key("x-once"));
+        assert_eq!(requests[1].1["x-persistent"], "restored");
+        assert_eq!(requests[1].1["content-type"], "text/plain");
+        assert!(!requests[2].1.contains_key("content-type"));
+        let response: moli_core::page::NavigationResponse = response.into();
+        let handle = SubresourceNetworkRequestHandle::new(1);
+        let complete = SubresourceNetworkRecord::success_with_body(
+            None,
+            document_url.clone(),
+            request_url.clone(),
+            "PATCH".into(),
+            vec![("X-Once".into(), "temporary".into())].into(),
+            Some("original".into()),
+            SubresourceResourceType::Xhr,
+            None,
+            response.redirect_chain.clone(),
+            response.final_url.clone(),
+            response.status,
+            response.headers.clone(),
+            SubresourceResponseBody::from_bytes(b"done".to_vec()),
+            Vec::new(),
+        );
+        let started = SubresourceRequestStarted::new(
+            handle,
+            None,
+            document_url,
+            request_url,
+            "PATCH".into(),
+            vec![("X-Once".into(), "temporary".into())].into(),
+            Some("original".into()),
+            SubresourceResourceType::Xhr,
+            SubresourceRequestInitiatorType::Script,
+            None,
+        );
+        let response = SubresourceResponseStarted::new(
+            handle,
+            response.redirect_chain,
+            response.final_url,
+            response.status,
+            response.headers,
+            Vec::new(),
+        );
+        for items in [
+            vec![ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                complete,
+            ))],
+            vec![
+                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(started)),
+                ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+                ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(
+                    SubresourceBodyFinished::ready(
+                        handle,
+                        SubresourceResponseBody::from_bytes(b"done".to_vec()),
+                    ),
+                )),
+            ],
+        ] {
+            let events = emitted_events_for(items)
+                .into_iter()
+                .filter_map(|event| {
+                    let message = event.into_parts().0;
+                    (message["method"] == "Network.requestWillBeSent").then_some(message)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(events.len(), 4);
+            assert_eq!(
+                events[0]["params"]["request"]["method"], "PATCH",
+                "Started remains the pre-interception request"
+            );
+            for (event, (method, headers, body)) in events[1..].iter().zip(&requests[1..]) {
+                let request = &event["params"]["request"];
+                assert_eq!(request["method"], method.as_str());
+                assert_eq!(
+                    request.get("postData").and_then(|value| value.as_str()),
+                    (!body.is_empty()).then(|| std::str::from_utf8(body).unwrap())
+                );
+                let projected = request["headers"].as_object().unwrap();
+                for name in ["x-once", "x-persistent", "content-type"] {
+                    let value = projected
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .and_then(|(_, value)| value.as_str());
+                    assert_eq!(
+                        value,
+                        headers.get(name).map(|value| value.to_str().unwrap()),
+                        "header {name}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1155,6 +1530,97 @@ mod tests {
         assert!(
             context.prepared_outputs.is_some(),
             "Network backlog context should carry the prepared output slot instead of exposing it as a separate emitter parameter"
+        );
+    }
+
+    fn emitted_request_methods_for_redirects(
+        initial_method: &str,
+        redirect_statuses: &[u16],
+    ) -> Vec<String> {
+        let document_url = Url::parse("https://example.test/").unwrap();
+        let start_url = Url::parse("https://example.test/start").unwrap();
+        let mut from_url = start_url.clone();
+        let redirects = redirect_statuses
+            .iter()
+            .enumerate()
+            .map(|(index, status)| {
+                let to_url = Url::parse(&format!("https://example.test/redirect-{index}")).unwrap();
+                let redirect = moli_core::page::NavigationRedirect {
+                    source: moli_fetch::RedirectSource::Network,
+                    from_url: from_url.clone(),
+                    to_url: to_url.clone(),
+                    status: *status,
+                    headers: Vec::new(),
+                    network_extra_info_available: true,
+                    request_extra_info: None,
+                    response_extra_info: None,
+                    redirect_has_extra_info: true,
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                };
+                from_url = to_url;
+                redirect
+            })
+            .collect();
+        let handle = SubresourceNetworkRequestHandle::new(1);
+        let request = SubresourceRequestStarted::new(
+            handle,
+            Some("FRAME-1".to_owned()),
+            document_url,
+            start_url,
+            initial_method.to_owned(),
+            Vec::new().into(),
+            None,
+            SubresourceResourceType::Xhr,
+            SubresourceRequestInitiatorType::Script,
+            None,
+        );
+        let response = SubresourceResponseStarted::new(
+            handle,
+            redirects,
+            from_url,
+            200,
+            Vec::new(),
+            Vec::new(),
+        );
+        let body =
+            SubresourceBodyFinished::ready(handle, SubresourceResponseBody::from_bytes(Vec::new()));
+        let items = vec![
+            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
+        ];
+        emitted_events_for(items)
+            .into_iter()
+            .filter(|event| event.protocol_method() == Some("Network.requestWillBeSent"))
+            .map(|event| {
+                event.into_parts().0["params"]["request"]["method"]
+                    .as_str()
+                    .expect("request method")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn redirected_request_events_use_the_effective_method_for_each_hop() {
+        assert_eq!(
+            emitted_request_methods_for_redirects("POST", &[302, 307, 308]),
+            ["POST", "GET", "GET", "GET"]
+        );
+        assert_eq!(
+            emitted_request_methods_for_redirects("POST", &[303]),
+            ["POST", "GET"]
+        );
+        assert_eq!(
+            emitted_request_methods_for_redirects("HEAD", &[303]),
+            ["HEAD", "HEAD"]
+        );
+        assert_eq!(
+            emitted_request_methods_for_redirects("POST", &[307, 308]),
+            ["POST", "POST", "POST"]
         );
     }
 
