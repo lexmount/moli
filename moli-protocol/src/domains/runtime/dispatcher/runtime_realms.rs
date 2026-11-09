@@ -382,26 +382,4 @@ pub(super) fn devtools_script_exception_from_cdp(
     }
 }
 
-pub(super) fn cdp_remote_object_value(remote: &Value) -> Value {
-    if let Some(value) = remote.get("value") {
-        return value.clone();
-    }
-    if remote
-        .get("subtype")
-        .and_then(Value::as_str)
-        .is_some_and(|subtype| subtype == "null")
-    {
-        return Value::Null;
-    }
-    if let Some(unserializable) = remote.get("unserializableValue").and_then(Value::as_str) {
-        return Value::String(unserializable.to_owned());
-    }
-    match remote.get("type").and_then(Value::as_str) {
-        Some("undefined") => Value::Null,
-        Some("boolean") => Value::Bool(false),
-        Some("number") => json!(0),
-        Some("string") => Value::String(String::new()),
-        Some("object") | Some("function") => json!({}),
-        _ => Value::Null,
-    }
-}
+pub(super) use crate::automation::cdp_remote_object_value;
