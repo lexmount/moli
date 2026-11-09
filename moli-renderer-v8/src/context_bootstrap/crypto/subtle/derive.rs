@@ -229,26 +229,7 @@ pub(crate) fn kdf_derive_params<'s>(
     }
 }
 
-pub(crate) fn required_kdf_hash_algorithm(
-    scope: &mut v8::PinScope<'_, '_>,
-    algorithm_object: v8::Local<'_, v8::Object>,
-) -> Result<WebCryptoHashAlgorithm, WebCryptoRejection> {
-    // KDF params use the same required HashAlgorithmIdentifier contract as
-    // HMAC params: a missing or malformed `hash` member is a WebIDL TypeError,
-    // while a well-formed but unregistered digest name is NotSupportedError.
-    let Some(hash_value) = algorithm_object.get(scope, v8str(scope, "hash").into()) else {
-        return Err(WebCryptoRejection::Type);
-    };
-    if hash_value.is_undefined() {
-        return Err(WebCryptoRejection::Type);
-    }
-    let Some(hash_name) = crypto_algorithm_name(scope, hash_value) else {
-        return Err(WebCryptoRejection::Type);
-    };
-    hash_name
-        .parse::<WebCryptoHashAlgorithm>()
-        .map_err(|_| WebCryptoRejection::NotSupported)
-}
+pub(crate) use super::params::required_webcrypto_hash_parameter as required_kdf_hash_algorithm;
 
 pub(crate) fn required_pbkdf2_iterations(
     scope: &mut v8::PinScope<'_, '_>,
