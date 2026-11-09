@@ -1226,42 +1226,14 @@ fn finish_live_document_parser(
     stream: DocumentStream,
     owner: &mut impl LiveDocumentParserOwner,
 ) -> DocumentParserFinishSignals {
-    let crate::parser::ParserFinishDiscoverySignals {
-        parser_created_null_registry_elements,
-        discovered_modulepreload_link_candidates,
-        discovered_parser_meta_csp_candidates,
-        discovered_stylesheet_inputs,
-    } = stream.finish_with_runtime_dom_consumer(owner);
-    DocumentParserFinishSignals {
-        parser_created_null_registry_elements,
-        discovery_signals: LiveDocumentParserDiscoverySignals {
-            modulepreload_link_candidates: discovered_modulepreload_link_candidates,
-            parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
-            stylesheet_inputs: discovered_stylesheet_inputs,
-            ..LiveDocumentParserDiscoverySignals::default()
-        },
-    }
+    stream.finish_with_runtime_dom_consumer(owner).into()
 }
 
 fn finish_live_xml_document_parser(
     stream: XmlDocumentStream,
     owner: &mut impl LiveDocumentParserOwner,
 ) -> DocumentParserFinishSignals {
-    let crate::parser::ParserFinishDiscoverySignals {
-        parser_created_null_registry_elements,
-        discovered_modulepreload_link_candidates,
-        discovered_parser_meta_csp_candidates,
-        discovered_stylesheet_inputs,
-    } = stream.finish_with_runtime_dom_consumer(owner);
-    DocumentParserFinishSignals {
-        parser_created_null_registry_elements,
-        discovery_signals: LiveDocumentParserDiscoverySignals {
-            modulepreload_link_candidates: discovered_modulepreload_link_candidates,
-            parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
-            stylesheet_inputs: discovered_stylesheet_inputs,
-            ..LiveDocumentParserDiscoverySignals::default()
-        },
-    }
+    stream.finish_with_runtime_dom_consumer(owner).into()
 }
 
 fn unwrap_exclusive_parser_stream(stream: DocumentParserStreamHandle) -> DocumentStream {
@@ -1278,6 +1250,26 @@ fn unwrap_exclusive_xml_parser_stream(stream: XmlDocumentParserStreamHandle) -> 
             panic!("live XML parser session must not retain cloned stream handles at finish")
         })
         .into_inner()
+}
+
+impl From<crate::parser::ParserFinishDiscoverySignals> for DocumentParserFinishSignals {
+    fn from(signals: crate::parser::ParserFinishDiscoverySignals) -> Self {
+        let crate::parser::ParserFinishDiscoverySignals {
+            parser_created_null_registry_elements,
+            discovered_modulepreload_link_candidates,
+            discovered_parser_meta_csp_candidates,
+            discovered_stylesheet_inputs,
+        } = signals;
+        Self {
+            parser_created_null_registry_elements,
+            discovery_signals: LiveDocumentParserDiscoverySignals {
+                modulepreload_link_candidates: discovered_modulepreload_link_candidates,
+                parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
+                stylesheet_inputs: discovered_stylesheet_inputs,
+                ..LiveDocumentParserDiscoverySignals::default()
+            },
+        }
+    }
 }
 
 #[cfg(test)]
