@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     BrowserInstanceControl,
@@ -16,10 +16,33 @@ pub(crate) struct CdpOwnerActorLifecycle {
     pub(crate) instance_control: BrowserInstanceControl,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct CdpFrontendControlState {
     next_frontend_id: Rc<Cell<u64>>,
     target_control: CdpFrontendTargetControl,
+    pending_frontend_detaches: watch::Sender<usize>,
+}
+
+impl Default for CdpFrontendControlState {
+    fn default() -> Self {
+        Self {
+            next_frontend_id: Rc::default(),
+            target_control: CdpFrontendTargetControl::default(),
+            pending_frontend_detaches: watch::channel(0).0,
+        }
+    }
+}
+
+struct PendingFrontendDetach(watch::Sender<usize>);
+
+impl Drop for PendingFrontendDetach {
+    fn drop(&mut self) {
+        self.0.send_modify(|pending| {
+            *pending = pending
+                .checked_sub(1)
+                .expect("balanced frontend detach work");
+        });
+    }
 }
 
 impl CdpFrontendControlState {
@@ -30,7 +53,42 @@ impl CdpFrontendControlState {
         }
     }
 
-    pub(super) async fn handle_request(
+    // Register cleanup before the actor spawns the future, so a later attach
+    // cannot overtake disposal of the previous frontend's session contexts.
+    pub(super) fn handle_request(
+        self,
+        request: CdpFrontendControlRequest,
+        frontend_router: CdpFrontendRouter,
+    ) -> impl std::future::Future<Output = ()> {
+        let pending_detach = matches!(
+            &request,
+            CdpFrontendControlRequest::DetachBrowser { .. }
+                | CdpFrontendControlRequest::DetachTarget { .. }
+        )
+        .then(|| {
+            self.pending_frontend_detaches.send_modify(|pending| {
+                *pending = pending
+                    .checked_add(1)
+                    .expect("frontend detach work overflow");
+            });
+            PendingFrontendDetach(self.pending_frontend_detaches.clone())
+        });
+        let pending_detaches = matches!(
+            &request,
+            CdpFrontendControlRequest::AttachBrowser { .. }
+                | CdpFrontendControlRequest::AttachTarget { .. }
+        )
+        .then(|| self.pending_frontend_detaches.subscribe());
+        async move {
+            if let Some(mut pending) = pending_detaches {
+                let _ = pending.wait_for(|count| *count == 0).await;
+            }
+            self.handle_request_inner(request, frontend_router).await;
+            drop(pending_detach);
+        }
+    }
+
+    async fn handle_request_inner(
         self,
         request: CdpFrontendControlRequest,
         frontend_router: CdpFrontendRouter,
