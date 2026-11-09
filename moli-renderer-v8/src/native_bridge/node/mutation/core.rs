@@ -415,14 +415,7 @@ fn node_move_before_after_argument_validation(
     }
 }
 
-fn node_move_before_is_valid_parent(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    runtime.dom_host().node(handle).is_some_and(|node| {
-        matches!(
-            node.node_type(),
-            NodeType::Document | NodeType::DocumentFragment | NodeType::Element
-        )
-    })
-}
+use self::node_can_contain_children as node_move_before_is_valid_parent;
 
 fn node_move_before_is_valid_child(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
