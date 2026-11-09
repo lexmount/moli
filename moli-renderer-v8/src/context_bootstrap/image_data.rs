@@ -383,17 +383,7 @@ fn image_data_dimension_from_object_slot<'s>(
     Some(value as u32)
 }
 
-fn image_data_string_from_object_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> Option<String> {
-    get_private_value(scope, object, slot).and_then(|value| {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-    })
-}
+use crate::util::private_string_property as image_data_string_from_object_slot;
 
 pub(super) fn image_data_bytes_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
