@@ -182,21 +182,7 @@ fn indexed_db_private_slot_fallback_allowed(slot: &str) -> bool {
     )
 }
 
-fn define_non_enumerable_value_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    debug_assert!(is_indexed_db_private_slot(key));
-    if set_indexed_db_typed_slot_value(scope, object, key, value) {
-        return;
-    }
-    if !indexed_db_private_slot_fallback_allowed(key) {
-        return;
-    }
-    set_private_value(scope, object, key, value);
-}
+use self::set_indexed_db_slot_value as define_non_enumerable_value_property;
 
 fn define_non_enumerable_bool_property(
     scope: &mut v8::PinScope<'_, '_>,
