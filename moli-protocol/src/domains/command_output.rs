@@ -1968,7 +1968,7 @@ fn service_worker_log_entry_json(entry: RuntimeConsoleEvent) -> Value {
     payload
 }
 
-fn client_window_info_json(window: crate::automation::DevToolsClientWindowInfo) -> Value {
+pub fn client_window_info_json(window: crate::automation::DevToolsClientWindowInfo) -> Value {
     json!({
         "clientWindow": window.client_window.into_string(),
         "active": window.active,
