@@ -768,8 +768,10 @@ impl ChildBrowsingContextEntry {
         replace_current: bool,
     ) {
         if url.scheme() == "javascript" {
-            self.apply_javascript_url_navigation_to_entry_seed();
-        } else if replace_current {
+            // A script result decides whether a Document will be replaced.
+            return;
+        }
+        if replace_current {
             self.replace_navigation_in_entry_seed(url);
         } else {
             self.apply_navigation_to_entry_seed(url);

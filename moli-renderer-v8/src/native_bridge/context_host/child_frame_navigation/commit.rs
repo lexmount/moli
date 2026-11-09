@@ -332,11 +332,11 @@ impl JsContextHost {
                 .dom_host()
                 .node(handle)
                 .is_some_and(|node| node.flags().parser_created());
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+        if !is_javascript_attribute_target
+            && let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
+        {
             if is_attribute_about_blank_noop {
                 entry.clear_navigation_activation();
-            } else if is_javascript_attribute_target {
-                entry.apply_javascript_url_navigation_to_entry_seed();
             } else if is_initial_about_blank_commit {
                 entry.apply_initial_attribute_target_navigation_entry(&url);
             } else if is_initial_attribute_target_seed {
@@ -705,6 +705,10 @@ impl JsContextHost {
                     owner_transition: None,
                 };
             };
+            // Script can synchronously change history before returning. Replace
+            // the latest committed entry only after accepting its string result.
+            entry.restore_navigation_entry_seed_from_committed();
+            entry.apply_javascript_url_navigation_to_entry_seed();
             entry.commit_new_child_document(
                 ChildBrowsingContextBootstrap::Url(url),
                 Some(&snapshot),
