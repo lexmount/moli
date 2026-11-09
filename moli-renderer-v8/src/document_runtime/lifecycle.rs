@@ -166,6 +166,7 @@ impl DocumentRuntime {
         )
         .with_interception(self.stylesheet_lifecycle.interception_context.clone(), None)
         .with_document_referrer_policy(self.current_document_referrer_policy())
+        .with_document_character_set(Some(self.document_character_set().to_owned()))
     }
 
     pub(super) fn stylesheet_fetcher_for_owner(
@@ -219,14 +220,18 @@ impl DocumentRuntime {
                 .and_then(|environment| environment.frame_id),
         )
         .with_request_initiator_type(request_initiator_type)
-        .with_document_referrer_policy(
+        .with_document_referrer_policy(host.dom_host().owner_document_handle(owner).and_then(
+            |document| {
+                crate::context_bootstrap::document_referrer_policy_for_native_document(
+                    host, document,
+                )
+            },
+        ))
+        .with_document_character_set(
             host.dom_host()
                 .owner_document_handle(owner)
-                .and_then(|document| {
-                    crate::context_bootstrap::document_referrer_policy_for_native_document(
-                        host, document,
-                    )
-                }),
+                .and_then(|document| host.dom_host().document_character_set_for_handle(document))
+                .map(str::to_owned),
         )
     }
 
@@ -246,6 +251,7 @@ impl DocumentRuntime {
         )
         .with_interception(self.stylesheet_lifecycle.interception_context.clone(), None)
         .with_document_referrer_policy(self.current_document_referrer_policy())
+        .with_document_character_set(Some(self.document_character_set().to_owned()))
     }
 
     fn stylesheet_service_worker_fetch_context(

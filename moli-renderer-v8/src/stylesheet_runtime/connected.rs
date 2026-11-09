@@ -184,14 +184,6 @@ impl PreparedStylesheetOwnerRuntimeChange {
 }
 
 impl PreparedConnectedStyleLoad {
-    pub(in crate::document_runtime) fn set_request_source(
-        &mut self,
-        source: ConnectedStyleRequestSource,
-    ) {
-        self.csp_source_location = source.csp_source_location;
-        self.resource_timing_initiator = source.resource_timing_initiator;
-    }
-
     fn new(
         owner: DomHandle,
         csp_blocked: bool,
@@ -303,43 +295,6 @@ impl DocumentRuntime {
             load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
         }
         prepared
-    }
-
-    pub(in crate::document_runtime) fn capture_connected_style_request_source(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host: &mut PageScriptHost,
-        owner: DomHandle,
-    ) -> ConnectedStyleRequestSource {
-        let document_url = self
-            .dom_host
-            .owner_document_handle(owner)
-            .and_then(|document| self.dom_host.document_url_for_handle(document))
-            .cloned();
-        let resource_timing_initiator = Some(
-            crate::context_bootstrap::ResourceTimingInitiator::capture_window(
-                scope,
-                host,
-                document_url.as_ref(),
-            ),
-        );
-        let modulepreload = self
-            .dom_host
-            .node(owner)
-            .and_then(Node::as_element)
-            .filter(|element| element.is_html_element("link"))
-            .and_then(|element| element.attribute("rel"))
-            .is_some_and(|rel| link_rel_includes_token(rel, "modulepreload"));
-        let csp_source_location = (modulepreload
-            && host
-                .owner_dispatch_scope_for_node(owner)
-                .and_then(|owner| host.document_connect_policy_snapshot_for_owner(owner))
-                .is_some_and(|policy| policy.has_policies()))
-        .then(|| ContentSecurityPolicySourceLocation::capture(scope));
-        ConnectedStyleRequestSource {
-            csp_source_location,
-            resource_timing_initiator,
-        }
     }
 
     pub(crate) fn start_connected_modulepreloads_in_current_scope(
@@ -1585,7 +1540,12 @@ impl DocumentRuntime {
     ) {
         let handle = source.owner();
         let roots = self.connected_style_import_roots(&source, host_ptr);
-        let urls = match connected_style_import_readiness(urls.clone()) {
+        let environment = self
+            .dom_host
+            .owner_document_handle(handle)
+            .and_then(|document| self.dom_host.document_character_set_for_handle(document))
+            .map(str::to_owned);
+        let urls = match connected_style_import_readiness(urls.clone(), environment.as_deref()) {
             ConnectedStyleImportReadiness::Ready(mut successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {
@@ -1725,7 +1685,16 @@ impl DocumentRuntime {
                 )
         });
         let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_resource_url);
-        match connected_style_import_readiness(urls) {
+        let options = stylesheet.import_options();
+        let environment = options
+            .as_ref()
+            .and_then(StylesheetFetchOptions::environment_encoding)
+            .or_else(|| {
+                self.dom_host
+                    .owner_document_handle(owner)
+                    .and_then(|document| self.dom_host.document_character_set_for_handle(document))
+            });
+        match connected_style_import_readiness(urls, environment) {
             ConnectedStyleImportReadiness::Ready(_) => {
                 let _ = unsafe { &mut *host_ptr }
                     .install_and_refresh_live_stylesheet_import_graph(root, &[]);
@@ -3950,7 +3919,7 @@ mod tests {
         let stylesheet_url = Url::parse("data:/,@import url('x/');").unwrap();
 
         assert_eq!(
-            data_stylesheet_import_readiness(&stylesheet_url),
+            data_stylesheet_import_readiness(&stylesheet_url, None),
             DataStylesheetImportReadiness::Imports(vec![
                 Url::parse("data:/,@import%20url('x/x/").unwrap()
             ])

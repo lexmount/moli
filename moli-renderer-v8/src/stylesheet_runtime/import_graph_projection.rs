@@ -81,8 +81,9 @@ pub(crate) fn live_stylesheet_import_responses(
                         result.request_url().clone()
                     }
                 },
-                css_text: ready_response
-                    .map(|response| response.body_text().to_owned())
+                css_text: terminal
+                    .stylesheet_text()
+                    .map(str::to_owned)
                     .unwrap_or_default(),
                 parsed_stylesheet: result.parsed_stylesheet().cloned(),
                 successful: ready_response.is_some(),
