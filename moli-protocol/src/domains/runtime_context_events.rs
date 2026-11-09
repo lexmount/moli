@@ -44,35 +44,19 @@ pub(crate) fn runtime_context_protocol_event_from_restore_event(
     event: RuntimeContextRestoreEvent,
 ) -> RuntimeContextProtocolEvent {
     match event {
-        RuntimeContextRestoreEvent::Created(event) => RuntimeContextProtocolEvent::Created(
-            runtime_context_created_event_from_restore_event(event),
-        ),
-        RuntimeContextRestoreEvent::Destroyed(event) => RuntimeContextProtocolEvent::Destroyed(
-            runtime_context_destroyed_event_from_restore_event(event),
-        ),
+        RuntimeContextRestoreEvent::Created(event) => {
+            RuntimeContextProtocolEvent::Created(runtime_context_event_from_restore_event(event))
+        }
+        RuntimeContextRestoreEvent::Destroyed(event) => {
+            RuntimeContextProtocolEvent::Destroyed(runtime_context_event_from_restore_event(event))
+        }
         RuntimeContextRestoreEvent::Cleared(event) => RuntimeContextProtocolEvent::Cleared(
             runtime_contexts_cleared_event_from_restore_event(event),
         ),
     }
 }
 
-fn runtime_context_created_event_from_restore_event(
-    event: RuntimeExecutionContextRestoreEvent,
-) -> RuntimeExecutionContextEvent {
-    RuntimeExecutionContextEvent {
-        target_id: None,
-        context_id: event.context_id,
-        realm_id: event.realm_id.as_deref().map(DevToolsRealmId::from),
-        frame_id: event.frame_id.as_deref().map(DevToolsFrameId::from),
-        origin: event.origin,
-        name: event.name,
-        is_default: event.is_default,
-        context_type: event.context_type,
-        grant_universal_access: event.grant_universal_access,
-    }
-}
-
-fn runtime_context_destroyed_event_from_restore_event(
+fn runtime_context_event_from_restore_event(
     event: RuntimeExecutionContextRestoreEvent,
 ) -> RuntimeExecutionContextEvent {
     RuntimeExecutionContextEvent {
