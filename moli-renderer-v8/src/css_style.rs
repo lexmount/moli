@@ -816,7 +816,7 @@ fn cssom_declaration_value_is_unitless_zero(value: &str) -> bool {
     moli_css_parse::normalize_cssom_component_value_serialization(value).as_deref() == Some("0")
 }
 
-pub(crate) fn normalize_cssom_flex_basis_value(value: &str) -> Option<String> {
+pub(crate) fn normalize_cssom_flex_component_value(value: &str) -> Option<String> {
     let serialized = moli_css_parse::normalize_cssom_component_value_serialization(value)?;
     if serialized == "0" {
         Some("0px".to_owned())
@@ -825,14 +825,9 @@ pub(crate) fn normalize_cssom_flex_basis_value(value: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn normalize_cssom_flex_shorthand_value(value: &str) -> Option<String> {
-    let serialized = moli_css_parse::normalize_cssom_component_value_serialization(value)?;
-    if serialized == "0" {
-        Some("0px".to_owned())
-    } else {
-        Some(serialized)
-    }
-}
+pub(crate) use self::normalize_cssom_flex_component_value as normalize_cssom_flex_basis_value;
+
+pub(crate) use self::normalize_cssom_flex_component_value as normalize_cssom_flex_shorthand_value;
 
 /// Splits top-level component values for box-like CSSOM reconstruction. Validity
 /// for the shorthand or its longhands must come from Stylo/PDB.
