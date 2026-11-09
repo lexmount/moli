@@ -8,7 +8,7 @@ use super::*;
 use crate::live_stylesheet::import_url_identity;
 use crate::stylesheet_blocking::{StylesheetFetchOptions, StylesheetFetcher};
 use futures_util::future::join_all;
-use moli_encoding::decode_text_for_legacy_web;
+use moli_encoding::decode_css_stylesheet;
 use moli_web_mime::{data_url_body_and_mime_type, mime_charset};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +84,8 @@ pub(crate) fn stylesheet_import_options(
                 document_options
                     .document_referrer_policy()
                     .map(str::to_owned),
-            ),
+            )
+            .with_environment_encoding(terminal.stylesheet_encoding().map(str::to_owned)),
     )
 }
 
@@ -94,7 +95,8 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
     urls: Vec<Url>,
     options: StylesheetFetchOptions,
 ) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
-    let urls = match connected_style_import_readiness(urls) {
+    let options = stylesheet_fetcher.prepare_stylesheet_fetch_options(options);
+    let urls = match connected_style_import_readiness(urls, options.environment_encoding()) {
         ConnectedStyleImportReadiness::Ready(successful) => {
             return crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(
                 successful,
@@ -119,16 +121,19 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
                 network_requests.push(request);
                 continue;
             }
-            match data_stylesheet_import_readiness(&request.url) {
-                DataStylesheetImportReadiness::NoImports => {}
-                DataStylesheetImportReadiness::Failed => successful = false,
-                DataStylesheetImportReadiness::Imports(urls) => {
+            match decoded_data_stylesheet_imports(
+                &request.url,
+                request.options.environment_encoding(),
+            ) {
+                None => successful = false,
+                Some((urls, encoding)) => {
                     let options = StylesheetFetchOptions::for_import(
                         request.url,
                         document_options
                             .document_referrer_policy()
                             .map(str::to_owned),
-                    );
+                    )
+                    .with_environment_encoding(Some(encoding.to_owned()));
                     import_graph.extend(urls, &options);
                 }
             }
@@ -154,12 +159,15 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
             let import_options = stylesheet_import_options(&terminal, &document_options);
             if let Some(response) = terminal.ready_response() {
                 let nested_urls = crate::style_engine::stylesheet_top_level_import_urls(
-                    response.body_text(),
+                    terminal
+                        .stylesheet_text()
+                        .expect("ready CSS has decoded text"),
                     &response.final_url,
                     false,
                 )
                 .unwrap_or_default();
-                match connected_style_import_readiness(nested_urls) {
+                match connected_style_import_readiness(nested_urls, terminal.stylesheet_encoding())
+                {
                     ConnectedStyleImportReadiness::Ready(nested_successful) => {
                         successful &= nested_successful;
                     }
@@ -188,43 +196,56 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
 
 pub(in crate::document_runtime) fn data_stylesheet_import_readiness(
     stylesheet_url: &Url,
+    environment_encoding: Option<&str>,
 ) -> DataStylesheetImportReadiness {
     if stylesheet_url.scheme() != "data" {
         return DataStylesheetImportReadiness::NoImports;
     }
-    if stylesheet_url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES {
-        return DataStylesheetImportReadiness::Failed;
+    match decoded_data_stylesheet_imports(stylesheet_url, environment_encoding) {
+        None => DataStylesheetImportReadiness::Failed,
+        Some((urls, _)) if urls.is_empty() => DataStylesheetImportReadiness::NoImports,
+        Some((urls, _)) => DataStylesheetImportReadiness::Imports(urls),
     }
-    let Some((body, mime_type)) = data_url_body_and_mime_type(stylesheet_url.as_str()) else {
-        return DataStylesheetImportReadiness::Failed;
-    };
+}
+
+fn decoded_data_stylesheet_imports(
+    stylesheet_url: &Url,
+    environment_encoding: Option<&str>,
+) -> Option<(Vec<Url>, &'static str)> {
+    if stylesheet_url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES {
+        return None;
+    }
+    let (body, mime_type) = data_url_body_and_mime_type(stylesheet_url.as_str())?;
     // Chromium treats a data: URL selected by a stylesheet request as CSS even
     // when its media type is omitted or is not text/css. HTTP response MIME
     // enforcement belongs to the network stylesheet response validator and
     // must not be reused for this local-scheme path.
-    let css_text = decode_text_for_legacy_web(&body, mime_charset(&mime_type).as_deref());
-    let Ok(urls) =
+    let (css_text, encoding) = decode_css_stylesheet(
+        &body,
+        mime_charset(&mime_type).as_deref(),
+        environment_encoding,
+    );
+    let urls =
         crate::style_engine::stylesheet_top_level_import_urls(&css_text, stylesheet_url, true)
-    else {
-        return DataStylesheetImportReadiness::Failed;
-    };
-    if urls.is_empty() {
-        DataStylesheetImportReadiness::NoImports
-    } else {
-        DataStylesheetImportReadiness::Imports(urls)
-    }
+            .ok()?;
+    Some((urls, encoding))
 }
 
 pub(in crate::document_runtime) fn connected_style_import_readiness(
     mut urls: Vec<Url>,
+    environment_encoding: Option<&str>,
 ) -> ConnectedStyleImportReadiness {
     let mut roots = HashSet::new();
     urls.retain(|url| roots.insert(import_url_identity(url)));
     let mut has_network_imports = false;
-    let mut stack = urls.iter().cloned().collect::<VecDeque<_>>();
+    let mut stack = urls
+        .iter()
+        .cloned()
+        .map(|url| (url, environment_encoding))
+        .collect::<VecDeque<_>>();
     let mut seen = HashSet::new();
     let mut data_expansions = 0;
-    while let Some(url) = stack.pop_front() {
+    while let Some((url, environment_encoding)) = stack.pop_front() {
         if !seen.insert(import_url_identity(&url)) {
             continue;
         }
@@ -239,14 +260,13 @@ pub(in crate::document_runtime) fn connected_style_import_readiness(
         if data_expansions > MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS {
             return ConnectedStyleImportReadiness::Ready(false);
         }
-        match data_stylesheet_import_readiness(&url) {
-            DataStylesheetImportReadiness::NoImports => {}
-            DataStylesheetImportReadiness::Failed => {
+        match decoded_data_stylesheet_imports(&url, environment_encoding) {
+            None => {
                 return ConnectedStyleImportReadiness::Ready(false);
             }
-            DataStylesheetImportReadiness::Imports(imports) => {
+            Some((imports, encoding)) => {
                 for import in imports.into_iter().rev() {
-                    stack.push_front(import);
+                    stack.push_front((import, Some(encoding)));
                 }
             }
         }
@@ -270,7 +290,7 @@ mod tests {
             Url::parse("data:/,@import url('https://example.test/imported.css');").unwrap();
 
         assert_eq!(
-            data_stylesheet_import_readiness(&stylesheet_url),
+            data_stylesheet_import_readiness(&stylesheet_url, None),
             DataStylesheetImportReadiness::Imports(vec![
                 Url::parse("https://example.test/imported.css").unwrap()
             ])
@@ -283,7 +303,7 @@ mod tests {
         let second = Url::parse("https://example.test/second.css").unwrap();
 
         let ConnectedStyleImportReadiness::Pending(pending) =
-            connected_style_import_readiness(vec![first.clone(), second.clone()])
+            connected_style_import_readiness(vec![first.clone(), second.clone()], None)
         else {
             panic!("external imports must remain pending");
         };
@@ -297,7 +317,7 @@ mod tests {
         let duplicate = Url::parse("https://example.test/shared.css#second").unwrap();
 
         let ConnectedStyleImportReadiness::Pending(pending) =
-            connected_style_import_readiness(vec![first.clone(), duplicate])
+            connected_style_import_readiness(vec![first.clone(), duplicate], None)
         else {
             panic!("external import must remain pending");
         };
@@ -311,7 +331,7 @@ mod tests {
             Url::parse("data:text/css,@import 'https://example.test/imported.css';").unwrap();
         let direct = Url::parse("https://example.test/direct.css").unwrap();
         let ConnectedStyleImportReadiness::Pending(pending) =
-            connected_style_import_readiness(vec![local.clone(), direct.clone()])
+            connected_style_import_readiness(vec![local.clone(), direct.clone()], None)
         else {
             panic!("local sheets with external imports must remain pending");
         };

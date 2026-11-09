@@ -9,5 +9,6 @@ mod grouping_rules;
 mod rule_interfaces;
 mod rule_tree_scaling;
 mod style_rule_mutations;
+mod stylesheet_decoding;
 mod stylesheets_and_at_rules;
 mod typed_values;

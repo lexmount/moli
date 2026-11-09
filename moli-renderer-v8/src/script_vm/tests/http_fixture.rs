@@ -70,9 +70,9 @@ impl StaticHttpServer {
         }).await
     }
 
-    pub(super) async fn spawn_with_raw_responder(
+    pub(super) async fn spawn_with_raw_responder<B: AsRef<[u8]> + Send + 'static>(
         expected_requests: usize,
-        response: impl Fn(usize, &CapturedHttpRequest) -> String + Send + 'static,
+        response: impl Fn(usize, &CapturedHttpRequest) -> B + Send + 'static,
     ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -161,7 +161,7 @@ impl StaticHttpServer {
                 requests.push(captured);
 
                 socket
-                    .write_all(response.as_bytes())
+                    .write_all(response.as_ref())
                     .await
                     .expect("write static HTTP test response");
             }

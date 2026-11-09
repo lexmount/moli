@@ -297,12 +297,21 @@ impl JsContextHost {
                     )
                 });
         let stylesheet = self.live_stylesheets.get(root.stylesheet_id)?;
-        stylesheet.set_import_options(
-            stylesheet
-                .import_options()
-                .unwrap_or_default()
-                .with_document_referrer_policy(document_policy),
-        );
+        let mut options = stylesheet
+            .import_options()
+            .unwrap_or_default()
+            .with_document_referrer_policy(document_policy);
+        if options.environment_encoding().is_none() {
+            options = options.with_environment_encoding(
+                self.dom_host()
+                    .owner_document_handle(root.owner)
+                    .and_then(|document| {
+                        self.dom_host().document_character_set_for_handle(document)
+                    })
+                    .map(str::to_owned),
+            );
+        }
+        stylesheet.set_import_options(options);
         self.live_stylesheets.install_import_graph(
             root.stylesheet_id,
             root.contents_revision,

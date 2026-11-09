@@ -52,6 +52,13 @@ impl JsContextHost {
                             )
                         }),
                 )
+                .with_document_character_set(
+                    self.child_browsing_context_document_handle(child_handle)
+                        .and_then(|document| {
+                            self.dom_host().document_character_set_for_handle(document)
+                        })
+                        .map(str::to_owned),
+                )
             });
         let mut accepted = 0;
         for input in inputs {
@@ -141,7 +148,9 @@ impl JsContextHost {
                         .await;
                     let graph = if let Some(response) = terminal.ready_response() {
                         let urls = crate::style_engine::stylesheet_top_level_import_urls(
-                            response.body_text(),
+                            terminal
+                                .stylesheet_text()
+                                .expect("ready CSS has decoded text"),
                             &response.final_url,
                             false,
                         )
@@ -184,6 +193,9 @@ impl JsContextHost {
                         document_options
                             .document_referrer_policy()
                             .map(str::to_owned),
+                    )
+                    .with_environment_encoding(
+                        document_options.environment_encoding().map(str::to_owned),
                     );
                     Some(
                         crate::document_runtime::fetch_complete_stylesheet_import_graph(
@@ -287,8 +299,9 @@ impl JsContextHost {
             // Match main-document LinkStyle semantics: failure changes the link
             // event result, but still creates an empty owner CSSStyleSheet.
             let ready_response = terminal.ready_response();
-            let stylesheet_text = ready_response
-                .map(|response| response.body_text().to_owned())
+            let stylesheet_text = terminal
+                .stylesheet_text()
+                .map(str::to_owned)
                 .unwrap_or_default();
             let stylesheet_base_url = match terminal.physical() {
                 crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {
@@ -334,7 +347,7 @@ impl JsContextHost {
                 continue;
             };
             for resource in crate::css_resource_urls::stylesheet_load_blocking_font_resources(
-                response.body_text(),
+                &stylesheet_text,
                 &response.final_url,
                 optional_resource_fetch_mask,
             ) {

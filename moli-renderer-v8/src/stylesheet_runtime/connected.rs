@@ -1575,7 +1575,12 @@ impl DocumentRuntime {
     ) {
         let handle = source.owner();
         let roots = self.connected_style_import_roots(&source, host_ptr);
-        let urls = match connected_style_import_readiness(urls.clone()) {
+        let environment = self
+            .dom_host
+            .owner_document_handle(handle)
+            .and_then(|document| self.dom_host.document_character_set_for_handle(document))
+            .map(str::to_owned);
+        let urls = match connected_style_import_readiness(urls.clone(), environment.as_deref()) {
             ConnectedStyleImportReadiness::Ready(mut successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {
@@ -1712,7 +1717,16 @@ impl DocumentRuntime {
             return;
         }
         let root = ConnectedStyleImportRoot::new(owner, &stylesheet, root_is_external_resource);
-        match connected_style_import_readiness(urls) {
+        let options = stylesheet.import_options();
+        let environment = options
+            .as_ref()
+            .and_then(StylesheetFetchOptions::environment_encoding)
+            .or_else(|| {
+                self.dom_host
+                    .owner_document_handle(owner)
+                    .and_then(|document| self.dom_host.document_character_set_for_handle(document))
+            });
+        match connected_style_import_readiness(urls, environment) {
             ConnectedStyleImportReadiness::Ready(_) => {
                 if unsafe { &*host_ptr }
                     .install_live_stylesheet_import_graph(root.clone(), &[])
@@ -3924,7 +3938,7 @@ mod tests {
         let stylesheet_url = Url::parse("data:/,@import url('x/');").unwrap();
 
         assert_eq!(
-            data_stylesheet_import_readiness(&stylesheet_url),
+            data_stylesheet_import_readiness(&stylesheet_url, None),
             DataStylesheetImportReadiness::Imports(vec![
                 Url::parse("data:/,@import%20url('x/x/").unwrap()
             ])

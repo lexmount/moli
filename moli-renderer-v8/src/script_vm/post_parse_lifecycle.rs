@@ -2634,9 +2634,32 @@ impl ScriptVm {
                         )
                         .ok()
                     });
+                let environment_encoding = import_options
+                    .as_ref()
+                    .and_then(
+                        crate::stylesheet_blocking::StylesheetFetchOptions::environment_encoding,
+                    )
+                    .or_else(|| {
+                        source_owners
+                            .first()
+                            .and_then(|owner| host.dom_host().owner_document_handle(*owner))
+                            .and_then(|document| {
+                                host.dom_host().document_character_set_for_handle(document)
+                            })
+                    });
                 let (stylesheet_text, stylesheet_base_url) = validated_response
                     .as_ref()
-                    .map(|response| (response.body_text().to_owned(), response.final_url.clone()))
+                    .map(|response| {
+                        let protocol_encoding =
+                            moli_encoding::encoding_from_response_headers(&response.headers)
+                                .map(|encoding| encoding.name());
+                        let (text, _) = moli_encoding::decode_css_stylesheet(
+                            response.body_bytes(),
+                            protocol_encoding,
+                            environment_encoding,
+                        );
+                        (text, response.final_url.clone())
+                    })
                     .unwrap_or_else(|| {
                         let final_url = result
                             .as_ref()

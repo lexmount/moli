@@ -176,8 +176,9 @@ impl DocumentRuntime {
             // rejection stops before CSSStyleSheet creation; its link error and
             // load-delay settlement still follow the normal terminal path.
             let ready_response = terminal.ready_response();
-            let stylesheet_text = ready_response
-                .map(|response| response.body_text().to_owned())
+            let stylesheet_text = terminal
+                .stylesheet_text()
+                .map(str::to_owned)
                 .unwrap_or_default();
             let stylesheet_base_url = match terminal.physical() {
                 crate::stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) => {

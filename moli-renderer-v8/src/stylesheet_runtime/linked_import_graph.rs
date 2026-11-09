@@ -325,7 +325,10 @@ impl DocumentRuntime {
         if stylesheet_url.scheme() != "data" {
             return StylesheetCompletionState::Pending;
         }
-        match super::import_graph::data_stylesheet_import_readiness(stylesheet_url) {
+        match super::import_graph::data_stylesheet_import_readiness(
+            stylesheet_url,
+            fetch.options().environment_encoding(),
+        ) {
             super::import_graph::DataStylesheetImportReadiness::NoImports => {
                 StylesheetCompletionState::Succeeded
             }
@@ -346,7 +349,11 @@ impl DocumentRuntime {
     ) {
         let fetch = load.fetch().clone();
         let roots = self.linked_stylesheet_import_roots(&fetch);
-        let urls = match super::import_graph::connected_style_import_readiness(urls) {
+        let terminal = fetch.terminal();
+        let environment = terminal
+            .as_ref()
+            .and_then(|terminal| terminal.stylesheet_encoding());
+        let urls = match super::import_graph::connected_style_import_readiness(urls, environment) {
             super::import_graph::ConnectedStyleImportReadiness::Ready(graph_successful) => {
                 if !host_ptr.is_null() {
                     for root in &roots {

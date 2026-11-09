@@ -361,10 +361,10 @@ impl LiveStylesheetRegistry {
                 let response = if request.url.scheme() == "data" {
                     *data_expansions = data_expansions.saturating_add(1);
                     let decoded = (*data_expansions <= MAX_DATA_STYLESHEET_IMPORT_EXPANSIONS)
-                        .then(|| decode_data_stylesheet(&request.url))
+                        .then(|| decode_data_stylesheet(&request.url, request.import_options.as_ref().and_then(crate::stylesheet_blocking::StylesheetFetchOptions::environment_encoding)))
                         .flatten();
                     match decoded {
-                        Some(css_text) => LiveStylesheetImportResponse {
+                        Some((css_text, encoding)) => LiveStylesheetImportResponse {
                             request_url: request.url.clone(),
                             response_url: request.url.clone(),
                             css_text,
@@ -377,7 +377,8 @@ impl LiveStylesheetRegistry {
                                 )
                                 .with_document_referrer_policy(
                                     document_referrer_policy.map(str::to_owned),
-                                ),
+                                )
+                                .with_environment_encoding(Some(encoding.to_owned())),
                             ),
                         },
                         None => LiveStylesheetImportResponse {

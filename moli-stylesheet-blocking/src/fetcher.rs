@@ -28,6 +28,7 @@ struct StylesheetFetchOptionsData {
     integrity: Option<String>,
     nonce: Option<String>,
     charset: Option<String>,
+    environment_encoding: Option<String>,
     fetch_priority: Option<String>,
     quirks_mode_mime_compatibility: bool,
 }
@@ -57,7 +58,14 @@ impl StylesheetFetchOptions {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             nonce: normalize_preserved_value(nonce),
-            charset: normalize_token(charset),
+            charset: charset
+                .map(|value| {
+                    value
+                        .trim_matches(['\t', '\n', '\u{c}', '\r', ' '])
+                        .to_ascii_lowercase()
+                })
+                .filter(|value| !value.is_empty()),
+            environment_encoding: None,
             fetch_priority: normalize_token(fetch_priority),
             quirks_mode_mime_compatibility: false,
         }))
@@ -116,6 +124,18 @@ impl StylesheetFetchOptions {
         self.0.charset.as_deref()
     }
 
+    pub fn with_environment_encoding(mut self, encoding: Option<String>) -> Self {
+        Arc::make_mut(&mut self.0).environment_encoding = encoding
+            .as_deref()
+            .and_then(moli_encoding::encoding_for_label)
+            .map(|encoding| encoding.name().to_owned());
+        self
+    }
+
+    pub fn environment_encoding(&self) -> Option<&str> {
+        self.0.environment_encoding.as_deref()
+    }
+
     pub fn fetch_priority(&self) -> Option<&str> {
         self.0.fetch_priority.as_deref()
     }
@@ -170,6 +190,7 @@ pub struct StylesheetResourceKey {
     referrer_url: Option<Url>,
     integrity: Option<String>,
     charset: Option<String>,
+    environment_encoding: Option<String>,
     quirks_mode_mime_compatibility: bool,
 }
 
@@ -186,6 +207,12 @@ impl StylesheetResourceKey {
             referrer_url: options.referrer_url().cloned(),
             integrity: options.integrity().map(str::to_owned),
             charset: options.charset().map(str::to_owned),
+            // The default fallback and an explicit UTF-8 environment produce
+            // the same CSS source, preserving the ordinary resource identity.
+            environment_encoding: options
+                .environment_encoding()
+                .filter(|encoding| *encoding != "UTF-8")
+                .map(str::to_owned),
             quirks_mode_mime_compatibility: options.quirks_mode_mime_compatibility(),
         }
     }
@@ -232,6 +259,18 @@ impl StylesheetUsability {
 }
 
 #[derive(Debug, Clone)]
+struct DecodedStylesheet {
+    text: Arc<str>,
+    encoding: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct StylesheetDecoding {
+    environment_encoding: Option<String>,
+    decoded: OnceLock<DecodedStylesheet>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StylesheetFetchTerminal {
     completed_at: std::time::Instant,
     service_worker_response_url: Option<Url>,
@@ -241,6 +280,7 @@ pub struct StylesheetFetchTerminal {
     from_service_worker: bool,
     response_filter: Option<moli_fetch::FetchResponseFilter>,
     consumed_preload_error: bool,
+    decoding: Arc<StylesheetDecoding>,
 }
 
 impl StylesheetFetchTerminal {
@@ -258,6 +298,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            decoding: Arc::default(),
         }
     }
 
@@ -290,6 +331,7 @@ impl StylesheetFetchTerminal {
             service_worker_response_url: None,
             response_filter: None,
             consumed_preload_error: false,
+            decoding: Arc::default(),
         }
     }
 
@@ -372,6 +414,42 @@ impl StylesheetFetchTerminal {
             StylesheetPhysicalOutcome::Response(response) => Some(response),
             StylesheetPhysicalOutcome::NetworkError(_) => None,
         }
+    }
+
+    pub fn with_environment_encoding(mut self, encoding: Option<String>) -> Self {
+        if self.decoding.environment_encoding != encoding {
+            self.decoding = Arc::new(StylesheetDecoding {
+                environment_encoding: encoding,
+                decoded: OnceLock::new(),
+            });
+        }
+        self
+    }
+
+    fn decoded_stylesheet(&self) -> Option<&DecodedStylesheet> {
+        let response = self.ready_response()?;
+        Some(self.decoding.decoded.get_or_init(|| {
+            let protocol_encoding =
+                moli_encoding::encoding_from_response_headers(&response.headers)
+                    .map(|encoding| encoding.name());
+            let (text, encoding) = moli_encoding::decode_css_stylesheet(
+                response.body_bytes(),
+                protocol_encoding,
+                self.decoding.environment_encoding.as_deref(),
+            );
+            DecodedStylesheet {
+                text: text.into(),
+                encoding,
+            }
+        }))
+    }
+
+    pub fn stylesheet_text(&self) -> Option<&str> {
+        Some(&self.decoded_stylesheet()?.text)
+    }
+
+    pub fn stylesheet_encoding(&self) -> Option<&'static str> {
+        Some(self.decoded_stylesheet()?.encoding)
     }
 }
 
@@ -645,4 +723,61 @@ pub struct StylesheetFetchNetworkResult {
     pub owner_node_ids: Vec<NodeId>,
     pub start_unix_millis: f64,
     pub terminal: Arc<StylesheetFetchTerminal>,
+}
+
+#[cfg(test)]
+mod decoding_tests {
+    use super::*;
+
+    #[test]
+    fn stylesheet_decoding_preserves_physical_bytes_and_isolates_cloned_environments() {
+        let url = Url::parse("https://example.test/style.css").unwrap();
+        let head = NavigationResponse::from_text_body(url, 200, Vec::new(), String::new()).head();
+        let response = NavigationResponse::from_head_and_body(head, "�".to_owned(), vec![0x80]);
+        let terminal = StylesheetFetchTerminal::ready(response.clone(), true)
+            .with_environment_encoding(Some("windows-1252".to_owned()));
+        assert_eq!(terminal.stylesheet_text(), Some("€"));
+        assert_eq!(terminal.stylesheet_encoding(), Some("windows-1252"));
+        let other = terminal
+            .clone()
+            .with_environment_encoding(Some("UTF-8".to_owned()));
+        assert_eq!(other.stylesheet_text(), Some("�"));
+        assert_eq!(terminal.stylesheet_text(), Some("€"));
+        assert_eq!(terminal.ready_response().unwrap().body_text(), "�");
+        assert_eq!(terminal.ready_response().unwrap().body_bytes(), [0x80]);
+        let rejected = StylesheetFetchTerminal::integrity_failure(response, true, "integrity");
+        assert!(rejected.stylesheet_text().is_none());
+        assert!(rejected.stylesheet_encoding().is_none());
+        assert_eq!(
+            rejected.physical().as_result().unwrap().body_bytes(),
+            [0x80]
+        );
+    }
+
+    #[test]
+    fn stylesheet_resource_identity_distinguishes_legacy_encoding_without_splitting_utf8() {
+        let url = Url::parse("https://example.test/style.css").unwrap();
+        let default = StylesheetFetchOptions::default();
+        assert_eq!(
+            default.resource_key(url.clone()),
+            default
+                .clone()
+                .with_environment_encoding(Some("utf8".to_owned()))
+                .resource_key(url.clone()),
+        );
+        assert_ne!(
+            default.resource_key(url.clone()),
+            default
+                .with_environment_encoding(Some("windows-1252".to_owned()))
+                .resource_key(url),
+        );
+        let charset = |label| {
+            StylesheetFetchOptions::from_link_attributes(None, None, None, None, Some(label), None)
+        };
+        assert_eq!(charset(" \tSHIFT_JIS\n").charset(), Some("shift_jis"));
+        assert!(
+            moli_encoding::encoding_for_label(charset("\u{a0}shift_jis").charset().unwrap())
+                .is_none()
+        );
+    }
 }

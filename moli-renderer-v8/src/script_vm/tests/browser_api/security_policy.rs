@@ -1108,14 +1108,16 @@ async fn hidden_link_nonce_authorizes_stylesheet_csp_before_resource_admission()
     vm.document_runtime.prime_document_lifecycle_processing();
     let request_url =
         Url::parse("data:text/css,body%7Bcolor%3Agreen%7D").expect("stylesheet data URL");
-    let expected_options = crate::stylesheet_blocking::StylesheetFetchOptions::from_link_attributes(
-        None,
-        None,
-        None,
-        Some("allowed"),
-        None,
-        None,
-    );
+    let expected_options =
+        crate::stylesheet_blocking::StylesheetFetchOptions::from_link_attributes(
+            None,
+            None,
+            None,
+            Some("allowed"),
+            None,
+            None,
+        )
+        .with_environment_encoding(Some("UTF-8".to_owned()));
 
     assert!(
         !vm.document_runtime.stylesheet_owner_is_csp_blocked(owner),

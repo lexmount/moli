@@ -808,7 +808,10 @@ pub(crate) fn import_url_identity(url: &url::Url) -> url::Url {
     identity
 }
 
-fn decode_data_stylesheet(url: &url::Url) -> Option<String> {
+fn decode_data_stylesheet(
+    url: &url::Url,
+    environment_encoding: Option<&str>,
+) -> Option<(String, &'static str)> {
     if url.as_str().len() > MAX_DATA_STYLESHEET_IMPORT_URL_BYTES {
         return None;
     }
@@ -816,9 +819,10 @@ fn decode_data_stylesheet(url: &url::Url) -> Option<String> {
     // A data: URL selected by a stylesheet request is parsed as CSS by
     // Chromium regardless of its declared media type. Network stylesheet MIME
     // validation is intentionally kept out of this local-scheme decoder.
-    Some(moli_encoding::decode_text_for_legacy_web(
+    Some(moli_encoding::decode_css_stylesheet(
         &body,
         moli_web_mime::mime_charset(&mime_type).as_deref(),
+        environment_encoding,
     ))
 }
 
