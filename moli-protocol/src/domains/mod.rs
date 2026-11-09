@@ -4,6 +4,7 @@ pub(crate) mod activity;
 pub mod audits;
 pub(crate) mod audits_output_state;
 pub mod autofill;
+mod bidi_contexts;
 pub mod browser;
 pub(crate) mod command_output;
 pub mod console;
