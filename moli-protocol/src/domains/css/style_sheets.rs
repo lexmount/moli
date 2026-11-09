@@ -150,12 +150,4 @@ pub(super) fn style_sheet_header_value(frame_id: &str, header: &RendererStyleShe
     })
 }
 
-fn style_sheet_text_end_position(text: &str) -> (u32, u32) {
-    let end_line = text.lines().count().saturating_sub(1) as u32;
-    let end_column = text
-        .lines()
-        .last()
-        .map(|line| line.chars().count())
-        .unwrap_or(0) as u32;
-    (end_line, end_column)
-}
+use moli_css_parse::style_sheet_text_end_position;
