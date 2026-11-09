@@ -300,21 +300,7 @@ pub(crate) fn set_live_style_named_property_value<'s>(
     true
 }
 
-fn retain_unaffected_style_entries(
-    entries: &mut Vec<crate::css_style::CssStyleEntry>,
-    property: &str,
-    affected_names: &[String],
-) {
-    entries.retain(|entry| {
-        entry.name != property
-            && !affected_names.iter().any(|name| name == &entry.name)
-            && shorthand_longhands(&entry.name).is_none_or(|longhands| {
-                !affected_names
-                    .iter()
-                    .any(|name| longhands.iter().any(|longhand| longhand == name))
-            })
-    });
-}
+use super::methods::retain_unaffected_style_entries;
 
 fn css_style_index_property(raw_key: &str) -> Option<usize> {
     if raw_key.is_empty() || (raw_key.len() > 1 && raw_key.starts_with('0')) {
