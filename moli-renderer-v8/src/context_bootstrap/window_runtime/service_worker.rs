@@ -300,17 +300,6 @@ where
     }
 }
 
-#[derive(Default, webidl::WebIdlDictionary)]
-#[webidl(prefix = "BackgroundSyncOptions")]
-struct BackgroundSyncOptions {
-    #[webidl(
-        name = "minInterval",
-        converter = "enforce_range_unsigned_long_long",
-        default = 0
-    )]
-    min_interval: u64,
-}
-
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "RegistrationOptions")]
 struct ServiceWorkerRegistrationOptions {
@@ -1731,22 +1720,7 @@ fn service_worker_periodic_sync_manager_unregister_callback<'s>(
     let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
 
-fn service_worker_periodic_sync_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<BackgroundSyncOptions> {
-    match webidl::parse_dictionary::<BackgroundSyncOptions>(
-        scope,
-        value,
-        webidl::Context::argument("PeriodicSyncManager.register", 2),
-    ) {
-        Ok(options) => Some(options.unwrap_or_default()),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
+use crate::service_worker_api_values::service_worker_periodic_sync_options;
 
 fn service_worker_background_sync_permission_state(scope: &mut v8::PinScope<'_, '_>) -> String {
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -1803,16 +1777,7 @@ fn service_worker_navigation_preload_manager_scope_from_this(
     url::Url::parse(&scope_string).ok()
 }
 
-fn service_worker_navigation_preload_header_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<String, webidl::WebIdlError> {
-    let context = webidl::Context::argument("NavigationPreloadManager.setHeaderValue", 1);
-    if args.length() <= 0 {
-        return Err(webidl::WebIdlError::missing_required(context));
-    }
-    webidl::convert::<webidl::ByteString>(scope, args.get(0), context).map(Into::into)
-}
+use crate::service_worker_api_values::service_worker_navigation_preload_header_value;
 
 fn service_worker_navigation_preload_valid_header_value(value: &str) -> bool {
     value
