@@ -27,19 +27,7 @@ pub(in crate::native_bridge::document) fn object_node_type(
         .int32_value(scope)
 }
 
-pub(in crate::native_bridge::document) fn array_index_property_name(value: &str) -> Option<u32> {
-    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
-        return None;
-    }
-    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let index = value.parse::<u64>().ok()?;
-    if index >= u64::from(u32::MAX) {
-        return None;
-    }
-    u32::try_from(index).ok()
-}
+pub(in crate::native_bridge::document) use crate::native_bridge::collections::array_index_property_name;
 
 pub(in crate::native_bridge::document) fn object_is_shadow_root<'s>(
     scope: &mut v8::PinScope<'s, '_>,
