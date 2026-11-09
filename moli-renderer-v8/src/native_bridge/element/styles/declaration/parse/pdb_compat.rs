@@ -38,16 +38,7 @@ pub(super) fn inline_style_entry_is_pdb_storage_candidate(entry: &StyleEntry) ->
         && parse_style_property_entries_with_pdb(&entry.name, &value, entry.priority).is_some()
 }
 
-pub(super) fn pdb_mutation_value_for_style_entry(entry: &StyleEntry) -> std::borrow::Cow<'_, str> {
-    if entry.value.is_empty()
-        && moli_css_parse::is_cssom_custom_property_name(&canonical_style_property_name(
-            &entry.name,
-        ))
-    {
-        return std::borrow::Cow::Borrowed(" ");
-    }
-    std::borrow::Cow::Borrowed(&entry.value)
-}
+pub(super) use crate::css_style::pdb_mutation_value_for_style_entry;
 
 pub(crate) fn style_entry_is_pdb_supplemental_side_entry(entry: &StyleEntry) -> bool {
     let Some(parsed) = parse_pdb_supplemental_entries(&entry.name, &entry.value, entry.priority)

@@ -638,7 +638,9 @@ fn normalized_pdb_entries_for_style_entry(entry: &CssStyleEntry) -> Option<Vec<C
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn pdb_mutation_value_for_style_entry(entry: &CssStyleEntry) -> std::borrow::Cow<'_, str> {
+pub(crate) fn pdb_mutation_value_for_style_entry(
+    entry: &CssStyleEntry,
+) -> std::borrow::Cow<'_, str> {
     if entry.value.is_empty()
         && moli_css_parse::is_cssom_custom_property_name(&canonical_style_property_name(
             &entry.name,
