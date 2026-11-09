@@ -1775,7 +1775,7 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> OpfsResult<()> {
     Ok(())
 }
 
-fn remove_file_if_exists(path: &Path, operation: &'static str) -> OpfsResult<()> {
+pub(super) fn remove_file_if_exists(path: &Path, operation: &'static str) -> OpfsResult<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
