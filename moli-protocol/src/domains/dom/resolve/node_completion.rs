@@ -1451,7 +1451,7 @@ pub(super) fn complete_get_outer_html_node_reference_result(
     }
 }
 
-pub(super) fn complete_scroll_into_view_if_needed_object_reference(
+pub(super) fn complete_node_scroll_into_view(
     page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
@@ -1471,6 +1471,8 @@ pub(super) fn complete_scroll_into_view_if_needed_object_reference(
     }
     DomCommandTaskStep::Complete
 }
+
+pub(super) use self::complete_node_scroll_into_view as complete_scroll_into_view_if_needed_object_reference;
 
 pub(super) fn complete_scroll_into_view_if_needed_object_reference_result(
     page: &mut Page,
@@ -1479,26 +1481,7 @@ pub(super) fn complete_scroll_into_view_if_needed_object_reference_result(
     complete_scroll_into_view_result(page.finish_scroll_node_into_view_if_needed(completion))
 }
 
-pub(super) fn complete_renderer_node_scroll_into_view_if_needed(
-    page: &mut Page,
-    completion: CompletedPageCommand,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    match page.finish_scroll_node_into_view_if_needed(completion) {
-        Ok(RendererScrollIntoViewResult::ScrolledOrAlreadyVisible) => out.push_success(),
-        Ok(RendererScrollIntoViewResult::NodeNotFound) => {
-            out.push_error(-32000, "Could not find node with given id")
-        }
-        Ok(RendererScrollIntoViewResult::NodeDetached) => {
-            out.push_error(-32000, "Node is detached from document")
-        }
-        Ok(RendererScrollIntoViewResult::NodeDoesNotHaveLayoutObject) => {
-            out.push_error(-32000, "Node does not have a layout object")
-        }
-        Err(error) => out.push_error(-32000, format!("Could not scroll node into view: {error}")),
-    }
-    DomCommandTaskStep::Complete
-}
+pub(super) use self::complete_node_scroll_into_view as complete_renderer_node_scroll_into_view_if_needed;
 
 pub(super) fn complete_renderer_node_scroll_into_view_if_needed_result(
     page: &mut Page,
