@@ -1213,13 +1213,7 @@ async fn sleep_until_or_forever(deadline: Option<Instant>) {
     }
 }
 
-fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    }
-}
+use super::earliest_deadline;
 
 #[cfg(test)]
 mod tests {

@@ -854,6 +854,17 @@ pub(super) enum PageVmRuntimeExpressionAwaitAdvance {
     },
 }
 
+pub(super) fn earliest_deadline(
+    left: Option<std::time::Instant>,
+    right: Option<std::time::Instant>,
+) -> Option<std::time::Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
