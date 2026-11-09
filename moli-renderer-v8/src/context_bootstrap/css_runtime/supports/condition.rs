@@ -6,10 +6,58 @@ pub(crate) fn css_supports_condition_text(condition: &str) -> bool {
     if super::stylo_supports_condition_text(trimmed).is_some_and(|supported| supported) {
         return true;
     }
+    if let Some(result) = css_supports_font_feature_condition(trimmed) {
+        return result;
+    }
     if let Some(result) = css_supports_at_rule_condition(trimmed) {
         return result;
     }
     false
+}
+
+pub(super) fn css_supports_font_feature_condition(condition: &str) -> Option<bool> {
+    let input = condition;
+    let mut parser = cssparser::Parser::new(input);
+    let function = parser.expect_function().ok()?.to_ascii_lowercase();
+    if !matches!(function.as_str(), "font-format" | "font-tech") {
+        return None;
+    }
+    let result = parser.parse_nested_block(|nested| {
+        let ident = nested.expect_ident()?.clone();
+        nested.expect_exhausted()?;
+        Ok::<_, cssparser::ParseError<()>>(match function.as_str() {
+            "font-format" => supports_font_format_keyword(ident.as_ref()),
+            "font-tech" => supports_font_tech_keyword(ident.as_ref()),
+            _ => false,
+        })
+    });
+    if parser.expect_exhausted().is_err() {
+        return Some(false);
+    }
+    Some(result.unwrap_or(false))
+}
+
+fn supports_font_format_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword.to_ascii_lowercase().as_str(),
+        "collection" | "embedded-opentype" | "opentype" | "svg" | "truetype" | "woff" | "woff2"
+    )
+}
+
+fn supports_font_tech_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword.to_ascii_lowercase().as_str(),
+        "features-opentype"
+            | "features-aat"
+            | "features-graphite"
+            | "color-colrv0"
+            | "color-colrv1"
+            | "color-svg"
+            | "color-sbix"
+            | "color-cbdt"
+            | "variations"
+            | "palettes"
+    )
 }
 
 pub(super) fn css_supports_at_rule_condition(condition: &str) -> Option<bool> {
