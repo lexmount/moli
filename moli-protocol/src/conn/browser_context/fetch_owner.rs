@@ -1010,20 +1010,33 @@ impl CdpConnection {
             })
     }
 
-    fn record_pending_subresource_network_request_identity_for_owner(
+    fn record_pending_subresource_network_identity_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        pending: &PendingSubresourceFetchRequest,
+        network_request_handle: Option<moli_core::page::SubresourceNetworkRequestHandle>,
+        network_request_id: &str,
     ) {
-        let Some(handle) = pending.network_request_handle else {
+        let Some(handle) = network_request_handle else {
             return;
         };
         if let Some(runtime_slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
             runtime_slot.record_subresource_request_id_for_handle_if_absent(
                 handle,
-                pending.network_request_id.clone(),
+                network_request_id.to_owned(),
             );
         }
+    }
+
+    fn record_pending_subresource_network_request_identity_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        pending: &PendingSubresourceFetchRequest,
+    ) {
+        self.record_pending_subresource_network_identity_for_owner(
+            owner,
+            pending.network_request_handle,
+            &pending.network_request_id,
+        );
     }
 
     fn record_pending_subresource_auth_network_request_identity_for_owner(
@@ -1031,15 +1044,11 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchAuthRequest,
     ) {
-        let Some(handle) = pending.network_request_handle else {
-            return;
-        };
-        if let Some(runtime_slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
-            runtime_slot.record_subresource_request_id_for_handle_if_absent(
-                handle,
-                pending.network_request_id.clone(),
-            );
-        }
+        self.record_pending_subresource_network_identity_for_owner(
+            owner,
+            pending.network_request_handle,
+            &pending.network_request_id,
+        );
     }
 
     fn record_pending_subresource_response_network_request_identity_for_owner(
@@ -1047,15 +1056,11 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchResponseRequest,
     ) {
-        let Some(handle) = pending.network_request_handle else {
-            return;
-        };
-        if let Some(runtime_slot) = self.runtime_session_owner_slot_mut_for_owner(owner) {
-            runtime_slot.record_subresource_request_id_for_handle_if_absent(
-                handle,
-                pending.network_request_id.clone(),
-            );
-        }
+        self.record_pending_subresource_network_identity_for_owner(
+            owner,
+            pending.network_request_handle,
+            &pending.network_request_id,
+        );
     }
 
     pub(crate) fn start_enable_fetch_for_session_owner(
