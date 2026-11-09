@@ -222,27 +222,7 @@ pub(super) fn fetch_worker_import_source_blocking(
     })
 }
 
-fn report_service_worker_imported_script_loaded(
-    state: &Rc<RefCell<WorkerGlobalState>>,
-    resource: crate::worker::WorkerScriptResource,
-) {
-    let state = state.borrow();
-    let WorkerGlobalKind::Service {
-        registration_id,
-        version_id,
-        ..
-    } = &state.global_kind
-    else {
-        return;
-    };
-    let _ = state
-        .parent_tx
-        .send(WorkerToParentMessage::ServiceWorkerImportedScriptLoaded {
-            registration_id: *registration_id,
-            version_id: *version_id,
-            resource,
-        });
-}
+use crate::worker::script_loading::report_service_worker_script_resource as report_service_worker_imported_script_loaded;
 
 fn evaluate_worker_script(
     scope: &mut v8::PinScope<'_, '_>,
