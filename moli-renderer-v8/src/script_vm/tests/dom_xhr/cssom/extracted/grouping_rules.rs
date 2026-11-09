@@ -1,6 +1,87 @@
 use super::*;
 
 #[test]
+fn css_container_rule_getters_require_native_receivers_in_the_callee_realm() {
+    let mut vm = new_storage_html_test_vm("https://css-container-rule-receivers.test/");
+    let result = vm.eval(r#"
+(() => {
+  document.body.innerHTML = '<iframe></iframe>';
+  const other = document.querySelector('iframe').contentWindow;
+  const sheets = [new CSSStyleSheet(), new other.CSSStyleSheet()];
+  const rules = [];
+  const media = [];
+  const supports = [];
+  for (const sheet of sheets) {
+    sheet.replaceSync(`
+      @container cont (min-width: 100px) { @container (min-width: 200px) {} }
+      @container sidebar {}
+      @media all {}
+      @supports (display: grid) {}
+    `);
+    rules.push(sheet.cssRules[0], sheet.cssRules[0].cssRules[0], sheet.cssRules[1]);
+    media.push(sheet.cssRules[2]);
+    supports.push(sheet.cssRules[3]);
+  }
+  const expected = [
+    {containerName: 'cont', containerQuery: '(min-width: 100px)'},
+    {containerName: '', containerQuery: '(min-width: 200px)'},
+    {containerName: 'sidebar', containerQuery: ''}
+  ];
+  let checks = 0;
+  let traps = 0;
+  const failures = [];
+  const equal = (actual, expectedValue, label) => {
+    checks++;
+    if (actual !== expectedValue) failures.push({label, actual, expected: expectedValue});
+  };
+  const realms = [['main', window], ['child', other]];
+  const getters = realms.map(([label, realm]) => Object.keys(expected[0]).map(name =>
+    [label, realm, name, Object.getOwnPropertyDescriptor(realm.CSSContainerRule.prototype, name).get]));
+  const read = (phase) => {
+    for (const [label, , name, getter] of getters.flat()) {
+      for (let i = 0; i < rules.length; i++) {
+        let actual;
+        try { actual = Reflect.apply(getter, rules[i], []); }
+        catch (error) { actual = {error: String(error)}; }
+        equal(actual, expected[i % expected.length][name], phase + ':' + label + ':' + name + ':' + i);
+      }
+    }
+  };
+  read('live');
+  const handler = new Proxy({}, {get() { traps++; throw new Error('unexpected receiver trap'); }});
+  for (const [index, [label, realm]] of realms.entries()) {
+    const revoked = Proxy.revocable(rules[0], {}); revoked.revoke();
+    const forged = {get cssText() { traps++; throw new Error('unexpected rule lookup'); }};
+    const invalid = [
+      null, undefined, {}, [], realm.CSSContainerRule.prototype,
+      realm.CSSConditionRule.prototype, realm.CSSRule.prototype,
+      Object.create(rules[0]), Object.create(realm.CSSContainerRule.prototype),
+      ...media, ...supports, new Proxy(rules[0], handler), revoked.proxy, forged
+    ];
+    for (const [, , name, getter] of getters[index]) {
+      for (let i = 0; i < invalid.length; i++) {
+        let error;
+        try { Reflect.apply(getter, invalid[i], []); } catch (caught) { error = caught; }
+        equal(!!error && Object.getPrototypeOf(error) === realm.TypeError.prototype, true,
+          label + ':' + name + ':invalid-' + i);
+      }
+    }
+  }
+  while (sheets[0].cssRules.length) sheets[0].deleteRule(0);
+  sheets[1].replaceSync('');
+  read('detached');
+  for (const rule of rules) Object.setPrototypeOf(rule, null);
+  read('reprototyped');
+  equal(traps, 0, 'native receiver validation does not invoke author traps');
+  return JSON.stringify({checks, failures});
+})()
+"#).expect("CSSContainerRule receiver probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["checks"], 137, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[test]
 fn css_starting_style_rules_share_native_grouping_lifecycle_and_realms() {
     let mut vm = new_parsed_test_vm(
         "https://css-starting-style.test/",
