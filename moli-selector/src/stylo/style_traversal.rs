@@ -213,12 +213,33 @@ impl StyloDomStyleAdapter {
         else {
             return false;
         };
+        let case_insensitive = host
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| element.namespace() == "http://www.w3.org/1999/xhtml")
+            && host
+                .node(document)
+                .and_then(Node::as_document)
+                .is_some_and(|document| document.is_html_document());
         let name = LocalName::from(name);
+        let name_text: &str = name.as_ref();
+        let local_name = name_text.rsplit_once(':').map(|(_, local)| local);
         let references_attribute = |style: &Arc<ComputedValues>| {
             style
                 .attribute_references
                 .as_ref()
-                .is_some_and(|references| references.contains_key(&name))
+                .is_some_and(|references| {
+                    references.contains_key(&name)
+                        || references.keys().any(|reference| {
+                            let reference: &str = reference.as_ref();
+                            local_name.is_some_and(|local| reference == local)
+                                || (case_insensitive
+                                    && (reference.eq_ignore_ascii_case(name_text)
+                                        || local_name.is_some_and(|local| {
+                                            reference.eq_ignore_ascii_case(local)
+                                        })))
+                        })
+                })
         };
         data.styles.get_primary().is_some_and(references_attribute)
             || data
