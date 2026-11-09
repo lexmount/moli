@@ -445,15 +445,7 @@ fn classic_print_scale(scale: Option<&Value>) -> Result<Option<f64>, ClassicErro
 }
 
 fn optional_bool(params: &Value, field: &str) -> Result<Option<bool>, ClassicError> {
-    let Some(value) = params.get(field) else {
-        return Ok(None);
-    };
-    value.as_bool().map(Some).ok_or_else(|| {
-        ClassicError::new(
-            ClassicErrorCode::InvalidArgument,
-            format!("{field} must be a boolean"),
-        )
-    })
+    super::parsing::optional_bool_value(params.get(field), field)
 }
 
 fn classic_print_page_ranges(page_ranges: Option<&Value>) -> Result<Option<String>, ClassicError> {
