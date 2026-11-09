@@ -2338,8 +2338,20 @@ impl ScriptVm {
                     .is_some()
             });
             if !has_handler {
+                let had_pending_blocker = !self
+                    .document_runtime
+                    .parser_blocking_stylesheet_release_is_ready();
+                let document_owner = ready
+                    .document_owner()
+                    .or_else(|| unsafe { &*host_ptr }.current_main_document_task_owner());
                 self.document_runtime
                     .consume_pending_style_load(host_ptr, &ready);
+                self.document_runtime.finish_pending_style_load(
+                    host_ptr,
+                    &ready,
+                    document_owner,
+                    had_pending_blocker,
+                );
                 return true;
             }
         }
