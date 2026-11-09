@@ -10,20 +10,7 @@ pub(super) fn js_node_type(
         .int32_value(scope)
 }
 
-pub(super) fn js_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<String> {
-    let key = v8_string(scope, key)?;
-    let value = object.get(scope, key.into())?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-}
+pub(super) use crate::util::object_defined_string_property as js_string_property;
 
 pub(super) fn js_object_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
