@@ -696,9 +696,7 @@ pub(super) fn complete_service_worker_runtime_inspector_error(
     }
 }
 
-pub(super) fn shared_worker_runtime_error_plan(
-    message: impl std::fmt::Display,
-) -> CommandOutputPlan {
+pub(super) fn worker_runtime_error_plan(message: impl std::fmt::Display) -> CommandOutputPlan {
     let message = message.to_string();
     match message.as_str() {
         "Duplicate `id` in protocol request" => CommandOutputPlan::error(-32600, message),
@@ -710,19 +708,9 @@ pub(super) fn shared_worker_runtime_error_plan(
     }
 }
 
-pub(super) fn service_worker_runtime_error_plan(
-    message: impl std::fmt::Display,
-) -> CommandOutputPlan {
-    let message = message.to_string();
-    match message.as_str() {
-        "Duplicate `id` in protocol request" => CommandOutputPlan::error(-32600, message),
-        "UnknownSession" => CommandOutputPlan::error(-32001, "Unknown sessionId"),
-        "InvalidParams" => CommandOutputPlan::error(-32602, "InvalidParams"),
-        "UnknownMethod" => CommandOutputPlan::error(-32601, "UnknownMethod"),
-        "NoDocumentLoaded" => CommandOutputPlan::error(-32000, "NoDocumentLoaded"),
-        _ => CommandOutputPlan::error(-32000, message),
-    }
-}
+pub(super) use self::worker_runtime_error_plan as shared_worker_runtime_error_plan;
+
+pub(super) use self::worker_runtime_error_plan as service_worker_runtime_error_plan;
 
 pub(super) fn append_shared_worker_runtime_console_messages(
     conn: &mut CdpConnection,
