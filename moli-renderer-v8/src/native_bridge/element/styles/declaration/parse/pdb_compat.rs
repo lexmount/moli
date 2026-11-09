@@ -366,8 +366,12 @@ pub(super) fn cssom_style_property_query_uses_pdb(name: &str) -> bool {
         return true;
     }
     let is_longhand_query = affected_names.len() == 1 && affected_names[0] == name;
+    // Derive shorthand ownership from Stylo's metadata. Candidate selection
+    // still checks whether native or supplemental storage covers the query.
+    let is_native_shorthand =
+        !is_longhand_query && moli_css_parse::stylo_style_rule_property_name_is_enabled(&name);
     cssom_style_property_write_can_use_pdb_storage(&name, "") && is_longhand_query
-        || cssom_style_shorthand_query_uses_pdb(&name)
+        || is_native_shorthand
         || cssom_animation_property_query_uses_pdb(&name, is_longhand_query)
 }
 
@@ -381,48 +385,6 @@ pub(super) fn cssom_animation_property_query_uses_pdb(name: &str, is_longhand_qu
         || animation_shorthand_longhands()
             .iter()
             .any(|longhand| longhand == &name)
-}
-
-pub(super) fn cssom_style_shorthand_query_uses_pdb(name: &str) -> bool {
-    matches!(
-        name,
-        "background"
-            | "background-position"
-            | "border"
-            | "border-image"
-            | "border-color"
-            | "border-radius"
-            | "border-style"
-            | "border-top"
-            | "border-right"
-            | "border-bottom"
-            | "border-left"
-            | "border-width"
-            | "flex"
-            | "flex-flow"
-            | "gap"
-            | "grid-column"
-            | "list-style"
-            | "margin"
-            | "margin-block"
-            | "margin-inline"
-            | "mask"
-            | "outline"
-            | "overflow"
-            | "overscroll-behavior"
-            | "page-break-after"
-            | "page-break-before"
-            | "page-break-inside"
-            | "padding"
-            | "place-content"
-            | "text-decoration"
-            | "text-emphasis"
-            | "transition"
-            | "white-space"
-            | "font"
-            | "font-variant"
-            | "-webkit-text-stroke"
-    )
 }
 
 pub(super) fn cssom_style_property_write_requires_legacy_parser(name: &str, value: &str) -> bool {
@@ -635,38 +597,11 @@ pub(super) fn cssom_overflow_property_write_uses_pdb(name: &str) -> bool {
 }
 
 pub(super) fn cssom_border_property_write_uses_pdb(name: &str) -> bool {
-    matches!(
-        name,
-        "border"
-            | "border-color"
-            | "border-style"
-            | "border-width"
-            | "border-radius"
-            | "border-top-left-radius"
-            | "border-top-right-radius"
-            | "border-bottom-right-radius"
-            | "border-bottom-left-radius"
-            | "border-top"
-            | "border-right"
-            | "border-bottom"
-            | "border-left"
-            | "border-top-color"
-            | "border-right-color"
-            | "border-bottom-color"
-            | "border-left-color"
-            | "border-block-end-color"
-            | "border-block-start-color"
-            | "border-inline-end-color"
-            | "border-inline-start-color"
-            | "border-top-style"
-            | "border-right-style"
-            | "border-bottom-style"
-            | "border-left-style"
-            | "border-top-width"
-            | "border-right-width"
-            | "border-bottom-width"
-            | "border-left-width"
-    )
+    // Physical and logical border properties share Stylo's grammar. A partial
+    // list leaves logical declarations on the permissive legacy parser.
+    (name == "border" || name.starts_with("border-"))
+        && !cssom_border_image_property_name(name)
+        && moli_css_parse::stylo_style_rule_property_name_is_enabled(name)
 }
 
 pub(super) fn cssom_outline_property_write_uses_pdb(name: &str) -> bool {

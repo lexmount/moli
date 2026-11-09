@@ -177,6 +177,9 @@ pub(super) fn style_entries_pdb_supplemental_entry(
                 && style_entry_is_pdb_supplemental_side_entry(entry)
                 && entry.priority == (priority == PdbQueryPriority::Important)
         })
+        // Keep whole-property serialization on the adapter when only one
+        // longhand is represented by supplemental storage.
+        .filter(|entry| entry.name == property || affected_names.len() == 1)
         .cloned()
 }
 
