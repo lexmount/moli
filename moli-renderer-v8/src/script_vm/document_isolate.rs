@@ -852,13 +852,7 @@ impl RendererDocumentIsolateHandle {
         &self,
         op: impl FnOnce(&mut v8::OwnedIsolate) -> Result<T>,
     ) -> Result<T> {
-        let mut holder = self.inner.borrow_mut();
-        with_entered_owned_isolate(&mut holder.isolate, |isolate| {
-            let result = op(isolate);
-            self.deferred_context_host_releases
-                .drain_on_entered_isolate(isolate);
-            result
-        })
+        self.with_renderer_document_isolate_mut(op)
     }
 
     pub(super) fn with_entered_renderer_document_isolate_and_bootstrap<T>(
