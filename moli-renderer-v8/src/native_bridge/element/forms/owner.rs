@@ -194,7 +194,7 @@ fn control_is_in_first_legend(
     false
 }
 
-fn node_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
+pub(super) fn node_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
     let mut current = Some(node);
     while let Some(handle) = current {
         if handle == ancestor {
