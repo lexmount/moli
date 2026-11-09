@@ -2,6 +2,9 @@ mod normalize;
 mod ops;
 mod params;
 mod reports;
+
+pub use ops::cdp_cookie_same_site_wire_name;
+
 #[cfg(test)]
 mod tests;
 

@@ -1298,7 +1298,7 @@ fn cookie_matches_devtools_filter(
     true
 }
 
-fn cdp_cookie_same_site_for_filter(cookie: &Value) -> &str {
+pub fn cdp_cookie_same_site_wire_name(cookie: &Value) -> &'static str {
     match cookie.get("sameSite").and_then(Value::as_str) {
         Some("None") => "none",
         Some("Lax") => "lax",
@@ -1306,6 +1306,8 @@ fn cdp_cookie_same_site_for_filter(cookie: &Value) -> &str {
         _ => "default",
     }
 }
+
+use self::cdp_cookie_same_site_wire_name as cdp_cookie_same_site_for_filter;
 
 fn delete_cookies_for_browser_context_by_filter(
     conn: &mut CdpConnection,
