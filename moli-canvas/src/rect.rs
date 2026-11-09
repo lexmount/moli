@@ -109,7 +109,8 @@ fn parse_channel(value: &str) -> Option<u8> {
     Some(value.clamp(0.0, 255.0) as u8)
 }
 
-fn css_named_color_rgb(value: &str) -> Option<(u8, u8, u8)> {
+/// Resolve a CSS named color without parsing color expressions.
+pub fn css_named_color_rgb(value: &str) -> Option<(u8, u8, u8)> {
     Some(match value.to_ascii_lowercase().as_str() {
         "aliceblue" => (240, 248, 255),
         "antiquewhite" => (250, 235, 215),
