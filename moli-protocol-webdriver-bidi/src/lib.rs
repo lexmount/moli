@@ -30,5 +30,7 @@ pub use responses::{
 };
 pub use user_context::bidi_user_context_from_browser_context_id;
 
+pub use protocol::bidi_message_with_channel;
+
 #[cfg(test)]
 mod tests;
