@@ -856,27 +856,7 @@ fn handle_worker_dynamic_module_import_advance(
     }
 }
 
-fn report_service_worker_module_script_resource(
-    state: &Rc<RefCell<WorkerGlobalState>>,
-    resource: WorkerScriptResource,
-) {
-    let state = state.borrow();
-    let WorkerGlobalKind::Service {
-        registration_id,
-        version_id,
-        ..
-    } = &state.global_kind
-    else {
-        return;
-    };
-    let _ = state
-        .parent_tx
-        .send(WorkerToParentMessage::ServiceWorkerImportedScriptLoaded {
-            registration_id: *registration_id,
-            version_id: *version_id,
-            resource,
-        });
-}
+use crate::worker::script_loading::report_service_worker_script_resource as report_service_worker_module_script_resource;
 
 fn drain_worker_dynamic_module_imports(
     scope: &mut v8::PinScope<'_, '_>,
