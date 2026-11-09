@@ -1172,7 +1172,7 @@ impl ScriptVm {
     ) {
         if !self
             .child_document_modulator_store
-            .mark_dynamic_module_graph_evaluated(owner, realm_id, root_entry)
+            .mark_module_graph_evaluated(owner, realm_id, root_entry)
         {
             self.record_runtime_warning(format_args!(
                 "failed to mark child dynamic module evaluated: owner {:?} realm {:?} had no current document modulator",

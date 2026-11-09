@@ -6,8 +6,7 @@ use crate::{
         FrameDocumentOwner, FrameRealmId,
     },
     module_runtime::{
-        ModuleEntryId, ModuleLoadError, NativeModuleGraphFetchRequest,
-        NativeParserModuleTreeJobResume,
+        ModuleLoadError, NativeModuleGraphFetchRequest, NativeParserModuleTreeJobResume,
     },
 };
 
@@ -103,22 +102,5 @@ impl ChildDocumentModulatorStore {
         let (tasks, _modulepreload_terminal_works, _dynamic_import_owner_actions, _warnings) =
             batch.into_parts();
         tasks
-    }
-
-    pub(crate) fn mark_parser_module_graph_evaluated(
-        &mut self,
-        owner: FrameDocumentOwner,
-        realm_id: FrameRealmId,
-        root_entry: ModuleEntryId,
-    ) -> bool {
-        let Some(document_modulator_entry) =
-            self.current_document_modulator_entry_mut(owner, realm_id)
-        else {
-            return false;
-        };
-        document_modulator_entry
-            .document_modulator
-            .mark_evaluated(root_entry);
-        true
     }
 }
