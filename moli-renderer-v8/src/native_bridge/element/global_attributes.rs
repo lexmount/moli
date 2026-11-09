@@ -1171,21 +1171,7 @@ pub(in crate::native_bridge) fn html_rel_setter_function<'s>(
 // the template). The per-element installers in accessors_forms/ still wire
 // these for HTMLInputElement and HTMLButtonElement.
 
-fn set_boolean_attribute_on_object_or_detached<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return;
-    };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        return;
-    }
-    set_reflected_boolean_attribute(scope, runtime_ptr, handle, name, value.boolean_value(scope));
-}
+use super::reflection::set_boolean_attribute_property_on_object_or_detached as set_boolean_attribute_on_object_or_detached;
 
 pub(in crate::native_bridge) fn html_compact_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
