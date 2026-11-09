@@ -3,7 +3,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use style::moli_declaration_block::CssDeclarationBlock as NativeDeclarationBlock;
-use style::properties::{PropertyDeclarationBlock, PropertyId};
+use style::properties::{
+    PropertyDeclaration, PropertyDeclarationBlock, PropertyDeclarationId, PropertyId,
+};
 
 use crate::{CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult};
 
@@ -101,6 +103,27 @@ impl CssDeclarationBlock {
         self.native.entries()
     }
 
+    /// Copy longhand and custom declarations in the requested order without
+    /// reparsing their CSSOM values. Pending substitution serializes as an
+    /// empty string, so that string cannot reconstruct its declaration.
+    pub fn select_properties<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+        let source = self.native.clone().into_inner();
+        let mut selected = PropertyDeclarationBlock::new();
+        for name in names {
+            let property = PropertyId::parse_enabled_for_all_content(name).ok()?;
+            let declaration_id = property.as_shorthand().err()?;
+            let (declaration, importance) = source.get(declaration_id)?;
+            selected.push(declaration.clone(), importance);
+        }
+        let native = NativeDeclarationBlock::new(selected);
+        let mut typed_numeric = self.typed_numeric.clone();
+        typed_numeric.retain(|name, _| native.property_is_declared(name));
+        Some(Self {
+            native,
+            typed_numeric,
+        })
+    }
+
     pub fn property_value(&self, name: &str) -> Option<String> {
         self.native.property_value(name)
     }
@@ -111,6 +134,26 @@ impl CssDeclarationBlock {
 
     pub fn property_is_declared(&self, name: &str) -> bool {
         self.native.property_is_declared(name)
+    }
+
+    /// Whether a query includes declarations retaining unparsed substitution
+    /// tokens, rather than ordinary values held by a compatibility adapter.
+    pub fn property_has_unparsed_value(&self, name: &str) -> bool {
+        let Ok(property) = PropertyId::parse_enabled_for_all_content(name) else {
+            return false;
+        };
+        let source = self.native.clone().into_inner();
+        let unparsed = |id| {
+            source.get(id).is_some_and(|(declaration, _)| {
+                matches!(declaration, PropertyDeclaration::WithVariables(..))
+            })
+        };
+        match property.as_shorthand() {
+            Ok(shorthand) => shorthand
+                .longhands()
+                .any(|longhand| unparsed(PropertyDeclarationId::Longhand(longhand))),
+            Err(id) => unparsed(id),
+        }
     }
 
     pub fn affected_names_for_property(name: &str) -> Option<Vec<String>> {
@@ -205,7 +248,7 @@ impl CssDeclarationBlock {
 
     /// A compatibility declaration stored alongside this block can override
     /// its longhands without replacing the block itself.
-    pub fn invalidate_typed_numeric_for_property(&mut self, name: &str) -> bool {
+    pub fn invalidate_typed_numeric_values_for_property(&mut self, name: &str) -> bool {
         let before = self.typed_numeric.len();
         if before != 0
             && let Some(affected) = Self::affected_names_for_property(name)
@@ -263,6 +306,53 @@ mod tests {
             return None;
         };
         Some(unit)
+    }
+
+    #[test]
+    fn selecting_declarations_preserves_pending_values_and_typed_numeric() {
+        let mut block = parse_declaration_block(
+            "border: var(--edge) !important; color: blue; opacity: 0.25; --empty: ;",
+        );
+        retain_unit(
+            &mut block,
+            "opacity",
+            CssDeclaredUnitValue {
+                value: 25.0,
+                unit: "percent".to_owned(),
+            },
+        );
+        let names = block
+            .entries()
+            .into_iter()
+            .filter(|entry| entry.name != "color")
+            .map(|entry| entry.name)
+            .collect::<Vec<_>>();
+        let selected = block
+            .select_properties(names.iter().map(String::as_str))
+            .expect("declared longhands and custom properties can be selected");
+        assert_eq!(
+            selected.property_value("border").as_deref(),
+            Some("var(--edge)")
+        );
+        assert_eq!(selected.property_value("border-color").as_deref(), Some(""));
+        assert!(selected.property_priority("border"));
+        assert!(selected.property_has_unparsed_value("border"));
+        assert!(selected.property_has_unparsed_value("border-top-color"));
+        assert!(!selected.property_has_unparsed_value("opacity"));
+        assert!(!selected.property_is_declared("color"));
+        assert!(selected.property_is_declared("--empty"));
+        assert_eq!(
+            typed_unit(&selected, "opacity"),
+            typed_unit(&block, "opacity")
+        );
+        assert!(
+            selected
+                .css_text()
+                .contains("border: var(--edge) !important;")
+        );
+        assert!(block.property_is_declared("color"));
+        assert!(block.select_properties(["border"]).is_none());
+        assert!(block.select_properties(["outline-width"]).is_none());
     }
 
     #[test]
