@@ -370,17 +370,7 @@ fn bidi_realm_string_field<'a>(realm: &'a Value, field: &str) -> &'a str {
     realm.get(field).and_then(Value::as_str).unwrap_or("")
 }
 
-fn bidi_client_window_info(window: moli_protocol::automation::DevToolsClientWindowInfo) -> Value {
-    json!({
-        "clientWindow": window.client_window.into_string(),
-        "active": window.active,
-        "state": window.state.as_bidi_value(),
-        "width": window.width,
-        "height": window.height,
-        "x": window.x,
-        "y": window.y,
-    })
-}
+use moli_protocol::client_window_info_json as bidi_client_window_info;
 
 fn bidi_user_contexts_from_browser_contexts(
     browser_context_ids: Vec<DevToolsBrowserContextId>,
