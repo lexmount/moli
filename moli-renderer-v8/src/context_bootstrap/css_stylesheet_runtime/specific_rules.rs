@@ -2268,7 +2268,11 @@ fn css_keyframe_rule_style_object_in_current_context<'s>(
     let style = build_lightweight_css_keyframe_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_KEYFRAME_RULE_STYLE_TEXT_SLOT);
     attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
+    if !css_rule_stylo_declaration_block_is_valid(scope, rule)
+        || !initialize_lightweight_css_style_from_stylo_declaration_block(scope, style)
+    {
+        set_style_object_css_text(scope, style, &style_text);
+    }
     sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
     if let Some(callback) = v8::Function::builder(css_keyframe_rule_style_changed_callback)
         .data(rule.into())
@@ -2366,7 +2370,11 @@ pub(crate) fn css_style_rule_style_object<'s>(
     let style = build_lightweight_css_rule_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_STYLE_RULE_STYLE_TEXT_SLOT);
     attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
+    if !css_rule_stylo_declaration_block_is_valid(scope, rule)
+        || !initialize_lightweight_css_style_from_stylo_declaration_block(scope, style)
+    {
+        set_style_object_css_text(scope, style, &style_text);
+    }
     sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
     if let Some(callback) = v8::Function::builder(css_style_rule_style_changed_callback)
         .data(rule.into())
@@ -2522,7 +2530,11 @@ pub(crate) fn css_nested_declarations_style_object<'s>(
     let style = build_lightweight_css_rule_style_declaration(scope);
     let style_text = private_string(scope, rule, CSS_NESTED_DECLARATIONS_STYLE_TEXT_SLOT);
     attach_css_rule_stylo_declaration_block_to_style(scope, rule, style);
-    set_style_object_css_text(scope, style, &style_text);
+    if !css_rule_stylo_declaration_block_is_valid(scope, rule)
+        || !initialize_lightweight_css_style_from_stylo_declaration_block(scope, style)
+    {
+        set_style_object_css_text(scope, style, &style_text);
+    }
     sync_css_rule_stylo_declaration_block_validity_from_style(scope, rule, style);
     if let Some(callback) = v8::Function::builder(css_nested_declarations_style_changed_callback)
         .data(rule.into())
