@@ -192,7 +192,7 @@ pub(super) fn record_blocked_xhr_failure(
     queue_xhr_failure_delivery(scope, xhr);
 }
 
-pub(super) fn record_csp_xhr_failure(
+pub(super) fn record_policy_blocked_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut JsContextHost,
     xhr: v8::Local<'_, v8::Object>,
@@ -212,25 +212,9 @@ pub(super) fn record_csp_xhr_failure(
     queue_xhr_failure_delivery(scope, xhr);
 }
 
-pub(super) fn record_url_policy_xhr_failure(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
-    xhr: v8::Local<'_, v8::Object>,
-    prepared: PreparedXhrSendRequest,
-    message: String,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.send_body),
-        SubresourceResourceType::Xhr,
-        message,
-    ));
-    queue_xhr_failure_delivery(scope, xhr);
-}
+pub(super) use self::record_policy_blocked_xhr_failure as record_csp_xhr_failure;
+
+pub(super) use self::record_policy_blocked_xhr_failure as record_url_policy_xhr_failure;
 
 pub(super) fn record_bad_port_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
