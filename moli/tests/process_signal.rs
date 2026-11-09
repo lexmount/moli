@@ -14,7 +14,21 @@ fn moli_cli_path() -> PathBuf {
 }
 
 #[test]
-fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
+fn cli_serve_exits_promptly_when_sigterm_is_delivered() {
+    assert_serve_exits_on_signal(libc::SIGTERM);
+}
+
+#[test]
+fn cli_serve_exits_promptly_when_sigint_is_delivered() {
+    assert_serve_exits_on_signal(libc::SIGINT);
+}
+
+#[test]
+fn cli_serve_exits_promptly_when_sighup_is_delivered() {
+    assert_serve_exits_on_signal(libc::SIGHUP);
+}
+
+fn assert_serve_exits_on_signal(signal: libc::c_int) {
     let mut child = Command::new(moli_cli_path())
         .args([
             "serve",
@@ -56,10 +70,7 @@ fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
     }
 
     // SAFETY: child_pid identifies the live server process.
-    assert_eq!(
-        unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGTERM) },
-        0
-    );
+    assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, signal) }, 0);
 
     let (status_sender, status_receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
@@ -80,5 +91,5 @@ fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
     stderr_reader
         .join()
         .expect("stderr reader should finish after server exit");
-    assert_eq!(status.code(), Some(128 + libc::SIGTERM));
+    assert!(status.success(), "graceful server shutdown: {status}");
 }

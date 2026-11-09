@@ -5,6 +5,8 @@
 //! protocol server.
 
 use anyhow::Result;
+use clap::Parser;
+use moli::cli::{Cli, Commands, normalize_args_for_compat};
 use std::process::ExitCode;
 
 #[cfg(all(
@@ -21,14 +23,25 @@ use std::process::ExitCode;
 mod allocator;
 
 fn run() -> Result<()> {
-    moli_process_signal::install_immediate_exit_handlers()?;
+    let cli = Cli::parse_from(normalize_args_for_compat(std::env::args_os()));
+    if !matches!(cli.command, Commands::Serve(_)) {
+        moli_process_signal::install_immediate_exit_handlers()?;
+    }
+    let config = moli::config::AppConfig::from_cli(&cli)?;
+    moli::telemetry::init(&config.log_filter);
     let runtime_thread_budget = moli::runtime_thread_budget::tokio_runtime_thread_budget();
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(runtime_thread_budget)
         .max_blocking_threads(runtime_thread_budget)
         .enable_all()
-        .build()?
-        .block_on(moli::app::run_from_env())
+        .build()?;
+    let result = runtime.block_on(moli::app::run_cli_with_config(
+        cli,
+        config,
+        &mut std::io::stdout(),
+    ));
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
 }
 
 fn main() -> ExitCode {
