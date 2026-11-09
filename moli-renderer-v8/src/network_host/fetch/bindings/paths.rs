@@ -85,7 +85,7 @@ pub(super) fn reject_blocked_fetch(
     message
 }
 
-pub(super) fn reject_csp_fetch(
+pub(super) fn reject_policy_blocked_fetch(
     host: &mut JsContextHost,
     prepared: PreparedWindowFetchRequest,
     message: String,
@@ -103,23 +103,9 @@ pub(super) fn reject_csp_fetch(
     message
 }
 
-pub(super) fn reject_url_policy_fetch(
-    host: &mut JsContextHost,
-    prepared: PreparedWindowFetchRequest,
-    message: String,
-) -> String {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        prepared.frame_id,
-        prepared.document_url,
-        prepared.resolved_url,
-        prepared.method,
-        prepared.request_headers,
-        request_body_text(&prepared.body),
-        SubresourceResourceType::Fetch,
-        message.clone(),
-    ));
-    message
-}
+pub(super) use self::reject_policy_blocked_fetch as reject_csp_fetch;
+
+pub(super) use self::reject_policy_blocked_fetch as reject_url_policy_fetch;
 
 pub(super) fn reject_bad_port_fetch(
     host: &mut JsContextHost,
