@@ -350,13 +350,7 @@ fn staging_path(bucket_dir: &Path, owner_id: u64) -> PathBuf {
         .join(format!("writer-{owner_id:016x}.stage"))
 }
 
-fn remove_file_if_exists(path: &Path, operation: &'static str) -> OpfsResult<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(OpfsError::io(operation, path, source)),
-    }
-}
+use crate::store::remove_file_if_exists;
 
 fn closed_io() -> std::io::Error {
     std::io::Error::other("writable staging file is closed")

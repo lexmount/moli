@@ -391,13 +391,7 @@ fn parse_marker_name(name: &str) -> Option<SyncRecoveryMarker> {
     })
 }
 
-fn remove_file_if_exists(path: &Path, operation: &'static str) -> OpfsResult<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(OpfsError::io(operation, path, source)),
-    }
-}
+use crate::store::remove_file_if_exists;
 
 #[cfg(test)]
 mod tests {
