@@ -646,7 +646,7 @@ pub(crate) fn response_static_redirect_callback<'s>(
     rv.set(response.into());
 }
 
-fn callback_base_url(
+pub(super) fn callback_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<url::Url> {

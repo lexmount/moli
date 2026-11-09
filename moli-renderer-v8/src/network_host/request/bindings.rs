@@ -163,15 +163,4 @@ pub(crate) fn request_constructor_callback<'s>(
     rv.set(obj.into());
 }
 
-fn callback_base_url(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) -> Option<url::Url> {
-    if !value.is_string() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .and_then(|value| url::Url::parse(&value).ok())
-}
+use crate::network_host::fetch_surface::callback_base_url;
