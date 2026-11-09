@@ -243,19 +243,7 @@ fn navigate_event_private_bool<'s>(
         .unwrap_or(default)
 }
 
-fn set_navigate_event_private_bool<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-    value: bool,
-) {
-    crate::context_bootstrap::set_event_private_value(
-        scope,
-        event,
-        slot,
-        v8::Boolean::new(scope, value).into(),
-    );
-}
+use crate::context_bootstrap::set_event_private_bool as set_navigate_event_private_bool;
 
 fn navigate_event_can_use_navigation_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
