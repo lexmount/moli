@@ -1738,11 +1738,7 @@ fn is_local_wpt_harness_meta_script(reference: &str) -> bool {
 }
 
 fn static_text_response(source: String, content_type: &'static str) -> Response {
-    let mut response = source.into_response();
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
-    response
+    response_with_content_type(source, content_type)
 }
 
 fn static_bytes_response(source: Vec<u8>, content_type: &'static str) -> Response {
@@ -3232,7 +3228,7 @@ fn text_response(source: &'static str) -> Response {
     response
 }
 
-fn response_with_content_type(source: &'static str, content_type: &'static str) -> Response {
+fn response_with_content_type(source: impl IntoResponse, content_type: &'static str) -> Response {
     let mut response = source.into_response();
     response
         .headers_mut()
@@ -3241,19 +3237,11 @@ fn response_with_content_type(source: &'static str, content_type: &'static str) 
 }
 
 fn json_response(source: &'static str) -> Response {
-    let mut response = source.into_response();
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    response
+    response_with_content_type(source, "application/json")
 }
 
 fn json_string_response(source: String) -> Response {
-    let mut response = source.into_response();
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    response
+    response_with_content_type(source, "application/json")
 }
 
 fn js_string_literal(value: &str) -> String {
