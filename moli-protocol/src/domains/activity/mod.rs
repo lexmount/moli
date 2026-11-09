@@ -72,3 +72,5 @@ pub(in crate::domains) async fn project_frozen_slot_for_test(
         .unwrap();
     out.extend(command.take_protocol_events());
 }
+
+pub(crate) use subresource::stage_blocked_intercepts;

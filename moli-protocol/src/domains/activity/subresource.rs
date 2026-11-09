@@ -366,7 +366,7 @@ fn routable_stage_owner_session_id(
     current_owner_session_id.map(str::to_owned)
 }
 
-fn stage_blocked_intercepts(
+pub(crate) fn stage_blocked_intercepts(
     owner_kind: PendingSubresourceFetchOwnerKind,
     stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     fallback_blocked_intercepts: &[DevToolsNetworkInterceptId],
