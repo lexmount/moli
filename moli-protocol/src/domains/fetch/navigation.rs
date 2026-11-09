@@ -325,19 +325,7 @@ fn navigation_auth_required_blocked_intercepts(
     )
 }
 
-fn stage_blocked_intercepts(
-    owner_kind: PendingSubresourceFetchOwnerKind,
-    stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
-    fallback_blocked_intercepts: &[DevToolsNetworkInterceptId],
-) -> Vec<DevToolsNetworkInterceptId> {
-    if !stage_blocked_intercepts.is_empty() {
-        return stage_blocked_intercepts;
-    }
-    match owner_kind {
-        PendingSubresourceFetchOwnerKind::Fetch => Vec::new(),
-        PendingSubresourceFetchOwnerKind::NetworkOrBidi => fallback_blocked_intercepts.to_vec(),
-    }
-}
+use crate::domains::activity::stage_blocked_intercepts;
 
 fn routable_stage_owner_session_id(
     conn: &CdpConnection,
