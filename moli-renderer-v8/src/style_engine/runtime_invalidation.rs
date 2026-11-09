@@ -3,6 +3,7 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc};
 use dom::ElementState as StyloElementState;
 use moli_selector::StyloStyleSourceScope as StyleSourceScope;
 use smallvec::SmallVec;
+use style::{LocalName, stylesheets::container_rule::ContainerAttributeDependencyKind};
 
 use crate::{
     document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
@@ -89,6 +90,7 @@ impl MoliStyleEngine {
             no_cached_style_us += no_cached_style_started
                 .map(|started| started.elapsed().as_micros())
                 .unwrap_or_default();
+            self.invalidate_container_attribute_dependencies(host, document_effects, &world);
             if should_defer_structural_mutations(document_effects) {
                 let deferred_started = profile_enabled.then(std::time::Instant::now);
                 world.document_state.note_style_input_change();
@@ -148,6 +150,60 @@ impl MoliStyleEngine {
             world.document_state.note_style_input_change();
         }
         true
+    }
+
+    fn invalidate_container_attribute_dependencies(
+        &self,
+        host: &DomHost,
+        effects: &[StyleMutationEffect],
+        world: &DocumentStyleWorld,
+    ) {
+        let roots = world
+            .document_state
+            .try_with_retained_style_system(|retained| {
+                effects
+                    .iter()
+                    .filter_map(|effect| {
+                        let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                            return None;
+                        };
+                        let mut names = SmallVec::<[LocalName; 4]>::new();
+                        for candidate in [
+                            Some(name.as_str()),
+                            name.rsplit_once(':').map(|(_, local)| local),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            names.push(LocalName::from(candidate));
+                            if candidate.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                                names
+                                    .push(LocalName::from(candidate.to_ascii_lowercase().as_str()));
+                            }
+                        }
+                        let depends_on_attribute = |data: &style::stylist::CascadeData| {
+                            names.iter().any(|name| {
+                                data.might_have_attribute_dependency_in_container(name)
+                                    != ContainerAttributeDependencyKind::None
+                            })
+                        };
+                        (retained
+                            .stylist
+                            .iter_origins()
+                            .any(|(data, _)| depends_on_attribute(data))
+                            || retained
+                                .shadow_cascade_data
+                                .iter()
+                                .any(|(_, data)| depends_on_attribute(data)))
+                        .then_some(*element)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !roots.is_empty() {
+            self.invalidation_cleanup_for_world(world)
+                .invalidate_subtrees(host, roots);
+        }
     }
 
     fn queue_style_invalidation_for_mutations(
