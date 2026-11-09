@@ -109,6 +109,45 @@ fn create_image_bitmap_matches_chromium_offscreen_canvas_and_close_contract() {
 }
 
 #[test]
+fn canvas_html_and_offscreen_styles_accept_modern_css_colors() {
+    let mut vm = new_storage_test_vm("https://canvas-css-colors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  for (const canvas of [document.createElement('canvas'), new OffscreenCanvas(2, 2)]) {
+    canvas.width = canvas.height = 2;
+    const ctx = canvas.getContext('2d');
+    for (const [color, expected] of [
+      ['oklch(0.5 0 0)', [99, 99, 99, 255]],
+      ['hsl(120 100% 50%)', [0, 255, 0, 255]],
+      ['color(srgb 1 0 0 / 0.5)', [255, 0, 0, 128]],
+      ['color-mix(in srgb, red 50%, blue 50%)', [128, 0, 128, 255]],
+    ]) {
+      ctx.fillStyle = '#000';
+      ctx.fillStyle = color;
+      ctx.clearRect(0, 0, 2, 2);
+      ctx.fillRect(0, 0, 1, 1);
+      const pixel = Array.from(ctx.getImageData(0, 0, 1, 1).data);
+      if (pixel.some((value, index) => Math.abs(value - expected[index]) > 1)) {
+        throw new Error(`${color}: ${pixel} != ${expected}`);
+      }
+      ctx.strokeStyle = color;
+      if (ctx.strokeStyle !== ctx.fillStyle) throw new Error('stroke color differs');
+      const style = ctx.fillStyle;
+      ctx.fillStyle = 'oklch(invalid)';
+      if (ctx.fillStyle !== style) throw new Error('invalid color changed the style');
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("HTML and OffscreenCanvas should accept modern CSS colors");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn webgl_viewport_state_matches_chromium_on_html_and_offscreen_contexts() {
     let mut vm = new_storage_test_vm("https://webgl-viewport.test/");
     let result = vm
