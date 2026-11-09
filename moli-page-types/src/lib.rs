@@ -3535,6 +3535,8 @@ pub enum ScriptSkipReason {
     UnsupportedType(String),
 }
 
+pub use inspector_identity::allocate_nonzero_u64;
+
 #[cfg(test)]
 mod tests {
     use super::*;

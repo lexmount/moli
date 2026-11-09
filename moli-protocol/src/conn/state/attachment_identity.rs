@@ -1,7 +1,4 @@
-use std::{
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{num::NonZeroU64, sync::atomic::AtomicU64};
 
 static NEXT_TARGET_PAGE_ATTACHMENT_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_NAVIGATION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -44,14 +41,7 @@ impl NavigationRequestId {
     }
 }
 
-fn allocate_nonzero_u64(counter: &AtomicU64, name: &str) -> NonZeroU64 {
-    let raw = counter
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .unwrap_or_else(|_| panic!("{name} exhausted"));
-    NonZeroU64::new(raw).unwrap_or_else(|| panic!("{name} allocator returned zero"))
-}
+use moli_page_types::allocate_nonzero_u64;
 
 #[cfg(test)]
 mod tests {
