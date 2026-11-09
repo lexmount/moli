@@ -681,10 +681,7 @@ pub(crate) fn css_condition_rule_read_from_object<'s>(
         |view| crate::live_stylesheet::LiveStylesheetConditionRuleRead {
             rule_type: view.rule_type,
             condition_text: view.condition_text,
-            container_conditions: moli_css_parse::parse_container_conditions_with_stylo(
-                &view.css_text,
-            )
-            .unwrap_or_default(),
+            container_conditions: view.container_conditions,
             scope_start: view.scope_start,
             scope_end: view.scope_end,
         },
