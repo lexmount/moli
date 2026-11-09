@@ -994,17 +994,7 @@ fn bump_animation_finish_token<'s>(
     next
 }
 
-fn private_string<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> Option<String> {
-    get_private_value(scope, object, slot).and_then(|value| {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-    })
-}
+use crate::util::private_string_property as private_string;
 
 fn private_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
