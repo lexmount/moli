@@ -1,3 +1,4 @@
+mod attr_invalidation;
 use super::*;
 
 mod css_text_and_detached;
