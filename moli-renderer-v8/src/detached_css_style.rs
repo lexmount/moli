@@ -759,14 +759,7 @@ fn all_shorthand_applies_to(property: &str) -> bool {
             || css_style_declaration_is_shell_property(property))
 }
 
-fn css_wide_keyword(value: &str) -> Option<String> {
-    let lowered = value.trim().to_ascii_lowercase();
-    matches!(
-        lowered.as_str(),
-        "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "revert-rule"
-    )
-    .then_some(lowered)
-}
+use crate::css_style::css_wide_keyword;
 
 pub(crate) fn build_lightweight_css_style_declaration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
