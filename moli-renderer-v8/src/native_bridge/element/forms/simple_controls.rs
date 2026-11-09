@@ -698,21 +698,7 @@ fn set_finite_double_attribute_on_receiver<'s>(
     set_numeric_attribute(scope, runtime_ptr, handle, name, number);
 }
 
-fn finite_double_from_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<f64> {
-    match webidl::convert::<webidl::Double>(scope, value, webidl::Context::member(owner, property))
-    {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
+use crate::webidl::finite_double_property_value as finite_double_from_value;
 
 fn set_numeric_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
