@@ -624,16 +624,7 @@ pub(in crate::native_bridge) fn output_default_value_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn node_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
-    let mut current = Some(node);
-    while let Some(handle) = current {
-        if handle == ancestor {
-            return true;
-        }
-        current = runtime.dom_host().parent_node(handle);
-    }
-    false
-}
+use super::owner::node_contains;
 
 fn legend_fieldset_ancestor(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = runtime.dom_host().parent_node(handle);
