@@ -804,22 +804,7 @@ fn xml_attribute_to_html(attribute: XmlAttribute) -> HtmlAttribute {
     }
 }
 
-fn split_xml_parser_input_prefix(input: String, max_bytes: usize) -> (String, Option<String>) {
-    if max_bytes == 0 || input.len() <= max_bytes {
-        return (input, None);
-    }
-    let mut split = input.len();
-    for (index, character) in input.char_indices() {
-        let end = index + character.len_utf8();
-        if end > max_bytes {
-            split = if index == 0 { end } else { index };
-            break;
-        }
-    }
-    let remainder = input[split..].to_owned();
-    let prefix = input[..split].to_owned();
-    (prefix, (!remainder.is_empty()).then_some(remainder))
-}
+use crate::input_prefix::split_parser_input_prefix as split_xml_parser_input_prefix;
 
 struct RuntimeXmlDomSinksParserStep<'a> {
     stream: &'a mut XmlDocumentStream,

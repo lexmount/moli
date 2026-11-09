@@ -5,6 +5,7 @@
 
 mod html;
 mod html_input;
+mod input_prefix;
 mod live_target;
 mod script_planning;
 mod session;
