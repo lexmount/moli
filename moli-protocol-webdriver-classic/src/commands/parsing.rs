@@ -5,12 +5,7 @@ use crate::{ClassicError, ClassicErrorCode};
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 pub(super) fn required_string<'a>(params: &'a Value, field: &str) -> Result<&'a str, ClassicError> {
-    params.get(field).and_then(Value::as_str).ok_or_else(|| {
-        ClassicError::new(
-            ClassicErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    required_string_value(params.get(field), field)
 }
 
 pub(super) fn optional_array(
@@ -40,12 +35,7 @@ pub(crate) fn required_object_string<'a>(
     params: &'a serde_json::Map<String, Value>,
     field: &str,
 ) -> Result<&'a str, ClassicError> {
-    params.get(field).and_then(Value::as_str).ok_or_else(|| {
-        ClassicError::new(
-            ClassicErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    required_string_value(params.get(field), field)
 }
 
 pub(crate) fn required_timeout_value(
@@ -109,15 +99,7 @@ pub(super) fn optional_object_bool(
     params: &serde_json::Map<String, Value>,
     field: &str,
 ) -> Result<Option<bool>, ClassicError> {
-    let Some(value) = params.get(field) else {
-        return Ok(None);
-    };
-    value.as_bool().map(Some).ok_or_else(|| {
-        ClassicError::new(
-            ClassicErrorCode::InvalidArgument,
-            format!("{field} must be a boolean"),
-        )
-    })
+    optional_bool_value(params.get(field), field)
 }
 
 pub(super) fn optional_object_expiry(
@@ -153,4 +135,31 @@ pub(super) fn optional_object_expiry(
         ClassicErrorCode::InvalidArgument,
         "expiry must be a non-negative integer",
     ))
+}
+
+fn required_string_value<'a>(
+    value: Option<&'a Value>,
+    field: &str,
+) -> Result<&'a str, ClassicError> {
+    value.and_then(Value::as_str).ok_or_else(|| {
+        ClassicError::new(
+            ClassicErrorCode::InvalidArgument,
+            format!("{field} must be a string"),
+        )
+    })
+}
+
+pub(super) fn optional_bool_value(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Option<bool>, ClassicError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| {
+        ClassicError::new(
+            ClassicErrorCode::InvalidArgument,
+            format!("{field} must be a boolean"),
+        )
+    })
 }
