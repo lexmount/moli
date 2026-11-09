@@ -1486,7 +1486,7 @@ fn overriding_later_flex_longhands<'a>(
         .collect()
 }
 
-fn css_wide_keyword(value: &str) -> Option<String> {
+pub(crate) fn css_wide_keyword(value: &str) -> Option<String> {
     let lowered = value.trim().to_ascii_lowercase();
     matches!(
         lowered.as_str(),

@@ -35,14 +35,7 @@ pub(in crate::native_bridge::element::styles) fn all_shorthand_applies_to(proper
         && known_style_property(property)
 }
 
-pub(in crate::native_bridge::element::styles) fn css_wide_keyword(value: &str) -> Option<String> {
-    let lowered = value.trim().to_ascii_lowercase();
-    matches!(
-        lowered.as_str(),
-        "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "revert-rule"
-    )
-    .then_some(lowered)
-}
+pub(in crate::native_bridge::element::styles) use crate::css_style::css_wide_keyword;
 
 pub(in crate::native_bridge::element::styles) fn supported_declared_property(
     property: &str,
