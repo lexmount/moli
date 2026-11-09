@@ -124,6 +124,8 @@ pub fn stylo_style_rule_property_name_is_enabled(name: &str) -> bool {
 
 pub use util::style_sheet_text_end_position;
 
+pub use util::functional_pseudo_name;
+
 #[cfg(test)]
 mod property_surface_tests {
     use super::{

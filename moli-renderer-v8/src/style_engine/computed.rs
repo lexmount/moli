@@ -1616,13 +1616,7 @@ fn stylo_pseudo_element_for_computed_style(pseudo_element: &str) -> Option<Pseud
     }
 }
 
-fn functional_pseudo_name<'a>(pseudo_element: &'a str, function_name: &str) -> Option<&'a str> {
-    pseudo_element
-        .strip_prefix(function_name)?
-        .strip_prefix('(')?
-        .strip_suffix(')')
-        .filter(|name| !name.is_empty())
-}
+use moli_css_parse::functional_pseudo_name;
 
 fn serialize_raw_computed_property(
     style: &ComputedValues,

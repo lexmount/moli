@@ -275,6 +275,14 @@ pub fn style_sheet_text_end_position(text: &str) -> (u32, u32) {
     (end_line, end_column)
 }
 
+pub fn functional_pseudo_name<'a>(pseudo_element: &'a str, function_name: &str) -> Option<&'a str> {
+    pseudo_element
+        .strip_prefix(function_name)?
+        .strip_prefix('(')?
+        .strip_suffix(')')
+        .filter(|name| !name.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
