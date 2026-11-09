@@ -556,13 +556,7 @@ impl SharedWorkerTargetState {
         let Some(state) = self.session_state(session_id) else {
             return &[];
         };
-        if !state.console_output_session_state.console_enabled {
-            return &[];
-        }
-        &self.console_messages[state
-            .console_output_session_state
-            .console_domain_entries
-            .min(self.console_messages.len())..]
+        state.pending_console_domain_messages(&self.console_messages)
     }
 
     pub(crate) fn pending_runtime_console_messages(
@@ -572,16 +566,10 @@ impl SharedWorkerTargetState {
         let Some(state) = self.session_state(session_id) else {
             return &[];
         };
-        if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
-        }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
-        }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
-            .min(self.console_messages.len())..]
+        state.pending_runtime_console_messages(
+            &self.console_messages,
+            self.runtime_execution_context_id.is_some(),
+        )
     }
 
     pub(crate) fn mark_console_domain_emitted(&mut self, session_id: &str, console_end: usize) {
