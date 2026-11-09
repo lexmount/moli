@@ -680,7 +680,7 @@ pub struct CssFontFeatureValuesRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSPropertyRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSPropertyRule, enumerable, receiver = web_api_interfaces::CSSPropertyRule::is_instance)]
 pub struct CssPropertyRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_property_rule_name_getter_callback)]
     pub name: (),
