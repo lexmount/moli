@@ -48,6 +48,7 @@ pub(crate) struct RendererStylesheetFetcher {
     quirks_mode: style::context::QuirksMode,
     completion_producer: Option<crate::page_task_queue::RendererPageStylesheetTaskProducer>,
     document_referrer_policy: Option<String>,
+    document_character_set: Option<String>,
 }
 
 impl RendererStylesheetFetcher {
@@ -75,6 +76,11 @@ impl RendererStylesheetFetcher {
     ) -> Self {
         self.interception = context;
         self.frame_id = frame_id;
+        self
+    }
+
+    pub(crate) fn with_document_character_set(mut self, encoding: Option<String>) -> Self {
+        self.document_character_set = encoding;
         self
     }
 
@@ -121,6 +127,7 @@ impl RendererStylesheetFetcher {
             quirks_mode: style::context::QuirksMode::NoQuirks,
             completion_producer: None,
             document_referrer_policy: None,
+            document_character_set: None,
         }
     }
 
@@ -142,6 +149,7 @@ impl RendererStylesheetFetcher {
             quirks_mode: style::context::QuirksMode::NoQuirks,
             completion_producer: None,
             document_referrer_policy: None,
+            document_character_set: None,
         }
     }
 
@@ -165,11 +173,21 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         &self,
         options: StylesheetFetchOptions,
     ) -> StylesheetFetchOptions {
-        if options.document_referrer_policy().is_some() {
+        let options = if options.document_referrer_policy().is_some() {
             options
         } else {
             options.with_document_referrer_policy(self.document_referrer_policy.clone())
+        };
+        if options.environment_encoding().is_some() {
+            return options;
         }
+        let environment = options
+            .charset()
+            .and_then(moli_encoding::encoding_for_label)
+            .map(|encoding| encoding.name().to_owned())
+            .or_else(|| self.document_character_set.clone())
+            .unwrap_or_else(|| "UTF-8".to_owned());
+        options.with_environment_encoding(Some(environment))
     }
 
     fn completion_publisher(
@@ -669,7 +687,8 @@ fn stylesheet_terminal_from_response(
         options,
         response,
         &response_provenance,
-    );
+    )
+    .with_environment_encoding(options.environment_encoding().map(str::to_owned));
     match response_provenance {
         StylesheetResponseProvenance::Network => terminal,
         StylesheetResponseProvenance::ServiceWorker { filter } => {
