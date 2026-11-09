@@ -2460,24 +2460,7 @@ fn native_module_graph_job_for_inline_entry(
 }
 
 #[cfg(test)]
-fn module_script_graph_job(
-    vm: &mut ScriptVm,
-    source: ModuleSource,
-    base_url: &Url,
-    initiator_url: &Url,
-    fetch_metadata: &ScriptFetchMetadata,
-    source_is_external: bool,
-) -> std::result::Result<NativeModuleGraphJob, ModuleLoadError> {
-    module_script_graph_job_for_owner(
-        vm,
-        source,
-        base_url,
-        initiator_url,
-        fetch_metadata,
-        source_is_external,
-        ModuleScriptCompletionOwner::Parser,
-    )
-}
+use self::parser_owned_loaded_module_script_graph_job as module_script_graph_job;
 
 fn module_script_graph_job_for_owner(
     vm: &mut ScriptVm,
