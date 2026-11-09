@@ -1,6 +1,127 @@
 use super::*;
 
 #[test]
+fn computed_background_images_preserve_url_lists_and_stylesheet_bases() {
+    let mut vm = new_storage_html_test_vm("https://background-image-urls.test/page/index.html");
+    vm.eval(
+        r#"
+document.body.innerHTML = '<div id="target"></div>';
+for (const name of ['--main-url', '--main-func', '--alt-url', '--alt-func']) {
+  CSS.registerProperty({name, syntax: '<url> | none', inherits: false, initialValue: 'none'});
+}
+for (const name of ['main', 'alt']) {
+  const link = document.createElement('link');
+  link.id = name;
+  link.rel = 'stylesheet';
+  link.href = '/' + name + '/style.css';
+  document.head.appendChild(link);
+}
+"#,
+    )
+    .expect("background image stylesheet setup should evaluate");
+    for (id, css) in [
+        (
+            "main",
+            r#"#target {
+              --main-url: url(foo.png);
+              --main-func: url("foo.png");
+              --unreg-main: url(foo.png);
+              --multi-url: var(--main-url), var(--alt-url);
+              --multi-func: var(--main-func), var(--alt-func);
+            }"#,
+        ),
+        (
+            "alt",
+            r#"#target {
+              --alt-url: url(foo.png);
+              --alt-func: url("foo.png");
+              --unreg-alt: url(foo.png);
+            }"#,
+        ),
+    ] {
+        let sheet_url = url::Url::parse(&format!(
+            "https://background-image-urls.test/{id}/style.css"
+        ))
+        .unwrap();
+        let owner = cssom_element_handle_by_id(&vm, id);
+        install_linked_stylesheet_for_test(
+            &mut vm,
+            owner,
+            sheet_url.clone(),
+            crate::style_engine::StyloStylesheetSource::new(css.to_owned(), sheet_url.clone())
+                .with_sheet_url(sheet_url),
+        );
+    }
+    let result = vm.eval(r#"
+(() => {
+  const target = document.getElementById('target');
+  const style = target.style;
+  const computed = getComputedStyle(target);
+  const url = path => 'url("https://background-image-urls.test/' + path + '")';
+  const gradient = 'linear-gradient(rgb(255, 0, 0), rgb(0, 0, 255))';
+  const images = 'image-set(' + url('page/b.svg') + ' 1dppx, ' + url('page/c.svg') + ' 2dppx)';
+  const data = 'url("data:image/png;base64,AA==")';
+  const registered = url('main/foo.png') + ', ' + url('alt/foo.png');
+  const cases = [
+    ['none', 'none', 'none'],
+    ['single URL token', 'url(icon.svg)', url('page/icon.svg')],
+    ['single URL function', 'url("icon.svg")', url('page/icon.svg')],
+    ['single absolute URL', 'url(https://images.test/icon.svg)', 'url("https://images.test/icon.svg")'],
+    ['multiple URL tokens', 'url(a.svg), url(b.svg)', url('page/a.svg') + ', ' + url('page/b.svg')],
+    ['multiple URL functions', `url("a.svg"), url('b.svg')`, url('page/a.svg') + ', ' + url('page/b.svg')],
+    ['URL then none', 'url(a.svg), none', url('page/a.svg') + ', none'],
+    ['none then URL', 'none, url(b.svg)', 'none, ' + url('page/b.svg')],
+    ['URL then gradient', 'url(a.svg), linear-gradient(red, blue)', url('page/a.svg') + ', ' + gradient],
+    ['gradient then URL', 'linear-gradient(red, blue), url(b.svg)', gradient + ', ' + url('page/b.svg')],
+    ['URL then image-set', 'url(a.svg), image-set(url(b.svg) 1x, url(c.svg) 2x)', url('page/a.svg') + ', ' + images],
+    ['image-set', 'image-set(url(b.svg) 1x, url(c.svg) 2x)', images],
+    ['URL then data URL', 'url(a.svg), ' + data, url('page/a.svg') + ', ' + data],
+    ['data URL then URL', data + ', url(b.svg)', data + ', ' + url('page/b.svg')],
+    ['quoted delimiters', 'url("a,b).svg"), url("c,d.svg")', url('page/a,b).svg') + ', ' + url('page/c,d.svg')],
+    ['escaped delimiter', String.raw`url("a\,b.svg"), url(c.svg)`, url('page/a,b.svg') + ', ' + url('page/c.svg')],
+    ['registered URL token', 'var(--main-url)', url('main/foo.png')],
+    ['registered URL function', 'var(--alt-func)', url('alt/foo.png')],
+    ['registered URL list', 'var(--main-url), var(--alt-url)', registered],
+    ['registered function list', 'var(--main-func), var(--alt-func)', registered],
+    ['unregistered wrapper URL list', 'var(--multi-url)', registered],
+    ['unregistered wrapper function list', 'var(--multi-func)', registered],
+    ['unregistered URLs', 'var(--unreg-main), var(--unreg-alt)', url('page/foo.png') + ', ' + url('page/foo.png')],
+    ['nested registered URLs', 'image-set(var(--main-url) 1x, var(--alt-url) 2x)', 'image-set(' + url('main/foo.png') + ' 1dppx, ' + url('alt/foo.png') + ' 2dppx)']
+  ];
+  let checks = 0;
+  const failures = [];
+  const equal = (actual, expected, label) => {
+    checks++;
+    if (actual !== expected) failures.push({label, actual, expected});
+  };
+  for (const [label, value, expected] of cases) {
+    style.backgroundImage = '';
+    style.backgroundImage = value;
+    equal(style.backgroundImage !== '', true, label + ': accepted');
+    equal(computed.backgroundImage, expected, label + ': computed');
+  }
+  equal(computed.getPropertyValue('--main-url'), url('main/foo.png'), 'registered main URL');
+  equal(computed.getPropertyValue('--alt-url'), url('alt/foo.png'), 'registered alt URL');
+  style.backgroundImage = 'var(--multi-url)';
+  equal(computed.backgroundImage, registered, 'before base mutation');
+  const base = document.createElement('base');
+  base.href = '/changed/';
+  document.head.appendChild(base);
+  equal(computed.backgroundImage, registered, 'registered bases survive document base mutation');
+  style.backgroundImage = 'var(--unreg-main), var(--unreg-alt)';
+  const changed = url('changed/foo.png') + ', ' + url('changed/foo.png');
+  equal(computed.backgroundImage, changed, 'unregistered URLs use the inline declaration base');
+  base.remove();
+  equal(computed.backgroundImage, changed, 'inline declaration retains its captured base');
+  return JSON.stringify({checks, failures});
+})()
+"#).expect("computed background image URL probe should evaluate");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["checks"], 54, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[test]
 fn child_document_create_element_exposes_css_style_declaration() {
     let mut vm = new_storage_test_vm("https://child-window-detached-style.test/");
 
