@@ -176,7 +176,7 @@ pub(crate) fn style_set_property_callback<'s>(
     );
 }
 
-fn retain_unaffected_style_entries(
+pub(super) fn retain_unaffected_style_entries(
     entries: &mut Vec<StyleEntry>,
     property: &str,
     affected_names: &[String],
