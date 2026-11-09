@@ -2786,12 +2786,7 @@ fn bidi_result_ownership(ownership: Option<&Value>) -> Result<DevToolsResultOwne
 }
 
 fn required_string<'a>(params: &'a Value, field: &str) -> Result<&'a str, BidiError> {
-    params.get(field).and_then(Value::as_str).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    required_string_value(params.get(field), field)
 }
 
 fn required_nullable_string(params: &Value, field: &str) -> Result<Option<String>, BidiError> {
@@ -2958,15 +2953,7 @@ fn required_bool_value(value: &Value, field: &str) -> Result<bool, BidiError> {
 }
 
 fn optional_string<'a>(params: &'a Value, field: &str) -> Result<Option<&'a str>, BidiError> {
-    let Some(value) = params.get(field) else {
-        return Ok(None);
-    };
-    value.as_str().map(Some).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    optional_string_value(params.get(field), field)
 }
 
 pub(crate) fn required_object_value<'a>(
@@ -2992,12 +2979,7 @@ pub(crate) fn required_object_string<'a>(
     params: &'a serde_json::Map<String, Value>,
     field: &str,
 ) -> Result<&'a str, BidiError> {
-    params.get(field).and_then(Value::as_str).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    required_string_value(params.get(field), field)
 }
 
 fn required_object_finite_number(
@@ -3065,15 +3047,7 @@ pub(crate) fn optional_object_string<'a>(
     params: &'a serde_json::Map<String, Value>,
     field: &str,
 ) -> Result<Option<&'a str>, BidiError> {
-    let Some(value) = params.get(field) else {
-        return Ok(None);
-    };
-    value.as_str().map(Some).ok_or_else(|| {
-        BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            format!("{field} must be a string"),
-        )
-    })
+    optional_string_value(params.get(field), field)
 }
 
 pub(crate) fn optional_object_bool(
@@ -3608,4 +3582,28 @@ fn is_bidi_realm_type(realm_type: &str) -> bool {
             | "paint-worklet"
             | "audio-worklet"
     )
+}
+
+fn required_string_value<'a>(value: Option<&'a Value>, field: &str) -> Result<&'a str, BidiError> {
+    value.and_then(Value::as_str).ok_or_else(|| {
+        BidiError::new(
+            BidiErrorCode::InvalidArgument,
+            format!("{field} must be a string"),
+        )
+    })
+}
+
+fn optional_string_value<'a>(
+    value: Option<&'a Value>,
+    field: &str,
+) -> Result<Option<&'a str>, BidiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    value.as_str().map(Some).ok_or_else(|| {
+        BidiError::new(
+            BidiErrorCode::InvalidArgument,
+            format!("{field} must be a string"),
+        )
+    })
 }
