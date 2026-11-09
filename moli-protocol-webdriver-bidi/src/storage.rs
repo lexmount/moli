@@ -283,14 +283,7 @@ fn bidi_cookie_same_site_for_filter(value: &str) -> Result<String, BidiError> {
     }
 }
 
-fn bidi_same_site_from_cdp_cookie(cookie: &Value) -> &'static str {
-    match cookie.get("sameSite").and_then(Value::as_str) {
-        Some("None") => "none",
-        Some("Lax") => "lax",
-        Some("Strict") => "strict",
-        _ => "default",
-    }
-}
+use moli_protocol::cdp_cookie_same_site_wire_name as bidi_same_site_from_cdp_cookie;
 
 pub(crate) fn bidi_cookie_partition_key(scope: &DevToolsCookieScope) -> Value {
     let mut result = json!({
