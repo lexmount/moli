@@ -578,6 +578,8 @@ impl From<NavigationResponse> for Response {
                 NetworkRequestExtraInfo {
                     headers,
                     cookie_report: request_cookie_report,
+                    request_method: None,
+                    request_body: None,
                 }
             }))
     }

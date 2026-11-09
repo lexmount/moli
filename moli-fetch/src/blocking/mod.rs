@@ -5,6 +5,7 @@ use std::{
     ffi::{c_char, c_long},
     net::IpAddr,
     str,
+    sync::Arc,
     time::Duration,
 };
 
@@ -317,6 +318,7 @@ fn outgoing_request_header_bytes_for_url(
 
 pub(crate) fn network_request_extra_info_from_headers(
     config: &FetchConfig,
+    request: &Request,
     outgoing_headers: &[(String, String)],
     cookie_report: Option<&StoredCookieQueryReport>,
 ) -> NetworkRequestExtraInfo {
@@ -325,6 +327,8 @@ pub(crate) fn network_request_extra_info_from_headers(
     NetworkRequestExtraInfo {
         headers,
         cookie_report: cookie_report.cloned().unwrap_or_default(),
+        request_method: Some(Arc::from(request.method.as_str())),
+        request_body: request.body.as_ref().map(|body| Arc::new(body.clone())),
     }
 }
 
