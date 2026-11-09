@@ -750,16 +750,7 @@ fn uppercase_ascii_head(input: &str) -> String {
     out
 }
 
-fn lowercase_ascii_head(input: &str) -> String {
-    let mut chars = input.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let mut out = String::new();
-    out.push(first.to_ascii_lowercase());
-    out.extend(chars);
-    out
-}
+use moli_css_parse::decapitalize_ascii_head as lowercase_ascii_head;
 
 fn all_shorthand_applies_to(property: &str) -> bool {
     !property.starts_with("--")
