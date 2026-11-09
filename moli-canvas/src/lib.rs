@@ -14,7 +14,9 @@ pub use pixel::{
     copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color, premultiply_rgba8_in_place,
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
 };
-pub use rect::{canonicalize_fill_style, fill_style_rgba, normalize_rect, paint_rect};
+pub use rect::{
+    canonicalize_fill_style, css_named_color_rgb, fill_style_rgba, normalize_rect, paint_rect,
+};
 pub use text::{draw_text, measure_text_width};
 pub use types::{
     CanvasRect, DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ImageDataRect,
