@@ -8,6 +8,7 @@
 
 #[path = "planning.rs"]
 mod script_planning;
+mod service_worker_api_values;
 mod stylesheet_blocking;
 mod subresource_integrity;
 
