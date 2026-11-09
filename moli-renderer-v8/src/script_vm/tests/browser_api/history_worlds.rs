@@ -1436,6 +1436,7 @@ fn history_worlds_share_primitive_state_without_coercion() {
 fn history_native_snapshot_survives_isolate_replacement_with_structured_values() {
     let seed = {
         let mut vm = new_storage_test_vm("https://example.com/base");
+        finish_main_document_load_for_test(&mut vm);
         vm.eval(r##"
             globalThis.jsonHooks = 0;
             Object.defineProperty(Object.prototype, 'toJSON', {configurable: true, get() {
@@ -1465,6 +1466,7 @@ fn history_native_snapshot_survives_isolate_replacement_with_structured_values()
     };
     // The source VM (including its isolate and all JS objects) is gone.
     let mut restored = new_storage_test_vm("https://example.com/base#saved");
+    finish_main_document_load_for_test(&mut restored);
     restored.install_navigation_bootstrap_entry(Some(seed));
     let isolated = restored
         .create_isolated_world("restored-history", false)
@@ -1500,6 +1502,7 @@ fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
             String(entry.getState().get('value'))]))"#;
     let (mut seed, expected) = {
         let mut vm = new_storage_test_vm("https://example.com/base");
+        finish_main_document_load_for_test(&mut vm);
         vm.eval(
             r##"
             history.replaceState({value: 1n}, '', '#one');
@@ -1530,6 +1533,7 @@ fn history_restored_entries_keep_world_identity_and_refresh_reused_ids() {
         (seed, expected)
     };
     let mut restored = new_storage_test_vm("https://example.com/base#one");
+    finish_main_document_load_for_test(&mut restored);
     restored.install_navigation_bootstrap_entry(Some(seed.clone()));
     let isolated = restored
         .create_isolated_world("lazy-history-entries", false)

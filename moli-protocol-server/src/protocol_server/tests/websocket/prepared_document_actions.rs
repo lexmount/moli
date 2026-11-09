@@ -1065,7 +1065,7 @@ async fn websocket_cdp_prepared_document_script_navigation_replaces_pending_adop
                     .iter()
                     .filter(|entry| entry["url"] == fixture.url)
                     .count(),
-                usize::from(action == "assign"),
+                0, // Both Location methods replace while the original parser is blocked.
                 "{history:?}"
             );
             for id in [20, 21] {

@@ -70,17 +70,19 @@ pub(in crate::native_bridge) fn form_navigation_target_document(
     }
 }
 
-fn navigate_target_window_location(
-    scope: &mut v8::PinScope<'_, '_>,
-    window: v8::Local<'_, v8::Object>,
+fn navigate_target_window_location<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
     resolved_url: &str,
 ) -> bool {
-    let Some(value) = crate::util::v8_string(scope, resolved_url) else {
-        return false;
-    };
-    window
-        .set(scope, v8str(scope, "location").into(), value.into())
-        .unwrap_or(false)
+    // Window.open and element navigation use their generic history policy.
+    // The common native path still checks ancestor/sandbox navigation access.
+    crate::context_bootstrap::navigate_window_object_with_source_element(
+        scope,
+        window,
+        resolved_url,
+        None,
+    )
 }
 
 fn queue_top_level_location_navigation(
