@@ -1093,21 +1093,7 @@ fn event_handler_setter<'s>(
     simple_object_event_set_handler(scope, receiver, event_type, slot, args.get(0));
 }
 
-fn finite_double_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    owner: &'static str,
-    property: &'static str,
-) -> Option<f64> {
-    match webidl::convert::<webidl::Double>(scope, value, webidl::Context::member(owner, property))
-    {
-        Ok(value) => Some(value.0),
-        Err(error) => {
-            webidl::throw_error(scope, &error);
-            None
-        }
-    }
-}
+use crate::webidl::finite_double_property_value as finite_double_property;
 
 fn private_number<'s>(
     scope: &mut v8::PinScope<'s, '_>,
