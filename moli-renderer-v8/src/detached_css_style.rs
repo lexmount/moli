@@ -2317,6 +2317,14 @@ fn set_style_entry<'s>(
             return;
         }
     }
+    if cssparser::Parser::new(value)
+        .expect_no_error_token()
+        .is_err()
+    {
+        // The compatibility path also rejects malformed component values before
+        // changing the stored declarations or their authored order.
+        return;
+    }
     if lightweight_style_interface_uses_standard_declarations(scope, style)
         && !value.is_empty()
         && mask_compat_property_name(&name)
@@ -2478,10 +2486,13 @@ fn detached_style_property_query_uses_pdb<'s>(
         && lightweight_style_property_uses_standard_declarations(scope, style, name)
         && keyframe_style_property_uses_pdb(scope, style, name)
         && name != "all"
-        // A CSS-wide value is valid for every native Stylo property. Asking
-        // the shared write gate keeps detached/rule query ownership aligned
-        // with the PDB instead of maintaining a second WebKit allowlist here.
-        && detached_style_property_write_uses_pdb(name, "initial")
+        && (detached_style_property_write_uses_pdb(name, "initial")
+            // Pending declarations retain their native owner even when ordinary
+            // values of this shorthand still need compatibility parsing.
+            || crate::native_bridge::element::cssom_style_property_affected_names_with_pdb(name)
+                .is_some_and(|names| names.len() > 1)
+                && stored_stylo_declaration_block(scope, style)
+                    .is_some_and(|block| block.property_has_unparsed_value(name)))
 }
 
 fn cssom_style_entry_requires_structured_parser(name: &str) -> bool {

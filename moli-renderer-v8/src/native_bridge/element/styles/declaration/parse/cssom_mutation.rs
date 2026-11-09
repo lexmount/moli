@@ -8,12 +8,14 @@ use super::inline_state::{
     style_entry_is_replaceable_by_pdb_property,
 };
 use super::pdb_compat::{
-    css_value_uses_unresolved_cssom_storage, cssom_empty_specified_placeholder_property,
+    append_unique_name, css_value_uses_unresolved_cssom_storage,
+    cssom_empty_specified_placeholder_property,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
     cssom_style_property_write_uses_pdb, inline_style_property_write_can_use_pdb_storage,
-    parse_style_property_entries_with_pdb, set_pdb_block_property_collecting_entries,
-    style_entry_affects_property_query, style_entry_is_pdb_supplemental_side_entry,
-    style_property_mutation_affected_names_with_pdb,
+    parse_style_property_entries_with_pdb,
+    prefixed_style_entry_is_independent_of_unprefixed_property,
+    set_pdb_block_property_collecting_entries, style_entry_affects_property_query,
+    style_entry_is_pdb_supplemental_side_entry, style_property_mutation_affected_names_with_pdb,
     style_property_mutation_cleanup_names_with_pdb,
 };
 use super::*;
@@ -118,8 +120,19 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     priority: bool,
     unit: Option<&moli_css_parse::CssDeclaredUnitValue>,
 ) -> Option<bool> {
-    if name != "all" && !inline_style_property_write_can_use_pdb_storage(name, value) {
-        return None;
+    let removes_custom_property =
+        value.is_empty() && moli_css_parse::is_cssom_custom_property_name(name);
+    let native_storage = name == "all"
+        || removes_custom_property
+        || inline_style_property_write_can_use_pdb_storage(name, value);
+    if !native_storage
+        && cssparser::Parser::new(value)
+            .expect_no_error_token()
+            .is_err()
+    {
+        // Compatibility values must still be valid component values. Reject
+        // error tokens before changing either native nodes or side entries.
+        return Some(false);
     }
     let runtime = unsafe { &*runtime_ptr };
     let existing_inline_base_url = runtime.existing_element_inline_style_base_url(handle);
@@ -134,7 +147,42 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
     } else {
         existing_inline_base_url
     };
-    let affected_names = style_property_mutation_affected_names_with_pdb(name)?;
+    let legacy = if native_storage {
+        None
+    } else {
+        // Keep unrelated native declarations as nodes when a compatibility
+        // property is written. Rebuilding all entries would lose pending values.
+        Some(parse_style_property_entries_for_cssom_fallback_write(
+            &state.entries(),
+            name,
+            if value.is_empty() { "initial" } else { value },
+            priority,
+            inline_base_url.as_ref(),
+        )?)
+    };
+    let mut affected_names = if let Some(parsed) = &legacy {
+        parsed.affected_names.clone()
+    } else {
+        style_property_mutation_affected_names_with_pdb(name)?
+    };
+    if !native_storage {
+        // A compatibility shorthand still replaces its native longhands. Keep
+        // prefixed compatibility declarations in their existing CSSOM namespace.
+        for affected in affected_names.clone() {
+            if let Some(native_names) =
+                moli_css_parse::CssDeclarationBlock::affected_names_for_property(&affected)
+            {
+                for native_name in native_names {
+                    if !prefixed_style_entry_is_independent_of_unprefixed_property(
+                        &affected,
+                        &native_name,
+                    ) {
+                        append_unique_name(&mut affected_names, &native_name);
+                    }
+                }
+            }
+        }
+    }
     if inline_state_has_unpreservable_side_entries_for_property(&state, name, &affected_names) {
         return None;
     }
@@ -142,13 +190,25 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
         inline_state_has_replaceable_side_entries_for_property(&state, name, &affected_names);
     let new_entries = if value.is_empty() {
         let mut removed_from_block = false;
+        let stored_names = state.block.entries();
         for affected in &affected_names {
-            removed_from_block |= state.block.remove_property(affected).changed;
+            if native_storage || stored_names.iter().any(|entry| entry.name == *affected) {
+                removed_from_block |= state.block.remove_property(affected).changed;
+            }
         }
         if !removed_from_block && !has_replaceable_side_entry {
             return Some(false);
         }
         (Vec::new(), Vec::new())
+    } else if let Some(parsed) = legacy {
+        let stored_names = state.block.entries();
+        for affected in &affected_names {
+            if stored_names.iter().any(|entry| entry.name == *affected) {
+                let _ = state.block.remove_property(affected);
+            }
+        }
+        state.block.invalidate_typed_units_for_property(name);
+        (parsed.entries.clone(), parsed.entries)
     } else if name == "all" {
         let parsed = parse_style_property_entries_with_base(name, value, priority, None)?;
         if state.block.set_property(name, value, priority)

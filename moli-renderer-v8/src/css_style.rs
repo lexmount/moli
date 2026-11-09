@@ -140,10 +140,9 @@ impl CssInlineStyleDeclarationState {
         if self.entries.iter().any(|entry| entry.name == "all") {
             return serialize_css_style_entries(&self.entries());
         }
-        if css_style_entries_have_renderer_projection(&self.entries) {
-            return serialize_css_style_entries(&self.entries);
-        }
-        if self.side_entries.is_empty() {
+        if self.side_entries.is_empty()
+            && !css_style_entries_have_renderer_projection(&self.entries, &self.block)
+        {
             return self.block.css_text();
         }
         self.mixed_css_text()
@@ -153,13 +152,14 @@ impl CssInlineStyleDeclarationState {
         if self.entries.iter().any(|entry| entry.name == "all") {
             return serialize_css_style_entries(&self.entries());
         }
-        if css_style_entries_have_renderer_projection(&self.entries) {
+        if css_style_entries_have_renderer_projection(&self.entries, &self.block) {
             let entries = self
                 .entries
                 .iter()
                 .cloned()
                 .map(|mut entry| {
                     if entry.value.is_empty()
+                        && !native_pending_substitution_entry(&entry, &self.block)
                         && let Some(value) =
                             self.style_resolution_value_for_placeholder_entry(&entry.name)
                     {
@@ -168,7 +168,19 @@ impl CssInlineStyleDeclarationState {
                     entry
                 })
                 .collect::<Vec<_>>();
-            return serialize_css_style_entries(&entries);
+            if !self
+                .entries
+                .iter()
+                .any(|entry| native_pending_substitution_entry(entry, &self.block))
+            {
+                return serialize_css_style_entries(&entries);
+            }
+            return serialize_css_style_entries_with_pdb_block(
+                &entries,
+                &self.side_entries,
+                &self.block,
+            )
+            .unwrap_or_else(|| serialize_css_style_entries(&entries));
         }
         if self.side_entries.is_empty() {
             return self.block.css_text();
@@ -187,7 +199,7 @@ impl CssInlineStyleDeclarationState {
     pub(crate) fn refresh_pdb_entries(&mut self) {
         if self.side_entries.is_empty()
             && !self.entries.iter().any(|entry| entry.name == "all")
-            && !css_style_entries_have_renderer_projection(&self.entries)
+            && !css_style_entries_have_renderer_projection(&self.entries, &self.block)
         {
             self.entries.clear();
         }
@@ -214,9 +226,6 @@ impl CssInlineStyleDeclarationState {
     }
 
     fn mixed_css_text(&self) -> String {
-        if css_style_entries_have_renderer_projection(&self.entries) {
-            return serialize_css_style_entries(&self.entries);
-        }
         serialize_css_style_entries_with_pdb_block(&self.entries(), &self.side_entries, &self.block)
             .unwrap_or_else(|| serialize_css_style_entries(&self.entries()))
     }
@@ -342,11 +351,26 @@ fn pdb_value_fragment_is_supported(property: &str, value: &str) -> bool {
         != moli_css_parse::CssSetResult::ParseError
 }
 
-fn css_style_entries_have_renderer_projection(entries: &[CssStyleEntry]) -> bool {
+fn native_pending_substitution_entry(
+    entry: &CssStyleEntry,
+    block: &moli_css_parse::CssDeclarationBlock,
+) -> bool {
+    entry.value.is_empty()
+        && !moli_css_parse::is_cssom_custom_property_name(&entry.name)
+        && block.property_is_declared(&entry.name)
+        && block
+            .property_value(&entry.name)
+            .is_some_and(|value| value.is_empty())
+}
+
+fn css_style_entries_have_renderer_projection(
+    entries: &[CssStyleEntry],
+    block: &moli_css_parse::CssDeclarationBlock,
+) -> bool {
     entries.iter().any(|entry| {
         let name = canonical_style_property_name(&entry.name);
         !moli_css_parse::is_cssom_custom_property_name(&name)
-            && (entry.value.is_empty()
+            && (entry.value.is_empty() && !native_pending_substitution_entry(entry, block)
                 || moli_css_parse::css_value_may_contain_var_function(&entry.value)
                 || moli_css_parse::css_value_may_contain_env_function(&entry.value))
     })
@@ -406,16 +430,58 @@ fn serialize_css_style_entries_with_pdb_runs(
     side_entries: &[CssStyleEntry],
     block: &moli_css_parse::CssDeclarationBlock,
 ) -> Option<String> {
-    let ordered_entries = ordered_css_style_entries_with_pdb_block(entries, side_entries, block)?;
+    let mut ordered_entries =
+        ordered_css_style_entries_with_pdb_block(entries, side_entries, block)?;
     if ordered_entries_need_renderer_projection(&ordered_entries) {
-        let entries = ordered_entries
-            .into_iter()
-            .map(OrderedCssStyleEntry::into_entry)
-            .collect::<Vec<_>>();
-        let css_text = serialize_css_style_entries(&entries);
-        return (!css_text.is_empty()).then_some(css_text);
+        project_renderer_shorthand_groups(&mut ordered_entries);
     }
-    serialize_ordered_css_style_entries_with_pdb_runs(&ordered_entries)
+    serialize_ordered_css_style_entries_with_pdb_runs(&ordered_entries, block)
+}
+
+fn project_renderer_shorthand_groups(entries: &mut Vec<OrderedCssStyleEntry>) {
+    for names in [
+        &["overflow-x", "overflow-y"][..],
+        &[
+            "text-decoration-line",
+            "text-decoration-thickness",
+            "text-decoration-style",
+            "text-decoration-color",
+        ][..],
+    ] {
+        let group = entries
+            .iter()
+            .map(OrderedCssStyleEntry::entry)
+            .filter(|entry| names.contains(&entry.name.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if group.len() != names.len()
+            || group
+                .iter()
+                .any(|entry| entry.value.is_empty() || entry.priority != group[0].priority)
+            || group
+                .iter()
+                .any(|entry| is_css_wide_keyword_value(&entry.value))
+                && group.iter().any(|entry| entry.value != group[0].value)
+        {
+            continue;
+        }
+        let first = entries
+            .iter()
+            .position(|entry| names.contains(&entry.entry().name.as_str()))
+            .expect("complete projection group has a first declaration");
+        let last = entries
+            .iter()
+            .rposition(|entry| names.contains(&entry.entry().name.as_str()))
+            .expect("complete projection group has a last declaration");
+        if last - first + 1 != group.len() {
+            continue;
+        }
+        let projected = parse_css_declaration_list(&serialize_css_style_entries(&group))
+            .into_iter()
+            .map(OrderedCssStyleEntry::Side);
+        entries.retain(|entry| !names.contains(&entry.entry().name.as_str()));
+        entries.splice(first..first, projected);
+    }
 }
 
 fn ordered_entries_need_renderer_projection(entries: &[OrderedCssStyleEntry]) -> bool {
@@ -494,6 +560,7 @@ fn ordered_css_style_entries_with_pdb_block(
 
     let mut remaining_side_entries = side_entries.to_vec();
     let mut entry_is_side = vec![false; entries.len()];
+    let mut renderer_placeholder_names = Vec::new();
     let mut pdb_candidates = Vec::new();
     for (entry_index, entry) in entries.iter().enumerate() {
         if let Some(position) = remaining_side_entries
@@ -505,7 +572,24 @@ fn ordered_css_style_entries_with_pdb_block(
             continue;
         }
 
-        let normalized_entries = normalized_pdb_entries_for_style_entry(entry)?;
+        let stored_entry = block_entries
+            .iter()
+            .find(|stored| style_entries_equal(stored, entry));
+        if entry.value.is_empty()
+            && !moli_css_parse::is_cssom_custom_property_name(&entry.name)
+            && stored_entry.is_none()
+        {
+            // Compatibility placeholders have a distinct display value. Native
+            // pending-substitution declarations, by contrast, stay in the PDB.
+            entry_is_side[entry_index] = true;
+            renderer_placeholder_names.push(entry.name.clone());
+            continue;
+        }
+        let normalized_entries = if let Some(stored) = stored_entry {
+            vec![stored.clone()]
+        } else {
+            normalized_pdb_entries_for_style_entry(entry)?
+        };
         if normalized_entries.is_empty() {
             return None;
         }
@@ -525,6 +609,9 @@ fn ordered_css_style_entries_with_pdb_block(
     let mut active_pdb_entries_by_index = vec![Vec::new(); entries.len()];
     let mut pending_unanchored_pdb_entries = Vec::new();
     for block_entry in block_entries {
+        if renderer_placeholder_names.contains(&block_entry.name) {
+            continue;
+        }
         let mut matched = None;
         for candidate in pdb_candidates.iter_mut().rev() {
             if let Some(normalized_index) =
@@ -651,6 +738,7 @@ fn pdb_mutation_value_for_style_entry(entry: &CssStyleEntry) -> std::borrow::Cow
 
 fn serialize_ordered_css_style_entries_with_pdb_runs(
     entries: &[OrderedCssStyleEntry],
+    source: &moli_css_parse::CssDeclarationBlock,
 ) -> Option<String> {
     let mut parts = Vec::new();
     let mut pdb_run = Vec::new();
@@ -662,35 +750,33 @@ fn serialize_ordered_css_style_entries_with_pdb_runs(
                 pdb_run.push(entry.clone());
             }
             OrderedCssStyleEntry::Side(entry) => {
-                flush_pdb_run(&mut parts, &mut pdb_run)?;
+                flush_pdb_run(&mut parts, &mut pdb_run, source)?;
                 side_run.push(entry.clone());
             }
         }
     }
-    flush_pdb_run(&mut parts, &mut pdb_run)?;
+    flush_pdb_run(&mut parts, &mut pdb_run, source)?;
     flush_side_run(&mut parts, &mut side_run);
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-fn flush_pdb_run(parts: &mut Vec<String>, entries: &mut Vec<CssStyleEntry>) -> Option<()> {
+fn flush_pdb_run(
+    parts: &mut Vec<String>,
+    entries: &mut Vec<CssStyleEntry>,
+    source: &moli_css_parse::CssDeclarationBlock,
+) -> Option<()> {
     if entries.is_empty() {
         return Some(());
     }
-    let mut block = moli_css_parse::CssDeclarationBlock::default();
-    for entry in entries.iter() {
-        let value = pdb_mutation_value_for_style_entry(entry);
-        let projection = block.set_property_with_projection(&entry.name, &value, entry.priority);
-        if projection.set_result == moli_css_parse::CssSetResult::ParseError {
-            entries.clear();
-            return None;
-        }
-    }
+    let block = source.select_properties(entries.iter().map(|entry| entry.name.as_str()))?;
     let canonical_entries = block
         .entries()
         .into_iter()
         .map(CssStyleEntry::from)
         .collect::<Vec<_>>();
-    let css_text = if pdb_run_needs_renderer_shorthand_projection(&canonical_entries) {
+    let css_text = if !canonical_entries.iter().any(|entry| entry.value.is_empty())
+        && pdb_run_needs_renderer_shorthand_projection(&canonical_entries)
+    {
         serialize_css_style_entries(&canonical_entries)
     } else {
         block.css_text()

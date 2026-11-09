@@ -416,7 +416,9 @@ pub(super) fn inline_state_pdb_property_query_candidate(
             } else {
                 InlineStatePdbQueryCandidate::Side
             }
-        } else if inline_style_entry_is_pdb_storage_candidate(entry) {
+        } else if entry.value.is_empty() && inline_state_block_contains_entry(state, entry)
+            || inline_style_entry_is_pdb_storage_candidate(entry)
+        {
             InlineStatePdbQueryCandidate::Pdb
         } else {
             return None;
