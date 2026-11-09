@@ -478,7 +478,7 @@ fn cache_key_from_entry_dir(entry_dir: &Path) -> Option<String> {
     safe_entry_key(key).then(|| key.to_owned())
 }
 
-fn directory_size(path: &Path) -> u64 {
+pub(super) fn directory_size(path: &Path) -> u64 {
     let Ok(entries) = fs::read_dir(path) else {
         return 0;
     };
