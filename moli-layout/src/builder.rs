@@ -1225,18 +1225,7 @@ where
         let layout_box = world
             .box_by_id(id)
             .ok_or(LayoutError::InvalidBoxReference { index: id.index() })?;
-        Ok(match layout_box.style.display() {
-            LayoutDisplay::Table | LayoutDisplay::InlineTable => Some(TableBoxRole::Root),
-            LayoutDisplay::TableCaption => Some(TableBoxRole::Caption),
-            LayoutDisplay::TableRowGroup
-            | LayoutDisplay::TableHeaderGroup
-            | LayoutDisplay::TableFooterGroup => Some(TableBoxRole::RowGroup),
-            LayoutDisplay::TableColumnGroup => Some(TableBoxRole::ColumnGroup),
-            LayoutDisplay::TableColumn => Some(TableBoxRole::Column),
-            LayoutDisplay::TableRow => Some(TableBoxRole::Row),
-            LayoutDisplay::TableCell => Some(TableBoxRole::Cell),
-            _ => None,
-        })
+        Ok(TableBoxRole::from_display(layout_box.style.display()))
     }
 
     fn is_inline_in_flow(&self, world: &LayoutWorld<S::NodeId>, id: LayoutBoxId) -> bool {
@@ -1453,41 +1442,7 @@ fn principal_kind(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TableBoxRole {
-    Root,
-    Caption,
-    RowGroup,
-    ColumnGroup,
-    Column,
-    Row,
-    Cell,
-}
-
-impl TableBoxRole {
-    const fn requires_parent(self) -> bool {
-        !matches!(self, Self::Root)
-    }
-
-    const fn is_direct_table_child(self) -> bool {
-        matches!(
-            self,
-            Self::Caption | Self::RowGroup | Self::ColumnGroup | Self::Column
-        )
-    }
-
-    const fn debug_name(self) -> &'static str {
-        match self {
-            Self::Root => "table-root",
-            Self::Caption => "table-caption",
-            Self::RowGroup => "table-row-group",
-            Self::ColumnGroup => "table-column-group",
-            Self::Column => "table-column",
-            Self::Row => "table-row",
-            Self::Cell => "table-cell",
-        }
-    }
-}
+use crate::table_role::TableRole as TableBoxRole;
 
 fn push_diagnostic(
     diagnostics: &mut Vec<LayoutCapabilityDiagnostic>,

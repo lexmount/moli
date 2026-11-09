@@ -1152,7 +1152,7 @@ where
             Some(TableInvariantRole::Root) => layout_box.children.iter().all(|child| {
                 self.box_by_id(*child)
                     .and_then(|child| table_role(child.style.display()))
-                    .is_some_and(TableInvariantRole::is_direct_root_child)
+                    .is_some_and(TableInvariantRole::is_direct_table_child)
             }),
             Some(TableInvariantRole::RowGroup) => layout_box.children.iter().all(|child| {
                 self.box_by_id(*child).is_some_and(|child| {
@@ -1246,63 +1246,10 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TableInvariantRole {
-    Root,
-    Caption,
-    RowGroup,
-    ColumnGroup,
-    Column,
-    Row,
-    Cell,
-}
-
-impl TableInvariantRole {
-    const fn is_direct_root_child(self) -> bool {
-        matches!(
-            self,
-            Self::Caption | Self::RowGroup | Self::ColumnGroup | Self::Column
-        )
-    }
-
-    const fn debug_name(self) -> &'static str {
-        match self {
-            Self::Root => "table-root",
-            Self::Caption => "table-caption",
-            Self::RowGroup => "table-row-group",
-            Self::ColumnGroup => "table-column-group",
-            Self::Column => "table-column",
-            Self::Row => "table-row",
-            Self::Cell => "table-cell",
-        }
-    }
-}
+use crate::table_role::TableRole as TableInvariantRole;
 
 const fn table_role(display: crate::LayoutDisplay) -> Option<TableInvariantRole> {
-    use crate::LayoutDisplay as Display;
-    match display {
-        Display::Table | Display::InlineTable => Some(TableInvariantRole::Root),
-        Display::TableCaption => Some(TableInvariantRole::Caption),
-        Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup => {
-            Some(TableInvariantRole::RowGroup)
-        }
-        Display::TableColumnGroup => Some(TableInvariantRole::ColumnGroup),
-        Display::TableColumn => Some(TableInvariantRole::Column),
-        Display::TableRow => Some(TableInvariantRole::Row),
-        Display::TableCell => Some(TableInvariantRole::Cell),
-        Display::None
-        | Display::Contents
-        | Display::Block
-        | Display::FlowRoot
-        | Display::Inline
-        | Display::InlineBlock
-        | Display::Flex
-        | Display::InlineFlex
-        | Display::Grid
-        | Display::InlineGrid
-        | Display::BlockListItem
-        | Display::InlineListItem => None,
-    }
+    TableInvariantRole::from_display(display)
 }
 
 fn default_capability_diagnostics(
