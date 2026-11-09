@@ -16,6 +16,7 @@ mod grouping_rules;
 mod native_shorthand_queries;
 mod rule_interfaces;
 mod rule_tree_scaling;
+mod shorthand_integrity;
 mod style_rule_mutations;
 mod stylesheet_decoding;
 mod stylesheets_and_at_rules;
