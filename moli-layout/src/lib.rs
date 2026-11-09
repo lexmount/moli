@@ -37,6 +37,7 @@ mod stacking;
 mod style;
 mod stylo_to_parley;
 mod table;
+mod table_role;
 mod taffy_tree;
 mod text;
 mod text_normalization;
