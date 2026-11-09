@@ -36,8 +36,9 @@ use style_traits::{CssStringWriter, ParsingMode, ToCss};
 
 use moli_crypto::Sha256Context;
 use moli_css_parse::{
-    CssRuleInsertError, CssRuleSnapshot, css_rule_snapshot_from_native_with_stylo,
-    keyframe_rule_snapshot_from_native_with_stylo, parse_font_face_cssom_rule_with_stylo_context,
+    CssContainerConditionView, CssRuleInsertError, CssRuleSnapshot,
+    css_rule_snapshot_from_native_with_stylo, keyframe_rule_snapshot_from_native_with_stylo,
+    parse_font_face_cssom_rule_with_stylo_context,
     refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
 
@@ -358,36 +359,30 @@ impl NativeStylesheetRule {
             Self::Css(CssRule::Media(rule)) => LiveStylesheetConditionRuleRead {
                 rule_type: CssRuleType::Media,
                 condition_text: rule.media_queries.read_with(&guard).to_css_string(),
-                container_name: None,
-                container_query: None,
+                container_conditions: Vec::new(),
                 scope_start: None,
                 scope_end: None,
             },
             Self::Css(CssRule::Supports(rule)) => LiveStylesheetConditionRuleRead {
                 rule_type: CssRuleType::Supports,
                 condition_text: rule.condition.to_css_string(),
-                container_name: None,
-                container_query: None,
+                container_conditions: Vec::new(),
                 scope_start: None,
                 scope_end: None,
             },
-            Self::Css(CssRule::Container(rule)) => {
-                let (container_name, container_query) =
-                    container_rule_name_and_query(&rule.conditions);
-                LiveStylesheetConditionRuleRead {
-                    rule_type: CssRuleType::Container,
-                    condition_text: rule.conditions.to_css_string(),
-                    container_name,
-                    container_query,
-                    scope_start: None,
-                    scope_end: None,
-                }
-            }
+            Self::Css(CssRule::Container(rule)) => LiveStylesheetConditionRuleRead {
+                rule_type: CssRuleType::Container,
+                condition_text: rule.conditions.to_css_string(),
+                container_conditions: style::moli_rule_tree::container_rule_cssom_conditions(
+                    &rule.conditions,
+                ),
+                scope_start: None,
+                scope_end: None,
+            },
             Self::Css(CssRule::Scope(rule)) => LiveStylesheetConditionRuleRead {
                 rule_type: CssRuleType::Scope,
                 condition_text: scope_rule_condition_text(rule),
-                container_name: None,
-                container_query: None,
+                container_conditions: Vec::new(),
                 scope_start: rule
                     .bounds
                     .start
@@ -620,26 +615,6 @@ fn serialize_page_rule_css_text(selector: &str, block: &str) -> String {
     }
 }
 
-fn container_rule_name_and_query(
-    conditions: &style::stylesheets::container_rule::ContainerConditions,
-) -> (Option<String>, Option<String>) {
-    let Some(first) = conditions.0.iter().next() else {
-        return (None, None);
-    };
-    let name = (!first.name().is_none()).then(|| first.name().to_css_string());
-    let mut query_parts = Vec::new();
-    if name.is_some() {
-        if let Some(condition) = first.query_condition() {
-            query_parts.push(condition.to_css_string());
-        }
-    } else {
-        query_parts.push(first.to_css_string());
-    }
-    query_parts.extend(conditions.0.iter().skip(1).map(ToCss::to_css_string));
-    let query = (!query_parts.is_empty()).then(|| query_parts.join(", "));
-    (name, query)
-}
-
 fn scope_rule_condition_text(rule: &style::stylesheets::ScopeRule) -> String {
     let mut components = Vec::new();
     if let Some(start) = rule.bounds.start.as_ref() {
@@ -663,8 +638,7 @@ pub(crate) struct LiveStylesheetSelectorNamespaces {
 pub(crate) struct LiveStylesheetConditionRuleRead {
     pub(crate) rule_type: CssRuleType,
     pub(crate) condition_text: String,
-    pub(crate) container_name: Option<String>,
-    pub(crate) container_query: Option<String>,
+    pub(crate) container_conditions: Vec<CssContainerConditionView>,
     pub(crate) scope_start: Option<String>,
     pub(crate) scope_end: Option<String>,
 }

@@ -53,11 +53,12 @@ pub use style::moli_declaration_block::{
     CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
 };
 pub use stylo_stylesheet::{
-    CssConditionRuleView, CssCounterStyleRuleView, CssDetachedRuleListMutation,
-    CssFontFaceDescriptorEntryView, CssFontFaceRuleView, CssFontFeatureValueEntryView,
-    CssFontFeatureValuesRuleView, CssImportRuleView, CssKeyframesRuleView, CssLayerRuleView,
-    CssMarginRuleView, CssNamespaceRuleView, CssNativeStylesheet, CssPageDescriptorEntryView,
-    CssPageRuleView, CssParsedRuleText, CssPropertyRuleView, CssRuleInsertError, CssRuleSnapshot,
+    CssConditionRuleView, CssContainerConditionView, CssCounterStyleRuleView,
+    CssDetachedRuleListMutation, CssFontFaceDescriptorEntryView, CssFontFaceRuleView,
+    CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
+    CssKeyframesRuleView, CssLayerRuleView, CssMarginRuleView, CssNamespaceRuleView,
+    CssNativeStylesheet, CssPageDescriptorEntryView, CssPageRuleView, CssParsedRuleText,
+    CssPropertyRuleView, CssRuleInsertError, CssRuleSnapshot,
     css_rule_snapshot_from_native_with_stylo, delete_detached_keyframe_rule_with_stylo,
     delete_detached_nested_rule_with_stylo, font_face_descriptor_property_names_with_stylo,
     insert_detached_keyframe_rule_with_stylo, insert_detached_nested_rule_with_stylo,

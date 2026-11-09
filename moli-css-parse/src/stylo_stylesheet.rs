@@ -4,7 +4,7 @@ use std::{borrow::Cow, sync::Once};
 
 use cssparser::{Parser, ToCss, Token, TokenSerializationType};
 pub use style::moli_rule_tree::{
-    CssConditionRuleView, CssCounterStyleRuleView, CssFontFaceRuleView,
+    CssConditionRuleView, CssContainerConditionView, CssCounterStyleRuleView, CssFontFaceRuleView,
     CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
     CssKeyframesRuleView, CssLayerRuleView, CssMarginRuleView, CssNamespaceRuleView,
     CssPageDescriptorEntryView, CssPageRuleView, CssPropertyRuleView, CssRuleInsertError,
@@ -504,7 +504,7 @@ pub fn keyframe_selector_texts_match_with_stylo(
 #[cfg(test)]
 mod tests {
     use super::{
-        CssRuleInsertError, delete_detached_keyframe_rule_with_stylo,
+        CssContainerConditionView, CssRuleInsertError, delete_detached_keyframe_rule_with_stylo,
         delete_detached_nested_rule_with_stylo, font_face_descriptor_property_names_with_stylo,
         insert_detached_keyframe_rule_with_stylo, insert_detached_nested_rule_with_stylo,
         keyframe_selector_texts_match_with_stylo,
@@ -983,6 +983,33 @@ mod tests {
         assert_eq!(
             container.container_query.as_deref(),
             Some("(inline-size > 10px)")
+        );
+        assert_eq!(
+            container.container_conditions,
+            vec![CssContainerConditionView {
+                name: "card".into(),
+                query: "(inline-size > 10px)".into(),
+            }]
+        );
+
+        let multiple = parse_condition_rule_view_with_stylo(
+            r"@container escaped\,name style(--color: rgb(1,2,3)), (width > 10px) {}",
+        )
+        .expect("multiple conditions should produce a Stylo view");
+        assert_eq!(multiple.container_name, None);
+        assert_eq!(multiple.container_query, None);
+        assert_eq!(
+            multiple.container_conditions,
+            vec![
+                CssContainerConditionView {
+                    name: r"escaped\,name".into(),
+                    query: "style(--color: rgb(1,2,3))".into(),
+                },
+                CssContainerConditionView {
+                    name: String::new(),
+                    query: "(width > 10px)".into(),
+                },
+            ]
         );
 
         let scope = parse_condition_rule_view_with_stylo("@scope (.a) to (> .b) {}")

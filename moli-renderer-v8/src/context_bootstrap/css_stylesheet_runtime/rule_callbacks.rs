@@ -681,8 +681,7 @@ pub(crate) fn css_condition_rule_read_from_object<'s>(
         |view| crate::live_stylesheet::LiveStylesheetConditionRuleRead {
             rule_type: view.rule_type,
             condition_text: view.condition_text,
-            container_name: view.container_name,
-            container_query: view.container_query,
+            container_conditions: view.container_conditions,
             scope_start: view.scope_start,
             scope_end: view.scope_end,
         },
@@ -1281,7 +1280,9 @@ pub(crate) fn css_container_rule_container_name_getter_callback<'s>(
 ) {
     let name = css_condition_rule_read_from_object(scope, args.this())
         .filter(|view| view.rule_type == CssRuleType::Container)
-        .and_then(|view| view.container_name)
+        .filter(|view| view.container_conditions.len() == 1)
+        .and_then(|view| view.container_conditions.into_iter().next())
+        .map(|condition| condition.name)
         .unwrap_or_default();
     rv.set(v8_dynamic_string_value(scope, &name));
 }
@@ -1293,9 +1294,41 @@ pub(crate) fn css_container_rule_container_query_getter_callback<'s>(
 ) {
     let query = css_condition_rule_read_from_object(scope, args.this())
         .filter(|view| view.rule_type == CssRuleType::Container)
-        .and_then(|view| view.container_query)
+        .filter(|view| view.container_conditions.len() == 1)
+        .and_then(|view| view.container_conditions.into_iter().next())
+        .map(|condition| condition.query)
         .unwrap_or_default();
     rv.set(v8_dynamic_string_value(scope, &query));
+}
+
+pub(crate) fn css_container_rule_conditions_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let conditions = css_condition_rule_read_from_object(scope, args.this())
+        .filter(|view| view.rule_type == CssRuleType::Container)
+        .map(|view| view.container_conditions)
+        .unwrap_or_default();
+    // WebIDL converts each fresh dictionary and FrozenArray in the getter's
+    // realm. Use data properties so authored prototype setters cannot run.
+    let mut values = Vec::with_capacity(conditions.len());
+    for condition in conditions {
+        let dictionary = v8::Object::new(scope);
+        for (name, value) in [("name", condition.name), ("query", condition.query)] {
+            let key = v8str(scope, name);
+            let value = v8_dynamic_string_value(scope, &value);
+            if dictionary.create_data_property(scope, key.into(), value) != Some(true) {
+                return;
+            }
+        }
+        values.push(dictionary.into());
+    }
+    let array = v8::Array::new_with_elements(scope, &values);
+    if array.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        return;
+    }
+    rv.set(array.into());
 }
 
 pub(crate) fn css_layer_block_rule_name_getter_callback<'s>(
