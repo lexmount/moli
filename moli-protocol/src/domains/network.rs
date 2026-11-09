@@ -425,14 +425,7 @@ fn resolve_network_data_collector_browser_context_ids(
     Ok(resolved)
 }
 
-fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
-    browser_context_id == "BID-default"
-        || browser_context_id
-            .strip_prefix("BID-")
-            .is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-            })
-}
+use crate::domains::bidi_contexts::is_moli_internal_default_user_context;
 
 fn set_cache_behavior_result(
     conn: &mut CdpConnection,
