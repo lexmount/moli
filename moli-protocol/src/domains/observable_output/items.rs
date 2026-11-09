@@ -422,21 +422,7 @@ pub(super) fn log_domain_items<'a>(
     items
 }
 
-pub(in crate::domains) fn runtime_console_message_type_and_text(
-    message: &str,
-) -> (&'static str, &str) {
-    let Some((level, text)) = message.split_once(": ") else {
-        return ("log", message);
-    };
-    match level {
-        "debug" => ("debug", text),
-        "warn" => ("warning", text),
-        "error" => ("error", text),
-        "info" => ("info", text),
-        "log" => ("log", text),
-        _ => ("log", message),
-    }
-}
+pub(in crate::domains) use self::console_message_level_and_text as runtime_console_message_type_and_text;
 
 pub(in crate::domains) fn console_message_added_background_event(
     session_id: Option<&str>,
