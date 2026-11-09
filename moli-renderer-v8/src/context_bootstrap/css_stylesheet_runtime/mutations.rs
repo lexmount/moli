@@ -1455,7 +1455,7 @@ pub(crate) fn sync_css_keyframe_rule_object_from_native_snapshot<'s>(
     }
 }
 
-pub(crate) fn sync_css_grouping_rule_rules_array_from_live_stylesheet<'s>(
+pub(crate) fn sync_css_rule_rules_array_from_live_stylesheet<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
     rules: v8::Local<'s, v8::Object>,
@@ -1468,6 +1468,8 @@ pub(crate) fn sync_css_grouping_rule_rules_array_from_live_stylesheet<'s>(
     initialize_attached_css_rule_list(scope, rules, parent_style_sheet, Some(rule), child_count);
     true
 }
+
+pub(crate) use self::sync_css_rule_rules_array_from_live_stylesheet as sync_css_grouping_rule_rules_array_from_live_stylesheet;
 
 pub(crate) fn apply_live_stylesheet_media_rule_media_mutation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1679,16 +1681,4 @@ pub(crate) fn sync_css_page_rule_style_wrapper_from_live_stylesheet<'s>(
     }
 }
 
-pub(crate) fn sync_css_style_rule_rules_array_from_live_stylesheet<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-    rules: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some((parent_style_sheet, child_count)) =
-        css_rule_live_stylesheet_child_rule_count(scope, rule)
-    else {
-        return false;
-    };
-    initialize_attached_css_rule_list(scope, rules, parent_style_sheet, Some(rule), child_count);
-    true
-}
+pub(crate) use self::sync_css_rule_rules_array_from_live_stylesheet as sync_css_style_rule_rules_array_from_live_stylesheet;
