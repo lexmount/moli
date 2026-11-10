@@ -2316,6 +2316,8 @@ mod offline_audio_context_interfaces;
 mod offline_audio_float;
 mod periodic_wave_interfaces;
 mod post_parse;
+
+mod promise_jobs;
 mod queue_microtask;
 
 mod svg_gradient_native_receivers;
