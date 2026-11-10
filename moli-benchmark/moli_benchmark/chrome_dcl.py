@@ -209,6 +209,9 @@ _BINARY_DOCUMENT_MIME_TYPES = {
 
 def _is_binary_document_mime_type(mime_type: str) -> bool:
     normalized = mime_type.split(";", 1)[0].strip().lower()
+    # Standalone SVG is an XML document with a DOM and a DCL lifecycle.
+    if normalized == "image/svg+xml":
+        return False
     return normalized in _BINARY_DOCUMENT_MIME_TYPES or normalized.startswith(
         _BINARY_DOCUMENT_MIME_PREFIXES
     )

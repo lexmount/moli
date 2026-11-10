@@ -409,6 +409,43 @@ class ChromeDclTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_svg_document_waits_for_dcl_instead_of_returning_only_headers(self) -> None:
+        async def run() -> None:
+            for mime_type in ("image/svg+xml", "IMAGE/SVG+XML; charset=utf-8"):
+                for buffered in (False, True):
+                    with self.subTest(mime_type=mime_type, buffered=buffered):
+                        messages = [
+                            _document_response_message(mime_type),
+                            _dcl_lifecycle_message(),
+                        ]
+                        client = _QueuedMessageClient([] if buffered else messages)
+                        observation = await _recv_until_dcl_or_binary_main_resource(
+                            client,
+                            session_id="SID-1",
+                            frame_id="FRAME-1",
+                            expected_loader_id="LOADER-1",
+                            deadline=time.perf_counter() + 1.0,
+                            seen=messages if buffered else [],
+                        )
+                        self.assertFalse(observation.headers_only)
+                        self.assertEqual(observation.response_mime_type, mime_type.lower())
+                        self.assertEqual(client.messages, [])
+
+        asyncio.run(run())
+
+    def test_raster_images_still_use_header_only_capture(self) -> None:
+        async def run() -> None:
+            observation = await _recv_until_dcl_or_binary_main_resource(
+                _QueuedMessageClient([]),
+                session_id="SID-1", frame_id="FRAME-1",
+                expected_loader_id="LOADER-1",
+                deadline=time.perf_counter() + 1.0,
+                seen=[_document_response_message("image/png")],
+            )
+            self.assertTrue(observation.headers_only)
+
+        asyncio.run(run())
+
     def test_binary_main_document_response_returns_mime_evidence(self) -> None:
         mime_type = _binary_main_resource_mime_type_from_message(
             _document_response_message("application/pdf"),
