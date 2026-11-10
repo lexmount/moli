@@ -37,7 +37,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "tinycss2", specifier = ">=1.5,<2" },
-    { name = "websockets", specifier = ">=13,<16" },
+    { name = "websockets", specifier = ">=15,<16" },
 ]
 
 [package.metadata.requires-dev]
