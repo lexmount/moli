@@ -594,15 +594,13 @@ fn append_resource_performance_entry<'s>(
 ) {
     let time_origin =
         performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
-    let start_time = entry.start_unix_millis.unwrap_or_else(unix_epoch_millis) - time_origin;
-    let start_time = if entry.end_unix_millis.is_some() {
-        moli_time::coarsened_dom_time_millis(start_time.max(0.0))
-    } else {
-        start_time
-    };
+    let start_time = moli_time::relative_dom_time_millis(
+        entry.start_unix_millis.unwrap_or_else(unix_epoch_millis),
+        time_origin,
+    );
     let end_time = entry
         .end_unix_millis
-        .map(|end| moli_time::coarsened_dom_time_millis(end - time_origin).max(start_time));
+        .map(|end| moli_time::relative_dom_time_millis(end, time_origin).max(start_time));
     let resource = entries::create_performance_entry(
         scope,
         performance,
@@ -632,7 +630,7 @@ fn append_resource_performance_entry<'s>(
     );
     if let Some(end_time) = end_time {
         let fetch_start = entry.fetch_start_unix_millis.map_or(start_time, |start| {
-            moli_time::coarsened_dom_time_millis(start - time_origin).clamp(start_time, end_time)
+            moli_time::relative_dom_time_millis(start, time_origin).clamp(start_time, end_time)
         });
         for (slot, value) in [
             (
@@ -649,7 +647,7 @@ fn append_resource_performance_entry<'s>(
                     scope,
                     resource,
                     slot,
-                    moli_time::coarsened_dom_time_millis(value - time_origin)
+                    moli_time::relative_dom_time_millis(value, time_origin)
                         .clamp(start_time, fetch_start),
                 );
             }
@@ -667,7 +665,7 @@ fn append_resource_performance_entry<'s>(
             end_time,
         );
         if let Some(response_start) = entry.response_start_unix_millis {
-            let response_start = moli_time::coarsened_dom_time_millis(response_start - time_origin)
+            let response_start = moli_time::relative_dom_time_millis(response_start, time_origin)
                 .clamp(fetch_start, end_time);
             set_performance_entry_slot_number(
                 scope,
@@ -721,7 +719,7 @@ fn append_resource_performance_entry<'s>(
                     scope,
                     resource,
                     slot,
-                    moli_time::coarsened_dom_time_millis(value - time_origin)
+                    moli_time::relative_dom_time_millis(value, time_origin)
                         .clamp(fetch_start, end_time),
                 );
             }

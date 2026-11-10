@@ -17,7 +17,6 @@ use crate::webidl_iterator::{
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
-pub(super) const MIN_LIFECYCLE_TIMING_DELTA_MILLIS: f64 = 0.001;
 pub(super) const EVENT_COUNTS_TRACKED_TYPES: &[&str] = &[
     "auxclick",
     "click",
@@ -764,11 +763,7 @@ fn monotonic_lifecycle_timestamp<'s>(
     let time_origin =
         performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
     let now = dom_time_since_origin_millis(time_origin).max(0.0);
-    if now > previous {
-        now
-    } else {
-        previous + MIN_LIFECYCLE_TIMING_DELTA_MILLIS
-    }
+    now.max(previous)
 }
 
 fn update_legacy_timing<'s>(
@@ -784,7 +779,9 @@ fn update_legacy_timing<'s>(
             scope,
             timing,
             name,
-            legacy_timing_epoch_millis(time_origin + high_res_timestamp) as f64,
+            legacy_timing_epoch_millis(
+                moli_time::coarsened_dom_time_millis(time_origin) + high_res_timestamp,
+            ) as f64,
         );
     }
 }
@@ -980,8 +977,9 @@ fn performance_timing_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) -> PerformanceTimingSnapshot {
-    let time_origin =
-        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let time_origin = moli_time::coarsened_dom_time_millis(
+        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0),
+    );
     let mut snapshot = PerformanceTimingSnapshot::new(time_origin);
     if let Some((start, end)) =
         super::navigation_timing::previous_document_unload_times(scope, performance)
@@ -1030,6 +1028,14 @@ fn performance_attribute_getter_callback<'s>(
         match super::lazy_subobjects::ensure_performance_subobject(scope, args.this(), subobject) {
             Ok(value) => rv.set(value),
             Err(error) => throw_type_error(scope, &error.to_string()),
+        }
+        return;
+    }
+    if slot == PERFORMANCE_TIME_ORIGIN_SLOT {
+        if let Some(origin) = performance_slot_number(scope, args.this(), slot) {
+            rv.set(v8::Number::new(scope, moli_time::coarsened_dom_time_millis(origin)).into());
+        } else {
+            rv.set_undefined();
         }
         return;
     }
@@ -1367,7 +1373,9 @@ pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
     // Default toJSON uses IDL attribute values. Object-valued attributes retain
     // their native identity; JSON.stringify invokes their own toJSON later.
     let output = PerformanceJsonSnapshotDeclaration {
-        time_origin: get_private_value(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT),
+        time_origin: performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).map(
+            |origin| v8::Number::new(scope, moli_time::coarsened_dom_time_millis(origin)).into(),
+        ),
         timing,
         navigation,
     }

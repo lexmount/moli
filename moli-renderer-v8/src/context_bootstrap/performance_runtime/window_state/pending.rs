@@ -3,8 +3,7 @@ use crate::{
     context_bootstrap::{
         dom_time_since_origin_millis,
         performance_runtime::{
-            ResourceConnectionTiming, ResourcePerformanceEntry,
-            install::{EVENT_COUNTS_TRACKED_TYPES, MIN_LIFECYCLE_TIMING_DELTA_MILLIS},
+            ResourceConnectionTiming, ResourcePerformanceEntry, install::EVENT_COUNTS_TRACKED_TYPES,
         },
     },
     util::{array_push_value, get_private_value, set_private_value, v8_string},
@@ -329,11 +328,7 @@ fn record_pending_lifecycle_timestamp(scope: &mut v8::PinScope<'_, '_>, index: u
         .and_then(|value| value.number_value(scope))
         .unwrap_or(0.0);
     let now = dom_time_since_origin_millis(time_origin_seed(scope, global)).max(0.0);
-    let timestamp = if now > previous {
-        now
-    } else {
-        previous + MIN_LIFECYCLE_TIMING_DELTA_MILLIS
-    };
+    let timestamp = now.max(previous);
     let timestamp_value = v8::Number::new(scope, timestamp);
     let _ = values.set_index(scope, index as u32, timestamp_value.into());
     timestamp

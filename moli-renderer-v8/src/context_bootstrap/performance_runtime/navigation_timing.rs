@@ -48,7 +48,7 @@ pub(super) fn refresh_navigation_unload_timing<'s>(
             scope,
             entry,
             slot,
-            moli_time::coarsened_dom_time_millis((absolute - time_origin).max(0.0)),
+            moli_time::relative_dom_time_millis(absolute, time_origin),
         );
     }
 }
@@ -229,9 +229,7 @@ pub(super) fn refresh_navigation_timing<'s>(
         (PERFORMANCE_RESOURCE_RESPONSE_END_SLOT, response_end),
     ] {
         let value = value
-            .map(|value| {
-                moli_time::coarsened_dom_time_millis((value - snapshot.time_origin).max(0.0))
-            })
+            .map(|value| moli_time::relative_dom_time_millis(value, snapshot.time_origin))
             .unwrap_or(0.0);
         set_performance_entry_slot_number(scope, entry, slot, value);
     }

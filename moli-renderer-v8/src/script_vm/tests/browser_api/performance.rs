@@ -1,5 +1,51 @@
 use super::*;
 
+#[test]
+fn performance_resource_times_share_the_public_origin_clock_buckets() {
+    for materialize in [false, true] {
+        for (origin, exposed_origin) in [(1000.09, 1000.0), (1200.01, 1200.0)] {
+            let mut vm = new_storage_test_vm("https://shared-performance-clock.test/");
+            if materialize {
+                vm.eval("performance").unwrap();
+            }
+            vm.with_default_context_scope_and_checkpoint_for_test(|scope, _host| {
+                let window = scope.get_current_context().global(scope);
+                crate::context_bootstrap::bind_window_performance_seed(
+                    scope, window, "navigate", origin,
+                )?;
+                let mut entry =
+                    crate::context_bootstrap::ResourcePerformanceEntry::without_network_result(
+                        "https://shared-performance-clock.test/resource",
+                        "fetch",
+                        Some(10000.199),
+                    );
+                entry.set_response_end_unix_millis(10000.201);
+                crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                Ok(())
+            })
+            .unwrap();
+            let result = vm.eval(r#"
+                (() => {
+                  const entry = performance.getEntriesByName('https://shared-performance-clock.test/resource')[0];
+                  return JSON.stringify({
+                    origin: performance.timeOrigin,
+                    jsonOrigin: performance.toJSON().timeOrigin,
+                    start: performance.timeOrigin + entry.startTime,
+                    end: performance.timeOrigin + entry.responseEnd,
+                    jsonStart: performance.timeOrigin + entry.toJSON().startTime
+                  });
+                })()
+            "#).unwrap();
+            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(result["origin"].as_f64(), Some(exposed_origin));
+            assert_eq!(result["jsonOrigin"].as_f64(), Some(exposed_origin));
+            assert_eq!(result["start"].as_f64(), Some(10000.1));
+            assert_eq!(result["end"].as_f64(), Some(10000.2));
+            assert_eq!(result["jsonStart"].as_f64(), Some(10000.1));
+        }
+    }
+}
+
 fn record_resource_from_javascript_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
