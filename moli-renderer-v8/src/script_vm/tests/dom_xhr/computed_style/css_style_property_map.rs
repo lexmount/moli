@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn css_style_property_maps_reject_numeric_shorthand_writes_atomically() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-typed-shorthands.test/",
+        "<!doctype html><body>",
+    );
+    let result = vm
+        .eval(include_str!("css_typed_shorthand_writes.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["checks"], 725, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[test]
 fn css_style_declarations_commit_before_custom_element_reactions() {
     let mut vm = new_parsed_test_vm("https://css-style-reactions.test/", "<!doctype html><body>");
     assert_eq!(

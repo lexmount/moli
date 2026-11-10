@@ -5,11 +5,13 @@ use style::{
     context::QuirksMode,
     custom_properties::SpecifiedValue,
     properties::{
-        CSSWideKeyword, Importance, PropertyDeclaration, PropertyDeclarationBlock, PropertyId,
-        ShorthandId, SourcePropertyDeclaration, parse_one_declaration_into,
+        CSSWideKeyword, Importance, LonghandId, PropertyDeclaration, PropertyDeclarationBlock,
+        PropertyDeclarationId, PropertyId, ShorthandId, SourcePropertyDeclaration,
+        parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, CssRuleTypes, Origin, UrlExtraData},
-    typed_om::{ToTyped, TypedValue, TypedValueList, UnparsedValue},
+    typed_om::{KeywordValue, ToTyped, TypedValue, TypedValueList, UnparsedValue},
+    values::specified::{AlignmentBaseline, BaselineSource},
 };
 use style_traits::ParsingMode;
 
@@ -116,6 +118,12 @@ pub fn parse_typed_style_value(
         // shorthands keep their property-specific projection. Read the
         // parsed keyword instead of guessing from serialized longhands.
         keyword.to_typed_value_list()
+    } else if matches!(id.as_shorthand(), Ok(ShorthandId::VerticalAlign)) {
+        // CSS Inline expands vertical-align into baseline longhands, but
+        // Typed OM explicitly exposes its scalar numeric/keyword forms.
+        // Read the original AST: shorthand serialization collapses a literal
+        // 0px into `baseline`, losing its numeric type.
+        vertical_align_values(&block, css_text, &serialized)
     } else {
         block.property_value_to_typed_value_list(&id).ok()?
     };
@@ -127,6 +135,47 @@ pub fn parse_typed_style_value(
         css_text: serialized,
         values,
     })
+}
+
+fn vertical_align_values(
+    block: &PropertyDeclarationBlock,
+    source: &str,
+    serialized: &str,
+) -> Option<TypedValueList> {
+    if let Some(keyword) = css_wide_keyword(block) {
+        return keyword.to_typed_value_list();
+    }
+    if Parser::new(source)
+        .parse_entirely(|input| Ok::<_, cssparser::ParseError<()>>(input.expect_ident_cloned()?))
+        .is_ok()
+    {
+        return Some(TypedValueList {
+            values: [TypedValue::Keyword(KeywordValue(serialized.to_owned()))]
+                .into_iter()
+                .collect(),
+        });
+    }
+    let (PropertyDeclaration::AlignmentBaseline(alignment), _) = block.get(
+        PropertyDeclarationId::Longhand(LonghandId::AlignmentBaseline),
+    )?
+    else {
+        return None;
+    };
+    let (PropertyDeclaration::BaselineSource(baseline), _) =
+        block.get(PropertyDeclarationId::Longhand(LonghandId::BaselineSource))?
+    else {
+        return None;
+    };
+    if *alignment != AlignmentBaseline::Baseline || *baseline != BaselineSource::Auto {
+        return None;
+    }
+    let (PropertyDeclaration::BaselineShift(shift), _) =
+        block.get(PropertyDeclarationId::Longhand(LonghandId::BaselineShift))?
+    else {
+        return None;
+    };
+    let values = shift.to_typed_value_list()?;
+    matches!(values.values.as_slice(), [TypedValue::Numeric(_)]).then_some(values)
 }
 
 fn css_wide_keyword(block: &PropertyDeclarationBlock) -> Option<CSSWideKeyword> {
@@ -169,6 +218,42 @@ mod tests {
             TypedStyleValueList::Native(values) => values,
             TypedStyleValueList::Images(_) => panic!("unexpected image projection"),
         }
+    }
+
+    #[test]
+    fn vertical_align_keeps_typed_scalars_despite_native_shorthand_expansion() {
+        for (source, unit) in [("0px", "px"), ("0%", "percent"), ("3em", "em")] {
+            let values =
+                native_values(parse_typed_style_value("vertical-align", source, None).unwrap());
+            assert!(
+                matches!(&values.values[0], TypedValue::Numeric(NumericValue::Unit(value)) if value.unit_str() == unit),
+                "{source}"
+            );
+        }
+        for source in ["baseline", "super", "initial", "inherit", r"\62 aseline"] {
+            let values =
+                native_values(parse_typed_style_value("vertical-align", source, None).unwrap());
+            assert!(
+                matches!(&values.values[0], TypedValue::Keyword(_)),
+                "{source}"
+            );
+        }
+        for source in ["calc(0px + 0em)", "calc(0% + 0%)"] {
+            let values =
+                native_values(parse_typed_style_value("vertical-align", source, None).unwrap());
+            assert!(
+                matches!(&values.values[0], TypedValue::Numeric(_)),
+                "{source}"
+            );
+        }
+        let compound = parse_typed_style_value("vertical-align", "first 2px", None).unwrap();
+        assert!(compound.values.is_none());
+        assert!(
+            parse_typed_style_value("background", "0px", None)
+                .unwrap()
+                .values
+                .is_none()
+        );
     }
 
     #[test]
