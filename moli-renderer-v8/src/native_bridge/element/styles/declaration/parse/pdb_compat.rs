@@ -447,6 +447,7 @@ pub(super) fn cssom_structured_property_write_uses_pdb(name: &str) -> bool {
     matches!(
         name,
         "accent-color"
+            | "background"
             | "align-content"
             | "align-items"
             | "align-self"

@@ -224,7 +224,12 @@ fn mask_composite_owner_initialization_preserves_other_attribute_shorthand_prior
   return JSON.stringify(values.map(value => {
     const element = document.createElement('div');
     element.setAttribute('style', value);
-    return element.style.cssText;
+    const style = element.style;
+    const copy = document.createElement('div');
+    copy.style.cssText = style.cssText;
+    return [style.backgroundColor, style.getPropertyPriority('background-color'),
+      style.getPropertyPriority('background-image'), copy.style.backgroundColor,
+      copy.style.getPropertyPriority('background-color')];
   }));
 })()
 "#,
@@ -233,9 +238,9 @@ fn mask_composite_owner_initialization_preserves_other_attribute_shorthand_prior
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&result).unwrap(),
         serde_json::json!([
-            "background: red;",
-            "background: red !important;",
-            "background: red; background-color: green !important;"
+            ["red", "", "", "red", ""],
+            ["red", "important", "important", "red", "important"],
+            ["green", "important", "", "green", "important"]
         ])
     );
 }

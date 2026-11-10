@@ -644,7 +644,7 @@ fn detached_css_text_setter_uses_stylo_declaration_block_semantics() {
     );
 }
 #[test]
-fn inline_css_text_preserves_cssom_shorthand_entry_shape_after_stylo_validation() {
+fn inline_css_text_expands_background_and_preserves_compatibility_shorthands() {
     let mut vm = new_storage_test_vm("https://inline-style-pdb-preserved-shorthand.test/");
 
     let result = vm
@@ -656,7 +656,7 @@ fn inline_css_text_preserves_cssom_shorthand_entry_shape_after_stylo_validation(
   const background = [
     style.length,
     style.item(0),
-    style.item(1),
+    Array.from(style).filter(name => name !== 'color').sort().join('/'),
     style.getPropertyValue('background'),
     style.getPropertyValue('background-color'),
     style.cssText
@@ -769,7 +769,7 @@ fn inline_css_text_preserves_cssom_shorthand_entry_shape_after_stylo_validation(
 
     assert_eq!(
         result,
-        r#"2,color,background,blue,blue,color: red; background: blue;|url("http://example.com/image.png")|2,row-gap,column-gap,10px,10px,gap: 10px;|2,row-gap,column-gap,10px,10px,gap: 10px;|2,row-gap,column-gap,567px,567px,567px,567px,gap: 567px;|true,true,true,true,true,true,false,5,scroll-margin-top/scroll-padding-bottom/column-width/column-rule-width/shape-margin,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,scroll-margin-top: 0px; scroll-padding-bottom: 0px; column-width: 0px; column-rule-width: 0px; shape-margin: 0px;|1,scroll-snap-align,start,start,scroll-snap-align: start;|overlay hidden,overlay,hidden"#
+        r#"10,color,background-attachment/background-clip/background-color/background-image/background-origin/background-position-x/background-position-y/background-repeat/background-size,blue,blue,color: red; background: blue;|url("http://example.com/image.png")|2,row-gap,column-gap,10px,10px,gap: 10px;|2,row-gap,column-gap,10px,10px,gap: 10px;|2,row-gap,column-gap,567px,567px,567px,567px,gap: 567px;|true,true,true,true,true,true,false,5,scroll-margin-top/scroll-padding-bottom/column-width/column-rule-width/shape-margin,0px,0px,0px,0px,0px,0px,0px,0px,0px,0px,scroll-margin-top: 0px; scroll-padding-bottom: 0px; column-width: 0px; column-rule-width: 0px; shape-margin: 0px;|1,scroll-snap-align,start,start,scroll-snap-align: start;|overlay hidden,overlay,hidden"#
     );
 }
 #[test]

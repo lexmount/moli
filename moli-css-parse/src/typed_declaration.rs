@@ -176,6 +176,27 @@ impl CssDeclarationBlock {
         self.native.into_inner()
     }
 
+    /// Retain only native nodes whose pending substitutions cannot survive a
+    /// CSSOM text round trip after another longhand replaces part of a shorthand.
+    pub fn pending_substitutions(&self) -> Option<Self> {
+        let source = self.native.clone().into_inner();
+        let mut pending = PropertyDeclarationBlock::new();
+        for (declaration, importance) in source.declaration_importance_iter() {
+            if matches!(declaration, PropertyDeclaration::WithVariables(..)) {
+                pending.push(declaration.clone(), importance);
+            }
+        }
+        (!pending.is_empty()).then(|| Self::new(pending))
+    }
+
+    pub fn restore_pending_substitutions(
+        &self,
+        block: &mut PropertyDeclarationBlock,
+        url_data: &style::stylesheets::UrlExtraData,
+    ) {
+        self.native.restore_pending_substitutions(block, url_data);
+    }
+
     pub fn typed_unit_value(&self, name: &str) -> Option<&CssDeclaredUnitValue> {
         if self.typed_units.is_empty() {
             return None;

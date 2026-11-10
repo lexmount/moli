@@ -125,6 +125,17 @@ pub(crate) fn lightweight_css_style_stylo_declaration_block_resolution_text(
     })
 }
 
+pub(crate) fn lightweight_css_style_pending_substitutions(
+    id: u64,
+) -> Option<moli_css_parse::CssDeclarationBlock> {
+    STYLO_DECLARATION_BLOCKS.with(|blocks| {
+        blocks
+            .borrow()
+            .get(&id)
+            .and_then(|block| block.pending_substitutions())
+    })
+}
+
 pub(crate) fn remove_lightweight_css_style_stylo_declaration_block(id: u64) {
     remove_stylo_declaration_block(id);
 }

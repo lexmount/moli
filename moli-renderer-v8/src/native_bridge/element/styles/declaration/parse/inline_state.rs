@@ -102,19 +102,56 @@ pub(super) fn inline_style_declaration_state_from_css_text(
         return state;
     }
     let entries = parse_inline_css_text_with_base(css_text, base_url);
-    preserve_mask_composite_grammar(
+    preserve_native_declaration_nodes(
         inline_style_declaration_state_from_entries(&entries),
         css_text,
     )
 }
 
-// A canonical CSSOM name cannot reconstruct the prefixed value grammar. Keep
-// this declaration as a native node when compatibility entries share its block.
-fn preserve_mask_composite_grammar(
+// Compatibility entries must not replay native declaration-list winners through
+// imperative setters or lose the grammar needed by deferred substitution.
+fn preserve_native_declaration_nodes(
     mut state: CssInlineStyleDeclarationState,
     css_text: &str,
 ) -> CssInlineStyleDeclarationState {
     let source = moli_css_parse::parse_declaration_block(css_text);
+    // The `all` adapter has its own CSSOM ownership and reset ordering.
+    if !state.entries.iter().any(|entry| entry.name == "all")
+        && source.property_is_declared("background")
+    {
+        let raw = source.clone().into_inner();
+        let mut background = style::properties::PropertyDeclarationBlock::new();
+        for (declaration, importance) in raw.declaration_importance_iter() {
+            if declaration
+                .id()
+                .is_longhand_of(style::properties::ShorthandId::Background)
+            {
+                background.push(declaration.clone(), importance);
+            }
+        }
+        let background = moli_css_parse::CssDeclarationBlock::new(background);
+        let names = moli_css_parse::CssDeclarationBlock::affected_names_for_property("background")
+            .unwrap_or_default();
+        let is_background =
+            |entry: &StyleEntry| entry.name == "background-position" || names.contains(&entry.name);
+        let first = state
+            .entries
+            .iter()
+            .position(is_background)
+            .unwrap_or(state.entries.len());
+        state.entries.retain(|entry| !is_background(entry));
+        state.entries.splice(
+            first..first,
+            background.entries().into_iter().map(StyleEntry::from),
+        );
+        state.side_entries.retain(|entry| !is_background(entry));
+        state.block.remove_property("background");
+        let mut block = std::mem::take(&mut state.block).into_inner();
+        for (declaration, importance) in background.into_inner().declaration_importance_iter() {
+            block.push(declaration.clone(), importance);
+        }
+        state.block = moli_css_parse::CssDeclarationBlock::new(block);
+    }
     let Some(selected) = source.select_properties(["mask-composite"]) else {
         return state;
     };
@@ -165,7 +202,7 @@ pub(super) fn inline_css_text_pdb_storage_state(
     if let Some(entries) = inline_css_text_all_adapter_entries(css_text) {
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
-        return Some(preserve_mask_composite_grammar(state, css_text));
+        return Some(preserve_native_declaration_nodes(state, css_text));
     }
     if !inline_css_text_can_seed_plain_pdb_block(css_text) {
         return None;
@@ -178,7 +215,7 @@ pub(super) fn inline_css_text_pdb_storage_state(
     {
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
-        return Some(preserve_mask_composite_grammar(state, css_text));
+        return Some(preserve_native_declaration_nodes(state, css_text));
     }
     Some(CssInlineStyleDeclarationState {
         block: moli_css_parse::parse_declaration_block(css_text),

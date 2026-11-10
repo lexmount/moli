@@ -2770,6 +2770,17 @@ impl JsContextHost {
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
     ) {
+        let dom_host = self.dom_host() as *const _;
+        if self
+            .style_engine
+            .set_inline_style_pending_declarations_with_host(
+                unsafe { &*dom_host },
+                handle,
+                state.block.pending_substitutions(),
+            )
+        {
+            self.note_element_inline_style_subtree_activity(handle);
+        }
         self.inline_style_declarations.insert(handle, state);
     }
 

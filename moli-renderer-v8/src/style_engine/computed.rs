@@ -1448,13 +1448,16 @@ fn populate_inline_style_attributes_for_resolution(
                 .base_url(node)
                 .unwrap_or_else(|| style_resolution_base_url(host, document_url, node));
             let url_data = UrlExtraData::from(base_url);
-            let declarations = parse_style_attribute(
+            let mut declarations = parse_style_attribute(
                 &style_attribute,
                 &url_data,
                 None,
                 quirks_mode,
                 CssRuleType::Style,
             );
+            if let Some(pending) = world.inline_style_metadata.pending_declarations(node) {
+                pending.restore_pending_substitutions(&mut declarations, &url_data);
+            }
             engine
                 .dom_adapter
                 .set_inline_style_attribute(node, ServoArc::new(shared_lock.wrap(declarations)));

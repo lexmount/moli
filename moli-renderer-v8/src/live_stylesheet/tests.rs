@@ -62,7 +62,7 @@ fn eof_open_var_cssom_override_is_shared_and_cleared_by_native_mutation() {
     );
 
     first
-        .set_style_rule_declarations(&[0], "width: var(--updated);")
+        .set_style_rule_declarations(&[0], "width: var(--updated);", None)
         .unwrap();
     assert_eq!(
         style_rule_seed_declaration_text(&first, &[0]),
@@ -1266,7 +1266,11 @@ fn rule_value_mutations_are_transactional_native_and_context_aware() {
         .set_style_rule_selector(&[1, 0], "svg|rect", CssRuleType::Media.bit(), None)
         .unwrap();
     first
-        .set_style_rule_declarations(&[1, 0], "background-image: url(icon.svg); color: green;")
+        .set_style_rule_declarations(
+            &[1, 0],
+            "background-image: url(icon.svg); color: green;",
+            None,
+        )
         .unwrap();
     first
         .set_font_face_rule_descriptors(
@@ -1290,7 +1294,7 @@ fn rule_value_mutations_are_transactional_native_and_context_aware() {
         .set_keyframe_rule_selector(&[4], 1, "75%, to")
         .unwrap();
     first
-        .set_nested_declarations_rule_declarations(&[5, 1], "padding: 1px 2px;")
+        .set_nested_declarations_rule_declarations(&[5, 1], "padding: 1px 2px;", None)
         .unwrap();
 
     let metrics = live_stylesheet_mutation_metrics_for_test();

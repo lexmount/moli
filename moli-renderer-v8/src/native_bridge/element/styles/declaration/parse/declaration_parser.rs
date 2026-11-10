@@ -64,6 +64,7 @@ pub(crate) fn parse_style_property_entries_with_base(
     let property_write_uses_pdb = cssom_border_property_write_uses_pdb(&name)
         || cssom_border_image_property_write_uses_pdb(&name)
         || cssom_outline_property_write_uses_pdb(&name)
+        || name == "background"
         || stylo_mask_property_name(&name)
         || cssom_overflow_property_write_uses_pdb(&name)
         || cssom_animation_property_write_uses_pdb(&name)
