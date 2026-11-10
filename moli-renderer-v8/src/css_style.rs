@@ -1253,31 +1253,6 @@ pub(crate) fn css_declaration_list_property_value(
     winner.map(|entry| entry.value)
 }
 
-pub(crate) fn resolve_css_url_function(value: &str, base_url: &url::Url) -> String {
-    let value = value.trim();
-    let Some(raw_url) = value
-        .strip_prefix("url(")
-        .and_then(|value| value.strip_suffix(')'))
-        .map(str::trim)
-    else {
-        return value.to_owned();
-    };
-    let raw_url = raw_url
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            raw_url
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(raw_url);
-    base_url
-        .join(raw_url)
-        .or_else(|_| url::Url::parse(raw_url))
-        .map(|url| format!("url(\"{}\")", url.as_str()))
-        .unwrap_or_else(|_| value.to_owned())
-}
-
 pub(crate) fn parse_css_font_faces(css_text: &str) -> Vec<CssFontFaceEntry> {
     parse_font_faces(css_text)
         .into_iter()

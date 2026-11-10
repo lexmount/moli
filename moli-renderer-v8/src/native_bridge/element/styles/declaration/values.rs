@@ -8,7 +8,7 @@ use crate::{
             canonical_style_property_name, ident_is_system_color,
             normalize_cssom_component_value_serialization_with_spaced_slash,
             normalize_cssom_flex_basis_value, normalize_cssom_flex_shorthand_value,
-            resolve_css_url_function, system_color_rgb, top_level_comma_separated_component_values,
+            system_color_rgb, top_level_comma_separated_component_values,
         },
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
@@ -33,9 +33,7 @@ use super::observation::{
     StyleComputationContext, StyleObservation,
 };
 use super::sizing::used_size_from_layout_snapshot;
-use super::style_world::{
-    effective_raw_stylesheet_sources, style_base_url, stylesheet_source_document_for_handle,
-};
+use super::style_world::{effective_raw_stylesheet_sources, stylesheet_source_document_for_handle};
 use super::{
     StyleMode, all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,
     font_variant_longhands, inline_state_property_priority_with_pdb,
