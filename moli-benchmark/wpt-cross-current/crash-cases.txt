@@ -1,1 +1,2 @@
 css/css-nesting/implicit-parent-insertion-crash.html
+html/browsers/the-window-object/open-close/open-features-non-integer-height.html

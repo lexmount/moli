@@ -1,4 +1,5 @@
-html/semantics/forms/form-submission-target/rel-base-target.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
+navigation-api/navigate-event/intercept-cross-origin.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 svg/linking/scripted/a.rel-noreferrer-policy.html

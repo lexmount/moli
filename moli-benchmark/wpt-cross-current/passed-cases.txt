@@ -548,6 +548,8 @@ content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-url
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-sandboxed-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-same-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-same-self-allow.html
@@ -812,6 +814,7 @@ css/css-cascade/layer-cssom-order-reverse-at-property.html
 css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-import.html
 css/css-cascade/layer-important.html
+css/css-cascade/layer-media-query.html
 css/css-cascade/layer-namespace-sandwich-crash.html
 css/css-cascade/layer-property-override.html
 css/css-cascade/layer-replaceSync-clears-stale.html
@@ -6182,6 +6185,7 @@ hr-time/performance-tojson.html
 hr-time/timeOrigin.html
 hr-time/timing-attack.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-client-postmessage.https.html
+html/browsers/browsing-the-web/back-forward-cache/service-worker-clients-claim.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-unregister.https.html
 html/browsers/browsing-the-web/history-traversal/001.html
 html/browsers/browsing-the-web/history-traversal/PopStateEvent.html
@@ -6451,9 +6455,14 @@ html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-closed.html
 html/browsers/windows/auxiliary-browsing-contexts/opener-multiple.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-noopener.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-noreferrer.html
+html/browsers/windows/auxiliary-browsing-contexts/opener-setter.html
 html/browsers/windows/auxiliary-browsing-contexts/opener.html
 html/browsers/windows/browsing-context-names/choose-_blank-001.html
+html/browsers/windows/browsing-context-names/choose-_blank-002.html
 html/browsers/windows/browsing-context-names/choose-_blank-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-001.html
 html/browsers/windows/browsing-context-names/choose-_parent-002.html
@@ -6461,6 +6470,9 @@ html/browsers/windows/browsing-context-names/choose-_parent-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-004.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/browsing-context-names/choose-_self-002.html
+html/browsers/windows/browsing-context-names/choose-_top-001.html
+html/browsers/windows/browsing-context-names/choose-_top-002.html
+html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
 html/browsers/windows/browsing-context-names/choose-existing-001.html
@@ -6674,6 +6686,7 @@ html/semantics/document-metadata/the-base-element/base_target_does_not_affect_if
 html/semantics/document-metadata/the-base-element/base_target_does_not_affect_location_assignment.html
 html/semantics/document-metadata/the-link-element/attr-link-fetchpriority.html
 html/semantics/document-metadata/the-link-element/link-href-attribute-crash.html
+html/semantics/document-metadata/the-link-element/link-load-error-events.html
 html/semantics/document-metadata/the-link-element/link-load-event.html
 html/semantics/document-metadata/the-link-element/link-rel-attribute-tokenization.html
 html/semantics/document-metadata/the-link-element/link-rel-attribute.html
@@ -6822,6 +6835,7 @@ html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -8018,6 +8032,7 @@ html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLU
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Element-setHTMLUnsafe-04.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-CEReactions.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/002.html
 html/webappapis/dynamic-markup-insertion/opening-the-input-stream/004.html
@@ -8729,6 +8744,7 @@ resource-timing/buffer-full-store-and-clear-during-callback.html
 resource-timing/buffer-full-then-decreased.html
 resource-timing/buffer-full-then-increased.html
 resource-timing/buffer-full-when-populate-entries.html
+resource-timing/cached-image-gets-single-entry.html
 resource-timing/clear-resource-timings.html
 resource-timing/iframe-non-html.html
 resource-timing/iframe-with-download.html
@@ -8754,6 +8770,7 @@ resource-timing/script-rt-entries.html
 resource-timing/shared-worker-rt-entry.html
 resource-timing/tojson.html
 screen-orientation/lock-bad-argument.html
+secure-contexts/basic-popup-and-iframe-tests.html
 secure-contexts/basic-shared-worker.html
 selection/Document-open.html
 selection/addRange-00.html
@@ -8863,6 +8880,7 @@ service-workers/service-worker/activate-event-after-install-state-change.https.h
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
+service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
@@ -8888,6 +8906,7 @@ service-workers/service-worker/fetch-event-respond-with-stops-propagation.https.
 service-workers/service-worker/fetch-event-throws-after-respond-with.https.html
 service-workers/service-worker/fetch-request-no-freshness-headers.https.html
 service-workers/service-worker/fetch-request-xhr.https.html
+service-workers/service-worker/fetch-response-xhr.https.html
 service-workers/service-worker/getregistration.https.html
 service-workers/service-worker/immutable-prototype-serviceworker.https.html
 service-workers/service-worker/import-scripts-data-url.https.html
@@ -8896,6 +8915,9 @@ service-workers/service-worker/indexeddb.https.html
 service-workers/service-worker/install-event-type.https.html
 service-workers/service-worker/installing.https.html
 service-workers/service-worker/intercepted-referrer.https.html
+service-workers/service-worker/invalid-blobtype.https.html
+service-workers/service-worker/invalid-header.https.html
+service-workers/service-worker/iso-latin1-header.https.html
 service-workers/service-worker/mime-sniffing.https.html
 service-workers/service-worker/multi-globals/url-parsing.https.html
 service-workers/service-worker/navigation-preload/empty-preload-response-body.https.html
@@ -8925,6 +8947,8 @@ service-workers/service-worker/uncontrolled-page.https.html
 service-workers/service-worker/unregister-controller.https.html
 service-workers/service-worker/unregister.https.html
 service-workers/service-worker/websocket-in-service-worker.https.html
+service-workers/service-worker/websocket.https.html
+service-workers/service-worker/webvtt-cross-origin.https.html
 service-workers/service-worker/worker-client-id.https.html
 shadow-dom/Document-prototype-adoptNode.html
 shadow-dom/Document-prototype-currentScript.html
@@ -9187,6 +9211,7 @@ streams/readable-streams/tee.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/tee.any.js?moli-wpt-any=window
 streams/readable-streams/templated.any.js?moli-wpt-any=dedicatedworker
 streams/readable-streams/templated.any.js?moli-wpt-any=window
+streams/transferable/deserialize-error.window.js?moli-wpt-script=window
 streams/transferable/gc-crash.html
 streams/transferable/readable-stream.html
 streams/transferable/reason.html
@@ -9482,8 +9507,10 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
-trusted-types/trusted-types-navigation.html?06-10
+trusted-types/trusted-types-navigation.html?11-15
 trusted-types/trusted-types-navigation.html?16-20
+trusted-types/trusted-types-navigation.html?21-25
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9856,6 +9883,7 @@ webidl/ecmascript-binding/setter-argument.html
 webmessaging/MessageEvent_onmessage_postMessage_infinite_loop.html
 webmessaging/MessageEvent_properties.htm
 webmessaging/broadcastchannel/blobs.html
+webmessaging/broadcastchannel/cross-origin.html
 webmessaging/broadcastchannel/detached-iframe.html
 webmessaging/broadcastchannel/opaque-origin.html
 webmessaging/broadcastchannel/ordering.html
@@ -9943,6 +9971,7 @@ webstorage/event_local_oldvalue.html
 webstorage/event_local_removeitem.html
 webstorage/event_local_storagearea.html
 webstorage/event_local_url.html
+webstorage/event_local_window_open_oldvalue.html
 webstorage/event_no_duplicates.html
 webstorage/event_session_key.html
 webstorage/event_session_newvalue.html
@@ -10104,6 +10133,7 @@ workers/interfaces/WorkerUtils/navigator/005.html
 workers/interfaces/WorkerUtils/navigator/006.html
 workers/interfaces/WorkerUtils/navigator/007.html
 workers/interfaces/WorkerUtils/navigator/language.html
+workers/modules/dedicated-worker-import-csp.html
 workers/modules/dedicated-worker-import-data-url-cross-origin.html
 workers/modules/dedicated-worker-import-failure.html
 workers/modules/dedicated-worker-import-meta.html
@@ -10272,7 +10302,6 @@ xhr/setrequestheader-before-open.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
-xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm
