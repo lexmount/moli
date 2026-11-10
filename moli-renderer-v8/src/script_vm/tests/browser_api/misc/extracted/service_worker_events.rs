@@ -1,5 +1,7 @@
 use super::*;
 
+mod navigation_preload;
+
 #[tokio::test]
 async fn navigator_service_worker_shim_controls_window_fetch() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
