@@ -125,6 +125,59 @@ class TemplateHeaderFixtureTests(unittest.TestCase):
         self.assertEqual((status, body), (200, b"caf\xc3\xa9"))
         self.assertEqual(self.request("/page.sub.html", [("X-Test", b"caf\xe9")])[0], 500)
 
+    def test_sidecar_line_splitting_preserves_field_bytes(self) -> None:
+        (self.root / "page.txt").write_bytes(b"body")
+        values = [b"left" + bytes([byte]) + b"X-Injected: right"
+                  for byte in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85)]
+        data = b"HTTP/1.1 200 OK\r\n# comment\n" + b"\r\n".join(
+            b"X-Preserved-" + str(index).encode() + b": " + value
+            for index, value in enumerate(values)
+        ) + b"\rX-CR: one\nX-LF: two\r\nX-CRLF: three\r\n"
+        for suffix in (".headers", ".sub.headers"):
+            sidecar = self.root / ("page.txt" + suffix)
+            sidecar.write_bytes(data)
+            for method in ("GET", "HEAD"):
+                with self.subTest(suffix=suffix, method=method):
+                    status, headers, body = self.request("/page.txt", method=method)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(body, b"" if method == "HEAD" else b"body")
+                    self.assertIsNone(headers["X-Injected"])
+                    for index, value in enumerate(values):
+                        self.assertEqual(headers[f"X-Preserved-{index}"].encode("latin-1"), value)
+                    self.assertEqual(headers["X-CR"], "one")
+                    self.assertEqual(headers["X-LF"], "two")
+                    self.assertEqual(headers["X-CRLF"], "three")
+            sidecar.unlink()
+
+    def test_sidecar_field_trimming_preserves_non_ascii_edge_bytes(self) -> None:
+        (self.root / "page.txt").write_bytes(b"body")
+        for suffix in (".headers", ".sub.headers"):
+            sidecar = self.root / ("page.txt" + suffix)
+            sidecar.write_bytes(b"X-Edges: \t\x85\xa0value\xa0\x85\t \r\n")
+            for method in ("GET", "HEAD"):
+                with self.subTest(suffix=suffix, method=method):
+                    status, headers, _ = self.request("/page.txt", method=method)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(headers["X-Edges"].encode("latin-1"), b"\x85\xa0value\xa0\x85")
+            sidecar.unlink()
+
+    def test_sub_header_query_control_bytes_remain_in_same_field(self) -> None:
+        (self.root / "page.txt").write_bytes(b"body")
+        (self.root / "page.txt.sub.headers").write_bytes(
+            b"Content-Security-Policy: {{GET[csp]}}\nX-After: intact\n"
+        )
+        for separator in ("\x0b", "\x0c"):
+            for value in (f"img-src{separator}'none';",
+                          f"img-src http://example.com{separator}http://example2.com;"):
+                for method in ("GET", "HEAD"):
+                    with self.subTest(value=value, method=method):
+                        status, headers, _ = self.request(
+                            "/page.txt?" + urlencode({"csp": value}), method=method,
+                        )
+                        self.assertEqual(status, 200)
+                        self.assertEqual(headers["Content-Security-Policy"], value)
+                        self.assertEqual(headers["X-After"], "intact")
+
 
 if __name__ == "__main__":
     unittest.main()
