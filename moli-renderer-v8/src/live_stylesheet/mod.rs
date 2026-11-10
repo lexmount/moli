@@ -16,15 +16,14 @@ use style::{
     font_face::FontFaceRule,
     invalidation::stylesheets::RuleChangeKind,
     media_queries::MediaList,
-    parser::{NestingContext, Parse, ParserContext},
+    parser::{NestingContext, ParserContext},
     properties::{PropertyDeclarationBlock, parse_property_declaration_list},
     selector_parser::{SelectorImpl, SelectorParser},
     servo_arc::Arc as ServoArc,
     shared_lock::{Locked, SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard},
     stylesheets::{
-        AllowImportRules, CssRule, CssRuleType, CssRuleTypes, CssRules, Origin, PageSelectors,
-        RulesMutateError, Stylesheet, StylesheetContents, StylesheetInDocument, StylesheetLoader,
-        UrlExtraData,
+        AllowImportRules, CssRule, CssRuleType, CssRuleTypes, CssRules, Origin, RulesMutateError,
+        Stylesheet, StylesheetContents, StylesheetInDocument, StylesheetLoader, UrlExtraData,
         font_feature_values_rule::{
             FFVDeclaration, FontFeatureValuesRule, PairValues, SingleValue, VectorValues,
         },
@@ -38,6 +37,7 @@ use moli_crypto::Sha256Context;
 use moli_css_parse::{
     CssRuleInsertError, CssRuleSnapshot, css_rule_snapshot_from_native_with_stylo,
     keyframe_rule_snapshot_from_native_with_stylo, parse_font_face_cssom_rule_with_stylo_context,
+    parse_page_selectors_with_stylo_context,
     refresh_native_stylesheet_namespaces_after_cssom_mutation,
 };
 

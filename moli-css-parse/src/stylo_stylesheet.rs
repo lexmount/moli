@@ -13,9 +13,9 @@ use style::{
     context::QuirksMode,
     custom_properties::AttrTaint,
     font_face::FontFaceRule,
-    parser::ParserContext,
+    parser::{Parse, ParserContext},
     properties::{PropertyDeclarationBlock, parse_property_declaration_list},
-    stylesheets::{CssRuleType, Namespaces, Origin, UrlExtraData},
+    stylesheets::{CssRuleType, Namespaces, Origin, PageSelectors, UrlExtraData},
 };
 use style_traits::{CssStringWriter, ParsingMode};
 
@@ -474,7 +474,26 @@ pub fn normalize_keyframe_selector_text_with_stylo(selector_text: &str) -> Optio
 }
 
 pub fn normalize_page_selector_text_with_stylo(selector_text: &str) -> Option<String> {
-    style::moli_rule_tree::normalize_page_selector_text(selector_text)
+    with_descriptor_declaration_context(CssRuleType::Page, |context| {
+        let selectors = parse_page_selectors_with_stylo_context(selector_text, context).ok()?;
+        Some(style_traits::ToCss::to_css_string(&selectors))
+    })
+}
+
+/// Parse the selector list shared by CSSPageRule validation and live mutation.
+pub fn parse_page_selectors_with_stylo_context(
+    selector_text: &str,
+    context: &ParserContext,
+) -> Result<PageSelectors, CssRuleInsertError> {
+    let mut input = Parser::new(selector_text);
+    // CSS whitespace and comments can form an empty selector list. Unicode
+    // whitespace outside CSS's whitespace set still belongs to identifiers.
+    if input.is_exhausted() {
+        return Ok(PageSelectors::default());
+    }
+    input
+        .parse_entirely(|input| PageSelectors::parse(context, input))
+        .map_err(|_| CssRuleInsertError::Syntax)
 }
 
 pub fn keyframe_selector_texts_match_with_stylo(
@@ -1260,6 +1279,28 @@ mod tests {
 
     #[test]
     fn native_stylesheet_adapter_exposes_stylo_page_selector_helper() {
+        for empty in ["", " \t\r\n\u{000c}", "/**/", " /*comment*/ /**/ "] {
+            assert_eq!(
+                normalize_page_selector_text_with_stylo(empty),
+                Some(String::new())
+            );
+        }
+        for identifier in [
+            "name\u{00a0}",
+            "\u{00a0}",
+            "\u{2003}:left",
+            "name\\ ",
+            "\\ name",
+        ] {
+            assert_eq!(
+                normalize_page_selector_text_with_stylo(identifier),
+                Some(identifier.to_owned())
+            );
+        }
+        assert_eq!(
+            normalize_page_selector_text_with_stylo("name\u{000b}"),
+            None
+        );
         assert_eq!(
             normalize_page_selector_text_with_stylo(":RIGHT"),
             Some(String::from(":right"))
