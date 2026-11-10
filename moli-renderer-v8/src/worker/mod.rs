@@ -61,9 +61,11 @@ pub(crate) use handle::{
     WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
     WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
     WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
+    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
 };
-pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
+pub(crate) use handle::{
+    WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy, WorkerSecureContextPolicy,
+};
 pub(crate) use module_mime::{
     ensure_worker_css_module_mime, ensure_worker_json_module_mime, ensure_worker_wasm_module_mime,
 };

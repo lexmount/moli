@@ -16,7 +16,7 @@ use super::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
         materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
         trusted_worker_script_url_string_or_throw, worker_constructor_base_url,
-        worker_script_resource_url, worker_script_scheme_can_load,
+        worker_creator_secure_context, worker_script_resource_url, worker_script_scheme_can_load,
     },
 };
 use crate::web_api_interfaces;
@@ -37,7 +37,7 @@ use crate::{
         context_host_ptr_from_global_bridge, get_private_value, set_private_value,
         throw_type_error, v8str,
     },
-    worker::{WorkerNetworkPolicy, WorkerScriptKind, worker_secure_context_for_script_url},
+    worker::{WorkerNetworkPolicy, WorkerScriptKind, WorkerSecureContextPolicy},
 };
 use moli_shared_worker::{
     SharedWorkerCreationContextType, SharedWorkerCredentialsMode, SharedWorkerDescriptor,
@@ -198,11 +198,12 @@ fn shared_worker_constructor_callback_inner<'s>(
             return;
         }
     };
-    let creation_context_type = if context.network_policy.secure_context {
-        SharedWorkerCreationContextType::Secure
-    } else {
-        SharedWorkerCreationContextType::Nonsecure
-    };
+    let creation_context_type =
+        if context.network_policy.secure_context == WorkerSecureContextPolicy::Inherited(true) {
+            SharedWorkerCreationContextType::Secure
+        } else {
+            SharedWorkerCreationContextType::Nonsecure
+        };
     let script_type = match options.script_kind {
         WorkerScriptKind::Classic => SharedWorkerScriptType::Classic,
         WorkerScriptKind::Module => SharedWorkerScriptType::Module,
@@ -288,7 +289,7 @@ fn shared_worker_constructor_callback_inner<'s>(
     );
     let mut network_policy = context.network_policy;
     network_policy.secure_context =
-        worker_secure_context_for_script_url(&resolved_url, network_policy.secure_context);
+        WorkerSecureContextPolicy::Inherited(network_policy.secure_context.resolve(&resolved_url));
     let execution_policy = SharedWorkerExecutionPolicy::new(
         options.script_kind,
         context.base_url.clone(),
@@ -414,11 +415,7 @@ fn shared_worker_constructor_context(
             .page_shared_worker_client_event_sender()
             .bind_execution_context(execution_context);
         let worker_host_bridge_sender = host.page_worker_host_bridge_event_sender().clone();
-        let secure_context_url = child_handle
-            .and_then(|handle| host.child_browsing_context_secure_context_url(handle))
-            .or_else(|| host.active_lightweight_popup_base_url(scope))
-            .unwrap_or_else(|| host.document_url().clone());
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&secure_context_url);
+        let creator_secure_context = worker_creator_secure_context(scope, host, child_handle);
         let resource_loader = host.document_resource_loader_for_dispatch_scope(owner_scope)?;
         let context = SharedWorkerConstructorContext {
             base_url,
@@ -426,7 +423,7 @@ fn shared_worker_constructor_context(
             request_client: resource_loader.request_client().clone(),
             resource_task_runner: resource_loader.task_runner(),
             network_policy: WorkerNetworkPolicy {
-                secure_context: creator_secure_context,
+                secure_context: WorkerSecureContextPolicy::Inherited(creator_secure_context),
                 permission_overrides: host.permission_overrides().to_vec(),
                 extra_http_headers: host.extra_http_headers().clone(),
                 network_offline: host.network_offline(),

@@ -11,7 +11,7 @@ use crate::service_worker_runtime::{
     ServiceWorkerUnregisterStart, ServiceWorkerUpdateViaCache, ServiceWorkerVersionId,
 };
 use crate::structured_clone::V8StructuredClonePayload;
-use crate::worker::{WorkerNetworkPolicy, WorkerScriptKind, worker_secure_context_for_script_url};
+use crate::worker::{WorkerNetworkPolicy, WorkerScriptKind, WorkerSecureContextPolicy};
 use moli_storage_key::MoliStorageKey;
 use url::Url;
 
@@ -702,11 +702,10 @@ impl JsContextHost {
         self.ensure_service_worker_client_for_request_context(request_context);
         let creator_secure_context =
             moli_url::is_potentially_trustworthy_url(request_context.document_url());
+        let secure_context =
+            WorkerSecureContextPolicy::Inherited(creator_secure_context).resolve(&script_url);
         let network_policy = WorkerNetworkPolicy {
-            secure_context: worker_secure_context_for_script_url(
-                &script_url,
-                creator_secure_context,
-            ),
+            secure_context: WorkerSecureContextPolicy::Inherited(secure_context),
             permission_overrides: self.permission_overrides().to_vec(),
             extra_http_headers: self.extra_http_headers().clone(),
             network_offline: self.network_offline(),

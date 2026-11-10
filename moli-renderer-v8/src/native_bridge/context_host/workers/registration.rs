@@ -18,7 +18,7 @@ use crate::types::{DedicatedWorkerId, SubresourcePolicyContext};
 use crate::worker::{
     WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerPendingFetchContinue,
     WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerScriptKind, WorkerScriptSource,
-    WorkerSpawnOptions, spawn_worker_with_options,
+    WorkerSecureContextPolicy, WorkerSpawnOptions, spawn_worker_with_options,
 };
 use moli_storage_key::MoliStorageKey;
 use url::Url;
@@ -243,6 +243,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         script_url: Url,
         initiator_url: Url,
+        creator_secure_context: bool,
         network_partition_key: Option<String>,
         creator_policy_context: SubresourcePolicyContext,
         script_kind: WorkerScriptKind,
@@ -273,7 +274,6 @@ impl JsContextHost {
         let request_client = outside_settings_load.request_client();
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         outside_settings_load.attach_cancel_handle(cancel_handle.clone());
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&initiator_url);
         let module_static_import_policy = Box::new(WorkerModuleStaticImportPolicySnapshot {
             initiator_url: initiator_url.clone(),
             content_security_policies: document_content_security_policies,
@@ -303,10 +303,9 @@ impl JsContextHost {
                     if final_url.fragment().is_none() {
                         final_url.set_fragment(script_url.fragment());
                     }
-                    let secure_context = crate::worker::worker_secure_context_for_script_url(
-                        final_url,
-                        creator_secure_context,
-                    );
+                    let secure_context =
+                        WorkerSecureContextPolicy::Inherited(creator_secure_context)
+                            .resolve(final_url);
                     let _ = client_event_producer.send(
                         RendererDedicatedWorkerClientEvent::ScriptLoaded {
                             script_url: final_url.to_string(),
@@ -514,7 +513,7 @@ impl JsContextHost {
             FinishLoadingAction::Spawn(spawn) => *spawn,
         };
         let network_policy = WorkerNetworkPolicy {
-            secure_context,
+            secure_context: WorkerSecureContextPolicy::Inherited(secure_context),
             permission_overrides: self.permission_overrides().to_vec(),
             extra_http_headers: self.extra_http_headers().clone(),
             network_offline: self.network_offline(),

@@ -1532,10 +1532,9 @@ async fn worker_main(
     let message_port_registry = worker_context_runtime.message_port_registry();
     let broadcast_channel_registry = worker_context_runtime.broadcast_channel_registry();
     let current_script_url = url::Url::parse(&script_url).ok();
-    let secure_context = network_policy.secure_context
-        || current_script_url
-            .as_ref()
-            .is_some_and(|url| crate::worker::worker_secure_context_for_script_url(url, false));
+    let secure_context = current_script_url
+        .as_ref()
+        .is_some_and(|url| network_policy.secure_context.resolve(url));
     let storage_key = worker_global_storage_key(
         current_script_url.as_ref(),
         api_storage_key.clone(),

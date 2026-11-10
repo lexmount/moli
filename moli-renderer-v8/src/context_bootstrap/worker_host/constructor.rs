@@ -280,15 +280,15 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 return;
             }
         };
-        let creator_secure_context = moli_url::is_potentially_trustworthy_url(&base_url);
+        let creator_secure_context = worker_creator_secure_context(scope, host, child_handle);
         let worker_id = if let Some(script_source) = materialized {
             let request_url = worker_script_resource_url(&resolved_url);
             let network_response =
                 local_worker_main_script_network_response(&resolved_url, &script_source);
             let secure_context =
-                worker_secure_context_for_script_url(&resolved_url, creator_secure_context);
+                WorkerSecureContextPolicy::Inherited(creator_secure_context).resolve(&resolved_url);
             let network_policy = WorkerNetworkPolicy {
-                secure_context,
+                secure_context: WorkerSecureContextPolicy::Inherited(secure_context),
                 permission_overrides: host.permission_overrides().to_vec(),
                 extra_http_headers: host.extra_http_headers().clone(),
                 network_offline: host.network_offline(),
@@ -376,10 +376,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                             resolved_url.clone(),
                             creator_storage_key.serialized_storage_key(),
                             ServiceWorkerClientType::DedicatedWorker,
-                            worker_secure_context_for_script_url(
-                                &resolved_url,
-                                creator_secure_context,
-                            ),
+                            WorkerSecureContextPolicy::Inherited(creator_secure_context)
+                                .resolve(&resolved_url),
                         ),
                 )
             };
@@ -424,6 +422,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     worker_id,
                     resolved_url,
                     base_url,
+                    creator_secure_context,
                     network_partition_key,
                     creator_policy_context,
                     worker_options.worker_type,
@@ -504,17 +503,18 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             }
         };
         let mut network_policy = nested_context.network_policy.clone();
-        network_policy.secure_context = Url::parse(&script_url).ok().is_some_and(|script_url| {
-            worker_secure_context_for_script_url(
-                &script_url,
-                nested_context.network_policy.secure_context,
-            )
+        let secure_context = Url::parse(&script_url).ok().is_some_and(|script_url| {
+            nested_context
+                .network_policy
+                .secure_context
+                .resolve(&script_url)
         });
+        network_policy.secure_context = WorkerSecureContextPolicy::Inherited(secure_context);
         let reserved_service_worker_client_id =
             reserve_nested_inherited_service_worker_worker_client_for_local_script(
                 &resolved_url,
                 &nested_context,
-                network_policy.secure_context,
+                secure_context,
             );
         let mut worker_policy_context = nested_context.policy_context;
         if resolved_url.scheme() == "data" {
@@ -759,6 +759,25 @@ pub(in crate::context_bootstrap) fn worker_constructor_base_url(
                 .document_base_url()
                 .unwrap_or_else(|| host.document_url().clone())
         })
+}
+
+pub(in crate::context_bootstrap) fn worker_creator_secure_context(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &crate::native_bridge::JsContextHost,
+    child_handle: Option<DomHandle>,
+) -> bool {
+    // Loaded lightweight popups share the opener's V8 realm, but have their
+    // own Document security state. A base URL cannot determine that state.
+    // Initial about:blank popups still inherit their creator's realm state.
+    if child_handle.is_none()
+        && let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
+        && let Some(document_url) = host.lightweight_popup_document_url(popup_id)
+        && !moli_url::is_about_blank(&document_url)
+    {
+        return moli_url::is_potentially_trustworthy_url(&document_url);
+    }
+    let creator_window = scope.get_current_context().global(scope);
+    crate::context_bootstrap::window_realm_secure_context_available(scope, creator_window)
 }
 
 pub(in crate::context_bootstrap) fn worker_script_resource_url(script_url: &Url) -> Url {
