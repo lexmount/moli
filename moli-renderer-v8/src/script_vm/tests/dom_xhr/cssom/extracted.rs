@@ -10,6 +10,7 @@ mod container_conditions;
 mod css_text_and_detached;
 mod cssom_interfaces;
 mod declaration_aliases;
+mod declaration_list_priority;
 mod declarations;
 mod fonts;
 mod grouping_rules;
