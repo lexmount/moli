@@ -2205,6 +2205,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
+                        scope,
+                        &(&document_url).into(),
+                    ),
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
                     credentials_mode,
@@ -2302,6 +2306,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
+                        scope,
+                        &(&document_url).into(),
+                    ),
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
                     credentials_mode,
@@ -2622,6 +2630,10 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     if let Some((resolver, message)) = reject {
         let pending = state.borrow_mut().pending_fetches.remove(&started.fetch_id);
         if let Some(pending) = pending {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.failed(&pending.request_url),
+            );
             record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
         }
         if let Some(message) = v8_string(scope, &message) {
@@ -2665,6 +2677,17 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
     let head = finished.head;
     match finished.result {
         Ok(body) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.completed(
+                    &pending.request_url,
+                    &(&pending.document_url).into(),
+                    pending.request_mode,
+                    &head,
+                    body.len(),
+                    None,
+                ),
+            );
             close_pending_network_body_stream(scope, finished.body_source_id);
             if let Some(record) = pending.network_record {
                 let internal_id = record.internal_id;
@@ -2687,6 +2710,10 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
             }
         }
         Err(error_text) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.failed(&pending.request_url),
+            );
             let reason = v8_string(scope, &error_text)
                 .map(|message| v8::Exception::type_error(scope, message))
                 .unwrap_or_else(|| v8::undefined(scope).into());
@@ -2827,6 +2854,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             };
             pending.load.finish();
             let resolver = v8::Local::new(scope, &pending.resolver);
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.failed(&pending.request_url),
+            );
             record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
             if let Some(message) = v8_string(scope, &message) {
                 let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));
@@ -2966,6 +2997,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 Ok(()) => false,
                 Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => true,
                 Err(violation) => {
+                    crate::context_bootstrap::record_resource_performance_entry(
+                        scope,
+                        pending.resource_timing.failed(&pending.request_url),
+                    );
                     let message = violation.into_message();
                     record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
                     if let Some(message) = v8_string(scope, &message) {
@@ -3004,6 +3039,18 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.completed(
+                    &pending.request_url,
+                    &(&pending.document_url).into(),
+                    pending.request_mode,
+                    &response_head,
+                    response.subresource_response_body().len(),
+                    opaque_response_blocked
+                        .then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                ),
+            );
             let filtered_headers = filter_cors_exposed_response_headers(
                 &pending.document_url,
                 &response_head,
@@ -3050,6 +3097,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             let _ = resolver.resolve(scope, response_obj.into());
         }
         Err(message) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                pending.resource_timing.failed(&pending.request_url),
+            );
             record_worker_fetch_failure(&state.borrow(), &pending, message.clone());
             if let Some(message) = v8_string(scope, &message) {
                 let _ = resolver.reject(scope, v8::Exception::type_error(scope, message));

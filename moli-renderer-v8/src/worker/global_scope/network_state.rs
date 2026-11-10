@@ -4,6 +4,7 @@ use super::*;
 
 pub(in crate::worker) struct PendingWorkerFetch {
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
+    pub(in crate::worker) resource_timing: crate::context_bootstrap::FetchResourceTiming,
     pub(in crate::worker) document_url: Url,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
     pub(in crate::worker) request_mode: moli_fetch::RequestMode,
