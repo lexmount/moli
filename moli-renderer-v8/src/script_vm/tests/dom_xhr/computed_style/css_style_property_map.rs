@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn native_column_count_numbers_reify_without_changing_range_validation() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::{NumericValue, TypedValue};
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for (source, expected) in [("1", 1.0), ("2", 2.0), ("12", 12.0)] {
+        let parsed = parse_typed_style_value("column-count", source, None).unwrap();
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Numeric(NumericValue::Unit(value))]
+                if value.unit_str() == "number" && value.value == expected
+        ));
+    }
+    for source in [
+        "calc(0)",
+        "calc(-3.14)",
+        "calc(3.14)",
+        "calc(2 + 3)",
+        "min(2, 3)",
+    ] {
+        let parsed = parse_typed_style_value("column-count", source, None).unwrap();
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Numeric(_)]
+        ));
+    }
+    for source in ["auto", "AUTO", "\\61 uto"] {
+        let parsed = parse_typed_style_value("column-count", source, None).unwrap();
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == "auto"
+        ));
+    }
+    for source in ["0", "-1", "1.5", "none", "2px", "50%", "1 2"] {
+        assert!(parse_typed_style_value("column-count", source, None).is_none());
+    }
+}
+
+#[test]
+fn css_style_property_maps_reify_numeric_column_count_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-column-count.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(include_str!("css_typed_column_count.js")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(325));
+}
+
+#[test]
 fn native_font_palette_builtin_keywords_leave_named_palettes_opaque() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::TypedValue;
