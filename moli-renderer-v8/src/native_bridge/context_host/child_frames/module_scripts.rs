@@ -20,7 +20,7 @@ use crate::{
     planning::PreparedScript,
     types::{
         ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
-        ChildParserModuleRootFetchCompletion, ScriptMode,
+        ChildParserModuleRootFetchCompletion, ScriptMode, ScriptSourceKind,
     },
 };
 
@@ -136,7 +136,7 @@ impl JsContextHost {
         blocking_stylesheet_signatures: std::collections::HashSet<
             crate::stylesheet_blocking::DocumentBlockingStylesheetSignature,
         >,
-        script: PreparedScript,
+        mut script: PreparedScript,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -147,6 +147,15 @@ impl JsContextHost {
         else {
             return false;
         };
+        // Capture the preparation Document's map before queuing work or creating
+        // its realm. An explicit attribute, including an empty value, takes precedence.
+        if script.source_kind == ScriptSourceKind::External
+            && script.fetch_metadata.integrity.is_none()
+        {
+            script.fetch_metadata.integrity = self
+                .frame_owner_store
+                .resolve_current_child_document_module_integrity(handle, owner, &script.url);
+        }
         let parser_ordered = script.mode == ScriptMode::ModuleDefer;
         let pending_script_id = ParserPendingScriptId::from_key(
             owner.document_owner(),

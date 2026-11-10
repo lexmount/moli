@@ -2071,6 +2071,58 @@ fn child_document_owner_token_tracks_current_child_document() {
 }
 
 #[test]
+fn child_module_integrity_preparation_needs_a_current_document_without_a_realm() {
+    let mut store = FrameOwnerStore::default();
+    let child_handle = handle(920);
+    let document_handle = handle(921);
+    let first_owner = commit_test_child_document(
+        &mut store,
+        child_handle,
+        document_handle,
+        "integrity-frame",
+        None,
+    );
+    let module_url = url("https://integrity-frame.test/module.mjs");
+    store
+        .register_current_child_document_import_map(
+            child_handle,
+            document_handle,
+            r#"{"integrity":{"/module.mjs":"sha384-first"}}"#,
+            &module_url,
+        )
+        .unwrap();
+    assert!(
+        store
+            .current_child_document_task_owner_materialized_realm(child_handle)
+            .is_none()
+    );
+    assert_eq!(
+        store.resolve_current_child_document_module_integrity(
+            child_handle,
+            first_owner,
+            &module_url,
+        ),
+        Some("sha384-first".to_owned())
+    );
+
+    let second_owner = commit_test_child_document(
+        &mut store,
+        child_handle,
+        handle(922),
+        "integrity-frame",
+        None,
+    );
+    for owner in [first_owner, second_owner] {
+        assert_eq!(
+            store
+                .resolve_current_child_document_module_integrity(child_handle, owner, &module_url,),
+            None,
+            "retired and replacement Documents must not reuse the old map"
+        );
+    }
+}
+
+#[test]
 fn child_import_map_registry_is_document_scoped_across_static_and_late_resolution() {
     let mut store = FrameOwnerStore::default();
     let child_handle = handle(910);
