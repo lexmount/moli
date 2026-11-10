@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn native_font_style_keywords_preserve_angular_and_calculated_values() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::{ToTyped, TypedValue};
+    use style::values::computed::font::FontStyle as ComputedFontStyle;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for (source, expected) in [
+        ("normal", "normal"),
+        ("ITALIC", "italic"),
+        ("oblique", "oblique"),
+        ("o\\62lique", "oblique"),
+        ("oblique 0deg", "normal"),
+        ("oblique 14deg", "oblique"),
+    ] {
+        let parsed = parse_typed_style_value("font-style", source, None).unwrap();
+        assert_eq!(parsed.css_text, expected);
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == expected
+        ));
+    }
+    for source in [
+        "oblique 23deg",
+        "oblique -10deg",
+        "oblique calc(7deg + 7deg)",
+        "oblique calc(0deg)",
+        "oblique calc(200deg)",
+    ] {
+        let parsed = parse_typed_style_value("font-style", source, None).unwrap();
+        assert!(parsed.values.is_none(), "{source}");
+    }
+    for (style, keyword) in [
+        (ComputedFontStyle::NORMAL, "normal"),
+        (ComputedFontStyle::ITALIC, "italic"),
+        (ComputedFontStyle::OBLIQUE, "oblique"),
+    ] {
+        let values = style.to_typed_value_list().unwrap();
+        assert!(matches!(values.values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == keyword));
+    }
+    for degrees in [-90., -10., 23., 90.] {
+        assert!(
+            ComputedFontStyle::oblique(degrees)
+                .to_typed_value_list()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn css_style_property_maps_reify_font_style_keywords_without_losing_angles() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-style.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(include_str!("css_typed_font_style.js")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(275));
+}
+
+#[test]
 fn native_scoped_names_preserve_decoded_identifiers_and_opaque_lists() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::TypedValue;

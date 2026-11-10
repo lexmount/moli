@@ -136,13 +136,13 @@ curl-sys = { path = "vendor/curl-sys-0.4.91" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "2f67f89c7b17793d439fe06cbe30cd0630732b7c" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "e9c4f214f86d61f4e036e587a367a1c69fc1fc8d" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "moli" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
 
