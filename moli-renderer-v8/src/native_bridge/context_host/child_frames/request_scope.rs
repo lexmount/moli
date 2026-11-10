@@ -120,26 +120,57 @@ impl JsContextHost {
             .map(|owner| owner.document_url)
     }
 
-    pub(crate) fn child_browsing_context_secure_context_url(
+    pub(crate) fn child_browsing_context_secure_context_available(
         &self,
         handle: DomHandle,
-    ) -> Option<Url> {
-        let mut current = Some(handle);
-        let mut depth = 0;
-        while let Some(current_handle) = current {
-            let entry = self.child_browsing_contexts.get(&current_handle)?;
-            if !entry.security_origin_inherited() {
-                return entry.current_document_url();
+    ) -> bool {
+        let mut current = OwnerDispatchScope::Child(handle);
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let OwnerDispatchScope::Child(handle) = current else {
+                // A popup is a separate top-level context. Its opener does not
+                // become an ancestor of documents loaded inside that popup.
+                return self.secure_context_available_for_dispatch_scope(current);
+            };
+            let Some(entry) = self.child_browsing_contexts.get(&handle) else {
+                return false;
+            };
+            // about:blank/srcdoc (including sandbox-derived opaque origins)
+            // inherit trust from their creator. Other documents must have a
+            // trustworthy origin themselves, as must every frame ancestor.
+            if !entry.security_origin_inherited()
+                && !entry
+                    .current_document_url()
+                    .as_ref()
+                    .is_some_and(moli_url::is_potentially_trustworthy_url)
+            {
+                return false;
             }
-            depth += 1;
-            if depth > self.child_browsing_contexts.len() {
-                return None;
-            }
-            current = self.child_browsing_context_parent_handle(current_handle);
+            let Some(parent) = self.owner_dispatch_scope_for_node(handle) else {
+                return false;
+            };
+            current = parent;
         }
-        // Initial about:blank and srcdoc retain the creator origin's potential
-        // trustworthiness even when sandboxing derives an opaque origin.
-        Some(self.document_url().clone())
+        false
+    }
+
+    pub(crate) fn secure_context_available_for_dispatch_scope(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> bool {
+        match owner {
+            OwnerDispatchScope::Top => moli_url::is_potentially_trustworthy_url(
+                &self
+                    .current_main_document_resource_loader()
+                    .and_then(|loader| Url::parse(loader.fetch_context().origin()).ok())
+                    .unwrap_or_else(|| self.document_url().clone()),
+            ),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_secure_context_available(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.popup_secure_context_available(popup_id)
+            }
+        }
     }
 
     pub(crate) fn active_child_subresource_request_handle(&self) -> Option<DomHandle> {
@@ -434,22 +465,12 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn secure_context_url_for_window_execution_context_identity(
+    pub(crate) fn secure_context_available_for_window_execution_context_identity(
         &self,
         identity: WindowExecutionContextIdentity,
-    ) -> Option<Url> {
-        if !self.window_execution_context_identity_is_current(identity) {
-            return None;
-        }
-        match identity.dispatch_scope() {
-            OwnerDispatchScope::Top => Some(self.document_url().clone()),
-            OwnerDispatchScope::Child(handle) => {
-                self.child_browsing_context_secure_context_url(handle)
-            }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                self.lightweight_popup_document_url(popup_id)
-            }
-        }
+    ) -> Option<bool> {
+        self.window_execution_context_identity_is_current(identity)
+            .then(|| self.secure_context_available_for_dispatch_scope(identity.dispatch_scope()))
     }
 
     pub(crate) fn storage_context_for_child_browsing_context(
