@@ -1,13 +1,76 @@
 use moli_protocol::{BackgroundProtocolEvent, CdpSchedulerEvent, RendererOutputDependencies};
+use std::{cell::Cell, rc::Rc};
 
-use super::{CommandOutputReleasePermit, ProtocolOutputSequence};
+use super::{CdpScheduler, CommandOutputReleasePermit, ProtocolOutputSequence};
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct CommandOutputFlushPredecessor(Rc<Cell<bool>>);
+
+impl CommandOutputFlushPredecessor {
+    pub(super) fn is_satisfied(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// Work is admitted before waiting for renderer output, but retains the
+/// original command response as an execution predecessor. Losing the response
+/// releases that predecessor without losing the already-accepted owner work.
+#[derive(Default)]
+pub(crate) struct CommandPostFlushActions {
+    events: Vec<CdpSchedulerEvent>,
+    predecessor: Option<CommandOutputFlushPredecessor>,
+    count: usize,
+}
+
+impl CommandPostFlushActions {
+    pub(super) fn admit(scheduler: &mut CdpScheduler, events: Vec<CdpSchedulerEvent>) -> Self {
+        let mut actions = Self {
+            events: Vec::new(),
+            predecessor: None,
+            count: events.len(),
+        };
+        for event in events {
+            match event {
+                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                    let predecessor = actions.predecessor.get_or_insert_with(Default::default);
+                    scheduler
+                        .queues
+                        .enqueue_command_protocol_work(work, predecessor.clone());
+                }
+                event => actions.events.push(event),
+            }
+        }
+        actions
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.count
+    }
+
+    pub(super) fn finish(mut self) -> Vec<CdpSchedulerEvent> {
+        self.release();
+        std::mem::take(&mut self.events)
+    }
+
+    fn release(&self) {
+        if let Some(predecessor) = &self.predecessor {
+            predecessor.0.set(true);
+        }
+    }
+}
+
+impl Drop for CommandPostFlushActions {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
 
 pub(crate) struct CommandTurnOutput {
     protocol_output: ProtocolOutputSequence,
     post_renderer_output: ProtocolOutputSequence,
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
-    post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+    post_flush_scheduler_events: CommandPostFlushActions,
     renderer_output_dependencies: RendererOutputDependencies,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
@@ -15,7 +78,7 @@ pub(crate) struct CommandTurnOutput {
 impl CommandTurnOutput {
     pub(super) fn new(
         protocol_output: ProtocolOutputSequence,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: CommandPostFlushActions,
     ) -> Self {
         Self::new_with_post_response_events(
             protocol_output,
@@ -27,7 +90,7 @@ impl CommandTurnOutput {
     pub(super) fn new_with_post_response_events(
         protocol_output: ProtocolOutputSequence,
         post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: CommandPostFlushActions,
     ) -> Self {
         Self::new_with_post_response_events_and_permit(
             protocol_output,
@@ -40,7 +103,7 @@ impl CommandTurnOutput {
     pub(super) fn new_with_post_response_events_and_permit(
         protocol_output: ProtocolOutputSequence,
         post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: CommandPostFlushActions,
         output_release_permit: Option<CommandOutputReleasePermit>,
     ) -> Self {
         Self {
@@ -125,7 +188,7 @@ impl CommandTurnOutput {
         ProtocolOutputSequence,
         Option<moli_core::RendererOutputFence>,
         Vec<BackgroundProtocolEvent>,
-        Vec<CdpSchedulerEvent>,
+        CommandPostFlushActions,
         RendererOutputDependencies,
         Option<CommandOutputReleasePermit>,
     ) {
