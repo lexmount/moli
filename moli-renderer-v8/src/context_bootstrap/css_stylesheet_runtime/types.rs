@@ -579,7 +579,7 @@ pub struct CssSupportsRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSContainerRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSContainerRule, enumerable, receiver = web_api_interfaces::CSSContainerRule::is_instance)]
 pub struct CssContainerRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_container_rule_container_name_getter_callback)]
     pub container_name: (),
