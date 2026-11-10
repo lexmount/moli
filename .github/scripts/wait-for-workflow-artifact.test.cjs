@@ -156,3 +156,22 @@ test('publishes bounded aggregate artifact outputs', async () => {
   assert.equal(notices.length, 1);
   assert.match(notices[0], /frontend-results/);
 });
+
+// The final upload can become visible between these two independent API calls.
+test('refreshes the artifact snapshot after observing workflow completion', async () => {
+  let finished = false;
+  const result = await pollWorkflowArtifacts({
+    artifactNames: ['release-results', 'frontend-results'],
+    listArtifacts: async () => finished
+      ? [{ name: 'release-results', expired: false }, { name: 'frontend-results', expired: false }]
+      : [{ name: 'release-results', expired: false }],
+    getWorkflowRun: async () => {
+      finished = true;
+      return { status: 'completed', conclusion: 'success' };
+    },
+    sleep: async () => { throw new Error('completed workflows need no polling delay'); },
+  });
+  assert.deepEqual(result.availableArtifacts, ['release-results', 'frontend-results']);
+  assert.deepEqual(result.missingArtifacts, []);
+  assert.equal(result.conclusion, 'success');
+});

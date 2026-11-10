@@ -36,15 +36,20 @@ async function pollWorkflowArtifacts({
   const names = normalizeArtifactNames(artifactNames);
   const deadline = now() + timeoutMs;
 
-  while (true) {
-    const artifacts = await listArtifacts();
+  const snapshot = (artifacts) => {
     const availableNames = new Set(
       artifacts
         .filter((artifact) => artifact.expired !== true)
         .map((artifact) => artifact.name)
     );
-    const availableArtifacts = names.filter((name) => availableNames.has(name));
-    const missingArtifacts = names.filter((name) => !availableNames.has(name));
+    return {
+      availableArtifacts: names.filter((name) => availableNames.has(name)),
+      missingArtifacts: names.filter((name) => !availableNames.has(name)),
+    };
+  };
+
+  while (true) {
+    const { availableArtifacts, missingArtifacts } = snapshot(await listArtifacts());
     if (missingArtifacts.length === 0) {
       return {
         availableArtifacts,
@@ -55,9 +60,9 @@ async function pollWorkflowArtifacts({
 
     const workflowRun = await getWorkflowRun();
     if (workflowRun.status === 'completed') {
+      // The final upload can finish between the artifact and status lookups.
       return {
-        availableArtifacts,
-        missingArtifacts,
+        ...snapshot(await listArtifacts()),
         conclusion: workflowRun.conclusion || 'failure',
       };
     }
