@@ -26,6 +26,8 @@ pub struct HistoryEntry {
     pub url: String,
     /// Origin inherited by an about:blank or about:srcdoc Document.
     pub inherited_origin: Option<String>,
+    /// Committed Document security, retained when a local-scheme entry is restored.
+    pub secure_context: bool,
     pub id: String,
     pub key: NavigationHistoryEntryKey,
     pub document: NavigationHistoryDocumentId,

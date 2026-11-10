@@ -280,7 +280,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 return;
             }
         };
-        let creator_secure_context = worker_creator_secure_context(scope, host, child_handle);
+        let creator_secure_context =
+            host.window_secure_context_for_dispatch_scope(scope, dispatch_scope);
         let worker_id = if let Some(script_source) = materialized {
             let request_url = worker_script_resource_url(&resolved_url);
             let network_response =
@@ -759,25 +760,6 @@ pub(in crate::context_bootstrap) fn worker_constructor_base_url(
                 .document_base_url()
                 .unwrap_or_else(|| host.document_url().clone())
         })
-}
-
-pub(in crate::context_bootstrap) fn worker_creator_secure_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
-    child_handle: Option<DomHandle>,
-) -> bool {
-    // Loaded lightweight popups share the opener's V8 realm, but have their
-    // own Document security state. A base URL cannot determine that state.
-    // Initial about:blank popups still inherit their creator's realm state.
-    if child_handle.is_none()
-        && let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
-        && let Some(document_url) = host.lightweight_popup_document_url(popup_id)
-        && !moli_url::is_about_blank(&document_url)
-    {
-        return moli_url::is_potentially_trustworthy_url(&document_url);
-    }
-    let creator_window = scope.get_current_context().global(scope);
-    crate::context_bootstrap::window_realm_secure_context_available(scope, creator_window)
 }
 
 pub(in crate::context_bootstrap) fn worker_script_resource_url(script_url: &Url) -> Url {

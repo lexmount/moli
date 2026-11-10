@@ -85,6 +85,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
         return NavigationHistorySerializedEntry {
             url: "about:blank".to_owned(),
             inherited_origin: None,
+            secure_context: false,
             history_state: None,
             navigation_state: None,
             scroll_restoration: Default::default(),
@@ -113,6 +114,7 @@ fn snapshot_native_entry(
     NavigationHistorySerializedEntry {
         url: entry.url.clone(),
         inherited_origin: entry.inherited_origin.clone(),
+        secure_context: entry.secure_context,
         history_state: entry.history_state.clone(),
         navigation_state: entry.navigation_state.clone(),
         scroll_restoration: entry.scroll_restoration,

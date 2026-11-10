@@ -291,6 +291,268 @@ async fn popup_workers_use_the_popup_security_instead_of_the_opener() {
     }
 }
 
+fn popup_worker_navigation_probe_url() -> String {
+    let markup = r#"<!doctype html><script>
+        const report = value => opener.postMessage(JSON.stringify(value), '*');
+        (async () => {
+            const url = location.href;
+            const dataUrl = source => 'data:text/javascript,' + encodeURIComponent(source);
+            const state = '{secure: isSecureContext, subtle: typeof crypto.subtle !== "undefined"}';
+            const dedicated = new Worker(dataUrl('postMessage(' + state + ');'));
+            const dedicatedState = await new Promise((resolve, reject) => {
+                dedicated.onmessage = ({data}) => resolve(data);
+                dedicated.onerror = event => reject(new Error(event.message || 'DedicatedWorker startup failed'));
+            });
+            dedicated.terminate();
+            const shared = new SharedWorker(dataUrl('onconnect = ({ports}) => ports[0].postMessage(' + state + ');'));
+            const sharedState = await new Promise((resolve, reject) => {
+                shared.port.onmessage = ({data}) => resolve(data);
+                shared.onerror = event => reject(new Error(event.message || 'SharedWorker startup failed'));
+                shared.port.start();
+            });
+            shared.port.close();
+            report({url, dedicated: dedicatedState, shared: sharedState});
+        })().catch(error => report({error: String(error)}));
+        </script>"#;
+    let source = serde_json::to_string(markup).unwrap();
+    format!(
+        "javascript:{}",
+        percent_encoding::utf8_percent_encode(&source, percent_encoding::NON_ALPHANUMERIC)
+    )
+}
+
+const RECEIVE_POPUP_WORKER_NAVIGATION_PROBE: &str = r#"
+    onmessage = ({data}) => { globalThis.workerAncestorResult = data; };
+"#;
+
+async fn receive_popup_worker_navigation_probe(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    runtime: &crate::runtime::RendererBrowserContextRuntime,
+    loader: &ResourceRequestClient,
+) -> serde_json::Value {
+    let mut facts = receive_worker_ancestor_probe(vm, runtime, loader).await;
+    // Compare the Workers with the committed Document's native security state.
+    let host = vm._context_host.borrow();
+    let document = host
+        .document_resource_loader_for_dispatch_scope(
+            crate::native_bridge::OwnerDispatchScope::LightweightPopup(1),
+        )
+        .expect("committed popup Document should own a resource loader");
+    facts["origin"] = serde_json::json!(document.fetch_context().origin());
+    facts["documentSecure"] =
+        serde_json::json!(host.lightweight_popup_document_is_secure_context(1));
+    facts
+}
+
+fn expected_popup_worker_navigation_probe(
+    url: &str,
+    origin: &str,
+    secure: bool,
+) -> serde_json::Value {
+    let worker = serde_json::json!({"secure": secure, "subtle": secure});
+    serde_json::json!({
+        "url": url, "origin": origin, "documentSecure": secure,
+        "dedicated": worker, "shared": worker
+    })
+}
+
+#[tokio::test]
+async fn initial_blank_popup_workers_inherit_creator_security_after_javascript_replacement() {
+    for (opener_url, secure) in [
+        ("https://secure.example.test/opener", true),
+        ("http://insecure.example.test/opener", false),
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let (mut vm, runtime) =
+            new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+                opener_url, &loader,
+            );
+        let probe_url = serde_json::to_string(&popup_worker_navigation_probe_url()).unwrap();
+        vm.eval(&format!(
+            "{RECEIVE_POPUP_WORKER_NAVIGATION_PROBE} const popup = open('about:blank'); popup.location.href = {probe_url};"
+        ))
+        .unwrap();
+        let origin = Url::parse(opener_url)
+            .unwrap()
+            .origin()
+            .ascii_serialization();
+        assert_eq!(
+            receive_popup_worker_navigation_probe(&mut vm, &runtime, &loader).await,
+            expected_popup_worker_navigation_probe("about:blank", &origin, secure),
+            "{opener_url}"
+        );
+    }
+}
+
+async fn assert_loaded_popup_worker_navigation_security(navigate_to_blank: bool) {
+    use crate::script_vm::tests::http_fixture::{StaticHttpServer, static_http_loader};
+
+    const INSECURE_HOST: &str = "insecure.example.test";
+    for (opener_url, popup_secure) in [
+        ("https://secure.example.test/opener", false),
+        ("http://insecure.example.test/opener", true),
+    ] {
+        let probe_url = serde_json::to_string(&popup_worker_navigation_probe_url()).unwrap();
+        let blank_navigation = if navigate_to_blank {
+            "location.href = 'about:blank';"
+        } else {
+            ""
+        };
+        let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+            "<!doctype html><script>{blank_navigation} open({probe_url}, '_self');</script>"
+        )])
+        .await;
+        let popup_url = if popup_secure {
+            server.base_url().join("popup.html").unwrap()
+        } else {
+            server.url_for_host(INSECURE_HOST, "/popup.html")
+        };
+        let loader = static_http_loader([server.resolve_entry(INSECURE_HOST)]);
+        let (mut vm, runtime) =
+            new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+                opener_url, &loader,
+            );
+        vm.eval(&format!(
+            "{RECEIVE_POPUP_WORKER_NAVIGATION_PROBE} open('{}');",
+            popup_url.as_str()
+        ))
+        .unwrap();
+        let expected_url = if navigate_to_blank {
+            "about:blank"
+        } else {
+            popup_url.as_str()
+        };
+        assert_eq!(
+            receive_popup_worker_navigation_probe(&mut vm, &runtime, &loader).await,
+            expected_popup_worker_navigation_probe(
+                expected_url,
+                &popup_url.origin().ascii_serialization(),
+                popup_secure
+            ),
+            "{opener_url} -> {popup_url} -> {expected_url}"
+        );
+        assert_eq!(server.finish_targets().await, vec!["/popup.html"]);
+    }
+}
+
+#[tokio::test]
+async fn loaded_popup_workers_keep_document_security_after_javascript_replacement() {
+    assert_loaded_popup_worker_navigation_security(false).await;
+}
+
+#[tokio::test]
+async fn loaded_popup_workers_inherit_document_security_after_self_navigation_to_about_blank() {
+    assert_loaded_popup_worker_navigation_security(true).await;
+}
+
+async fn assert_popup_history_restores_blank_document_security(secure: bool) {
+    use crate::script_vm::tests::http_fixture::{StaticHttpServer, static_http_loader};
+
+    const INSECURE_HOST: &str = "insecure.example.test";
+    let server = StaticHttpServer::spawn_with_responder(
+        2,
+        "Content-Type: text/html; charset=utf-8\r\n",
+        move |index, request| match index {
+            0 => {
+                assert_eq!(request.target, "/popup.html");
+                let port = request.host.as_ref().unwrap().rsplit(':').next().unwrap();
+                let away_host = if secure { INSECURE_HOST } else { "127.0.0.1" };
+                format!(
+                    "<!doctype html><script>location.href = 'about:blank'; \
+                     history.pushState({{}}, '', '#saved'); \
+                     location.href = 'http://{away_host}:{port}/away.html';</script>"
+                )
+            }
+            1 => {
+                assert_eq!(request.target, "/away.html");
+                "<!doctype html><script>opener.postMessage('history-away-ready', '*'); \
+                 history.go(-2);</script>"
+                    .to_owned()
+            }
+            _ => unreachable!(),
+        },
+    )
+    .await;
+    let popup_url = if secure {
+        server.base_url().join("popup.html").unwrap()
+    } else {
+        server.url_for_host(INSECURE_HOST, "/popup.html")
+    };
+    let loader = static_http_loader([server.resolve_entry(INSECURE_HOST)]);
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        popup_url.as_str(),
+        &loader,
+    );
+    vm.eval(&format!(
+        "{RECEIVE_POPUP_WORKER_NAVIGATION_PROBE} \
+         onmessage = ({{data}}) => {{ \
+           if (data === 'history-away-ready') globalThis.popupHistoryAwayReady = true; \
+           else globalThis.workerAncestorResult = data; \
+         }}; const popup = open('{}');",
+        popup_url.as_str()
+    ))
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let away_ready = vm
+                .eval("globalThis.popupHistoryAwayReady === true")
+                .unwrap()
+                == "true";
+            let blank_committed = vm
+                ._context_host
+                .borrow()
+                .document_resource_loader_for_dispatch_scope(
+                    crate::native_bridge::OwnerDispatchScope::LightweightPopup(1),
+                )
+                .is_some_and(|document| {
+                    document.fetch_context().document_url().as_str() == "about:blank"
+                });
+            if away_ready && blank_committed {
+                break;
+            }
+            drain_service_worker_test_turn(&mut vm, &runtime, &loader).await;
+        }
+    })
+    .await
+    .expect("history traversal should return to the saved blank Document");
+
+    // Target the restored Document directly: exact origin restoration is a
+    // separate limitation of lightweight-popup history traversal.
+    vm.with_default_context_scope_for_test(|scope, host_ptr| {
+        let previous = crate::native_bridge::enter_active_lightweight_popup_scope(scope, 1);
+        let accepted = unsafe { &mut *host_ptr }.navigate_lightweight_popup_window_to_url(
+            scope,
+            1,
+            Url::parse(&popup_worker_navigation_probe_url()).unwrap(),
+            crate::context_bootstrap::LocationNavigationKind::Assign,
+        );
+        crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous);
+        anyhow::ensure!(accepted, "restored popup must accept the Worker probe");
+        Ok(())
+    })
+    .unwrap();
+    let facts = receive_popup_worker_navigation_probe(&mut vm, &runtime, &loader).await;
+    assert_eq!(facts["url"], "about:blank");
+    assert_eq!(facts["documentSecure"], secure);
+    let expected_worker = serde_json::json!({"secure": secure, "subtle": secure});
+    assert_eq!(facts["dedicated"], expected_worker);
+    assert_eq!(facts["shared"], expected_worker);
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/popup.html", "/away.html"]
+    );
+}
+
+#[tokio::test]
+async fn popup_history_restores_secure_blank_after_insecure_document() {
+    assert_popup_history_restores_blank_document_security(true).await;
+}
+
+#[tokio::test]
+async fn popup_history_restores_insecure_blank_after_secure_document() {
+    assert_popup_history_restores_blank_document_security(false).await;
+}
+
 #[tokio::test]
 async fn shared_worker_isolation_does_not_inherit_document_capability() {
     for document_dip in [false, true] {

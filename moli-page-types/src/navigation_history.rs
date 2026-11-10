@@ -49,6 +49,8 @@ pub struct NavigationHistorySerializedEntry {
     pub url: String,
     /// Preserves an inherited Document origin across renderer replacement.
     pub inherited_origin: Option<String>,
+    /// Preserves the Document's security state for local-scheme history traversal.
+    pub secure_context: bool,
     /// Authoritative structured state, preserved across renderer replacement.
     pub history_state: Option<moli_history::SerializedScriptValue>,
     pub navigation_state: Option<moli_history::SerializedScriptValue>,
@@ -494,6 +496,7 @@ fn navigation_history_entry(
     NavigationHistorySerializedEntry {
         url: url.to_owned(),
         inherited_origin: None,
+        secure_context: false,
         history_state: None,
         navigation_state: None,
         scroll_restoration: Default::default(),

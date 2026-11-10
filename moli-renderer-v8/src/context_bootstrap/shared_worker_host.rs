@@ -16,7 +16,7 @@ use super::{
         document_query_encoding_override, is_cross_origin_http_worker_script,
         materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
         trusted_worker_script_url_string_or_throw, worker_constructor_base_url,
-        worker_creator_secure_context, worker_script_resource_url, worker_script_scheme_can_load,
+        worker_script_resource_url, worker_script_scheme_can_load,
     },
 };
 use crate::web_api_interfaces;
@@ -415,7 +415,8 @@ fn shared_worker_constructor_context(
             .page_shared_worker_client_event_sender()
             .bind_execution_context(execution_context);
         let worker_host_bridge_sender = host.page_worker_host_bridge_event_sender().clone();
-        let creator_secure_context = worker_creator_secure_context(scope, host, child_handle);
+        let creator_secure_context =
+            host.window_secure_context_for_dispatch_scope(scope, owner_scope);
         let resource_loader = host.document_resource_loader_for_dispatch_scope(owner_scope)?;
         let context = SharedWorkerConstructorContext {
             base_url,
