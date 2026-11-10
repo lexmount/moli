@@ -2,6 +2,7 @@ use super::*;
 use crate::script_provenance::CompiledStringProvenance;
 
 mod event_handler_getter;
+mod fetch;
 mod geolocation_watch;
 mod realm_lifetime;
 

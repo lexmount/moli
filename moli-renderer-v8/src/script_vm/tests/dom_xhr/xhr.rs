@@ -157,6 +157,10 @@ fn pending_fetch_continuation<'s>(
     crate::types::PendingSubresourceContinuation::Fetch(
         crate::types::PendingWindowFetchContinuation::new(
             v8::Global::new(scope, resolver),
+            crate::context_bootstrap::FetchResourceTiming::capture(
+                scope,
+                &host.document_url().into(),
+            ),
             false,
             moli_fetch::RequestCacheMode::Default,
             crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(

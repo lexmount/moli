@@ -7,6 +7,8 @@
     request.send();
   });
   const context = globalThis.cacheTimingContext || 'top';
+  const request = globalThis.cacheTimingTransport === 'fetch'
+    ? url => fetch(url).then(response => response.text()) : xhr;
   const resourceUrl = (path, parameters) => {
     const url = new URL(path, document.baseURI);
     url.search = new URLSearchParams({...parameters, context});
@@ -17,7 +19,7 @@
     const url = resourceUrl('/probe-cache', {mode});
     const observations = [];
     for (let i = 0; i < 3; i++) {
-      const body = await xhr(url);
+      const body = await request(url);
       await new Promise(resolve => setTimeout(resolve, 0));
       const entries = performance.getEntriesByName(url);
       const entry = entries[entries.length - 1];
@@ -36,7 +38,7 @@
   const headers = [];
   for (const padding of [0, 4096]) {
     const url = resourceUrl('/probe-cache', {mode: 'padding', padding});
-    await xhr(url);
+    await request(url);
     await new Promise(resolve => setTimeout(resolve, 0));
     const entry = performance.getEntriesByName(url)[0];
     headers.push({padding, transfer: entry.transferSize, encoded: entry.encodedBodySize});

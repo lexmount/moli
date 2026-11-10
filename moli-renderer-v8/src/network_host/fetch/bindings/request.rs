@@ -59,6 +59,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) csp_report_context: crate::network_host::WindowCspReportRequestContext,
     pub(super) document_url: url::Url,
     pub(super) request_origin: moli_url::WebOrigin,
+    pub(super) resource_timing: crate::context_bootstrap::FetchResourceTiming,
     pub(super) network_partition_key: Option<String>,
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
@@ -130,6 +131,10 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
 
     Ok(PreparedWindowFetchRequest {
+        resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(
+            scope,
+            &request_origin,
+        ),
         frame_id,
         fetch_context,
         resource_loader,
