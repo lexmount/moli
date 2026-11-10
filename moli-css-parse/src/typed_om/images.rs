@@ -1,6 +1,6 @@
 use super::TypedStyleValueList;
 use style::{
-    properties::{ComputedValues, LonghandId, PropertyDeclaration},
+    properties::{ComputedValues, LonghandId, PropertyDeclaration, PropertyId},
     values::specified::Image,
 };
 use style_traits::ToCss;
@@ -32,8 +32,14 @@ pub(super) fn from_declaration(declaration: &PropertyDeclaration) -> Option<Vec<
 
 pub fn computed_typed_style_value_list(
     computed: &ComputedValues,
-    id: LonghandId,
+    property: &PropertyId,
 ) -> Option<TypedStyleValueList> {
+    if let Ok(shorthand) = property.as_shorthand() {
+        return computed
+            .shorthand_value_to_typed_value_list(shorthand)
+            .map(TypedStyleValueList::Native);
+    }
+    let id = property.longhand_id()?;
     if let Some(values) = computed.property_value_to_typed_value_list(id) {
         return Some(TypedStyleValueList::Native(values));
     }
