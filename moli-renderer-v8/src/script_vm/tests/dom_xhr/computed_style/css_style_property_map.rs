@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn native_font_alternates_reify_keywords_without_exposing_function_arguments() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::TypedValue;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for (source, expected) in [
+        ("normal", "normal"),
+        ("historical-forms", "historical-forms"),
+        ("HISTORICAL-FORMS", "historical-forms"),
+        ("h\\69storical-forms", "historical-forms"),
+    ] {
+        let parsed = parse_typed_style_value("font-variant-alternates", source, None).unwrap();
+        assert_eq!(parsed.css_text, expected);
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == expected
+        ));
+    }
+    for source in [
+        "stylistic(foo)",
+        "styleset(foo, bar)",
+        "character-variant(foo, bar)",
+        "swash(foo)",
+        "ornaments(foo)",
+        "annotation(foo)",
+        "historical-forms swash(foo)",
+        "swash(foo) historical-forms",
+        "swash(foo) annotation(bar)",
+    ] {
+        let parsed = parse_typed_style_value("font-variant-alternates", source, None).unwrap();
+        assert!(parsed.values.is_none(), "{source}");
+    }
+}
+
+#[test]
+fn css_style_property_maps_reify_font_alternates_and_preserve_functional_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-alternates.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm
+        .eval(include_str!("css_typed_font_alternates.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(150));
+}
+
+#[test]
 fn native_default_keywords_reify_while_compound_values_remain_opaque() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::TypedValue;
