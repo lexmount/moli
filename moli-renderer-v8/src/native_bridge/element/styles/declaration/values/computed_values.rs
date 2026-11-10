@@ -19,9 +19,6 @@ pub(super) fn resolve_moli_computed_style_value(
         let current_color = resolution.computed_property(runtime, handle, "color");
         return normalize_computed_color_functions(value, Some(&current_color));
     }
-    if property == "background-image" {
-        return resolve_computed_background_image(runtime, handle, value);
-    }
     if matches!(property, "transform" | "-webkit-transform")
         && let Some(transform) = computed_transform_matrix_value(value)
     {
@@ -1647,18 +1644,6 @@ fn format_non_negative_used_css_px(value: f64) -> String {
         return format!("{}px", i64::MAX);
     }
     format_css_px(value)
-}
-
-fn resolve_computed_background_image(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    value: &str,
-) -> String {
-    resolve_background_image_url(value, &style_base_url(runtime, handle))
-}
-
-fn resolve_background_image_url(value: &str, base_url: &url::Url) -> String {
-    resolve_css_url_function(value, base_url)
 }
 
 pub(super) fn compress_box_shorthand_value(value: &str) -> String {
