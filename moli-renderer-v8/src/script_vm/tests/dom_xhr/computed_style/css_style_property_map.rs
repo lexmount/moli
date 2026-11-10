@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn native_font_palette_builtin_keywords_leave_named_palettes_opaque() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::TypedValue;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for (source, expected) in [
+        ("normal", "normal"),
+        ("NORMAL", "normal"),
+        ("light", "light"),
+        ("LIGHT", "light"),
+        ("dark", "dark"),
+        ("d\\61rk", "dark"),
+    ] {
+        let parsed = parse_typed_style_value("font-palette", source, None).unwrap();
+        assert_eq!(parsed.css_text, expected);
+        assert!(matches!(
+            parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == expected
+        ));
+    }
+    for source in [
+        "--foo",
+        "--Fóo",
+        "--normal",
+        "--foo\\2e bar",
+        "--foo\\20 bar",
+    ] {
+        let parsed = parse_typed_style_value("font-palette", source, None).unwrap();
+        assert!(parsed.values.is_none(), "{source}");
+    }
+    assert!(parse_typed_style_value("font-palette", "Augusta", None).is_none());
+}
+
+#[test]
+fn css_style_property_maps_reify_builtin_font_palettes() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-palette.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(include_str!("css_typed_font_palette.js")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(225));
+}
+
+#[test]
 fn native_font_style_keywords_preserve_angular_and_calculated_values() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::{ToTyped, TypedValue};
