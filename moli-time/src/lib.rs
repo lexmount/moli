@@ -48,6 +48,14 @@ pub fn coarsened_dom_time_millis(millis: f64) -> f64 {
     (millis * DOM_TIME_TICKS_PER_MILLISECOND).floor() / DOM_TIME_TICKS_PER_MILLISECOND
 }
 
+/// Convert a shared clock moment to a realm's relative high resolution time.
+/// Coarsen moments before subtracting the origin so communicating realms use
+/// the same clock buckets. Coarsening the relative duration gives each realm
+/// a different phase and can reverse the reported order of nearby events.
+pub fn relative_dom_time_millis(timestamp: f64, time_origin: f64) -> f64 {
+    (coarsened_dom_time_millis(timestamp) - coarsened_dom_time_millis(time_origin)).max(0.0)
+}
+
 /// Remaining time between two timestamps on the same relative DOM timeline.
 /// Subtract in ticks so floating-point cancellation cannot expose sub-tick
 /// residuals or change the precision of the remaining duration.
@@ -58,7 +66,7 @@ pub fn coarsened_dom_time_remaining_millis(deadline_millis: f64, now_millis: f64
 }
 
 pub fn dom_time_since_origin_millis(time_origin: f64) -> f64 {
-    coarsened_dom_time_millis((unix_epoch_millis() - time_origin).max(0.0))
+    relative_dom_time_millis(unix_epoch_millis(), time_origin)
 }
 
 /// Formats HTML's fixed, locale-independent Document.lastModified surface.
@@ -125,6 +133,39 @@ mod tests {
             dom_time_since_origin_millis(unix_epoch_millis() + 1000.0),
             0.0
         );
+    }
+
+    #[test]
+    fn shared_clock_coarsening_preserves_event_order_across_different_origins() {
+        // Independently flooring relative durations used to put the later
+        // event 80 microseconds before the earlier event on the shared clock.
+        let worker_origin = 1000.09;
+        let window_origin = 1200.01;
+        let activation_end = 10000.199;
+        let fetch_start = 10000.200;
+        let worker_epoch = coarsened_dom_time_millis(worker_origin)
+            + relative_dom_time_millis(activation_end, worker_origin);
+        let window_epoch = coarsened_dom_time_millis(window_origin)
+            + relative_dom_time_millis(fetch_start, window_origin);
+        assert_eq!(worker_epoch, coarsened_dom_time_millis(activation_end));
+        assert_eq!(window_epoch, coarsened_dom_time_millis(fetch_start));
+        assert!(worker_epoch <= window_epoch);
+    }
+
+    #[test]
+    fn relative_times_reconstruct_the_same_epoch_bucket_for_every_realm() {
+        let epoch = 1_794_283_799_000.0;
+        for fraction in [0.001, 0.049, 0.099, 0.101, 0.199] {
+            let timestamp = epoch + 1000.0 + fraction;
+            for origin in [epoch + 0.013, epoch + 50.089, epoch + 701.031] {
+                assert_eq!(
+                    coarsened_dom_time_millis(origin) + relative_dom_time_millis(timestamp, origin),
+                    coarsened_dom_time_millis(timestamp)
+                );
+            }
+        }
+        assert_eq!(relative_dom_time_millis(20.01, 20.09), 0.0);
+        assert_eq!(relative_dom_time_millis(19.0, 20.0), 0.0);
     }
 
     #[test]
