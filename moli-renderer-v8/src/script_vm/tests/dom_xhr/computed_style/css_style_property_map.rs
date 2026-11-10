@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn native_scoped_names_preserve_decoded_identifiers_and_opaque_lists() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::TypedValue;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for property in ["anchor-scope", "timeline-scope"] {
+        for (source, expected) in [
+            ("none", "none"),
+            ("ALL", "all"),
+            ("--a", "--a"),
+            ("--A", "--A"),
+            ("--é", "--é"),
+            ("--foo\\2e bar", "--foo.bar"),
+            ("--foo\\20 bar", "--foo bar"),
+            ("--foo\\5c bar", "--foo\\bar"),
+        ] {
+            let parsed = parse_typed_style_value(property, source, None).unwrap();
+            assert!(matches!(
+                parsed.values.unwrap().native().unwrap().values.as_slice(),
+                [TypedValue::Keyword(value)] if value.0 == expected
+            ));
+        }
+        for source in ["--a, --b", "--a, --a", "--A, --a", "--foo\\2e bar, --é"] {
+            let parsed = parse_typed_style_value(property, source, None).unwrap();
+            assert!(parsed.values.is_none(), "{property}: {source}");
+        }
+    }
+}
+
+#[test]
+fn css_style_property_maps_reify_scoped_names_without_splitting_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-scoped-names.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(include_str!("css_typed_scoped_names.js")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(600));
+}
+
+#[test]
 fn native_font_alternates_reify_keywords_without_exposing_function_arguments() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::TypedValue;
