@@ -20,12 +20,6 @@ IndexedDB/idbtransaction-objectStore-finished.any.js?moli-wpt-any=dedicatedworke
 IndexedDB/idbtransaction-objectStore-finished.any.js?moli-wpt-any=window
 IndexedDB/idlharness.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idlharness.any.js?moli-wpt-any=window
-IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?101-last=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?21-40=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?41-60=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?61-80=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?81-100=&moli-wpt-any=window
 IndexedDB/transaction-deactivation-timing.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-deactivation-timing.any.js?moli-wpt-any=window
 IndexedDB/transaction-relaxed-durability.any.js?moli-wpt-any=dedicatedworker
@@ -37,8 +31,6 @@ close-watcher/frame-removal.html
 compat/webkit-box-item-shrink-001.html
 compat/webkit-box-item-shrink-002.html
 compat/webkit-box-vertically-centered.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-star-allow.html
-content-security-policy/frame-ancestors/frame-ancestors-nested-same-in-cross-url-allow.html
 content-security-policy/generic/image-document-applies-csp.html
 content-security-policy/generic/only-valid-whitespaces-are-allowed.html
 content-security-policy/generic/policy-inherited-correctly-by-plznavigate.html
@@ -75,7 +67,6 @@ css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
 css/css-cascade/layer-font-face-override.html
 css/css-cascade/layer-keyframes-override.html
-css/css-cascade/layer-media-query.html
 css/css-cascade/presentational-hints-rollback.html
 css/css-cascade/revert-layer-008.html
 css/css-cascade/revert-val-003.html
@@ -2603,9 +2594,9 @@ html/browsers/browsing-the-web/back-forward-cache/eligibility/dedicated-worker.h
 html/browsers/browsing-the-web/back-forward-cache/eligibility/shared-worker.html
 html/browsers/browsing-the-web/back-forward-cache/events.html
 html/browsers/browsing-the-web/back-forward-cache/focus.html
-html/browsers/browsing-the-web/back-forward-cache/service-worker-clients-claim.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-clients-matchall.https.html
 html/browsers/browsing-the-web/back-forward-cache/service-worker-controlled-after-restore.https.html
+html/browsers/browsing-the-web/back-forward-cache/storage-events.html
 html/browsers/browsing-the-web/back-forward-cache/timers.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_2.html
@@ -2697,7 +2688,6 @@ html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsi
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_3.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_4.html
-html/browsers/the-window-object/open-close/open-features-non-integer-height.html
 html/browsers/the-window-object/open-close/open-features-non-integer-innerheight.html
 html/browsers/the-window-object/open-close/open-features-non-integer-innerwidth.html
 html/browsers/the-window-object/open-close/open-features-non-integer-left.html
@@ -2824,7 +2814,6 @@ html/obsolete/requirements-for-implementations/other-elements-attributes-and-api
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/semantics/document-metadata/the-base-element/base_multiple.html
 html/semantics/document-metadata/the-link-element/link-error-fired-before-scripting-unblocked.html
-html/semantics/document-metadata/the-link-element/link-load-error-events.html
 html/semantics/document-metadata/the-link-element/link-load-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/stylesheet-not-removed-until-next-stylesheet-loads.html
 html/semantics/document-metadata/the-style-element/tentative/style-element-basic-import.html
@@ -2869,7 +2858,6 @@ html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitiv
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
 html/semantics/embedded-content/the-iframe-element/sandbox_011.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
@@ -2893,6 +2881,7 @@ html/semantics/embedded-content/the-img-element/natural-size-orientation.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
@@ -3030,7 +3019,6 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/events/event-handler-all-global-events.html
 html/webappapis/scripting/events/event-handler-attributes-body-alt.html
@@ -3101,6 +3089,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.h
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
 navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
+navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-activation/activation-after-bfcache-cross-origin.html
@@ -3156,9 +3145,7 @@ reporting/crashReport-test.html
 requestidlecallback/deadline-max-rAF-dynamic.html
 requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
-resource-timing/cached-image-gets-single-entry.html
 resource-timing/document-domain-no-impact-opener.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
@@ -3203,7 +3190,6 @@ scroll-to-text-fragment/same-document-tests-force-load-at-top.html
 scroll-to-text-fragment/same-document-tests-no-force-load-at-top.html
 scroll-to-text-fragment/same-document-tests.html
 secure-contexts/basic-dedicated-worker.html
-secure-contexts/basic-popup-and-iframe-tests.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
 service-workers/cache-storage/cache-keys-attributes-for-service-worker.https.html
 service-workers/cache-storage/sandboxed-iframes.https.html
@@ -3211,11 +3197,11 @@ service-workers/service-worker/ServiceWorkerGlobalScope/update.https.html
 service-workers/service-worker/active.https.html
 service-workers/service-worker/add-routes.https.html
 service-workers/service-worker/claim-affect-other-registration.https.html
-service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/claim-using-registration.https.html
 service-workers/service-worker/claim-worker-fetch.https.html
 service-workers/service-worker/client-navigate.https.html
 service-workers/service-worker/clients-get-resultingClientId.https.html
+service-workers/service-worker/clients-get.https.html
 service-workers/service-worker/clients-matchall-blob-url-worker.https.html
 service-workers/service-worker/clients-matchall-client-types.https.html
 service-workers/service-worker/clients-matchall-exact-controller.https.html
@@ -3227,6 +3213,7 @@ service-workers/service-worker/controlled-iframe-postMessage.https.html
 service-workers/service-worker/dedicated-worker-service-worker-interception.https.html
 service-workers/service-worker/detached-context.https.html
 service-workers/service-worker/fetch-audio-tainting.https.html
+service-workers/service-worker/fetch-cors-xhr.https.html
 service-workers/service-worker/fetch-event-referrer-policy.https.html
 service-workers/service-worker/fetch-event-respond-with-custom-response.https.html
 service-workers/service-worker/fetch-event-respond-with-readable-stream.https.html
@@ -3254,6 +3241,7 @@ service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/opaque-script.https.html
 service-workers/service-worker/postmessage.https.html
 service-workers/service-worker/redirected-response.https.html
+service-workers/service-worker/referer.https.html
 service-workers/service-worker/referrer-policy-header.https.html
 service-workers/service-worker/registration-schedule-job.https.html
 service-workers/service-worker/registration-scope-module-static-import.https.html
@@ -3262,6 +3250,7 @@ service-workers/service-worker/registration-script-url.https.html
 service-workers/service-worker/request-end-to-end.https.html
 service-workers/service-worker/resource-timing-cross-origin.https.html
 service-workers/service-worker/sandboxed-iframe-navigator-serviceworker.https.html
+service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-installed.https.html
 service-workers/service-worker/skip-waiting-using-registration.https.html
 service-workers/service-worker/skip-waiting-without-using-registration.https.html
@@ -3280,9 +3269,6 @@ service-workers/service-worker/unregister-then-register.https.html
 service-workers/service-worker/update-not-allowed.https.html
 service-workers/service-worker/update-result.https.html
 service-workers/service-worker/waiting.https.html
-service-workers/service-worker/websocket.https.html
-service-workers/service-worker/webvtt-cross-origin.https.html
-service-workers/service-worker/windowclient-ancestorOrigins.sub.https.html
 service-workers/service-worker/worker-interception.https.html
 service-workers/service-worker/xhr-response-url.https.html
 service-workers/service-worker/xsl-base-url.https.html
@@ -3438,6 +3424,7 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
+workers/SharedWorker-extendedLifetime-named-module.html
 workers/SharedWorker-extendedLifetime.html
 workers/WorkerNavigator_platform.htm
 workers/interfaces/SharedWorkerGlobalScope/onconnect.html
