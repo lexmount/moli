@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -83,26 +84,41 @@ def _join_log_drain_threads(threads: list[threading.Thread] | None) -> None:
         thread.join(timeout=1)
 
 
+def _signal_process_group(process: subprocess.Popen[bytes], sig: signal.Signals) -> None:
+    # start_moli_serve gives every invocation its own session, including when
+    # /usr/bin/time is the group leader and the browser is its child.
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    if process.poll() is None:
+        try:
+            if sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
+        except OSError:
+            pass
+
+
 def _terminate_process(process: subprocess.Popen[bytes]) -> bool:
-    if process.poll() is not None:
-        return True
-    try:
-        process.terminate()
-    except OSError:
-        return process.poll() is not None
+    _signal_process_group(process, signal.SIGTERM)
     try:
         process.wait(timeout=2)
-        return True
     except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-        except OSError:
-            return process.poll() is not None
+        _signal_process_group(process, signal.SIGKILL)
         try:
             process.wait(timeout=2)
-            return True
         except subprocess.TimeoutExpired:
             return False
+    # The wrapper may exit before a child, or may have exited before teardown.
+    # Retire any remaining members of the dedicated group as well.
+    _signal_process_group(process, signal.SIGKILL)
+    return True
 
 
 def probe_url(url: str, timeout_seconds: float = 0.5) -> bool:
