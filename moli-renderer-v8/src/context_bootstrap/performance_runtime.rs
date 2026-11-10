@@ -420,8 +420,12 @@ fn append_resource_performance_entry<'s>(
     performance: v8::Local<'s, v8::Object>,
     entry: ResourcePerformanceEntry,
 ) {
-    let start_time = entry.start_unix_millis.unwrap_or_else(unix_epoch_millis)
-        - performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let time_origin =
+        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let start_time = moli_time::relative_dom_time_millis(
+        entry.start_unix_millis.unwrap_or_else(unix_epoch_millis),
+        time_origin,
+    );
     let resource = entries::create_performance_entry(
         scope,
         performance,
