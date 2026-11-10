@@ -771,7 +771,11 @@ pub(crate) fn apply_live_stylesheet_rule_declaration_block_mutation<'s>(
     rule: v8::Local<'s, v8::Object>,
     kind: CssRulePdbDeclarationKind,
 ) -> bool {
-    let Some(declaration_text) = css_rule_stylo_declaration_block_css_text(scope, rule) else {
+    let Some(declaration_text) = css_rule_stylo_declaration_block_is_valid(scope, rule)
+        .then(|| css_rule_stylo_declaration_block_id(scope, rule))
+        .flatten()
+        .and_then(lightweight_css_style_stylo_declaration_block_resolution_text)
+    else {
         return false;
     };
     apply_live_stylesheet_rule_declaration_text_mutation(scope, rule, kind, &declaration_text)

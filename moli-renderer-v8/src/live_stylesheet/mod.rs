@@ -606,6 +606,13 @@ fn serialize_declaration_block(
     text.trim_end().to_owned()
 }
 
+fn declaration_block_style_resolution_text(
+    block: &ServoArc<Locked<PropertyDeclarationBlock>>,
+    guard: &SharedRwLockReadGuard<'_>,
+) -> String {
+    moli_css_parse::CssDeclarationBlock::new(block.read_with(guard).clone()).style_resolution_text()
+}
+
 fn serialize_page_rule_css_text(selector: &str, block: &str) -> String {
     match (selector.is_empty(), block.is_empty()) {
         (true, true) => "@page { }".to_owned(),
@@ -1585,7 +1592,9 @@ impl LiveStylesheet {
                     .as_ref()
                     .filter(|source_override| source_override.rule_path == path)
                     .map(|source_override| source_override.declaration_text.clone())
-                    .unwrap_or_else(|| serialize_declaration_block(&rule.block, &guard));
+                    .unwrap_or_else(|| {
+                        declaration_block_style_resolution_text(&rule.block, &guard)
+                    });
                 LiveStylesheetRuleWrapperSeed::Style {
                     selector_text: cssparser::ToCss::to_css_string(&rule.selectors),
                     declaration_text,
@@ -1595,12 +1604,12 @@ impl LiveStylesheet {
                 let rule = rule.read_with(&guard);
                 LiveStylesheetRuleWrapperSeed::Keyframe {
                     key_text: rule.selector.to_css_string(),
-                    declaration_text: serialize_declaration_block(&rule.block, &guard),
+                    declaration_text: declaration_block_style_resolution_text(&rule.block, &guard),
                 }
             }
             NativeStylesheetRule::Css(CssRule::NestedDeclarations(rule)) => {
                 LiveStylesheetRuleWrapperSeed::NestedDeclarations {
-                    declaration_text: serialize_declaration_block(
+                    declaration_text: declaration_block_style_resolution_text(
                         &rule.read_with(&guard).block,
                         &guard,
                     ),

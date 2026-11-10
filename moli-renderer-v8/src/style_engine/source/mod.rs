@@ -652,17 +652,20 @@ impl MoliStyleEngine {
         host: &DomHost,
         handle: DomHandle,
         text: String,
-    ) {
+    ) -> bool {
         let Some(document) = owner_document_for_source_owner(host, handle) else {
-            return;
+            return false;
         };
         self.move_inline_style_metadata_to_document(handle, document);
-        self.world_for_document(document)
+        let world = self.world_for_document(document);
+        let changed = world.inline_style_metadata.resolution_text(handle).as_ref() != Some(&text);
+        world
             .inline_style_metadata
             .set_resolution_text(handle, text);
         self.inline_style_metadata_documents
             .borrow_mut()
             .insert(handle, document);
+        changed
     }
 
     pub(crate) fn clear_inline_style_resolution_text_with_host(

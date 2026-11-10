@@ -114,6 +114,17 @@ pub(crate) fn lightweight_css_style_stylo_declaration_block_css_text(id: u64) ->
     STYLO_DECLARATION_BLOCKS.with(|blocks| blocks.borrow().get(&id).map(|block| block.css_text()))
 }
 
+pub(crate) fn lightweight_css_style_stylo_declaration_block_resolution_text(
+    id: u64,
+) -> Option<String> {
+    STYLO_DECLARATION_BLOCKS.with(|blocks| {
+        blocks
+            .borrow()
+            .get(&id)
+            .map(|block| block.style_resolution_text())
+    })
+}
+
 pub(crate) fn remove_lightweight_css_style_stylo_declaration_block(id: u64) {
     remove_stylo_declaration_block(id);
 }
@@ -925,6 +936,18 @@ pub(crate) fn lightweight_css_style_css_text<'s>(
         return Some(css_text);
     }
     Some(serialize_css_style_entries(&style_entries(scope, style)))
+}
+
+pub(crate) fn lightweight_css_style_resolution_text<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let text = lightweight_css_style_css_text(scope, style)?;
+    Some(
+        stored_stylo_declaration_block(scope, style).map_or(text.clone(), |block| {
+            block.project_style_resolution_names(text)
+        }),
+    )
 }
 
 pub(crate) fn set_lightweight_css_style_css_text<'s>(

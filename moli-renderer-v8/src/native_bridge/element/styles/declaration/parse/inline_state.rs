@@ -98,11 +98,50 @@ pub(super) fn inline_style_declaration_state_from_css_text(
     css_text: &str,
     base_url: Option<&url::Url>,
 ) -> CssInlineStyleDeclarationState {
+    if let Some(state) = inline_css_text_pdb_storage_state(css_text) {
+        return state;
+    }
     let entries = parse_inline_css_text_with_base(css_text, base_url);
-    inline_style_declaration_state_from_entries(&entries)
+    preserve_mask_composite_grammar(
+        inline_style_declaration_state_from_entries(&entries),
+        css_text,
+    )
 }
 
-pub(super) fn inline_style_declaration_state_for_handle(
+// A canonical CSSOM name cannot reconstruct the prefixed value grammar. Keep
+// this declaration as a native node when compatibility entries share its block.
+fn preserve_mask_composite_grammar(
+    mut state: CssInlineStyleDeclarationState,
+    css_text: &str,
+) -> CssInlineStyleDeclarationState {
+    let source = moli_css_parse::parse_declaration_block(css_text);
+    let Some(selected) = source.select_properties(["mask-composite"]) else {
+        return state;
+    };
+    if selected.style_resolution_text() == selected.css_text() {
+        return state;
+    }
+    let selected = selected.into_inner();
+    let mut block = std::mem::take(&mut state.block).into_inner();
+    for (declaration, importance) in selected.declaration_importance_iter() {
+        block.push(declaration.clone(), importance);
+    }
+    state.block = moli_css_parse::CssDeclarationBlock::new(block);
+    for entry in &mut state.entries {
+        if entry.name == "-webkit-mask-composite" {
+            entry.name = "mask-composite".to_owned();
+        }
+    }
+    state.side_entries.retain(|entry| {
+        !matches!(
+            entry.name.as_str(),
+            "mask-composite" | "-webkit-mask-composite"
+        )
+    });
+    state
+}
+
+pub(in crate::native_bridge::element::styles) fn inline_style_declaration_state_for_handle(
     runtime: &JsContextHost,
     handle: DomHandle,
     base_url: Option<&url::Url>,
@@ -126,7 +165,7 @@ pub(super) fn inline_css_text_pdb_storage_state(
     if let Some(entries) = inline_css_text_all_adapter_entries(css_text) {
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
-        return Some(state);
+        return Some(preserve_mask_composite_grammar(state, css_text));
     }
     if !inline_css_text_can_seed_plain_pdb_block(css_text) {
         return None;
@@ -139,7 +178,7 @@ pub(super) fn inline_css_text_pdb_storage_state(
     {
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
-        return Some(state);
+        return Some(preserve_mask_composite_grammar(state, css_text));
     }
     Some(CssInlineStyleDeclarationState {
         block: moli_css_parse::parse_declaration_block(css_text),
@@ -416,7 +455,7 @@ pub(super) fn inline_state_pdb_property_query_candidate(
             } else {
                 InlineStatePdbQueryCandidate::Side
             }
-        } else if entry.value.is_empty() && inline_state_block_contains_entry(state, entry)
+        } else if inline_state_block_contains_entry(state, entry)
             || inline_style_entry_is_pdb_storage_candidate(entry)
         {
             InlineStatePdbQueryCandidate::Pdb

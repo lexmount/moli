@@ -58,6 +58,15 @@ impl CssDeclarationBlock {
             .map(|name| crate::stylo_cssom_property_name(&name).to_owned())
     }
 
+    /// Preserve the native grammar when CSSOM text is reused as style input.
+    pub fn project_style_resolution_names(&self, text: String) -> String {
+        self.native.project_style_resolution_names(text)
+    }
+
+    pub fn style_resolution_text(&self) -> String {
+        self.project_style_resolution_names(self.css_text())
+    }
+
     pub fn entries(&self) -> Vec<CssDeclarationEntry> {
         let mut entries = self.native.entries();
         for entry in &mut entries {

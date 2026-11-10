@@ -2719,8 +2719,12 @@ impl JsContextHost {
         text: String,
     ) {
         let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .set_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle, text);
+        if self
+            .style_engine
+            .set_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle, text)
+        {
+            self.note_element_inline_style_subtree_activity(handle);
+        }
     }
 
     pub(crate) fn clear_element_inline_style_resolution_text(&mut self, handle: DomHandle) {
