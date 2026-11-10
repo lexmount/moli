@@ -2467,6 +2467,19 @@ fn css_page_and_margin_style_mutation_preserves_live_stylesheet() {
     );
 }
 #[test]
+fn css_page_rule_selector_resets_preserve_native_rules_and_wrappers() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-page-selector-reset.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_page_selector_resets.js"))
+            .unwrap(),
+        r#"{"cases":114,"failures":[]}"#
+    );
+}
+
+#[test]
 fn css_page_rule_selector_text_mutation_preserves_live_stylesheet() {
     let mut vm = new_storage_test_vm("https://css-page-selector-live-mutation.test/");
 

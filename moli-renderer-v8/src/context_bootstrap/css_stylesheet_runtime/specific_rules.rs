@@ -484,7 +484,7 @@ pub(crate) fn serialize_page_rule_text(selector: &str, block: &str) -> String {
 }
 
 fn raw_page_rule_text(selector: &str, block: &str) -> String {
-    let selector = selector.trim();
+    // A serialized page name can end in an escaped space.
     let block = block.trim();
     match (selector.is_empty(), block.is_empty()) {
         (true, true) => "@page { }".to_owned(),

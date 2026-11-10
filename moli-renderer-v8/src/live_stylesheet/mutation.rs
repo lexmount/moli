@@ -771,11 +771,8 @@ impl LiveStylesheet {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
         let selectors = self.with_parser_context(CssRuleType::Page, None, |context| {
-            let input = selector_text;
-            let mut input = Parser::new(input);
-            input.parse_entirely(|input| PageSelectors::parse(context, input))
-        });
-        let selectors = selectors.map_err(|_| CssRuleInsertError::Syntax)?;
+            parse_page_selectors_with_stylo_context(selector_text, context)
+        })?;
         self.ensure_owned_contents_for_mutation();
         let Some(NativeStylesheetRule::Css(CssRule::Page(rule))) =
             self.native_rule_at_path(rule_path)
