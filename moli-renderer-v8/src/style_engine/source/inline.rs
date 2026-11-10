@@ -11,6 +11,7 @@ pub(in crate::style_engine) struct InlineStyleMetadataStore {
 pub(in crate::style_engine) struct InlineStyleMetadata {
     base_url: Option<url::Url>,
     resolution_text: Option<String>,
+    pending_declarations: Option<moli_css_parse::CssDeclarationBlock>,
     csp_state: InlineStyleCspState,
 }
 
@@ -55,16 +56,16 @@ impl InlineStyleMetadataStore {
     }
 
     pub(in crate::style_engine) fn set_resolution_text(&self, handle: DomHandle, text: String) {
-        self.metadata_by_handle
-            .borrow_mut()
-            .entry(handle)
-            .or_default()
-            .resolution_text = Some(text);
+        let mut values = self.metadata_by_handle.borrow_mut();
+        let metadata = values.entry(handle).or_default();
+        metadata.resolution_text = Some(text);
+        metadata.pending_declarations = None;
     }
 
     pub(in crate::style_engine) fn clear_resolution_text(&self, handle: DomHandle) {
         self.update(handle, |metadata| {
             metadata.resolution_text = None;
+            metadata.pending_declarations = None;
         });
     }
 
@@ -73,6 +74,32 @@ impl InlineStyleMetadataStore {
             .borrow()
             .get(&handle)
             .and_then(|metadata| metadata.resolution_text.clone())
+    }
+
+    pub(in crate::style_engine) fn set_pending_declarations(
+        &self,
+        handle: DomHandle,
+        block: Option<moli_css_parse::CssDeclarationBlock>,
+    ) {
+        if let Some(block) = block {
+            self.metadata_by_handle
+                .borrow_mut()
+                .entry(handle)
+                .or_default()
+                .pending_declarations = Some(block);
+        } else {
+            self.update(handle, |metadata| metadata.pending_declarations = None);
+        }
+    }
+
+    pub(in crate::style_engine) fn pending_declarations(
+        &self,
+        handle: DomHandle,
+    ) -> Option<moli_css_parse::CssDeclarationBlock> {
+        self.metadata_by_handle
+            .borrow()
+            .get(&handle)
+            .and_then(|metadata| metadata.pending_declarations.clone())
     }
 
     pub(in crate::style_engine) fn set_csp_state(
@@ -125,6 +152,9 @@ impl InlineStyleMetadataStore {
         }
         if metadata.resolution_text.is_none() {
             metadata.resolution_text = incoming.resolution_text;
+            if metadata.pending_declarations.is_none() {
+                metadata.pending_declarations = incoming.pending_declarations;
+            }
         }
         if metadata.csp_state == InlineStyleCspState::Unchecked {
             metadata.csp_state = incoming.csp_state;
@@ -163,6 +193,7 @@ impl InlineStyleMetadata {
     fn is_empty(&self) -> bool {
         self.base_url.is_none()
             && self.resolution_text.is_none()
+            && self.pending_declarations.is_none()
             && self.csp_state == InlineStyleCspState::Unchecked
     }
 }

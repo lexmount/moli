@@ -28,10 +28,11 @@ pub(in crate::native_bridge::element::styles) fn style_runtime_and_handle_from_o
                     handle,
                     base.as_ref(),
                 );
-                // Cache declarations whose prefixed grammar cannot be recovered
-                // from their public CSSOM text. Other attributes retain the
-                // existing renderer projection for compatibility shorthands.
-                if state.block.style_resolution_text() != state.block.css_text() {
+                // Background longhands and prefixed grammars retain their native
+                // shorthand nodes, priority and deferred substitution.
+                if state.block.property_is_declared("background")
+                    || state.block.style_resolution_text() != state.block.css_text()
+                {
                     runtime.set_element_inline_style_declaration_state(handle, state);
                 }
             }

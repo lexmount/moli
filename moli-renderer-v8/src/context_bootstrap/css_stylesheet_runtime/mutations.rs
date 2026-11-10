@@ -778,11 +778,16 @@ pub(crate) fn apply_live_stylesheet_rule_declaration_text_mutation<'s>(
 ) -> bool {
     match kind {
         CssRulePdbDeclarationKind::StyleRule | CssRulePdbDeclarationKind::NestedDeclarations => {
+            // Compatibility side entries still share their surviving native
+            // pending nodes with the rule's declaration owner.
+            let pending = css_rule_stylo_declaration_block_id(scope, rule)
+                .and_then(lightweight_css_style_pending_substitutions);
             apply_live_stylesheet_style_like_rule_declaration_block_mutation(
                 scope,
                 rule,
                 kind,
                 declaration_text,
+                pending.as_ref(),
             )
         }
         CssRulePdbDeclarationKind::KeyframeRule => {
@@ -832,6 +837,7 @@ pub(crate) fn apply_live_stylesheet_style_like_rule_declaration_block_mutation<'
     rule: v8::Local<'s, v8::Object>,
     kind: CssRulePdbDeclarationKind,
     declaration_text: &str,
+    pending: Option<&moli_css_parse::CssDeclarationBlock>,
 ) -> bool {
     let Some(parent_style_sheet) = get_private_value(scope, rule, CSS_RULE_PARENT_STYLE_SHEET_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -848,6 +854,7 @@ pub(crate) fn apply_live_stylesheet_style_like_rule_declaration_block_mutation<'
             parent_style_sheet,
             &rule_path,
             declaration_text,
+            pending,
         ),
         CssRulePdbDeclarationKind::NestedDeclarations => {
             set_css_style_sheet_live_nested_declarations_rule_declarations(
@@ -855,6 +862,7 @@ pub(crate) fn apply_live_stylesheet_style_like_rule_declaration_block_mutation<'
                 parent_style_sheet,
                 &rule_path,
                 declaration_text,
+                pending,
             )
         }
         CssRulePdbDeclarationKind::KeyframeRule => return false,

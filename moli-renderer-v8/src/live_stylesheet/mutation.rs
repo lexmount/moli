@@ -605,6 +605,7 @@ impl LiveStylesheet {
         &self,
         rule_path: &[usize],
         declaration_text: &str,
+        pending: Option<&moli_css_parse::CssDeclarationBlock>,
     ) -> Result<(), CssRuleInsertError> {
         if !matches!(
             self.native_rule_at_path(rule_path),
@@ -612,7 +613,13 @@ impl LiveStylesheet {
         ) {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
-        let declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
+        let mut declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
+        if let Some(pending) = pending {
+            pending.restore_pending_substitutions(
+                &mut declarations,
+                &self.current_contents().url_data,
+            );
+        }
         self.ensure_owned_contents_for_mutation();
         let Some(NativeStylesheetRule::Css(CssRule::Style(rule))) =
             self.native_rule_at_path(rule_path)
@@ -634,6 +641,7 @@ impl LiveStylesheet {
         &self,
         rule_path: &[usize],
         declaration_text: &str,
+        pending: Option<&moli_css_parse::CssDeclarationBlock>,
     ) -> Result<(), CssRuleInsertError> {
         if !matches!(
             self.native_rule_at_path(rule_path),
@@ -641,7 +649,13 @@ impl LiveStylesheet {
         ) {
             return Err(CssRuleInsertError::HierarchyRequest);
         }
-        let declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
+        let mut declarations = self.parse_declaration_block(declaration_text, CssRuleType::Style);
+        if let Some(pending) = pending {
+            pending.restore_pending_substitutions(
+                &mut declarations,
+                &self.current_contents().url_data,
+            );
+        }
         self.ensure_owned_contents_for_mutation();
         let Some(NativeStylesheetRule::Css(CssRule::NestedDeclarations(rule))) =
             self.native_rule_at_path(rule_path)
