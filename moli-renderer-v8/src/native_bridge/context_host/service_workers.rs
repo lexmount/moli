@@ -1677,6 +1677,33 @@ impl JsContextHost {
             );
     }
 
+    pub(crate) fn service_worker_get_registration_url(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        request_context: &ServiceWorkerWindowRequestContext,
+        client_url: &str,
+    ) -> Result<Url, crate::service_worker_runtime::ServiceWorkerClientUrlError> {
+        let owner = request_context.owner().dispatch_scope();
+        // URL resolution follows the receiver Window's current API base URL.
+        // Its authority stays with the native environment origin, including
+        // an inherited about:blank origin and a cross-origin <base> element.
+        let base = match owner {
+            OwnerDispatchScope::Top => {
+                Some(self.document_base_url_for_handle(self.document_handle()))
+            }
+            OwnerDispatchScope::Child(handle) => self.child_browsing_context_base_url(handle),
+            OwnerDispatchScope::LightweightPopup(id) => {
+                self.lightweight_popup_request_base_url(scope, id)
+            }
+        }
+        .ok_or(crate::service_worker_runtime::ServiceWorkerClientUrlError::Invalid)?;
+        let origin = self
+            .window_document_origin(owner)
+            .map(|origin| moli_url::WebOrigin::from_serialized(&origin))
+            .unwrap_or(moli_url::WebOrigin::Opaque);
+        crate::service_worker_runtime::service_worker_client_url(&base, &origin, client_url)
+    }
+
     pub(crate) fn service_worker_registration_for_client(
         &mut self,
         request_context: &ServiceWorkerWindowRequestContext,

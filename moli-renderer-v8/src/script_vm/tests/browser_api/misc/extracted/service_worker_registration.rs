@@ -1,6 +1,138 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_get_registration_separates_api_base_url_from_native_origin() {
+    let (base_url, server) =
+        spawn_service_worker_script_server(vec!["/app/worker.js", "/other/worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__registrationBaseDone = false;
+        (async () => {
+            const sw = navigator.serviceWorker;
+            const app = await sw.register('worker.js');
+            const other = await sw.register('/other/worker.js');
+            const checks = [await sw.getRegistration() === app];
+            const base = document.createElement('base');
+            base.href = other.scope;
+            document.head.appendChild(base);
+            checks.push(await sw.getRegistration() === other);
+            checks.push(await sw.getRegistration('page.html#fragment') === other);
+            base.href = 'https://different-origin.test/';
+            checks.push(await sw.getRegistration(app.scope + 'page.html#fragment') === app);
+            const errorName = promise => promise.then(() => 'resolved', error => error.name);
+            checks.push(await errorName(sw.getRegistration('page.html')));
+            checks.push(await errorName(sw.getRegistration('http://[')));
+            checks.push(await errorName(sw.getRegistration('data:text/html,opaque')));
+            checks.push(await sw.getRegistration({toString() {
+                base.href = other.scope;
+                return 'page.html#converted';
+            }}) === other);
+            Object.defineProperty(document, 'baseURI', {get() { throw new Error('author baseURI'); }});
+            Object.defineProperty(document, 'URL', {get() { throw new Error('author URL'); }});
+            checks.push(await sw.getRegistration() === other);
+            globalThis.__registrationBase = checks.join('|');
+        })().catch(error => { __registrationBase = 'error:' + error.name + ':' + error.message; })
+          .finally(() => { __registrationBaseDone = true; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__registrationBaseDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__registrationBase)").unwrap(),
+        "true|true|true|true|SecurityError|TypeError|SecurityError|true|true"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn service_worker_get_registration_uses_inherited_blank_popup_and_srcdoc_settings() {
+    let (base_url, server) =
+        spawn_service_worker_script_server(vec!["/app/worker.js", "/other/worker.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__registrationInheritedDone = false;
+        globalThis.__registrationInheritedPhase = 'register';
+        (async () => {
+            const sw = navigator.serviceWorker;
+            const app = await sw.register('worker.js');
+            const other = await sw.register('/other/worker.js');
+            const checks = [];
+            const setBase = (realm, href) => {
+                const doc = realm.document;
+                const html = doc.documentElement || doc.appendChild(doc.createElement('html'));
+                const head = doc.head || html.insertBefore(doc.createElement('head'), html.firstChild);
+                const base = doc.createElement('base');
+                base.href = href;
+                head.appendChild(base);
+                return base;
+            };
+            __registrationInheritedPhase = 'blank';
+            const blank = document.createElement('iframe');
+            document.body.appendChild(blank);
+            const child = blank.contentWindow;
+            const childSw = child.navigator.serviceWorker;
+            checks.push((await childSw.getRegistration(app.scope + 'page.html#fragment')).scope === app.scope);
+            checks.push((await childSw.getRegistration()).scope === app.scope);
+            checks.push((await childSw.getRegistration('deep/page.html')).scope === app.scope);
+            const childBase = setBase(child, other.scope);
+            checks.push((await childSw.getRegistration()).scope === other.scope);
+            checks.push((await sw.getRegistration.call(childSw, 'page.html')).scope === other.scope);
+            checks.push((await childSw.getRegistration.call(sw, 'page.html')).scope === app.scope);
+            childBase.href = 'https://different-origin.test/';
+            checks.push((await childSw.getRegistration(app.scope + 'page.html')).scope === app.scope);
+            checks.push(await childSw.getRegistration('page.html').then(() => 'resolved', error => error.name));
+            __registrationInheritedPhase = 'popup';
+            const popup = open('about:blank', 'get-registration-settings');
+            const popupSw = popup.navigator.serviceWorker;
+            checks.push((await popupSw.getRegistration()).scope === app.scope);
+            const popupBase = setBase(popup, other.scope);
+            checks.push((await popupSw.getRegistration('page.html#fragment')).scope === other.scope);
+            popupBase.href = 'https://different-origin.test/';
+            checks.push((await popupSw.getRegistration(app.scope + 'page.html')).scope === app.scope);
+            checks.push(await popupSw.getRegistration('page.html').then(() => 'resolved', error => error.name));
+            __registrationInheritedPhase = 'srcdoc';
+            const srcdoc = document.createElement('iframe');
+            const loaded = new Promise(resolve => { srcdoc.onload = resolve; });
+            srcdoc.srcdoc = '<!doctype html><base href="' + other.scope + '"><title>lookup</title>';
+            document.body.appendChild(srcdoc);
+            await loaded;
+            const srcdocSw = srcdoc.contentWindow.navigator.serviceWorker;
+            checks.push((await srcdocSw.getRegistration('page.html#fragment')).scope === other.scope);
+            checks.push((await srcdocSw.getRegistration()).scope === other.scope);
+            checks.push((await srcdocSw.getRegistration(app.scope + 'page.html')).scope === app.scope);
+            globalThis.__registrationInherited = checks.join('|');
+        })().catch(error => { __registrationInherited = __registrationInheritedPhase + ':error:' + error.name + ':' + error.message; })
+          .finally(() => { __registrationInheritedDone = true; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__registrationInheritedDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__registrationInherited)").unwrap(),
+        "true|true|true|true|true|true|true|SecurityError|true|true|true|SecurityError|true|true|true"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn navigator_service_worker_update_check_failure_rejects_register_with_type_error() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
         (

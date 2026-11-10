@@ -11,6 +11,7 @@ mod owner_wake;
 mod path_restriction;
 mod pending_clear;
 mod registration;
+mod registration_urls;
 mod resource_store;
 mod run_owner;
 mod script_loading;
@@ -86,4 +87,9 @@ pub(crate) use service::{
 };
 pub(crate) use snapshots::{
     ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
+};
+
+pub(crate) use registration_urls::{
+    ServiceWorkerClientUrlError, resolve_service_worker_script_url, service_worker_client_url,
+    service_worker_scope_url,
 };
