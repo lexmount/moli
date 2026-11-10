@@ -1,6 +1,113 @@
 use super::*;
 
 #[test]
+fn native_text_size_adjust_reifies_specified_and_computed_percentages() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::moli_declaration_block::parse_declaration_block;
+    use style::properties::{LonghandId, PropertyDeclaration, PropertyDeclarationId};
+    use style::servo_arc::Arc;
+    use style::typed_om::{NumericValue, ToTyped, TypedValue, TypedValueList};
+    use style::values::specified::text::TextSizeAdjust;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    let percent = |values: TypedValueList, expected: f32| {
+        assert!(matches!(values.values.as_slice(),
+            [TypedValue::Numeric(NumericValue::Unit(value))]
+                if value.unit_str() == "percent" && (value.value - expected).abs() < 0.0001));
+    };
+    for (source, expected) in [
+        ("0%", 0.0),
+        ("3.14%", 314.0 / 100.0),
+        ("100%", 100.0),
+        ("calc(-3.14%)", 0.0),
+        ("calc(50% + 50%)", 100.0),
+        ("min(20%, 40%)", 20.0),
+        ("max(20%, 40%)", 40.0),
+        ("clamp(10%, 50%, 40%)", 40.0),
+    ] {
+        let block = parse_declaration_block(&format!("text-size-adjust: {source}"));
+        let css_text = block.css_text();
+        let block = block.into_inner();
+        let (declaration, _) = block
+            .get(PropertyDeclarationId::Longhand(LonghandId::TextSizeAdjust))
+            .unwrap();
+        let PropertyDeclaration::TextSizeAdjust(value) = declaration else {
+            panic!("expected text-size-adjust");
+        };
+        assert!(matches!(
+            declaration.to_typed_value_list().unwrap().values.as_slice(),
+            [TypedValue::Numeric(_)]
+        ));
+        percent(value.to_computed_typed_value_list().unwrap(), expected);
+        percent(
+            ToTyped::to_computed_typed_value_list(&value).unwrap(),
+            expected,
+        );
+        percent(
+            Box::new(value.clone())
+                .to_computed_typed_value_list()
+                .unwrap(),
+            expected,
+        );
+        percent(
+            Arc::new(value.clone())
+                .to_computed_typed_value_list()
+                .unwrap(),
+            expected,
+        );
+        assert_eq!(
+            style::moli_declaration_block::CssDeclarationBlock::new(block).css_text(),
+            css_text
+        );
+    }
+    for (source, expected) in [("AUTO", "auto"), ("n\\6fne", "none")] {
+        let parsed = parse_typed_style_value("text-size-adjust", source, None).unwrap();
+        assert!(
+            matches!(parsed.values.unwrap().native().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == expected)
+        );
+    }
+    for source in ["-3.14%", "10px", "10", "none auto", "10%, 20%"] {
+        assert!(parse_typed_style_value("text-size-adjust", source, None).is_none());
+    }
+    for source in ["calc(10% * sibling-index())", "calc(10% * sibling-count())"] {
+        let parsed = parse_typed_style_value("text-size-adjust", source, None).unwrap();
+        assert!(parsed.values.is_none(), "{source}");
+        let value = TextSizeAdjust::Dynamic(source.to_owned().into());
+        assert!(value.to_typed_value_list().is_none());
+        assert!(value.to_computed_typed_value_list().is_none());
+    }
+    for (value, expected) in [
+        (TextSizeAdjust::Auto, "auto"),
+        (TextSizeAdjust::None, "none"),
+    ] {
+        assert!(
+            matches!(value.to_computed_typed_value_list().unwrap().values.as_slice(),
+            [TypedValue::Keyword(value)] if value.0 == expected)
+        );
+    }
+    assert!(
+        matches!(1.0f32.to_computed_typed_value_list().unwrap().values.as_slice(),
+        [TypedValue::Numeric(NumericValue::Unit(value))]
+            if value.unit_str() == "number" && value.value == 1.0)
+    );
+}
+
+#[test]
+fn css_style_property_maps_reify_text_size_adjust_percentages() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-text-size-adjust.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm
+        .eval(include_str!("css_typed_text_size_adjust.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(325));
+}
+
+#[test]
 fn native_column_count_numbers_reify_without_changing_range_validation() {
     use moli_css_parse::parse_typed_style_value;
     use style::typed_om::{NumericValue, TypedValue};
