@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn css_style_property_maps_preserve_step_keywords_and_opaque_easing_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-typed-easings.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(include_str!("css_typed_easings.js")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 1000, "{result}");
+}
+
+#[test]
 fn css_style_property_maps_reject_numeric_shorthand_writes_atomically() {
     let mut vm = new_parsed_test_vm(
         "https://css-typed-shorthands.test/",

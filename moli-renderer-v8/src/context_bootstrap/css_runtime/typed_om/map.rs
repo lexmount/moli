@@ -365,6 +365,11 @@ fn style_values_for_property<'s>(
     };
     if !native_bridge::element::style_declaration_is_computed(scope, style) {
         crate::style_engine::ensure_stylo_browser_compat_prefs();
+        if let Some(values) =
+            detached_css_style::css_declaration_typed_easing_values(scope, style, property)
+        {
+            return values::easing_values(scope, property, values, &text);
+        }
         let base_url = parse::base_url(scope);
         if let Some(parsed) =
             moli_css_parse::parse_typed_style_value(property, &text, base_url.as_ref())

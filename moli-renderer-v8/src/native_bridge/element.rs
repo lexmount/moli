@@ -673,7 +673,7 @@ pub(crate) use styles::{
     style_for_element, style_get_property_priority_callback, style_get_property_value_callback,
     style_item_callback, style_length_getter_callback, style_property_names_from_object,
     style_property_value_from_object, style_remove_property_callback, style_set_property_callback,
-    style_typed_unit_value_from_object,
+    style_typed_easing_values_from_object, style_typed_unit_value_from_object,
 };
 pub(crate) use stylesheets::{
     detach_cached_style_sheet_for_element, detach_cached_style_sheet_if_live_stylesheet_changed,

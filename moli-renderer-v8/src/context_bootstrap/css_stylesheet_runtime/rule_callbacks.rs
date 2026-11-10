@@ -913,6 +913,19 @@ pub(crate) fn seed_css_rule_stylo_declaration_block_from_declaration_text<'s>(
     set_css_rule_stylo_declaration_block_valid(scope, rule, true);
 }
 
+pub(crate) fn retain_css_rule_native_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    block: &moli_css_parse::CssDeclarationBlock,
+) {
+    // Validation and compatibility side entries still use the ordinary wrapper
+    // initialization. Its native owner retains the original parsed values.
+    if css_rule_stylo_declaration_block_is_valid(scope, rule) {
+        let id = ensure_css_rule_stylo_declaration_block_id(scope, rule);
+        store_lightweight_css_style_stylo_declaration_block(id, block);
+    }
+}
+
 pub(crate) fn css_rule_pdb_safe_declaration_block(
     style_text: &str,
     kind: CssRulePdbDeclarationKind,

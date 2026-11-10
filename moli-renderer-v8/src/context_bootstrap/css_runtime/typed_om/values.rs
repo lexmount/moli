@@ -208,6 +208,9 @@ pub(super) fn from_parsed<'s>(
     let typed = match typed {
         TypedStyleValueList::Native(typed) => typed,
         TypedStyleValueList::Images(images) => return image_values(scope, images),
+        TypedStyleValueList::Easings(easings) => {
+            return easing_values(scope, property, easings, &parsed.css_text);
+        }
     };
     // Stylo determines whether this property is list-valued. Only subdivide
     // its serialization when that projection has multiple items; a shorthand
@@ -299,6 +302,32 @@ fn image_values<'s>(
         .collect()
 }
 
+pub(super) fn easing_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    property: &str,
+    easings: Vec<moli_css_parse::TypedEasingValue>,
+    text: &str,
+) -> Vec<v8::Local<'s, v8::Object>> {
+    // A functional easing makes the whole declaration unsupported in Typed
+    // OM. Keep one property-associated CSSStyleValue, including mixed lists.
+    // The native iterations remain available to validate append() separately.
+    if easings
+        .iter()
+        .any(|value| matches!(value, moli_css_parse::TypedEasingValue::Function(_)))
+    {
+        return vec![opaque_style_value(scope, property, text)];
+    }
+    easings
+        .into_iter()
+        .map(|value| match value {
+            moli_css_parse::TypedEasingValue::Keyword(keyword) => keyword_value(scope, keyword),
+            moli_css_parse::TypedEasingValue::Function(text) => {
+                opaque_style_value(scope, property, &text)
+            }
+        })
+        .collect()
+}
+
 pub(super) fn from_computed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     property: &str,
@@ -310,6 +339,9 @@ pub(super) fn from_computed<'s>(
     let typed = match typed {
         TypedStyleValueList::Native(typed) => typed,
         TypedStyleValueList::Images(images) => return image_values(scope, images),
+        TypedStyleValueList::Easings(easings) => {
+            return easing_values(scope, property, easings, &parsed.css_text);
+        }
     };
     let texts = if typed.values.len() == 1 {
         vec![parsed.css_text.clone()]

@@ -667,6 +667,7 @@ pub(crate) enum LiveStylesheetRuleWrapperSeed {
     Style {
         selector_text: String,
         declaration_text: String,
+        declaration_block: Box<moli_css_parse::CssDeclarationBlock>,
     },
     Keyframe {
         key_text: String,
@@ -1585,18 +1586,26 @@ impl LiveStylesheet {
         Some(match native_rule {
             NativeStylesheetRule::Css(CssRule::Style(rule)) => {
                 let rule = rule.read_with(&guard);
-                let declaration_text = self
+                let source_override = self
                     .source_declaration_override
                     .borrow()
                     .as_ref()
                     .filter(|source_override| source_override.rule_path == path)
-                    .map(|source_override| source_override.declaration_text.clone())
-                    .unwrap_or_else(|| {
-                        declaration_block_style_resolution_text(&rule.block, &guard)
-                    });
+                    .map(|source_override| source_override.declaration_text.clone());
+                let declaration_block = source_override.as_ref().map_or_else(
+                    || {
+                        moli_css_parse::CssDeclarationBlock::new(
+                            rule.block.read_with(&guard).clone(),
+                        )
+                    },
+                    |text| moli_css_parse::parse_declaration_block(text),
+                );
+                let declaration_text =
+                    source_override.unwrap_or_else(|| declaration_block.style_resolution_text());
                 LiveStylesheetRuleWrapperSeed::Style {
                     selector_text: cssparser::ToCss::to_css_string(&rule.selectors),
                     declaration_text,
+                    declaration_block: Box::new(declaration_block),
                 }
             }
             NativeStylesheetRule::Keyframe(rule) => {

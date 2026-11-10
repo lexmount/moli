@@ -163,6 +163,7 @@ pub(crate) fn build_css_rule_object_from_live_stylesheet_rule_path<'s>(
         crate::live_stylesheet::LiveStylesheetRuleWrapperSeed::Style {
             selector_text,
             declaration_text,
+            declaration_block,
         } => {
             let selector_context =
                 css_style_sheet_selector_namespace_context(scope, parent_style_sheet);
@@ -174,7 +175,7 @@ pub(crate) fn build_css_rule_object_from_live_stylesheet_rule_path<'s>(
                 style_rule_context,
             )
             .ok()?;
-            Some(build_css_style_rule_object_from_stylo_view(
+            let rule = build_css_style_rule_object_from_stylo_view(
                 scope,
                 CssStyleRuleTextParts {
                     css_text: String::new(),
@@ -184,7 +185,9 @@ pub(crate) fn build_css_rule_object_from_live_stylesheet_rule_path<'s>(
                 &declaration_text,
                 Some(parent_style_sheet),
                 parent_rule,
-            ))
+            );
+            retain_css_rule_native_declaration_block(scope, rule, &declaration_block);
+            Some(rule)
         }
         crate::live_stylesheet::LiveStylesheetRuleWrapperSeed::Keyframe {
             key_text,
@@ -789,16 +792,16 @@ pub(crate) fn apply_live_stylesheet_rule_declaration_text_mutation<'s>(
 ) -> bool {
     match kind {
         CssRulePdbDeclarationKind::StyleRule | CssRulePdbDeclarationKind::NestedDeclarations => {
-            // Compatibility side entries still share their surviving native
-            // pending nodes with the rule's declaration owner.
-            let pending = css_rule_stylo_declaration_block_id(scope, rule)
-                .and_then(lightweight_css_style_pending_substitutions);
+            // Preserve native nodes that CSSOM cannot reconstruct, including
+            // pending substitutions and specified step keywords.
+            let preserved = css_rule_stylo_declaration_block_id(scope, rule)
+                .and_then(lightweight_css_style_declaration_block_snapshot);
             apply_live_stylesheet_style_like_rule_declaration_block_mutation(
                 scope,
                 rule,
                 kind,
                 declaration_text,
-                pending.as_ref(),
+                preserved.as_ref(),
             )
         }
         CssRulePdbDeclarationKind::KeyframeRule => {
@@ -1124,6 +1127,7 @@ fn sync_attached_css_rule_root_from_seed<'s>(
         crate::live_stylesheet::LiveStylesheetRuleWrapperSeed::Style {
             selector_text,
             declaration_text,
+            declaration_block,
         } => {
             set_private_string(
                 scope,
@@ -1144,6 +1148,7 @@ fn sync_attached_css_rule_root_from_seed<'s>(
                 CssRulePdbDeclarationKind::StyleRule,
                 &declaration_text,
             );
+            retain_css_rule_native_declaration_block(scope, rule, &declaration_block);
             CssRuleType::Style
         }
         crate::live_stylesheet::LiveStylesheetRuleWrapperSeed::Keyframe {

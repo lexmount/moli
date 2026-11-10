@@ -125,15 +125,10 @@ pub(crate) fn lightweight_css_style_stylo_declaration_block_resolution_text(
     })
 }
 
-pub(crate) fn lightweight_css_style_pending_substitutions(
+pub(crate) fn lightweight_css_style_declaration_block_snapshot(
     id: u64,
 ) -> Option<moli_css_parse::CssDeclarationBlock> {
-    STYLO_DECLARATION_BLOCKS.with(|blocks| {
-        blocks
-            .borrow()
-            .get(&id)
-            .and_then(|block| block.pending_substitutions())
-    })
+    STYLO_DECLARATION_BLOCKS.with(|blocks| blocks.borrow().get(&id).cloned())
 }
 
 pub(crate) fn remove_lightweight_css_style_stylo_declaration_block(id: u64) {
@@ -3296,6 +3291,25 @@ pub(crate) fn css_declaration_typed_unit_value<'s>(
     stored_stylo_declaration_block(scope, style)?
         .typed_unit_value(name)
         .cloned()
+}
+
+pub(crate) fn css_declaration_typed_easing_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    name: &str,
+) -> Option<Vec<moli_css_parse::TypedEasingValue>> {
+    if !matches!(
+        name,
+        "animation-timing-function" | "transition-timing-function"
+    ) {
+        return None;
+    }
+    if crate::native_bridge::element::is_live_style_declaration_object(scope, style) {
+        return crate::native_bridge::element::style_typed_easing_values_from_object(
+            scope, style, name,
+        );
+    }
+    stored_stylo_declaration_block(scope, style)?.typed_easing_values(name)
 }
 
 pub(crate) fn set_typed_css_declaration_property<'s>(

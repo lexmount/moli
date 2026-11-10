@@ -320,6 +320,23 @@ pub(crate) fn style_typed_unit_value_from_object<'s>(
         .cloned()
 }
 
+pub(crate) fn style_typed_easing_values_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    property: &str,
+) -> Option<Vec<moli_css_parse::TypedEasingValue>> {
+    let (runtime_ptr, handle, StyleMode::Inline) =
+        style_runtime_and_handle_from_object(scope, style).ok()?
+    else {
+        return None;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let base = runtime.existing_element_inline_style_base_url(handle);
+    super::declaration::inline_style_declaration_state_for_handle(runtime, handle, base.as_ref())
+        .block
+        .typed_easing_values(property)
+}
+
 /// Typed OM observes computed values, before CSSOM resolves percentages and
 /// auto sizes against layout. Reuse the declaration's document/viewport and
 /// retained style observation rather than reading serialized used values.

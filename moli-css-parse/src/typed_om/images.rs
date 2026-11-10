@@ -48,6 +48,10 @@ pub fn computed_typed_style_value_list(
             let declaration = computed.computed_or_resolved_declaration(id, None);
             from_declaration(&declaration).map(TypedStyleValueList::Images)
         }
+        LonghandId::AnimationTimingFunction | LonghandId::TransitionTimingFunction => {
+            let declaration = computed.computed_or_resolved_declaration(id, None);
+            super::easings::from_declaration(&declaration).map(TypedStyleValueList::Easings)
+        }
         _ => None,
     }
 }
