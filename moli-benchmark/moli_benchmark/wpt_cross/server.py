@@ -859,20 +859,21 @@ def _sidecar_response_headers(
             continue
         if substitute is not None and sidecar.name.endswith(".sub.headers"):
             body = substitute(body)
-        lines = body.decode("latin-1").splitlines()
-        for line in lines:
+        # Match wptserve's byte line splitting and trimming. Decoded string
+        # helpers also split VT/FF/NEL and strip non-ASCII header value bytes.
+        for line in body.splitlines():
             stripped = line.strip()
             if (
                 not stripped
-                or stripped.startswith("#")
-                or stripped.upper().startswith("HTTP/")
+                or stripped.startswith(b"#")
+                or stripped.upper().startswith(b"HTTP/")
             ):
                 continue
-            name, separator, value = stripped.partition(":")
+            name, separator, value = stripped.partition(b":")
             if not separator:
                 continue
-            header_name = name.strip()
-            header_value = value.strip()
+            header_name = name.strip().decode("latin-1")
+            header_value = value.strip().decode("latin-1")
             if _valid_static_response_header(header_name, header_value):
                 headers.append((header_name, header_value))
     return headers
