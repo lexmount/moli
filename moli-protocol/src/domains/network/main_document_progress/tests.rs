@@ -19,14 +19,21 @@ use super::gate::{
 use super::*;
 
 #[test]
-fn aborted_navigation_preserves_the_document_without_hiding_other_failures() {
+fn client_cancelled_navigation_preserves_the_document_without_hiding_other_failures() {
     use crate::automation::DevToolsRequestFailure;
 
     for error in [
         anyhow::Error::new(moli_fetch::FetchCancelled),
         anyhow::Error::new(DevToolsRequestFailure::Aborted),
+        anyhow::Error::new(DevToolsRequestFailure::Failed(
+            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
+        )),
+        anyhow::Error::new(DevToolsRequestFailure::Failed("TimedOut".to_owned())),
         anyhow::anyhow!("transport detail").context(moli_fetch::FetchCancelled),
         anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Aborted),
+        anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Failed(
+            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
+        )),
     ] {
         assert_eq!(
             FailedNavigationDocumentPolicy::for_navigation_error(&error),
@@ -47,21 +54,17 @@ fn aborted_navigation_preserves_the_document_without_hiding_other_failures() {
         "net::ERR_CONNECTION_RESET",
         "net::ERR_BLOCKED_BY_CLIENT",
     ] {
-        for error in [
-            anyhow::anyhow!(error_text),
-            anyhow::Error::new(DevToolsRequestFailure::Failed(error_text.to_owned())),
-        ] {
-            assert_eq!(
-                FailedNavigationDocumentPolicy::for_navigation_error(&error),
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
-            );
-            assert_eq!(
-                FailedNavigationDocumentPolicy::for_navigation_error(
-                    &error.context("net::ERR_ABORTED")
-                ),
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
-            );
-        }
+        let error = anyhow::anyhow!(error_text);
+        assert_eq!(
+            FailedNavigationDocumentPolicy::for_navigation_error(&error),
+            FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+        );
+        assert_eq!(
+            FailedNavigationDocumentPolicy::for_navigation_error(
+                &error.context("net::ERR_ABORTED")
+            ),
+            FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+        );
     }
 }
 

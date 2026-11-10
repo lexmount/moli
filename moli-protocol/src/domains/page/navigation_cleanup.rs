@@ -10,6 +10,20 @@ use crate::domains::{
     network::{self, MaterializedFailedDocumentProgress},
 };
 
+/// The retained navigation-failure terminal (the navigate error and
+/// `Network.loadingFailed`) is only published once this cleanup finishes, so a
+/// retired Page's teardown must not hold it hostage. Chromium delivers the
+/// navigation error regardless of old-document teardown; bound the close so a
+/// stalled renderer cannot turn a failed navigation into a dead tab.
+///
+/// The bound covers the page close only. The renderer-call replays waited on
+/// afterwards are deliberately unbounded: every admitted replay owns protocol
+/// state and an in-flight renderer dispatch whose response lease is only
+/// settled by finishing it, so abandoning a replay on a timer would orphan the
+/// original command. Bounding that wait needs expiry support in the replay
+/// pipeline, not a dropped future.
+const FAILED_NAVIGATION_PAGE_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Retirement is applied once, while the original navigation is current. The
 /// remaining native work owns its Page and original renderer response leases.
 pub(crate) struct PreparedNavigationFailureCleanup {
@@ -44,8 +58,14 @@ impl PreparedNavigationFailureCleanup {
         self,
         driver: &mut ProtocolWorkflowDriver,
     ) -> Result<Vec<crate::conn::BackgroundProtocolEvent>> {
-        if let Some(page) = self.page {
-            let _ = page.close_async().await;
+        if let Some(page) = self.page
+            && tokio::time::timeout(FAILED_NAVIGATION_PAGE_CLOSE_TIMEOUT, page.close_async())
+                .await
+                .is_err()
+        {
+            tracing::debug!(
+                "retired page close stalled after a failed navigation; publishing the failure terminal"
+            );
         }
         self.renderer.wait_using(driver).await
     }

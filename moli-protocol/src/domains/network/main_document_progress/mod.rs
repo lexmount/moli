@@ -77,17 +77,26 @@ impl FailedNavigationDocumentPolicy {
     fn for_navigation_error(error: &anyhow::Error) -> Self {
         // Decide from the cause before projecting diagnostic text. Context and
         // shared body-capture wrappers must not turn cancellation into failure.
+        // Every protocol-requested failure cancels the navigation: Chromium
+        // keeps the committed document when a paused request is failed with
+        // `Fetch.failRequest`, whatever error reason the client supplies, so
+        // `DevToolsRequestFailure::Failed` preserves it like `Aborted`.
+        //
+        // Both DevToolsRequestFailure probes are load-bearing. The chain probe
+        // sees the head error plus causes exposed through `#[source]`, but
+        // anyhow stores `.context` values beside the chain rather than in it:
+        // a `.context(DevToolsRequestFailure…)` wrapper only matches the
+        // direct anyhow-level downcast, and a bare typed head only needs the
+        // chain. Removing either probe regresses the classification test.
+        //
+        // Auth cancellation (`Fetch.continueWithAuth` Default, carried as
+        // NavigationAuthAborted) deliberately stays on Invalidate: Chromium
+        // parity for that path is unverified, so it needs its own change.
         if moli_fetch::is_fetch_cancelled(error)
-            || matches!(
-                error.downcast_ref::<DevToolsRequestFailure>(),
-                Some(DevToolsRequestFailure::Aborted)
-            )
-            || error.chain().any(|cause| {
-                matches!(
-                    cause.downcast_ref::<DevToolsRequestFailure>(),
-                    Some(DevToolsRequestFailure::Aborted)
-                )
-            })
+            || error.downcast_ref::<DevToolsRequestFailure>().is_some()
+            || error
+                .chain()
+                .any(|cause| cause.downcast_ref::<DevToolsRequestFailure>().is_some())
         {
             Self::PreserveCommittedDocument
         } else {

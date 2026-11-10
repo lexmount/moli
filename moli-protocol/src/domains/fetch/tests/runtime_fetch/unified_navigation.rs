@@ -175,6 +175,34 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
         redirects, 1,
         "{entry:?}: redirect must not be announced again at completion"
     );
+    if fail && matches!(entry, NavigationEntry::Main) {
+        // A client-failed main navigation must answer the navigate command
+        // with the Chromium error text and keep the committed document.
+        wait_until_message(
+            &mut ctx,
+            session.as_str(),
+            "blocked main navigation error reply",
+            |event| event["id"] == json!(41_006) && event["error"].is_object(),
+        )
+        .await;
+        let reply = ctx
+            .sent
+            .iter()
+            .find(|event| event["id"] == json!(41_006))
+            .expect("navigate reply");
+        assert_eq!(reply["error"]["code"], -32000, "{reply:?}");
+        assert_eq!(reply["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
+        let evaluate = evaluate_until_value_async(
+            &mut ctx,
+            &session,
+            41_008,
+            "location.href",
+            &json!(format!("http://{addr}/page")),
+            "committed document stays current after a blocked navigation",
+        )
+        .await;
+        assert!(evaluate["error"].is_null(), "{evaluate:?}");
+    }
     server.abort();
 }
 
