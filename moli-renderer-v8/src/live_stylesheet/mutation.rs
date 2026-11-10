@@ -619,6 +619,7 @@ impl LiveStylesheet {
                 &mut declarations,
                 &self.current_contents().url_data,
             );
+            pending.restore_easing_declarations(&mut declarations);
         }
         self.ensure_owned_contents_for_mutation();
         let Some(NativeStylesheetRule::Css(CssRule::Style(rule))) =
@@ -655,6 +656,7 @@ impl LiveStylesheet {
                 &mut declarations,
                 &self.current_contents().url_data,
             );
+            pending.restore_easing_declarations(&mut declarations);
         }
         self.ensure_owned_contents_for_mutation();
         let Some(NativeStylesheetRule::Css(CssRule::NestedDeclarations(rule))) =

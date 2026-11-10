@@ -15,23 +15,26 @@ use style::{
 };
 use style_traits::ParsingMode;
 
+pub(crate) mod easings;
 mod images;
 mod tokens;
 
+pub use easings::TypedEasingValue;
 pub use images::{TypedImageValue, computed_typed_style_value_list};
 
-/// Stylo's general projection plus image ASTs which its pinned ToTyped
-/// implementation does not yet cover (gradients, image-set and mixed lists).
+/// Stylo's general projection plus native image and easing ASTs which its
+/// pinned ToTyped implementation cannot project completely.
 pub enum TypedStyleValueList {
     Native(TypedValueList),
     Images(Vec<TypedImageValue>),
+    Easings(Vec<TypedEasingValue>),
 }
 
 impl TypedStyleValueList {
     pub fn native(&self) -> Option<&TypedValueList> {
         match self {
             Self::Native(values) => Some(values),
-            Self::Images(_) => None,
+            Self::Images(_) | Self::Easings(_) => None,
         }
     }
 
@@ -39,6 +42,7 @@ impl TypedStyleValueList {
         match self {
             Self::Native(values) => values.values.len(),
             Self::Images(values) => values.len(),
+            Self::Easings(values) => values.len(),
         }
     }
 
@@ -50,6 +54,7 @@ impl TypedStyleValueList {
         match self {
             Self::Native(values) => matches!(values.values.as_slice(), [TypedValue::Image(_)]),
             Self::Images(values) => matches!(values.as_slice(), [TypedImageValue::Image(_)]),
+            Self::Easings(_) => false,
         }
     }
 }
@@ -129,7 +134,9 @@ pub fn parse_typed_style_value(
     };
     let values = values.map(TypedStyleValueList::Native).or_else(|| {
         let (declaration, _) = block.get(id.as_shorthand().err()?)?;
-        images::from_declaration(declaration).map(TypedStyleValueList::Images)
+        images::from_declaration(declaration)
+            .map(TypedStyleValueList::Images)
+            .or_else(|| easings::from_declaration(declaration).map(TypedStyleValueList::Easings))
     });
     Some(ParsedTypedStyleValue {
         css_text: serialized,
@@ -216,7 +223,9 @@ mod tests {
     fn native_values(parsed: ParsedTypedStyleValue) -> TypedValueList {
         match parsed.values.expect("typed values") {
             TypedStyleValueList::Native(values) => values,
-            TypedStyleValueList::Images(_) => panic!("unexpected image projection"),
+            TypedStyleValueList::Images(_) | TypedStyleValueList::Easings(_) => {
+                panic!("unexpected non-native projection")
+            }
         }
     }
 

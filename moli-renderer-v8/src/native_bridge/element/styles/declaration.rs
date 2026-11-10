@@ -29,6 +29,7 @@ pub(crate) use parse::{
 };
 pub(super) use parse::{
     expand_unresolved_box_shorthand_entries_for_mutation,
+    inline_style_declaration_state_for_handle,
     parse_style_property_entries_for_cssom_fallback_write,
     parse_style_property_entries_for_cssom_write, set_inline_style_css_text_with_pdb_storage,
     set_inline_style_property_with_pdb_storage, set_style_entries_if_changed_with_inline_base_url,

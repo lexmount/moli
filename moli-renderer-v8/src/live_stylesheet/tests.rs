@@ -30,6 +30,56 @@ fn style_rule_seed_declaration_text(stylesheet: &LiveStylesheet, path: &[usize])
 }
 
 #[test]
+fn style_rule_easing_nodes_survive_cssom_reparse_and_wrapper_recreation() {
+    let registry = LiveStylesheetRegistry::default();
+    let sheet = registry.create(
+        ".target { animation-timing-function: step-start; transition-timing-function: step-end !important; color: red; }",
+        url::Url::parse("https://example.test/styles/easing.css").unwrap(),
+        QuirksMode::NoQuirks,
+        AllowImportRules::Yes,
+        SharedRwLock::new(),
+    );
+    let read_block = || {
+        let Some(LiveStylesheetRuleWrapperSeed::Style {
+            declaration_block, ..
+        }) = sheet.rule_wrapper_seed_at_path(&[0])
+        else {
+            panic!("expected native style rule");
+        };
+        declaration_block
+    };
+    let mut declared = read_block();
+    for phase in ["parsed", "mutated"] {
+        for (property, keyword) in [
+            ("animation-timing-function", "step-start"),
+            ("transition-timing-function", "step-end"),
+        ] {
+            assert!(
+                matches!(
+                    declared.typed_easing_values(property).unwrap().as_slice(),
+                    [moli_css_parse::TypedEasingValue::Keyword(value)] if value == keyword
+                ),
+                "{phase}: {property}"
+            );
+        }
+        assert!(declared.property_priority("transition-timing-function"));
+        declared.set_property("color", "blue", false);
+        sheet
+            .set_style_rule_declarations(&[0], &declared.css_text(), Some(&declared))
+            .unwrap();
+        declared = read_block();
+    }
+    declared.set_property("animation-timing-function", "steps(1, start)", false);
+    sheet
+        .set_style_rule_declarations(&[0], &declared.css_text(), Some(&declared))
+        .unwrap();
+    assert!(matches!(
+        read_block().typed_easing_values("animation-timing-function").unwrap().as_slice(),
+        [moli_css_parse::TypedEasingValue::Function(value)] if value == "steps(1, start)"
+    ));
+}
+
+#[test]
 fn eof_open_var_cssom_override_is_shared_and_cleared_by_native_mutation() {
     let registry = LiveStylesheetRegistry::default();
     let shared_lock = SharedRwLock::new();

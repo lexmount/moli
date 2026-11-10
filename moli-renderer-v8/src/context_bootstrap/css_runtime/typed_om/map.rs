@@ -6,9 +6,7 @@ use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
 };
-use moli_webapi::css_values::{
-    new_style_property_map_read_only, style_property_map_style,
-};
+use moli_webapi::css_values::{new_style_property_map_read_only, style_property_map_style};
 
 const ELEMENT_COMPUTED_STYLE_MAP_SLOT: &str = "__moliElementComputedStyleMap";
 const STYLE_PROPERTY_MAP_ELEMENT_SLOT: &str = "__moliStylePropertyMapElement";
@@ -359,6 +357,11 @@ fn style_values_for_property<'s>(
     };
     if !native_bridge::element::style_declaration_is_computed(scope, style) {
         crate::style_engine::ensure_stylo_browser_compat_prefs();
+        if let Some(values) =
+            detached_css_style::css_declaration_typed_easing_values(scope, style, property)
+        {
+            return values::easing_values(scope, property, values, &text);
+        }
         let base_url = parse::base_url(scope);
         if let Some(parsed) =
             moli_css_parse::parse_typed_style_value(property, &text, base_url.as_ref())

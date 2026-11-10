@@ -247,12 +247,40 @@ impl CssDeclarationBlock {
         self.native.restore_pending_substitutions(block, url_data);
     }
 
+    /// Restore specified easing nodes after CSSOM has expanded step keywords.
+    /// These declarations have no URL context; other values keep the parser's
+    /// owning stylesheet context.
+    pub fn restore_easing_declarations(&self, block: &mut PropertyDeclarationBlock) {
+        let source = self.native.clone().into_inner();
+        for (declaration, importance) in source.declaration_importance_iter() {
+            if matches!(
+                declaration,
+                PropertyDeclaration::AnimationTimingFunction(..)
+                    | PropertyDeclaration::TransitionTimingFunction(..)
+            ) {
+                block.push(declaration.clone(), importance);
+            }
+        }
+    }
+
     pub fn typed_numeric_values(&self, name: &str) -> Option<&CssDeclaredNumericValues> {
         if self.typed_numeric.is_empty() {
             return None;
         }
         let key = typed_numeric_property_key(name)?;
         self.typed_numeric.get(key)
+    }
+
+    /// Read the declaration's easing AST before CSSOM serialization expands
+    /// step keywords, including in mixed lists containing opaque functions.
+    pub fn typed_easing_values(&self, name: &str) -> Option<Vec<crate::TypedEasingValue>> {
+        if !matches!(
+            name,
+            "animation-timing-function" | "transition-timing-function"
+        ) {
+            return None;
+        }
+        crate::typed_om::easings::from_block(&self.native.clone().into_inner(), name)
     }
 
     /// Attach already-validated values without changing the native declaration.

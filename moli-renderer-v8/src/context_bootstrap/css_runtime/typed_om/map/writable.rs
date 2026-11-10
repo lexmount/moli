@@ -224,6 +224,8 @@ fn mutate<'s>(
         let Some(previous) = style_property_text(scope, style, &property) else {
             return Ok(coerced);
         };
+        let previous_easings =
+            detached_css_style::css_declaration_typed_easing_values(scope, style, &property);
         let previous =
             moli_css_parse::parse_typed_style_value(&property, &previous, base_url.as_ref())
                 .ok_or(CoercionError::Invalid)?;
@@ -231,7 +233,14 @@ fn mutate<'s>(
             return Err(CoercionError::Invalid);
         }
         let previous_count = typed_value_count(&previous);
-        let joined = format!("{}, {}", previous.css_text, coerced.text);
+        let previous_text = previous_easings.map_or(previous.css_text, |values| {
+            values
+                .iter()
+                .map(moli_css_parse::TypedEasingValue::declaration_text)
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+        let joined = format!("{}, {}", previous_text, coerced.text);
         let parsed = moli_css_parse::parse_typed_style_value(&property, &joined, base_url.as_ref())
             .ok_or(CoercionError::Invalid)?;
         let mut typed_values =
@@ -303,6 +312,20 @@ fn is_numeric(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
         .as_ref()
         .and_then(moli_css_parse::TypedStyleValueList::native)
         .is_some_and(|list| matches!(list.values.as_slice(), [TypedValue::Numeric(_)]))
+}
+
+fn preserve_declared_syntax(parsed: &moli_css_parse::ParsedTypedStyleValue) -> bool {
+    match parsed.values.as_ref() {
+        Some(moli_css_parse::TypedStyleValueList::Easings(_)) => true,
+        Some(moli_css_parse::TypedStyleValueList::Native(values)) => {
+            !values.values.is_empty()
+                && values
+                    .values
+                    .iter()
+                    .all(|value| matches!(value, TypedValue::Keyword(_)))
+        }
+        _ => false,
+    }
 }
 
 fn coerce_values<'s>(
@@ -454,7 +477,7 @@ fn coerce_values<'s>(
         } else {
             typed_values.extend(std::iter::repeat_n(None, count));
         }
-        texts.push(if preserve_unit_text {
+        texts.push(if preserve_unit_text || preserve_declared_syntax(&parsed) {
             text
         } else {
             parsed.css_text
@@ -481,7 +504,7 @@ fn coerce_values<'s>(
         typed_values.clear();
     }
     Ok(CoercedValues {
-        text: if preserve_unit_text {
+        text: if preserve_unit_text || preserve_declared_syntax(&parsed) {
             text
         } else {
             parsed.css_text
