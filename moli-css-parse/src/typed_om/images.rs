@@ -52,6 +52,36 @@ pub fn computed_typed_style_value_list(
             let declaration = computed.computed_or_resolved_declaration(id, None);
             super::easings::from_declaration(&declaration).map(TypedStyleValueList::Easings)
         }
+        LonghandId::TransitionProperty => {
+            // Computed single property names are identifiers, including known
+            // properties whose specified values remain opaque in Typed OM.
+            // A multi-property list remains one unsupported CSSStyleValue.
+            let PropertyDeclaration::TransitionProperty(properties) =
+                computed.computed_or_resolved_declaration(id, None)
+            else {
+                return None;
+            };
+            let mut properties = properties.0.iter();
+            let property = properties.next()?;
+            if properties.next().is_some() {
+                return None;
+            }
+            use style::values::specified::animation::TransitionProperty;
+            let keyword = match property {
+                TransitionProperty::NonCustom(id) => id.name().to_owned(),
+                TransitionProperty::Custom(name) => format!("--{name}"),
+                TransitionProperty::Unsupported(ident) => ident.0.to_string(),
+            };
+            Some(TypedStyleValueList::Native(
+                style::typed_om::TypedValueList {
+                    values: [style::typed_om::TypedValue::Keyword(
+                        style::typed_om::KeywordValue(keyword),
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+            ))
+        }
         _ => None,
     }
 }

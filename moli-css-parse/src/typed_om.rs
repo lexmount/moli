@@ -17,6 +17,8 @@ use style_traits::ParsingMode;
 
 pub(crate) mod easings;
 mod images;
+#[cfg(test)]
+mod keyword_defaults;
 mod tokens;
 
 pub use easings::TypedEasingValue;
