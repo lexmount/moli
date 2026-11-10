@@ -291,7 +291,7 @@ impl CssDeclarationBlock {
             .unwrap_or_default();
         for (&name, value) in &previous.typed_numeric {
             if name != changed_property
-                && !affected.iter().any(|affected| affected == name)
+                && !typed_numeric_is_affected(name, &affected)
                 && self.native.property_is_declared(name)
                 && self.native.property_value(name) == previous.native.property_value(name)
             {
@@ -316,19 +316,28 @@ impl CssDeclarationBlock {
         if self.typed_numeric.is_empty() {
             return;
         }
-        for name in affected {
-            self.typed_numeric.remove(name.as_str());
-        }
+        self.typed_numeric
+            .retain(|name, _| !typed_numeric_is_affected(name, affected));
     }
 }
 
 fn typed_numeric_property_key(name: &str) -> Option<&'static str> {
-    Some(
-        PropertyId::parse_enabled_for_all_content(name)
-            .ok()?
-            .longhand_id()?
-            .name(),
-    )
+    let property = PropertyId::parse_enabled_for_all_content(name).ok()?;
+    property
+        .longhand_id()
+        .map(|id| id.name())
+        .or_else(|| property.as_shorthand().ok().map(|id| id.name()))
+}
+
+fn typed_numeric_is_affected(name: &str, affected: &[String]) -> bool {
+    affected.iter().any(|affected| affected == name)
+        || PropertyId::parse_enabled_for_all_content(name)
+            .ok()
+            .and_then(|id| id.as_shorthand().ok())
+            .is_some_and(|id| {
+                id.longhands()
+                    .any(|longhand| affected.iter().any(|name| name == longhand.name()))
+            })
 }
 
 fn project_cssom_name(name: &mut String) {
@@ -515,5 +524,34 @@ mod tests {
                 unit: "number".into(),
             }
         ));
+    }
+
+    #[test]
+    fn typed_shorthand_units_follow_all_owned_longhand_mutations() {
+        let unit = CssDeclaredUnitValue {
+            value: 0.0,
+            unit: "px".into(),
+        };
+        for (property, value) in [
+            ("alignment-baseline", "middle"),
+            ("baseline-shift", "2px"),
+            ("baseline-source", "first"),
+        ] {
+            let mut block = parse_declaration_block("vertical-align: 0px; color: red");
+            assert!(retain_unit(&mut block, "vertical-align", unit.clone()));
+            block.set_property("color", "blue", false);
+            assert_eq!(typed_unit(&block, "vertical-align"), Some(&unit));
+            assert_ne!(
+                block.set_property(property, value, false),
+                CssSetResult::ParseError
+            );
+            assert!(typed_unit(&block, "vertical-align").is_none());
+            block = parse_declaration_block("vertical-align: 0px; color: red");
+            assert!(retain_unit(&mut block, "vertical-align", unit.clone()));
+            // A rebuild starts without the previous declaration-owned units.
+            let mut rebuilt = parse_declaration_block(&block.css_text());
+            rebuilt.retain_unaffected_typed_numeric_values(&block, property);
+            assert!(typed_unit(&rebuilt, "vertical-align").is_none());
+        }
     }
 }

@@ -1,6 +1,7 @@
 use super::*;
 use moli_css_parse::{CssDeclaredNumericValue, CssDeclaredNumericValues, CssDeclaredUnitValue};
 use moli_webapi::css_values::new_style_property_map;
+use style::properties::PropertyId;
 use style::typed_om::{NumericValue, TypedValue};
 
 const INLINE_MAP_SLOT: &str = "__moliInlineStylePropertyMap";
@@ -315,7 +316,11 @@ fn coerce_values<'s>(
         return Err(CoercionError::Invalid);
     }
     let multiple = inputs.len() > 1;
-    let shorthand = native_bridge::element::computed_style_property_is_shorthand(property);
+    // The computed-style compatibility table covers only some shorthands.
+    // Use the parser's property identity so typed numeric objects cannot slip
+    // through an omitted shorthand by serializing into valid CSS text.
+    let shorthand =
+        PropertyId::parse_enabled_for_all_content(property).is_ok_and(|id| id.is_shorthand());
     let mut texts = Vec::with_capacity(inputs.len());
     let mut typed_values = Vec::new();
     let mut preserve_unit_text = false;
@@ -372,11 +377,13 @@ fn coerce_values<'s>(
                     return Err(CoercionError::UnparsedStorage);
                 }
             } else if property.starts_with("--")
-                || (shorthand && web_api_interfaces::CSSMathValue::is_instance(scope, object))
+                || (shorthand
+                    && web_api_interfaces::CSSMathValue::is_instance(scope, object)
+                    && !parsed.as_ref().is_some_and(is_numeric))
             {
                 return Err(CoercionError::Invalid);
             } else if let Some(unit) = values::css_unit_value_unit(scope, object) {
-                if shorthand {
+                if shorthand && !parsed.as_ref().is_some_and(is_numeric) {
                     return Err(CoercionError::Invalid);
                 }
                 let suffix = match unit.as_str() {
