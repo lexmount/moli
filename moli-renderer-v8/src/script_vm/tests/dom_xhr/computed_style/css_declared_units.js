@@ -148,6 +148,12 @@
   const element = elements[0];
   const map = element.attributeStyleMap;
   document.body.append(element);
+  map.set('column-count', new CSSMathSum(2.125, 3.5));
+  equal(map.get('column-count').values.length, 2, 'integer declaration keeps its operands');
+  unit(element.computedStyleMap().get('column-count'), 6, 'number');
+  map.set('column-count', new CSSMathSum(-2, -3));
+  unit(element.computedStyleMap().get('column-count'), 1, 'number');
+  map.delete('column-count');
   for (const [number, computed] of [[-25, 0], [25, 0.25], [200, 1]]) {
     map.set('opacity', CSS.percent(number));
     unit(map.get('opacity'), number, 'percent');
