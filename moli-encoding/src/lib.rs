@@ -7,6 +7,7 @@ mod legacy_text;
 mod percent;
 mod query;
 mod script;
+mod stylesheet;
 mod xhr;
 
 pub use document::{
@@ -24,6 +25,7 @@ pub use labels::{
 pub use legacy_text::decode_text_for_legacy_web;
 pub use query::{encode_url_query_for_legacy_web, encode_url_query_for_url_parser};
 pub use script::{decode_classic_script_source, decode_utf8};
+pub use stylesheet::decode_css_stylesheet;
 pub use xhr::{XhrResponseDecoder, XhrResponseTextKind};
 
 #[cfg(test)]
