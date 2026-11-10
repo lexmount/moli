@@ -18,6 +18,9 @@ mod preload_as;
 #[path = "fetch_behaviors/font_binary.rs"]
 mod font_binary;
 
+#[path = "fetch_behaviors/fetch_resource_timing.rs"]
+mod fetch_resource_timing;
+
 fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapshot> {
     page.script_execution().global(name)
 }

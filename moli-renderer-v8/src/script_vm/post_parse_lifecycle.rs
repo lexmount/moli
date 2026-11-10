@@ -2747,13 +2747,28 @@ impl ScriptVm {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        let performance_entry =
+        let mut performance_entry =
             crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                 request_url.as_str(),
                 "script",
                 None,
                 result,
             );
+        if request_initiator_type == SubresourceRequestInitiatorType::Parser
+            && let Ok(response) = result
+            && let Some(loader) = self.current_main_document_resource_loader()
+        {
+            let origin = loader.fetch_context().request_origin();
+            if origin.same_origin_url(&document_url) {
+                performance_entry =
+                    performance_entry.with_initiator_url(crate::resource_initiator::response_url(
+                        document_url.as_str().to_owned(),
+                        &origin,
+                        &response.final_url,
+                        response.cache_state,
+                    ));
+            }
+        }
         self._context_host
             .borrow_mut()
             .record_get_subresource_network_result_with_initiator(
