@@ -502,9 +502,13 @@ pub(crate) fn set_css_style_sheet_live_style_rule_declarations<'s>(
     sheet: v8::Local<'s, v8::Object>,
     rule_path: &[usize],
     declaration_text: &str,
+    pending: Option<&moli_css_parse::CssDeclarationBlock>,
 ) -> Result<(), CssRuleInsertError> {
-    require_css_style_sheet_live_stylesheet(scope, sheet)
-        .set_style_rule_declarations(rule_path, declaration_text)
+    require_css_style_sheet_live_stylesheet(scope, sheet).set_style_rule_declarations(
+        rule_path,
+        declaration_text,
+        pending,
+    )
 }
 
 pub(crate) fn set_css_style_sheet_live_style_rule_selector<'s>(
@@ -568,9 +572,13 @@ pub(crate) fn set_css_style_sheet_live_nested_declarations_rule_declarations<'s>
     sheet: v8::Local<'s, v8::Object>,
     rule_path: &[usize],
     declaration_text: &str,
+    pending: Option<&moli_css_parse::CssDeclarationBlock>,
 ) -> Result<(), CssRuleInsertError> {
-    require_css_style_sheet_live_stylesheet(scope, sheet)
-        .set_nested_declarations_rule_declarations(rule_path, declaration_text)
+    require_css_style_sheet_live_stylesheet(scope, sheet).set_nested_declarations_rule_declarations(
+        rule_path,
+        declaration_text,
+        pending,
+    )
 }
 
 pub(crate) fn set_css_style_sheet_live_keyframe_rule_declarations<'s>(

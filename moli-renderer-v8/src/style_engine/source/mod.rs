@@ -668,6 +668,31 @@ impl MoliStyleEngine {
         changed
     }
 
+    pub(crate) fn set_inline_style_pending_declarations_with_host(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+        block: Option<moli_css_parse::CssDeclarationBlock>,
+    ) -> bool {
+        let Some(document) = owner_document_for_source_owner(host, handle) else {
+            return false;
+        };
+        self.move_inline_style_metadata_to_document(handle, document);
+        let world = self.world_for_document(document);
+        let changed = world.inline_style_metadata.pending_declarations(handle) != block;
+        world
+            .inline_style_metadata
+            .set_pending_declarations(handle, block);
+        if world.inline_style_metadata.has_metadata(handle) {
+            self.inline_style_metadata_documents
+                .borrow_mut()
+                .insert(handle, document);
+        } else {
+            self.remove_inline_style_metadata_document_if_empty(document, handle);
+        }
+        changed
+    }
+
     pub(crate) fn clear_inline_style_resolution_text_with_host(
         &self,
         host: &DomHost,

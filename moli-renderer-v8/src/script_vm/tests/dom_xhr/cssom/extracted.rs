@@ -6,6 +6,7 @@ mod attr_fallback;
 mod attr_invalidation;
 mod attr_number_units;
 mod attr_security;
+mod background_declaration_ownership;
 mod container_conditions;
 mod css_text_and_detached;
 mod cssom_interfaces;
