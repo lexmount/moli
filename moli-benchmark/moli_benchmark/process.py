@@ -190,6 +190,15 @@ def run_process(
                     stdout, stderr = process.communicate(timeout=2)
                 except subprocess.TimeoutExpired:
                     pass
+    except BaseException:
+        # A keyboard interrupt is not a benchmark result. Retire the dedicated
+        # command group before propagating it, just as for a timed-out command.
+        _kill_process_group(process.pid, signal.SIGKILL)
+        try:
+            process.communicate(timeout=2)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        raise
     finally:
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         resources = sampler.stop() if sampler is not None else {}
