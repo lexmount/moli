@@ -2531,6 +2531,7 @@ fn stylo_vertical_align(
         GenericBaselineShift::Keyword(BaselineShiftKeyword::Bottom) => {
             (LayoutInlineAlignment::Bottom, 0.0)
         }
+        GenericBaselineShift::Initial => (LayoutInlineAlignment::Baseline, 0.0),
         GenericBaselineShift::Length(value) => (
             LayoutInlineAlignment::Baseline,
             value.resolve(CSSPixelLength::new(line_height)).px(),

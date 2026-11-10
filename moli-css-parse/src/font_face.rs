@@ -1,5 +1,9 @@
 use cssparser::{Parser, Token};
 use style::values::computed::font::{FontFamilyList, FontFamilyNameSyntax, SingleFontFamily};
+use style::{
+    font_face::Source,
+    moli_font_face::{parse_font_face_source_list, supports_font_source},
+};
 
 pub use style::moli_font_face::{CssFontFace, normalize_font_face_src, parse_font_faces};
 
@@ -9,65 +13,20 @@ pub enum CssFontSource {
     Url(String),
 }
 
-/// Parse through Stylo first; the token walk only extracts validated sources.
+/// Parse font sources in fallback order, leaving URL resolution to the caller.
 pub fn parse_font_face_sources(source: &str) -> Option<Vec<CssFontSource>> {
-    let normalized = normalize_font_face_src(source)?;
-    let mut parser = Parser::new(&normalized);
-    parser
-        .parse_comma_separated(|parser| {
-            let name = parser.expect_function()?.clone();
-            let source = parser.parse_nested_block(|nested| {
-                if name.eq_ignore_ascii_case("local") {
-                    let mut parts = Vec::new();
-                    while !nested.is_exhausted() {
-                        parts.push(nested.expect_ident_or_string()?.to_string());
-                    }
-                    Ok(CssFontSource::Local(parts.join(" ")))
-                } else if name.eq_ignore_ascii_case("url") {
-                    Ok(CssFontSource::Url(nested.expect_string()?.to_string()))
-                } else {
-                    Err(cssparser::ParseError::custom(()))
-                }
-            })?;
-            let mut supported = true;
-            while !parser.is_exhausted() {
-                let kind = parser.expect_function()?.clone();
-                parser.parse_nested_block(|nested| {
-                    let mut values = Vec::new();
-                    while !nested.is_exhausted() {
-                        if nested.try_parse(|p| p.expect_comma()).is_ok() {
-                            continue;
-                        }
-                        values.push(nested.expect_ident_or_string()?.to_ascii_lowercase());
-                    }
-                    supported &= kind.eq_ignore_ascii_case("format")
-                        && !values.is_empty()
-                        && values.iter().all(|v| {
-                            matches!(
-                                legacy_variations_font_format(v).unwrap_or(v),
-                                "woff"
-                                    | "woff2"
-                                    | "truetype"
-                                    | "ttf"
-                                    | "opentype"
-                                    | "otf"
-                                    | "collection"
-                            )
-                        });
-                    Ok::<_, cssparser::ParseError<()>>(())
-                })?;
-            }
-            Ok(supported.then_some(source))
-        })
-        .ok()
-        .map(|sources| sources.into_iter().flatten().collect())
-}
-
-/// Maps a legacy variable font format hint to its container format.
-pub fn legacy_variations_font_format(format: &str) -> Option<&str> {
-    format
-        .strip_suffix("-variations")
-        .filter(|format| matches!(*format, "woff" | "woff2" | "truetype" | "opentype"))
+    let sources = parse_font_face_source_list(source)?;
+    Some(
+        sources
+            .0
+            .into_iter()
+            .filter_map(|source| match source {
+                Source::Local(name) => Some(CssFontSource::Local(name.name.to_string())),
+                Source::Url(source) => supports_font_source(&source)
+                    .then(|| CssFontSource::Url(source.url.as_specified_str().to_owned())),
+            })
+            .collect(),
+    )
 }
 
 /// A decoded family name or a generic selected by the CSS parser. Quoting a
@@ -349,6 +308,25 @@ mod tests {
                 "url(unknown) format('svg-variations'), url(empty) format(), url(fallback) format('woff2')"
             ),
             Some(vec![CssFontSource::Url("fallback".into())]),
+        );
+    }
+
+    #[test]
+    fn font_sources_filter_hints_using_renderer_capabilities() {
+        use super::*;
+        assert_eq!(
+            parse_font_face_sources(
+                r#"url(legacy) format('embedded-opentype'),
+                   url(svg-color) format(woff2) tech(variations, color-svg),
+                   url("fonts/Variable Font.woff2") format(WOFF2) tech(variations, features-opentype),
+                   url(aat.woff2) format(woff2) tech(features-aat),
+                   url(fallback) format("OTF")"#
+            ),
+            Some(vec![
+                CssFontSource::Url("fonts/Variable Font.woff2".into()),
+                CssFontSource::Url("aat.woff2".into()),
+                CssFontSource::Url("fallback".into()),
+            ])
         );
     }
 

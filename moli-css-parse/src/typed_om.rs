@@ -222,6 +222,29 @@ mod tests {
     use super::*;
     use style::typed_om::{NumericValue, UnparsedSegment};
 
+    #[test]
+    fn initial_baseline_shift_interpolates_from_zero() {
+        use style::properties::{ComputedValues, style_structs::Font};
+        use style::values::animated::{Animate, Context, Procedure, ToAnimatedValue};
+        use style::values::computed::{BaselineShift, Length, LengthPercentage};
+        use style_traits::ToCss;
+
+        let style = ComputedValues::initial_values_with_font_override(Font::initial_values());
+        let context = Context { style: &style };
+        let initial = style.clone_baseline_shift();
+        assert_eq!(initial.to_css_string(), "0px");
+        let shift = BaselineShift::Length(LengthPercentage::new_length(Length::new(8.0)));
+        let initial = initial.to_animated_value(&context);
+        let shift = shift.to_animated_value(&context);
+        let midpoint = initial
+            .animate(&shift, Procedure::Interpolate { progress: 0.5 })
+            .unwrap();
+        assert_eq!(
+            BaselineShift::from_animated_value(midpoint).to_css_string(),
+            "4px"
+        );
+    }
+
     fn native_values(parsed: ParsedTypedStyleValue) -> TypedValueList {
         match parsed.values.expect("typed values") {
             TypedStyleValueList::Native(values) => values,

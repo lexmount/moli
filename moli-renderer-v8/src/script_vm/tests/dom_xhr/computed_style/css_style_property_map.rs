@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn computed_vertical_align_preserves_zero_and_compound_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-vertical-align.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm
+        .eval(include_str!("css_typed_vertical_align.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+}
+
+#[test]
 fn native_text_size_adjust_reifies_specified_and_computed_percentages() {
     use moli_css_parse::parse_typed_style_value;
     use style::moli_declaration_block::parse_declaration_block;
