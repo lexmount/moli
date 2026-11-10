@@ -87,6 +87,7 @@ const WORKER_NAVIGATOR_BACKING_SLOT: &str = "__moliWorkerNavigatorBacking";
 
 const NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliNavigatorStorageOwnerChildHandle";
 const NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT: &str = "__moliNavigatorStorageOwnerPopupId";
+const ORIGIN_SLOT: &str = "__moliNavigatorOrigin";
 const NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliNavigatorAcceptLanguage";
 pub(in crate::context_bootstrap) const NAVIGATOR_IDENTITY_PROFILE_SLOT: &str =
     "__moliNavigatorIdentityProfile";
@@ -123,6 +124,9 @@ struct PermissionsPrototypeMethodsDeclaration {
 struct NavigatorObjectDeclaration<'scope> {
     #[webapi(slot = NAVIGATOR_RUNTIME_DATA_SLOT)]
     runtime_data: v8::Local<'scope, v8::Object>,
+
+    #[webapi(slot = ORIGIN_SLOT)]
+    origin: String,
 }
 
 #[derive(Default, WebApiFunctionTemplate)]
@@ -659,6 +663,23 @@ fn navigator_runtime_data_getter_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
+    if key == "serviceWorker" {
+        // Window Navigators retain their Document's native origin, including
+        // sandboxed HTTP documents and inherited about:blank/srcdoc origins.
+        // Check before returning a cached container. WorkerNavigator has its
+        // own exposure policy and does not carry this Window-only slot.
+        let origin = moli_webapi_declare::web_api_object_target(scope, args.this())
+            .and_then(|navigator| get_private_value(scope, navigator, ORIGIN_SLOT))
+            .and_then(|value| v8::Local::<v8::String>::try_from(value).ok());
+        if origin.is_some_and(|origin| origin.to_rust_string_lossy(scope) == "null") {
+            crate::webidl::throw_dom_exception(
+                scope,
+                "SecurityError",
+                "Access to service workers is denied in this document origin.",
+            );
+            return;
+        }
+    }
     if matches!(key, "language" | "languages" | "userAgentData")
         && let Some(identity) = worker_navigator_identity(scope, backing)
     {
@@ -1276,9 +1297,7 @@ pub(super) fn build_window_navigator_object_for_owner<'s>(
     storage_apis_available: bool,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, owner_child, None, identity)?;
-    let navigator = NavigatorObjectDeclaration::new(backing)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind Navigator object: {error}"))?;
+    let navigator = bind_window_navigator(scope, backing)?;
     if let Some(prototype) = global_constructor_prototype(scope, "Navigator") {
         filter_navigator_secure_context_exposure(scope, prototype, storage_apis_available)?;
     }
@@ -1335,9 +1354,10 @@ pub(super) fn update_window_navigator_identity<'s>(
 pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_popup: u64,
+    origin: &str,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let backing = build_window_navigator_backing_for_owner(scope, None, Some(owner_popup), None)?;
-    NavigatorObjectDeclaration::new(backing)
+    NavigatorObjectDeclaration::new(backing, origin.to_owned())
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind lightweight popup Navigator object: {error}"))
 }
@@ -1665,4 +1685,23 @@ fn navigator_runtime_data_object<'s>(
     let navigator = moli_webapi_declare::web_api_object_target(scope, navigator)?;
     get_private_value(scope, navigator, NAVIGATOR_RUNTIME_DATA_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+fn bind_window_navigator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    backing: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Object>> {
+    let _ = ensure_intrinsic_interface_prototype(scope, "Navigator")?;
+    let (child, popup) = navigator_backing_owner(scope, backing);
+    let owner = child
+        .map(OwnerDispatchScope::Child)
+        .or_else(|| popup.map(OwnerDispatchScope::LightweightPopup))
+        .unwrap_or(OwnerDispatchScope::Top);
+    let origin = context_host_ptr_from_global_bridge(scope)
+        .and_then(|host_ptr| unsafe { &*host_ptr }.window_document_origin(owner))
+        .unwrap_or_else(|| "null".to_owned());
+    let navigator = NavigatorObjectDeclaration::new(backing, origin)
+        .bind(scope)
+        .map_err(|error| anyhow!("failed to bind Navigator object: {error}"))?;
+    Ok(navigator)
 }

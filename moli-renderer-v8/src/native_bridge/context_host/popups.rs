@@ -856,22 +856,6 @@ impl JsContextHost {
             let opener = v8::null(scope);
             set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
         }
-        if let Ok(navigator) =
-            crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
-                scope, popup_id,
-            )
-        {
-            set_object_slot(scope, window, "navigator", navigator.into());
-            if let Err(error) = crate::context_bootstrap::install_lightweight_popup_legacy_objects(
-                scope, window, navigator,
-            ) {
-                tracing::warn!(%error, "failed to initialize popup legacy Window objects");
-            }
-        }
-        let _ = install_storage_aliases_for_window(scope, window);
-        initialize_simple_event_target(scope, window);
-        install_simple_window_event_handlers(scope, window);
-        let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);
         let initial_local_window_id = self.allocate_lightweight_popup_local_window_id();
         let initial_execution_context_owner =
@@ -908,6 +892,24 @@ impl JsContextHost {
         let initial_document_state =
             LightweightPopupDocumentState::new(initial_base_url.clone(), initial_policy_container);
         let initial_resource_origin = initial_origin.serialized_origin();
+        if let Ok(navigator) =
+            crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
+                scope,
+                popup_id,
+                &initial_resource_origin,
+            )
+        {
+            set_object_slot(scope, window, "navigator", navigator.into());
+            if let Err(error) = crate::context_bootstrap::install_lightweight_popup_legacy_objects(
+                scope, window, navigator,
+            ) {
+                tracing::warn!(%error, "failed to initialize popup legacy Window objects");
+            }
+        }
+        let _ = install_storage_aliases_for_window(scope, window);
+        initialize_simple_event_target(scope, window);
+        install_simple_window_event_handlers(scope, window);
+        let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let session_storage_store = match opener {
             Some(opener) => self.cloned_lightweight_popup_session_storage_store(
                 scope,
