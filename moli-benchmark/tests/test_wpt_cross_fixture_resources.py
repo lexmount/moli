@@ -241,6 +241,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
     def test_fixture_server_builds_any_js_dedicated_worker_wrapper(self) -> None:
         html = _wpt_any_dedicated_worker_wrapper_html(
             "wasm/jsapi/feature.any.js",
+            "// META: title=Worker fixture\n",
             query="variant=1&moli-wpt-any=dedicatedworker",
         )
 
@@ -251,6 +252,33 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             html,
         )
         self.assertNotIn("moli-wpt-any", html)
+
+    def test_fixture_server_honors_any_js_worker_timeout_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("// harness", encoding="utf-8")
+            for name, metadata in (("long", "// META: timeout=long\n"), ("normal", "")):
+                (root_path / f"{name}.any.js").write_text(
+                    metadata + "test(() => {}, 'worker fixture');\n", encoding="utf-8",
+                )
+            with WptFixtureServer(root_path) as server:
+                for name in ("long", "normal"):
+                    with self.subTest(name=name):
+                        connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                        try:
+                            connection.request("GET", f"/{name}.any.js?moli-wpt-any=dedicatedworker")
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            body = response.read().decode()
+                            timeout_meta = '<meta name="timeout" content="long">'
+                            if name == "long":
+                                self.assertIn(timeout_meta, body)
+                                self.assertLess(body.index(timeout_meta), body.index("/resources/testharness.js"))
+                            else:
+                                self.assertNotIn(timeout_meta, body)
+                        finally:
+                            connection.close()
 
     def test_fixture_server_builds_any_js_dedicated_worker_script(self) -> None:
         js = _wpt_any_dedicated_worker_wrapper_js(
