@@ -19,8 +19,47 @@ impl JsContextHost {
         area_key: &str,
         data: RendererPageStorageEventData,
     ) -> usize {
+        let mut queued = self.queue_storage_event_deliveries_in_page(
+            Some(source.dispatch_scope()),
+            origin,
+            area_key,
+            &data,
+        );
+        if !data.is_session()
+            && let Some(environment) = self.page_script_environment()
+        {
+            for related in environment.related_document_hosts() {
+                let related_ptr = related.as_ptr();
+                if std::ptr::eq(related_ptr, self) {
+                    continue;
+                }
+                // Related Pages share the owner thread. Capture native task
+                // recipients here; no other Page's JavaScript is entered.
+                let related_host = unsafe { &mut *related_ptr };
+                if related_host.page_script_environment().is_none()
+                    || !std::sync::Arc::ptr_eq(
+                        &self.web_storage_store,
+                        &related_host.web_storage_store,
+                    )
+                {
+                    continue;
+                }
+                queued += related_host
+                    .queue_storage_event_deliveries_in_page(None, origin, area_key, &data);
+            }
+        }
+        queued
+    }
+
+    fn queue_storage_event_deliveries_in_page(
+        &mut self,
+        source_scope: Option<OwnerDispatchScope>,
+        origin: &str,
+        area_key: &str,
+        data: &RendererPageStorageEventData,
+    ) -> usize {
         let targets =
-            self.storage_event_delivery_targets(source, data.is_session(), origin, area_key);
+            self.storage_event_delivery_targets(source_scope, data.is_session(), origin, area_key);
         let sender = self.page_storage_event_delivery_sender();
         let mut queued = 0;
         for target in targets {
@@ -28,7 +67,7 @@ impl JsContextHost {
                 Ok(()) => queued += 1,
                 Err(_) => {
                     tracing::debug!(
-                        ?source,
+                        ?source_scope,
                         ?target,
                         "retired Page DOM-manipulation route rejected StorageEvent delivery"
                     );
@@ -41,7 +80,7 @@ impl JsContextHost {
 
     fn storage_event_delivery_targets(
         &mut self,
-        source: WindowTaskTarget,
+        source_scope: Option<OwnerDispatchScope>,
         is_session: bool,
         origin: &str,
         area_key: &str,
@@ -49,9 +88,9 @@ impl JsContextHost {
         let mut targets = Vec::new();
         let top_origin = moli_url::origin_ascii_serialization(self.document_url());
 
-        let source_scope = source.dispatch_scope();
-        let top_is_eligible = !matches!(source_scope, OwnerDispatchScope::Top)
-            && (!is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_)));
+        let top_is_eligible = source_scope != Some(OwnerDispatchScope::Top)
+            && (!is_session
+                || !matches!(source_scope, Some(OwnerDispatchScope::LightweightPopup(_))));
         if top_is_eligible {
             let target_scope = self.top_web_storage_scope();
             if target_scope.origin() == origin && target_scope.area_key() == area_key {
@@ -60,11 +99,11 @@ impl JsContextHost {
         }
 
         let child_contexts_are_eligible =
-            !is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_));
+            !is_session || !matches!(source_scope, Some(OwnerDispatchScope::LightweightPopup(_)));
         if child_contexts_are_eligible {
             for handle in self.child_browsing_context_handles_in_document_order() {
                 let dispatch_scope = OwnerDispatchScope::Child(handle);
-                if dispatch_scope == source_scope {
+                if Some(dispatch_scope) == source_scope {
                     continue;
                 }
                 let Some(target_scope) =
@@ -82,7 +121,7 @@ impl JsContextHost {
         if !is_session {
             for popup_id in self.open_lightweight_popup_ids() {
                 let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-                if dispatch_scope == source_scope {
+                if Some(dispatch_scope) == source_scope {
                     continue;
                 }
                 let Some(target_context) = self.storage_context_for_lightweight_popup(popup_id)
