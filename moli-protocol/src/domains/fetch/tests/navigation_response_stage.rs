@@ -1947,6 +1947,122 @@ async fn fail_request_at_response_stage_aborts_navigation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fail_request_at_response_stage_preserves_the_committed_document() {
+    async fn handler() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body><main>response-stage</main></body></html>",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/page", get(handler)))
+            .await
+            .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        &format!("http://{addr}/committed"),
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "fixture document load",
+        |message| message["method"] == json!("Page.loadEventFired"),
+    )
+    .await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 335,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(335, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 336,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": format!("http://{addr}/page") }
+    }))
+    .await;
+
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    let request_id = paused["params"]["requestId"].as_str().unwrap().to_owned();
+
+    ctx.process_async(json!({
+        "id": 337,
+        "method": "Fetch.continueRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": request_id, "interceptResponse": true }
+    }))
+    .await;
+    ctx.expect_result(337, json!({}), Some("SID-1"));
+    let response_paused = take_main_document_response_pause(&mut ctx);
+    assert_eq!(response_paused["method"], "Fetch.requestPaused");
+    let response_request_id = response_paused["params"]["requestId"]
+        .as_str()
+        .expect("response-stage request id")
+        .to_owned();
+
+    let old_page = ctx.with_fixture(|conn| {
+        conn.browser_context
+            .as_ref()
+            .and_then(|bc| bc.loaded_page())
+            .expect("committed document before the failed navigation")
+            .page_id()
+    });
+
+    ctx.process_async(json!({
+        "id": 338,
+        "method": "Fetch.failRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": response_request_id, "errorReason": "BlockedByClient" }
+    }))
+    .await;
+
+    ctx.expect_result(338, json!({}), Some("SID-1"));
+    let failed = ctx.take_one();
+    assert_eq!(failed["method"], "Network.loadingFailed");
+    assert_eq!(failed["params"]["requestId"], LOADER_ID);
+    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
+    ctx.expect_error(336, -32000, "net::ERR_BLOCKED_BY_CLIENT");
+
+    ctx.with_fixture(|conn| {
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .and_then(|bc| bc.loaded_page())
+                .expect("a client-failed navigation must retain the committed page")
+                .page_id(),
+            old_page,
+            "Fetch.failRequest at the response stage must not retire the committed document"
+        );
+    });
+
+    ctx.process_async(json!({
+        "id": 339,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": { "expression": "6 * 7" }
+    }))
+    .await;
+    let reply = take_response_by_id(&mut ctx, 339);
+    assert_eq!(reply["result"]["result"]["value"], json!(42), "{reply:?}");
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fulfill_request_at_response_stage_replaces_the_network_response_once() {
     async fn handler() -> impl IntoResponse {
         (
