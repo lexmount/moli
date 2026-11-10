@@ -1,6 +1,79 @@
 use super::*;
 
 #[test]
+fn main_document_close_updates_interactive_before_returning() {
+    let mut vm = new_storage_test_vm("https://main-parser-close.test/");
+    finish_main_document_load_for_test(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.closeEvents = [];
+            document.open();
+            document.write('<!doctype html><p>replacement</p>');
+            document.addEventListener('readystatechange', () => {
+                closeEvents.push('ready:' + document.readyState);
+            });
+            document.addEventListener('DOMContentLoaded', () => closeEvents.push('DCL'));
+            window.addEventListener('load', () => closeEvents.push('load'));
+            closeEvents.push('before:' + document.readyState);
+            document.close();
+            closeEvents.push('after:' + document.readyState);
+            document.close();
+            closeEvents.join('|');
+            "#,
+        )
+        .unwrap(),
+        "before:loading|ready:interactive|after:interactive"
+    );
+    let owner = vm.current_main_document_task_owner().unwrap();
+    assert!(vm.finish_current_main_document_parsing(owner).is_none());
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .current_main_document_domcontentloaded_transition_is_ready(owner),
+        Some(true),
+        "the native lifecycle must advance with the observable readiness"
+    );
+    vm.dispatch_main_document_domcontentloaded_lifecycle(owner);
+    vm.dispatch_main_document_window_load_lifecycle(owner)
+        .unwrap();
+    assert_eq!(
+        vm.eval("closeEvents.join('|')").unwrap(),
+        "before:loading|ready:interactive|after:interactive|DCL|ready:complete|load"
+    );
+}
+
+#[test]
+fn main_document_close_readiness_listener_can_open_another_stream() {
+    let mut vm = new_storage_test_vm("https://main-parser-close-reentry.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+            globalThis.closeEvents = [];
+            document.open();
+            document.write('<!doctype html><p>first</p>');
+            document.addEventListener('readystatechange', () => {
+                closeEvents.push('first:' + document.readyState);
+                document.open();
+                document.write('<!doctype html><p>second</p>');
+                document.addEventListener('readystatechange', () => {
+                    closeEvents.push('second:' + document.readyState);
+                });
+            }, {once: true});
+            document.close();
+            closeEvents.push('after-first:' + document.readyState);
+            document.close();
+            closeEvents.push('after-second:' + document.readyState);
+            closeEvents.push(document.body.textContent);
+            closeEvents.join('|');
+            "#,
+        )
+        .unwrap(),
+        "first:interactive|after-first:loading|second:interactive|after-second:interactive|second"
+    );
+}
+
+#[test]
 fn main_document_owner_transition_retires_script_vm_local_state_once() {
     let mut vm = new_storage_test_vm("https://main-owner-transition.test/");
     let retired_owner = vm

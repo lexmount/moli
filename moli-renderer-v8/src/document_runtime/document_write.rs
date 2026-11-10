@@ -498,6 +498,7 @@ impl DocumentRuntime {
         if !parser.can_finish_now() {
             return false;
         }
+        let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
         let Some(mut parser) = self.root_document_parser.take() else {
             return false;
         };
@@ -534,7 +535,59 @@ impl DocumentRuntime {
         unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
         self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
         self.style_source_document_sync_pending = true;
+        if let Some(owner) = owner {
+            self.finish_root_document_parser_lifecycle(scope, host_ptr, owner);
+        }
         true
+    }
+
+    fn finish_root_document_parser_lifecycle(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        let Some(action) = unsafe { &mut *host_ptr }.finish_current_main_document_parsing(owner)
+        else {
+            return;
+        };
+        self.clear_main_document_script_preload_store();
+        if !unsafe { &mut *host_ptr }.apply_current_main_document_interactive_transition(action) {
+            return;
+        }
+        // Reaching EOF updates readiness on the parser's current stack, including
+        // document.close(). DCL and load still belong to their queued tasks.
+        self.set_document_ready_state(DocumentReadyState::Interactive);
+        let Some(context) = unsafe { &*host_ptr }.page_default_context(scope) else {
+            return;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let handle = self.document_handle();
+        if let Some(document) = unsafe { &mut *host_ptr }
+            .native_bridge_mut()
+            .wrap_handle(scope, host_ptr, handle)
+            && let Ok(event) = crate::host::create_host_event(
+                scope,
+                "readystatechange",
+                document.into(),
+                document.into(),
+                false,
+                false,
+            )
+        {
+            let _ = self.dispatch_public_event_best_effort(
+                scope,
+                host_ptr,
+                EventTargetHandle::Node(handle),
+                event,
+                "main document parser interactive readiness",
+            );
+        }
+        // A readiness listener may open a new stream on the same Document.
+        if unsafe { &*host_ptr }.main_document_task_owner_is_current(owner) {
+            self.queue_current_main_document_image_load_events(scope, host_ptr);
+            self.queue_current_main_document_media_loads(scope, host_ptr);
+        }
     }
 
     fn frameset_fragment_child_is_ignored(is_frameset_context: bool, child: &Node) -> bool {
