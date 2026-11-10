@@ -10,7 +10,14 @@ struct PopupResponseRecords {
 async fn opener_document() -> impl IntoResponse {
     (
         [(CONTENT_TYPE.as_str(), "text/html")],
-        "<!doctype html><title>opener</title><body>popup response owner</body>",
+        r#"<!doctype html><title>opener</title><body>popup response owner<script>
+        globalThis.storageChange = new Promise(resolve => {
+            addEventListener('storage', event => resolve([
+                event.key, event.oldValue, event.newValue, event.url,
+                event.storageArea === localStorage, event.isTrusted
+            ]), {once: true});
+        });
+        </script></body>"#,
     )
 }
 
@@ -25,6 +32,7 @@ async fn popup_document(
         globalThis.__runs = Number(sessionStorage.getItem('side-effects') || 0) + 1;
         sessionStorage.setItem('side-effects', String(__runs));
         sessionStorage.setItem('probe', 'child');
+        localStorage.setItem('popup-side-effects', String(__runs));
         const record = {before: __before, runs: __runs, hasOpener: opener !== null};
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/record', false);
@@ -199,6 +207,19 @@ async fn assert_popup_response_has_one_script_owner(
             assert_eq!(
                 take_response_by_id(&mut ctx, 6)["result"]["result"]["value"],
                 "parent"
+            );
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 8, "method": "Runtime.evaluate", "sessionId": opener_session,
+                "params": {
+                    "expression": "storageChange", "awaitPromise": true,
+                    "returnByValue": true
+                }
+            }))
+            .await;
+            assert_eq!(
+                take_response_by_id(&mut ctx, 8)["result"]["result"]["value"],
+                json!(["popup-side-effects", null, "1", popup_url, true, true]),
+                "{source}, {features}: a native popup must notify the other localStorage Window"
             );
             ctx.process_async(json!({
                 "id": 7, "method": "Target.closeTarget", "params": {"targetId": popup_id}
