@@ -197,6 +197,10 @@ def main() -> None:
             timings = r.get("timings", {})
             print(f"  Run {r['run']}:")
             print(f"    Total elapsed: {r['elapsed_ms']:.1f}ms")
+            if "error" in r or "error" in timings:
+                error = r["error"] if "error" in r else timings["error"]
+                print(f"    Error: {error or '<no error details>'}")
+                continue
             print(f"    create_target: {timings.get('create_target_ms', 'N/A'):.1f}ms")
             print(f"    attach_target: {timings.get('attach_target_ms', 'N/A'):.1f}ms")
             print(f"    enable_domains: {timings.get('enable_domains_ms', 'N/A'):.1f}ms")
