@@ -1280,9 +1280,10 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
         block: moli_css_parse::parse_declaration_block("animation: spin 1s;"),
         ..Default::default()
     };
-    assert!(
-        inline_state_property_value_with_pdb(&animation_state, "animation").is_none(),
-        "non-whitelisted shorthand queries must keep their CSSOM adapter semantics"
+    assert_eq!(
+        inline_state_property_value_with_pdb(&animation_state, "animation").as_deref(),
+        Some("1s spin"),
+        "native shorthand queries should use the complete stored declarations"
     );
 }
 
