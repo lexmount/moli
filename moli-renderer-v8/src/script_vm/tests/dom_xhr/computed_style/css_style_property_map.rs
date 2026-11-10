@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn native_default_keywords_reify_while_compound_values_remain_opaque() {
+    use moli_css_parse::parse_typed_style_value;
+    use style::typed_om::TypedValue;
+
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+    for (property, keyword, compound) in [
+        ("counter-increment", "none", "chapter 3"),
+        ("counter-reset", "none", "chapter 3"),
+        ("counter-set", "none", "chapter 3"),
+        ("quotes", "none", "\"a\" \"b\""),
+        ("font-feature-settings", "normal", "\"kern\" 1"),
+        ("font-variation-settings", "normal", "\"wght\" 400"),
+        ("font-variant-alternates", "normal", "swash(foo)"),
+        ("font-language-override", "normal", "\"ENG\""),
+        ("transition-property", "none", "width"),
+    ] {
+        for source in [
+            keyword.to_owned(),
+            keyword.to_ascii_uppercase(),
+            format!("\\6e {}", &keyword[1..]),
+        ] {
+            let parsed = parse_typed_style_value(property, &source, None)
+                .unwrap_or_else(|| panic!("valid {property}: {source}"));
+            assert_eq!(parsed.css_text, keyword);
+            let values = parsed.values.unwrap();
+            assert!(
+                matches!(values.native().unwrap().values.as_slice(),
+                [TypedValue::Keyword(value)] if value.0 == keyword),
+                "{property}: {source}"
+            );
+        }
+        let parsed = parse_typed_style_value(property, compound, None)
+            .unwrap_or_else(|| panic!("valid {property}: {compound}"));
+        assert!(parsed.values.is_none(), "{property}: {compound}");
+    }
+}
+
+#[test]
+fn css_style_property_maps_reify_native_default_keywords_and_preserve_opaque_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-default-keywords.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm
+        .eval(include_str!("css_typed_default_keywords.js"))
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]));
+    assert_eq!(result["checks"], 3780);
+    assert_eq!(result["cases"].as_array().map(Vec::len), Some(675));
+}
+
+#[test]
 fn css_style_property_maps_preserve_step_keywords_and_opaque_easing_lists() {
     let mut vm = new_parsed_test_vm(
         "https://css-typed-easings.test/",
