@@ -1309,7 +1309,36 @@ fn set_css_text_as_stylo_declaration_block<'s>(
         return None;
     }
     clear_stylo_declaration_block(scope, style);
-    for entry in parse_css_text(false, css_text) {
+    let entries = parse_css_text(false, css_text);
+    let mut checked = moli_css_parse::CssDeclarationBlock::default();
+    let native = style_interface(scope, style) != "CSSKeyframeProperties" && entries.iter().all(|entry| {
+        if matches!(entry.name.as_str(), "mask-position-x" | "mask-position-y")
+            || keyframe_style_property_write_is_ignored(scope, style, &entry.name)
+        {
+            return false;
+        }
+        if lightweight_style_property_write_uses_pdb(scope, style, &entry.name, &entry.value)
+            && !crate::native_bridge::element::cssom_style_property_uses_preferred_pdb_supplemental_entries(&entry.name, &entry.value, entry.priority)
+            && checked.set_property(&entry.name, &entry.value, entry.priority)
+                != moli_css_parse::CssSetResult::ParseError
+        {
+            return true;
+        }
+        // Invalid declarations do not prevent native parsing of the rest.
+        crate::native_bridge::element::parse_cssom_style_property_entries_with_base(
+            &entry.name, &entry.value, entry.priority, None,
+        ).is_none()
+    });
+    if native {
+        // Parse a declaration list as a list. Replaying setProperty would let
+        // a later normal declaration replace an earlier important declaration.
+        let block = moli_css_parse::parse_declaration_block(css_text);
+        let names = stylo_declaration_block_property_names(&block);
+        store_stylo_declaration_block(scope, style, &block);
+        set_style_names(scope, style, &names);
+        return Some(());
+    }
+    for entry in entries {
         set_style_entry(scope, style, &entry.name, &entry.value, entry.priority);
     }
     Some(())

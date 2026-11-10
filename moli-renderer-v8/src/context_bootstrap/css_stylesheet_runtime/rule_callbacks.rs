@@ -952,7 +952,15 @@ pub(crate) fn css_rule_pdb_safe_declaration_block_from_declaration_text(
             return None;
         }
     }
-    Some(block)
+    match kind {
+        CssRulePdbDeclarationKind::StyleRule | CssRulePdbDeclarationKind::NestedDeclarations => {
+            // Validation uses setters, but initialization must retain the
+            // original declaration list's priority and pending substitution.
+            Some(moli_css_parse::parse_declaration_block(declaration_text))
+        }
+        // Keyframe declarations need their own parsing context and restrictions.
+        CssRulePdbDeclarationKind::KeyframeRule => Some(block),
+    }
 }
 
 pub(crate) fn css_rule_declaration_text_for_pdb(
