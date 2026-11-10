@@ -154,7 +154,8 @@ impl SharedWorkerLaunchParams {
             .launch_context
             .execution_policy
             .network_policy
-            .secure_context;
+            .secure_context
+            .resolve(&script_url);
         let storage_key = self.key.storage_key().serialized_storage_key();
         let client_id = if matches!(script_url.scheme(), "http" | "https") {
             Some(

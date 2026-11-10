@@ -126,10 +126,15 @@ impl JsContextHost {
     ) -> Option<Url> {
         let mut current = Some(handle);
         let mut depth = 0;
+        let mut secure_url = None;
         while let Some(current_handle) = current {
             let entry = self.child_browsing_contexts.get(&current_handle)?;
             if !entry.security_origin_inherited() {
-                return entry.current_document_url();
+                let url = entry.current_document_url()?;
+                if !moli_url::is_potentially_trustworthy_url(&url) {
+                    return Some(url);
+                }
+                secure_url.get_or_insert(url);
             }
             depth += 1;
             if depth > self.child_browsing_contexts.len() {
@@ -137,9 +142,17 @@ impl JsContextHost {
             }
             current = self.child_browsing_context_parent_handle(current_handle);
         }
-        // Initial about:blank and srcdoc retain the creator origin's potential
-        // trustworthiness even when sandboxing derives an opaque origin.
-        Some(self.document_url().clone())
+        let top_url = self
+            .current_main_document_resource_loader()
+            .and_then(|loader| Url::parse(loader.fetch_context().origin()).ok())
+            .unwrap_or_else(|| self.document_url().clone());
+        // about:blank/srcdoc inherit their creator's trustworthiness, but a
+        // trustworthy descendant cannot override an insecure ancestor.
+        if moli_url::is_potentially_trustworthy_url(&top_url) {
+            Some(secure_url.unwrap_or(top_url))
+        } else {
+            Some(top_url)
+        }
     }
 
     pub(crate) fn active_child_subresource_request_handle(&self) -> Option<DomHandle> {

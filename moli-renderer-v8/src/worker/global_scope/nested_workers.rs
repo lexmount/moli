@@ -58,7 +58,7 @@ pub(crate) fn reserve_nested_worker_context(
                 &state.content_security_policies,
             ),
         network_policy: crate::worker::handle::WorkerNetworkPolicy {
-            secure_context: state.secure_context,
+            secure_context: crate::worker::WorkerSecureContextPolicy::Inherited(state.secure_context),
             permission_overrides: state.permission_overrides.clone(),
             extra_http_headers: state.extra_http_headers.clone(),
             network_offline: state.network_offline,

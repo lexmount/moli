@@ -2,6 +2,69 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_secure_context_resolves_script_urls_and_creator_state() {
+    use crate::worker::WorkerSecureContextPolicy::{Inherited, ScriptUrl};
+
+    ensure_v8();
+    for (script_url, policy, expected) in [
+        ("https://worker.example.test/worker.js", ScriptUrl, true),
+        (
+            "https://worker.example.test/worker.js",
+            Inherited(false),
+            false,
+        ),
+        (
+            "https://worker.example.test/worker.js",
+            Inherited(true),
+            true,
+        ),
+        ("http://worker.example.test/worker.js", ScriptUrl, false),
+        (
+            "http://worker.example.test/worker.js",
+            Inherited(true),
+            false,
+        ),
+        ("http://127.0.0.1/worker.js", ScriptUrl, true),
+        ("http://127.0.0.1/worker.js", Inherited(false), false),
+        ("blob:https://worker.example.test/worker", ScriptUrl, false),
+        (
+            "blob:https://worker.example.test/worker",
+            Inherited(false),
+            false,
+        ),
+        (
+            "blob:https://worker.example.test/worker",
+            Inherited(true),
+            true,
+        ),
+        ("data:text/javascript,", ScriptUrl, false),
+        ("data:text/javascript,", Inherited(false), false),
+        ("data:text/javascript,", Inherited(true), true),
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                "postMessage([isSecureContext, typeof crypto.subtle !== 'undefined']);".into(),
+                script_url.into(),
+            )
+            .with_network_policy(WorkerNetworkPolicy {
+                secure_context: policy,
+                ..WorkerNetworkPolicy::default()
+            }),
+        );
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("secure-context probe must reply")
+            .expect("worker channel must remain open");
+        assert_eq!(
+            expect_post_json(message),
+            format!("[{expected},{expected}]"),
+            "script URL: {script_url}, secure-context policy: {policy:?}"
+        );
+        handle.terminate_and_join();
+    }
+}
+
+#[tokio::test]
 async fn worker_navigator_uses_loader_identity_for_user_agent_data() {
     ensure_v8();
     const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36";

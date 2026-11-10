@@ -50,17 +50,31 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
-pub(crate) fn worker_secure_context_for_script_url(
-    script_url: &Url,
-    creator_secure_context: bool,
-) -> bool {
-    match script_url.scheme() {
-        // Blink's secure-context tests expect workers created from blob URLs to
-        // inherit the creator context's HTTPS state. Chromium also treats data
-        // workers created by a secure page as secure, even though a standalone
-        // data URL is not itself a trustworthy URL.
-        "blob" | "data" => creator_secure_context,
-        _ => moli_url::is_potentially_trustworthy_url(script_url),
+/// How to determine a worker's secure-context state during startup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum WorkerSecureContextPolicy {
+    /// Starts without a creator, including restored service workers.
+    #[default]
+    ScriptUrl,
+    /// Use the creator's security state as a prerequisite for the worker.
+    Inherited(bool),
+}
+
+impl WorkerSecureContextPolicy {
+    pub(crate) fn resolve(self, script_url: &Url) -> bool {
+        match self {
+            Self::ScriptUrl => {
+                !matches!(script_url.scheme(), "blob" | "data")
+                    && moli_url::is_potentially_trustworthy_url(script_url)
+            }
+            Self::Inherited(secure) => {
+                // Blob/data workers inherit the creator's state even though a
+                // standalone data URL is not itself trustworthy.
+                secure
+                    && (matches!(script_url.scheme(), "blob" | "data")
+                        || moli_url::is_potentially_trustworthy_url(script_url))
+            }
+        }
     }
 }
 
@@ -650,11 +664,12 @@ pub(crate) struct WorkerWebSocketFrameEvent {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WorkerNetworkPolicy {
-    /// Secure-context state for APIs guarded by `[SecureContext]`.
+    /// Startup policy for APIs guarded by `[SecureContext]`.
     ///
-    /// Dedicated workers normally derive this from their script URL, but
-    /// blob/data workers inherit it from the creator context instead.
-    pub(crate) secure_context: bool,
+    /// Page-created workers inherit the creator's state, including insecure
+    /// ancestors. Native starts without a creator derive it from the script
+    /// URL; blob/data workers require an explicit creator state.
+    pub(crate) secure_context: WorkerSecureContextPolicy,
     pub(crate) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) network_offline: bool,
