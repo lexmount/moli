@@ -657,6 +657,21 @@ impl ScriptVm {
                         trace_fields,
                         record_started,
                     );
+                    if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope,
+                            fetch.resource_timing().completed(
+                                &pending.info.url,
+                                &pending.request_origin,
+                                pending.request_mode,
+                                &response.head(),
+                                response.body_bytes().len(),
+                                opaque_response_blocked
+                                    .then_some(AsyncSubresourceFetchResponseFilter::Opaque)
+                                    .or(response_filter),
+                            ),
+                        );
+                    }
                     let mut observable_response = response;
                     if matches!(
                         pending.info.resource_type,
@@ -878,6 +893,10 @@ impl ScriptVm {
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                     match pending.continuation {
                         PendingSubresourceContinuation::Fetch(fetch) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                fetch.resource_timing().failed(&pending.info.url),
+                            );
                             let resolver = fetch
                                 .into_resolver()
                                 .expect("detached keepalive failure is handled before V8 entry");

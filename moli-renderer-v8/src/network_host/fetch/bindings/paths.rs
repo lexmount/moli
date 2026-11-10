@@ -23,6 +23,7 @@ pub(super) fn record_intercepted_fetch(
     host.record_pending_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
+        prepared.resource_timing,
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,
@@ -243,6 +244,7 @@ pub(super) fn spawn_network_fetch(
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context,
         v8::Global::new(scope, resolver),
+        prepared.resource_timing,
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,

@@ -601,6 +601,7 @@ impl JsContextHost {
         &mut self,
         fetch_context: super::WindowFetchContext,
         resolver: v8::Global<v8::PromiseResolver>,
+        resource_timing: crate::context_bootstrap::FetchResourceTiming,
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
@@ -641,6 +642,7 @@ impl JsContextHost {
                 continuation: PendingSubresourceContinuation::Fetch(
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
+                        resource_timing,
                         keepalive,
                         cache_mode,
                         connect_policy,
@@ -886,6 +888,7 @@ impl JsContextHost {
         &mut self,
         fetch_context: super::WindowFetchContext,
         resolver: v8::Global<v8::PromiseResolver>,
+        resource_timing: crate::context_bootstrap::FetchResourceTiming,
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
@@ -931,6 +934,7 @@ impl JsContextHost {
                 continuation: PendingSubresourceContinuation::Fetch(
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
+                        resource_timing,
                         keepalive,
                         cache_mode,
                         connect_policy,

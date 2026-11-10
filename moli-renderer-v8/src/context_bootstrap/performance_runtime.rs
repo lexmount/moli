@@ -2,6 +2,8 @@ use super::*;
 use crate::util::{get_private_value, set_private_value};
 
 mod entries;
+mod fetch_timing;
+pub(crate) use fetch_timing::FetchResourceTiming;
 mod install;
 mod lazy_subobjects;
 mod marks_measures;

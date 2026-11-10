@@ -246,6 +246,7 @@ impl PendingSubresourceContinuation {
 
 pub(super) struct PendingWindowFetchContinuation {
     promise: PendingWindowFetchPromise,
+    resource_timing: crate::context_bootstrap::FetchResourceTiming,
     keepalive: bool,
     cache_mode: moli_fetch::RequestCacheMode,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -260,6 +261,7 @@ enum PendingWindowFetchPromise {
 impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
+        resource_timing: crate::context_bootstrap::FetchResourceTiming,
         keepalive: bool,
         cache_mode: moli_fetch::RequestCacheMode,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -267,6 +269,7 @@ impl PendingWindowFetchContinuation {
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
+            resource_timing,
             keepalive,
             cache_mode,
             connect_policy,
@@ -276,6 +279,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
         self.cache_mode
+    }
+
+    pub(super) fn resource_timing(&self) -> &crate::context_bootstrap::FetchResourceTiming {
+        &self.resource_timing
     }
 
     pub(super) fn keepalive(&self) -> bool {

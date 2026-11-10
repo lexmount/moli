@@ -52,6 +52,7 @@ pub(super) fn dispatch_service_worker_fetch(
     let internal_id = host.record_async_subresource_fetch(
         prepared.fetch_context.duplicate(scope),
         v8::Global::new(scope, resolver),
+        prepared.resource_timing.clone(),
         prepared.keepalive,
         prepared.connect_policy.clone(),
         prepared.csp_report_context.clone(),

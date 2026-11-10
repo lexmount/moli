@@ -96,21 +96,28 @@ async fn resource_timing_distinguishes_network_local_and_revalidated_responses()
     let browser = Browser::new(config)?;
     let mut page = browser.fetch(&format!("http://{addr}/")).await?;
     let fixture = include_str!("../fixtures/cache-resource-timing.js");
-    for context in ["top", "child"] {
+    for (context, transport) in [
+        ("top", "xhr"),
+        ("child", "xhr"),
+        ("top", "fetch"),
+        ("child", "fetch"),
+    ] {
+        let fixture = format!(
+            "(() => {{globalThis.cacheTimingContext = '{context}-{transport}';globalThis.cacheTimingTransport = '{transport}';return {fixture};}})()"
+        );
         let script = if context == "top" {
-            fixture.to_owned()
+            fixture.clone()
         } else {
             format!(
                 r#"(async () => {{
                 const frame = document.createElement('iframe');
                 frame.srcdoc = '<!doctype html><body>child';
                 await new Promise(resolve => {{ frame.onload=resolve; document.body.append(frame); }});
-                frame.contentWindow.cacheTimingContext = 'child';
                 const result = await frame.contentWindow.eval({});
                 frame.remove();
                 return result;
             }})()"#,
-                serde_json::to_string(fixture)?
+                serde_json::to_string(&fixture)?
             )
         };
         let result = tokio::time::timeout(
@@ -155,7 +162,7 @@ async fn resource_timing_distinguishes_network_local_and_revalidated_responses()
                 {"padding":0,"transfer":306,"encoded":6},
                 {"padding":4096,"transfer":306,"encoded":6}
             ]}),
-            "{context}"
+            "{context}, {transport}"
         );
     }
     let _ = shutdown.send(());

@@ -727,6 +727,10 @@ impl ScriptVm {
                     .record_subresource_network(network_record);
                 match &pending.continuation {
                     PendingSubresourceContinuation::Fetch(fetch) => {
+                        crate::context_bootstrap::record_resource_performance_entry(
+                            scope,
+                            fetch.resource_timing().failed(&pending.info.url),
+                        );
                         let resolver = fetch
                             .resolver()
                             .expect("detached keepalive stream is handled before V8 entry");
@@ -1799,6 +1803,19 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                fetch.resource_timing().completed(
+                                    &streaming.pending.info.url,
+                                    &streaming.pending.request_origin,
+                                    streaming.pending.request_mode,
+                                    &streaming.head,
+                                    response_body_size,
+                                    streaming.response_filter,
+                                ),
+                            );
+                        }
                         if let PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -1851,6 +1868,12 @@ impl ScriptVm {
                         }
                     }
                     Err(error_text) => {
+                        if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                fetch.resource_timing().failed(&streaming.pending.info.url),
+                            );
+                        }
                         let error_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         crate::network_host::error_pending_network_body_stream(
