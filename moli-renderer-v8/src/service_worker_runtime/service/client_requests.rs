@@ -111,10 +111,12 @@ impl ServiceWorkerRuntimeService {
             if version.run != run {
                 return;
             }
+            // Evaluation can query Clients before bootstrap completion marks
+            // the version Running. Its host already has the worker handle.
             match &version.running_state {
-                ServiceWorkerVersionRunningState::Running { host } => Some(host.clone()),
-                ServiceWorkerVersionRunningState::Starting { .. }
-                | ServiceWorkerVersionRunningState::Stopped => None,
+                ServiceWorkerVersionRunningState::Starting { host }
+                | ServiceWorkerVersionRunningState::Running { host } => Some(host.clone()),
+                ServiceWorkerVersionRunningState::Stopped => None,
             }
         };
         if let Some(host) = host {

@@ -1105,20 +1105,15 @@ fn client_query_matches_live_window_clients_for_active_version() {
     });
     assert!(hidden_cross_origin.clients.is_empty());
 
-    {
-        let mut state = service.inner.state.lock();
-        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
-            ServiceWorkerVersionLifecycleState::Installed;
-    }
-    let inactive_result = service.query_clients(&ServiceWorkerClientQuery {
+    let mismatched_registration = service.query_clients(&ServiceWorkerClientQuery {
         request_id: 15,
-        registration_id,
+        registration_id: ServiceWorkerRegistrationId(2),
         version_id,
         kind: ServiceWorkerClientQueryKind::Get {
             exposed_client_id: service_worker_exposed_client_id(controlled_client_id),
         },
     });
-    assert!(inactive_result.clients.is_empty());
+    assert!(mismatched_registration.clients.is_empty());
 }
 #[test]
 fn client_match_all_visibility_uses_storage_partition_and_security_instead_of_scope() {
@@ -1543,6 +1538,33 @@ fn client_query_requires_exact_active_controller_version() {
     });
     assert!(waiting_worker_clients.clients.is_empty());
 
+    let waiting_worker_all_clients = service.query_clients(&ServiceWorkerClientQuery {
+        request_id: 28,
+        registration_id,
+        version_id: waiting_version_id,
+        kind: ServiceWorkerClientQueryKind::MatchAll {
+            options: ServiceWorkerClientQueryOptions {
+                include_uncontrolled: true,
+                client_type: ServiceWorkerClientQueryType::Window,
+            },
+        },
+    });
+    assert_eq!(waiting_worker_all_clients.clients.len(), 1);
+    assert_eq!(waiting_worker_all_clients.clients[0].id, client_id);
+    assert!(!waiting_worker_all_clients.clients[0].controlled);
+
+    let waiting_worker_get = service.query_clients(&ServiceWorkerClientQuery {
+        request_id: 29,
+        registration_id,
+        version_id: waiting_version_id,
+        kind: ServiceWorkerClientQueryKind::Get {
+            exposed_client_id: service_worker_exposed_client_id(client_id),
+        },
+    });
+    assert_eq!(waiting_worker_get.clients.len(), 1);
+    assert_eq!(waiting_worker_get.clients[0].id, client_id);
+    assert!(!waiting_worker_get.clients[0].controlled);
+
     let active_worker_clients = service.query_clients(&ServiceWorkerClientQuery {
         request_id: 27,
         registration_id,
@@ -1563,6 +1585,205 @@ fn client_query_requires_exact_active_controller_version() {
         vec![client_id]
     );
 }
+
+#[test]
+fn client_queries_remain_available_across_lifecycle_and_unregistration() {
+    for lifecycle in [
+        ServiceWorkerVersionLifecycleState::Installing,
+        ServiceWorkerVersionLifecycleState::Installed,
+        ServiceWorkerVersionLifecycleState::Activating,
+        ServiceWorkerVersionLifecycleState::Activated,
+        ServiceWorkerVersionLifecycleState::Redundant,
+    ] {
+        for pending_unregistration in [false, true] {
+            let service = new_service_worker_runtime_service();
+            let registration_id = ServiceWorkerRegistrationId(1);
+            let version_id = ServiceWorkerVersionId(1);
+            insert_registered_version(
+                &service,
+                registration_id,
+                version_id,
+                url("https://example.test/app/sw.js"),
+                url("https://example.test/app/"),
+                [],
+            );
+            let client_id =
+                register_client_for_test(&service, url("https://example.test/app/page.html"));
+            let outside_client_id =
+                register_client_for_test(&service, url("https://example.test/outside.html"));
+            register_client_for_test(&service, url("https://other.test/app/page.html"));
+            let is_active = matches!(
+                lifecycle,
+                ServiceWorkerVersionLifecycleState::Activating
+                    | ServiceWorkerVersionLifecycleState::Activated
+            );
+            {
+                let mut state = service.inner.state.lock();
+                let registration = state.registrations.get_mut(&registration_id).unwrap();
+                registration.installing_version_id = (lifecycle
+                    == ServiceWorkerVersionLifecycleState::Installing)
+                    .then_some(version_id);
+                registration.waiting_version_id = (lifecycle
+                    == ServiceWorkerVersionLifecycleState::Installed)
+                    .then_some(version_id);
+                registration.active_version_id = is_active.then_some(version_id);
+                if !is_active {
+                    registration.controlled_client_ids.clear();
+                }
+                registration.pending_unregistration = pending_unregistration;
+                state.versions.get_mut(&version_id).unwrap().lifecycle_state = lifecycle;
+            }
+
+            for include_uncontrolled in [false, true] {
+                let result = service.query_clients(&ServiceWorkerClientQuery {
+                    request_id: 1,
+                    registration_id,
+                    version_id,
+                    kind: ServiceWorkerClientQueryKind::MatchAll {
+                        options: ServiceWorkerClientQueryOptions {
+                            include_uncontrolled,
+                            client_type: ServiceWorkerClientQueryType::Window,
+                        },
+                    },
+                });
+                let expected = if include_uncontrolled {
+                    vec![client_id, outside_client_id]
+                } else if is_active {
+                    vec![client_id]
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    result
+                        .clients
+                        .iter()
+                        .map(|client| client.id)
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{lifecycle:?}, pending unregistration: {pending_unregistration}"
+                );
+            }
+            for target in [client_id, outside_client_id] {
+                let result = service.query_clients(&ServiceWorkerClientQuery {
+                    request_id: 2,
+                    registration_id,
+                    version_id,
+                    kind: ServiceWorkerClientQueryKind::Get {
+                        exposed_client_id: service_worker_exposed_client_id(target),
+                    },
+                });
+                assert_eq!(result.clients.len(), 1, "{lifecycle:?}");
+                assert_eq!(result.clients[0].id, target);
+                assert_eq!(
+                    result.clients[0].controlled,
+                    is_active && target == client_id
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn client_query_replies_during_startup_reject_stale_runs() {
+    ensure_v8_for_test();
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let script_url = url("https://example.test/app/sw.js");
+    let scope_url = url("https://example.test/app/");
+    let client_id = register_client_for_test(&service, url("https://example.test/outside.html"));
+    let exposed_id = serde_json::to_string(&service_worker_exposed_client_id(client_id)).unwrap();
+    let source = format!(
+        r#"
+        const expectedId = {exposed_id};
+        Promise.all([
+            clients.matchAll({{includeUncontrolled: true}}),
+            clients.get(expectedId)
+        ]).then(([all, one]) => {{
+            if (all.length !== 1 || all[0].id !== expectedId || one?.id !== expectedId) {{
+                throw new Error("startup query returned incorrect clients");
+            }}
+            all[0].postMessage("queried during startup");
+        }});
+        "#
+    );
+    let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut handle = crate::worker::spawn_worker_with_options(
+        crate::worker::WorkerSpawnOptions::new_with_request_client(
+            source,
+            script_url.to_string(),
+            service.request_client(),
+        )
+        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            registration_id,
+            version_id,
+            scope_url: scope_url.clone(),
+        })
+        .with_bootstrap_completion_sender(bootstrap_tx),
+    );
+    let mut parent_rx = handle.take_receiver().expect("worker receiver");
+    let run = RendererServiceWorkerRunIdentity::fresh();
+    let host = new_running_test_host_with_handle(version_id, &run, handle);
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        script_url,
+        scope_url,
+        [],
+    );
+    {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.active_version_id = None;
+        registration.installing_version_id = Some(version_id);
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.lifecycle_state = ServiceWorkerVersionLifecycleState::Installing;
+        version.running_state = ServiceWorkerVersionRunningState::Starting { host };
+        version.run = run.clone();
+    }
+
+    // Keep bootstrap completion queued, as can happen when evaluation requests
+    // reach the service lane before its worker-start completion.
+    for _ in 0..2 {
+        let message = tokio::time::timeout(Duration::from_secs(5), parent_rx.recv())
+            .await
+            .expect("top-level query should arrive")
+            .expect("worker channel should stay open");
+        let crate::worker::WorkerToParentMessage::ServiceWorkerClientQuery(query) = message else {
+            panic!("expected top-level Clients query, got {message:?}");
+        };
+        service.finish_client_query(
+            version_id,
+            RendererServiceWorkerRunIdentity::fresh(),
+            ServiceWorkerClientQueryResult {
+                request_id: query.request_id,
+                clients: vec![],
+            },
+        );
+        service.finish_client_query_requested(query, run.clone());
+    }
+    let message = tokio::time::timeout(Duration::from_secs(5), parent_rx.recv())
+        .await
+        .expect("both startup query promises should resolve")
+        .expect("worker channel should stay open");
+    let crate::worker::WorkerToParentMessage::ServiceWorkerClientMessage(message) = message else {
+        panic!("expected queried client message, got {message:?}");
+    };
+    assert_eq!(message.target_client_id, client_id);
+    assert_eq!(message.source_version_id, version_id);
+    let bootstrap = tokio::time::timeout(Duration::from_secs(5), bootstrap_rx.recv())
+        .await
+        .expect("bootstrap completion should arrive")
+        .expect("bootstrap channel should stay open");
+    bootstrap.result.expect("bootstrap should succeed");
+    assert!(matches!(
+        service.inner.state.lock().versions[&version_id].running_state,
+        ServiceWorkerVersionRunningState::Starting { .. }
+    ));
+    service.terminate_all_for_context_shutdown();
+}
+
 #[test]
 fn client_document_update_tracks_creation_url_and_regenerates_cross_origin_exposed_id() {
     let service = new_service_worker_runtime_service();
