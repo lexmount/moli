@@ -89,10 +89,24 @@ pub(super) fn project_css_mask<N>(
             PaintCompositeMode::SrcOver
         } else {
             match get_cyclic(&svg.mask_composite.0, index) {
-                StyloMaskComposite::Add => PaintCompositeMode::SrcOver,
-                StyloMaskComposite::Subtract => PaintCompositeMode::SrcOut,
-                StyloMaskComposite::Intersect => PaintCompositeMode::SrcIn,
-                StyloMaskComposite::Exclude => PaintCompositeMode::Xor,
+                StyloMaskComposite::Add | StyloMaskComposite::SourceOver => {
+                    PaintCompositeMode::SrcOver
+                }
+                StyloMaskComposite::Subtract | StyloMaskComposite::SourceOut => {
+                    PaintCompositeMode::SrcOut
+                }
+                StyloMaskComposite::Intersect | StyloMaskComposite::SourceIn => {
+                    PaintCompositeMode::SrcIn
+                }
+                StyloMaskComposite::Exclude | StyloMaskComposite::Xor => PaintCompositeMode::Xor,
+                StyloMaskComposite::Clear => PaintCompositeMode::Clear,
+                StyloMaskComposite::Copy => PaintCompositeMode::Copy,
+                StyloMaskComposite::SourceAtop => PaintCompositeMode::SrcAtop,
+                StyloMaskComposite::DestinationOver => PaintCompositeMode::DestOver,
+                StyloMaskComposite::DestinationIn => PaintCompositeMode::DestIn,
+                StyloMaskComposite::DestinationOut => PaintCompositeMode::DestOut,
+                StyloMaskComposite::DestinationAtop => PaintCompositeMode::DestAtop,
+                StyloMaskComposite::PlusLighter => PaintCompositeMode::PlusLighter,
             }
         };
         snapshot.push_fragment(PaintFragment::PushLayer {

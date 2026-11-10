@@ -61,6 +61,7 @@ pub(in crate::native_bridge::element::styles) use entry_conversion::{
     style_entries, style_entries_for_style_object,
 };
 pub(in crate::native_bridge::element::styles) use inline_state::expand_unresolved_box_shorthand_entries_for_mutation;
+pub(in crate::native_bridge::element::styles) use inline_state::inline_style_declaration_state_for_handle;
 pub(crate) use inline_state::{
     inline_state_property_priority_with_pdb, inline_state_property_value_with_pdb,
 };
