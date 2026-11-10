@@ -143,13 +143,13 @@ curl-sys = { path = "vendor/curl-sys-0.4.91" }
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "d08fd48d1c3ecf5b7b6fdc3dc2eeccef6e0a3b38" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "b4e1f7c6d0fdb2fa90f87e7d72352f1f6199d385" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", rev = "520374d714d69f8e2dc93c81a9d6be559ecde3ff" }
 # Preserve original SVG selector inputs and collect unclipped source geometry.
 usvg = { git = "https://github.com/lexmount/resvg", rev = "a137793a5749c27862b724eef60c4734526b14a0" }
