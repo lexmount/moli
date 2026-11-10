@@ -392,8 +392,7 @@ pub(crate) fn computed_typed_style_value_from_object<'s>(
             },
         ))
     } else {
-        id.longhand_id()
-            .and_then(|id| moli_css_parse::computed_typed_style_value_list(&computed, id))
+        moli_css_parse::computed_typed_style_value_list(&computed, &id)
     };
     Some(moli_css_parse::ParsedTypedStyleValue { css_text, values })
 }
