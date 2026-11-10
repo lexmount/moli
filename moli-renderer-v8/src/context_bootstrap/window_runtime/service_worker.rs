@@ -5,8 +5,9 @@ use crate::context_bootstrap::navigator_runtime::{
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::service_worker_runtime::{
-    ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
-    ServiceWorkerRegistrationError, ServiceWorkerUpdateViaCache,
+    ServiceWorkerClientUrlError, ServiceWorkerNavigationPreloadState,
+    ServiceWorkerNavigationPreloadStateError, ServiceWorkerRegistrationError,
+    ServiceWorkerUpdateViaCache, resolve_service_worker_script_url, service_worker_scope_url,
 };
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
@@ -1047,7 +1048,8 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
         return;
     };
     let client_url =
-        match service_worker_client_url(request_context.document_url(), &parsed.client_url) {
+        match host.service_worker_get_registration_url(scope, &request_context, &parsed.client_url)
+        {
             Ok(client_url) => client_url,
             Err(ServiceWorkerClientUrlError::Invalid) => {
                 reject_service_worker_promise_with_type_error(
@@ -2024,12 +2026,6 @@ fn reject_service_worker_navigation_preload_state_error(
     }
 }
 
-fn resolve_service_worker_script_url(document_url: &url::Url, script: &str) -> Option<url::Url> {
-    let mut script_url = document_url.join(script).ok()?;
-    script_url.set_fragment(None);
-    Some(script_url)
-}
-
 fn service_worker_registration_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -2053,49 +2049,6 @@ fn service_worker_registration_options<'s>(
             None
         }
     }
-}
-
-fn service_worker_scope_url(
-    document_url: &url::Url,
-    script_url: &url::Url,
-    requested_scope: Option<&str>,
-) -> Option<url::Url> {
-    let Some(requested_scope) = requested_scope else {
-        return Some(default_service_worker_scope_url(script_url));
-    };
-    let mut scope_url = document_url.join(requested_scope).ok()?;
-    scope_url.set_fragment(None);
-    Some(scope_url)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ServiceWorkerClientUrlError {
-    Invalid,
-    CrossOrigin,
-}
-
-fn service_worker_client_url(
-    document_url: &url::Url,
-    client: &str,
-) -> Result<url::Url, ServiceWorkerClientUrlError> {
-    let mut client_url = document_url
-        .join(client)
-        .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
-    if !moli_url::same_origin(document_url, &client_url) {
-        return Err(ServiceWorkerClientUrlError::CrossOrigin);
-    }
-    client_url.set_fragment(None);
-    Ok(client_url)
-}
-
-fn default_service_worker_scope_url(script_url: &url::Url) -> url::Url {
-    let mut scope_url = script_url.clone();
-    let path = script_url.path();
-    let scope_path = path.rfind('/').map(|index| &path[..=index]).unwrap_or("/");
-    scope_url.set_path(scope_path);
-    scope_url.set_query(None);
-    scope_url.set_fragment(None);
-    scope_url
 }
 
 fn service_worker_registration_snapshot_script_url(

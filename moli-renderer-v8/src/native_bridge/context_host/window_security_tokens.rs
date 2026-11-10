@@ -462,6 +462,11 @@ impl JsContextHost {
         self.lightweight_popup_access_origin(popup_id)
     }
 
+    pub(crate) fn window_document_origin(&self, scope: OwnerDispatchScope) -> Option<String> {
+        self.window_access_origin_for_dispatch_scope(scope)
+            .map(|origin| origin.serialized_origin())
+    }
+
     pub(in crate::native_bridge::context_host) fn window_access_origin_for_dispatch_scope(
         &self,
         dispatch_scope: OwnerDispatchScope,

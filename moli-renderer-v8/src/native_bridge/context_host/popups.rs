@@ -1452,7 +1452,12 @@ impl JsContextHost {
         popup_id: u64,
     ) -> Option<Url> {
         self.lightweight_popup_document_record(popup_id)
-            .map(|document| document.state.base_url.clone())
+            .map(|document| {
+                document
+                    .handle
+                    .map(|handle| self.document_base_url_for_handle(handle))
+                    .unwrap_or_else(|| document.state.base_url.clone())
+            })
             .or_else(|| {
                 self.lightweight_popup_window(scope, popup_id)
                     .and_then(|window| lightweight_popup_location_href(scope, window))
