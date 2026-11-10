@@ -2816,6 +2816,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 elif wrapper_global == ANY_JS_DEDICATED_WORKER_GLOBAL:
                     wrapper = _wpt_any_dedicated_worker_wrapper_html(
                         cleaned,
+                        body_text,
                         query=parsed.query,
                     ).encode("utf-8")
                 else:
@@ -4239,6 +4240,7 @@ def _wpt_any_window_wrapper_html(
 
 def _wpt_any_dedicated_worker_wrapper_html(
     script_path: str,
+    script_source: str,
     *,
     query: str = "",
 ) -> str:
@@ -4247,8 +4249,14 @@ def _wpt_any_dedicated_worker_wrapper_html(
     if worker_query:
         worker_src = f"{worker_src}?{worker_query}"
     worker_src = html_escape(worker_src, quote=True)
+    timeout_meta = (
+        '<meta name="timeout" content="long">'
+        if parse_any_js_meta(script_source).timeout_multiplier > 1.0
+        else ""
+    )
     return (
         '<!doctype html><meta charset="utf-8">'
+        f"{timeout_meta}"
         '<script src="/resources/testharness.js"></script>'
         '<script src="/resources/testharnessreport.js"></script>'
         "<body><div id=\"log\"></div>"
