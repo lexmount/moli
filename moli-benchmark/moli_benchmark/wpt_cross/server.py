@@ -1616,6 +1616,18 @@ class _FixtureThreadingHTTPSServer(_FixtureThreadingHTTPServer):
             return
         super().process_request_thread(request, client_address)
 
+    def shutdown_request(self, request: socket.socket) -> None:
+        if isinstance(request, ssl.SSLSocket):
+            try:
+                # EOF delimits streaming responses. Send close_notify before
+                # closing TCP so clients can distinguish completion from a
+                # truncated TLS stream. Bound the wait for the peer's alert.
+                request.settimeout(10.0)
+                request = request.unwrap()
+            except OSError:
+                pass
+        super().shutdown_request(request)
+
 
 class _Ipv6ThreadingHTTPSServer(_FixtureThreadingHTTPSServer):
     address_family = socket.AF_INET6
