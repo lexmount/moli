@@ -133,11 +133,18 @@ pub(crate) fn to_backend_blend_mode(
         PaintBlendMode::Luminosity => Mix::Luminosity,
     };
     let compose = match composite {
+        PaintCompositeMode::Clear => Compose::Clear,
+        PaintCompositeMode::Copy => Compose::Copy,
         PaintCompositeMode::SrcOver => Compose::SrcOver,
         PaintCompositeMode::DestIn => Compose::DestIn,
         PaintCompositeMode::SrcOut => Compose::SrcOut,
         PaintCompositeMode::SrcIn => Compose::SrcIn,
+        PaintCompositeMode::SrcAtop => Compose::SrcAtop,
+        PaintCompositeMode::DestOver => Compose::DestOver,
+        PaintCompositeMode::DestOut => Compose::DestOut,
+        PaintCompositeMode::DestAtop => Compose::DestAtop,
         PaintCompositeMode::Xor => Compose::Xor,
+        PaintCompositeMode::PlusLighter => Compose::PlusLighter,
     };
     BlendMode::new(mix, compose)
 }

@@ -885,7 +885,8 @@ pub(crate) fn sync_css_style_rule_from_style_object<'s>(
     ) {
         return;
     }
-    let style_text = lightweight_css_style_object_css_text(scope, style);
+    let style_text = lightweight_css_style_resolution_text(scope, style)
+        .unwrap_or_else(|| lightweight_css_style_object_css_text(scope, style));
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
         rule,
@@ -915,7 +916,8 @@ pub(crate) fn sync_css_nested_declarations_from_style_object<'s>(
     ) {
         return;
     }
-    let style_text = lightweight_css_style_object_css_text(scope, style);
+    let style_text = lightweight_css_style_resolution_text(scope, style)
+        .unwrap_or_else(|| lightweight_css_style_object_css_text(scope, style));
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
         rule,
@@ -1147,7 +1149,8 @@ pub(crate) fn sync_css_keyframe_rule_from_style_object<'s>(
     ) {
         return;
     }
-    let style_text = lightweight_css_style_object_css_text(scope, style);
+    let style_text = lightweight_css_style_resolution_text(scope, style)
+        .unwrap_or_else(|| lightweight_css_style_object_css_text(scope, style));
     if apply_live_stylesheet_rule_declaration_text_mutation(
         scope,
         rule,

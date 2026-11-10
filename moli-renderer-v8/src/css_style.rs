@@ -149,6 +149,11 @@ impl CssInlineStyleDeclarationState {
     }
 
     pub(crate) fn style_resolution_text(&self) -> String {
+        self.block
+            .project_style_resolution_names(self.serialize_style_resolution_text())
+    }
+
+    fn serialize_style_resolution_text(&self) -> String {
         if self.entries.iter().any(|entry| entry.name == "all") {
             return serialize_css_style_entries(&self.entries());
         }
@@ -255,7 +260,6 @@ pub(crate) fn mask_compat_property_name(property: &str) -> bool {
             | "-webkit-mask-size"
             | "-webkit-mask-clip"
             | "-webkit-mask-origin"
-            | "-webkit-mask-composite"
             | "-webkit-mask-repeat"
     )
 }
@@ -275,6 +279,7 @@ pub(crate) fn stylo_mask_property_name(property: &str) -> bool {
             | "mask-clip"
             | "mask-origin"
             | "mask-composite"
+            | "-webkit-mask-composite"
             | "mask-position"
             | "mask-position-x"
             | "mask-position-y"
@@ -306,7 +311,6 @@ pub(crate) fn mask_compat_value_is_supported(property: &str, value: &str) -> boo
         "-webkit-mask-box-image-repeat" => value == "stretch",
         "-webkit-mask-box-image-width" | "-webkit-mask-size" => value == "auto",
         "-webkit-mask-clip" | "-webkit-mask-origin" => value == "border-box",
-        "-webkit-mask-composite" => value == "source-over",
         "-webkit-mask-repeat" => value == "repeat",
         _ => false,
     }

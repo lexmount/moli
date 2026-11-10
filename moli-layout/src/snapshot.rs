@@ -483,12 +483,19 @@ pub enum PaintBlendMode {
 /// Porter-Duff operator for an isolated owned layer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PaintCompositeMode {
+    Clear,
+    Copy,
     #[default]
     SrcOver,
     DestIn,
     SrcOut,
     SrcIn,
+    SrcAtop,
+    DestOver,
+    DestOut,
+    DestAtop,
     Xor,
+    PlusLighter,
 }
 
 /// One CSS filter function after computed-value resolution.

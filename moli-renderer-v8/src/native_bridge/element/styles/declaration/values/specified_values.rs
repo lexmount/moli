@@ -1198,7 +1198,7 @@ pub(in crate::native_bridge::element::styles::declaration) fn computed_style_def
         "-webkit-mask-box-image-repeat" => "stretch".to_owned(),
         "-webkit-mask-box-image-width" | "-webkit-mask-size" => "auto".to_owned(),
         "-webkit-mask-clip" | "-webkit-mask-origin" => "border-box".to_owned(),
-        "-webkit-mask-composite" => "source-over".to_owned(),
+        "-webkit-mask-composite" => "add".to_owned(),
         "-webkit-mask-position" => "0% 0%".to_owned(),
         "-webkit-mask-repeat" => "repeat".to_owned(),
         "-webkit-perspective" => "none".to_owned(),
