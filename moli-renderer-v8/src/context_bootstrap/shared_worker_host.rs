@@ -287,14 +287,11 @@ fn shared_worker_constructor_callback_inner<'s>(
         context.worker_owner_child_handle,
         &resolved_url,
     );
-    let mut network_policy = context.network_policy;
-    network_policy.secure_context =
-        WorkerSecureContextPolicy::Inherited(network_policy.secure_context.resolve(&resolved_url));
     let execution_policy = SharedWorkerExecutionPolicy::new(
         options.script_kind,
         context.base_url.clone(),
         context.document_content_security_policies.clone(),
-        network_policy,
+        context.network_policy,
         context.policy_context,
         context.browser_context_runtime.worker_context_runtime(),
         Some(context.top_level_site),
