@@ -63,12 +63,13 @@ impl NavigationInterception {
         method: String,
         headers: moli_fetch::RequestHeaders,
         body: Option<bytes::Bytes>,
+        body_text: Option<std::sync::Arc<str>>,
         redirect_headers: Option<moli_fetch::RequestHeaders>,
     ) {
         self.request.url = url;
         self.request.method = method;
         self.request.request_headers = headers;
-        self.request.body = body;
+        self.request.set_body(body, body_text);
         self.request.set_redirect_headers(redirect_headers);
     }
 

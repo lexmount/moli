@@ -908,6 +908,7 @@ pub(crate) struct BackgroundNavigationLoadJob {
     method: String,
     raw_url: String,
     body: Option<bytes::Bytes>,
+    body_text: Option<Arc<str>>,
     request_headers: moli_fetch::RequestHeaders,
     body_progress_source: MainDocumentBodyProgressSource,
     /// Browser-context transport/cache state shared with the resident engine.
@@ -1130,6 +1131,7 @@ impl BackgroundNavigationLoadJob {
                     &self.method,
                     &self.raw_url,
                     self.body,
+                    self.body_text,
                     self.request_headers.clone(),
                     None,
                     self.cancellation.clone(),
@@ -2344,6 +2346,7 @@ impl CdpConnection {
             method: "GET".to_owned(),
             raw_url: raw_url.to_owned(),
             body: None,
+            body_text: None,
             body_progress_source: MainDocumentBodyProgressSource::default(),
             shared_resource_runtime,
         }
@@ -2628,6 +2631,7 @@ impl CdpConnection {
             method: navigation.request_method.clone(),
             raw_url: navigation.requested_url.as_str().to_owned(),
             body: navigation.clone_request_body_bytes(),
+            body_text: navigation.request_body.as_deref().map(Arc::from),
             request_headers: navigation.request_headers.clone(),
             body_progress_source,
             shared_resource_runtime,
@@ -3192,7 +3196,8 @@ impl CdpConnection {
             navigation.clone_request_body_bytes(),
             navigation.request_headers.clone(),
             auth,
-        )?;
+        )?
+        .with_body_text(navigation.request_body.as_deref().map(Arc::from));
         let client = self
             .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
             .frozen_request_client();

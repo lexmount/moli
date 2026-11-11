@@ -97,9 +97,7 @@ fn emit_subresource_redirect_events(
         // An unissued hop has no dispatched request to report. ExtraInfo still
         // belongs to the preceding response, independently of its destination.
         let request = redirect.dispatched_request.as_deref();
-        let body = request
-            .and_then(|request| request.body.as_deref())
-            .map(String::from_utf8_lossy);
+        let body = request.and_then(moli_fetch::DispatchedRequest::body_text);
         for event_session_id in event_session_ids {
             if let Some(request) = request {
                 emit_request_will_be_sent(

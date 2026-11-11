@@ -41,7 +41,14 @@ fn request_for_pending_subresource(
         request.cookie_context = request
             .cookie_context
             .recompute_site_context_for_request(request_url);
-        request.body = request_body_bytes;
+        request.set_body(
+            request_body_bytes,
+            pending
+                .info
+                .request_body
+                .as_deref()
+                .map(std::sync::Arc::from),
+        );
         request.request_headers = request_headers;
         return request.with_redirect_headers(pending.redirect_headers.clone());
     }
@@ -52,6 +59,13 @@ fn request_for_pending_subresource(
         request_body_bytes,
         request_headers,
         pending.request_origin.clone(),
+    )
+    .with_body_text(
+        pending
+            .info
+            .request_body
+            .as_deref()
+            .map(std::sync::Arc::from),
     )
     .with_redirect_headers(pending.redirect_headers.clone())
     .with_initiator_url(&pending.info.document_url)
@@ -510,6 +524,12 @@ impl ScriptVm {
             state.request_method.clone(),
             state.request_headers.clone(),
             state.pending.info.request_body_bytes.clone(),
+            state
+                .pending
+                .info
+                .request_body
+                .as_deref()
+                .map(std::sync::Arc::from),
         );
         let prepared = match auth {
             Some(auth) => fetch.set_auth(auth),

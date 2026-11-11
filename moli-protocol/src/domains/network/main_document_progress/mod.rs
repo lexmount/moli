@@ -1103,10 +1103,7 @@ impl MainDocumentLiveNetworkProgressSource {
                     target: target.clone(),
                     url: redirect.to_url.clone(),
                     method: request.method.clone(),
-                    request_body: request
-                        .body
-                        .as_ref()
-                        .map(|body| String::from_utf8_lossy(body).into_owned()),
+                    request_body: request.body_text().map(|text| text.into_owned()),
                     request_headers: request.headers.clone(),
                     request_initiator_type: SubresourceRequestInitiatorType::Other,
                     redirect_response: Box::new(Some(MainDocumentRedirectResponse {
@@ -1787,10 +1784,7 @@ impl CompletedMainDocumentProgressContext {
                     target: target.clone(),
                     url: redirect.to_url.clone(),
                     method: request.method.clone(),
-                    request_body: request
-                        .body
-                        .as_ref()
-                        .map(|body| String::from_utf8_lossy(body).into_owned()),
+                    request_body: request.body_text().map(|text| text.into_owned()),
                     request_headers: request.headers.clone(),
                     request_initiator_type: SubresourceRequestInitiatorType::Other,
                     redirect_response: Box::new(Some(MainDocumentRedirectResponse {

@@ -553,6 +553,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
 ) {
+    let request = request.with_body_text(request_body.as_deref().map(std::sync::Arc::from));
     let parkable_image_manager = matches!(
         request.browser_request_metadata(),
         Some(BrowserRequestMetadata::Image)

@@ -953,19 +953,24 @@ impl ChildDocumentFetch {
         method: String,
         headers: moli_fetch::RequestHeaders,
         body: Option<bytes::Bytes>,
+        body_text: Option<std::sync::Arc<str>>,
     ) {
         if let Some(interception) = self.request.as_mut() {
-            interception.apply_request_override(url, method, headers, body, redirect_headers);
+            interception.apply_request_override(
+                url,
+                method,
+                headers,
+                body,
+                body_text,
+                redirect_headers,
+            );
             let request = interception.request();
             if let Some(info) = self.network_info.as_mut() {
                 info.url = request.url.clone();
                 info.method = request.method.clone();
                 info.request_headers = request.request_headers.clone();
                 info.request_body_bytes = request.body.clone();
-                info.request_body = request
-                    .body
-                    .as_ref()
-                    .map(|body| String::from_utf8_lossy(body).into_owned());
+                info.request_body = request.body_text().map(|text| text.into_owned());
             }
         }
     }

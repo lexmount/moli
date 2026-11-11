@@ -1236,6 +1236,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<bytes::Bytes>,
+        body_text: Option<std::sync::Arc<str>>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
@@ -1250,7 +1251,9 @@ impl NavigationEngine {
             }),
         )
         .map(|request| {
-            let request = request.with_top_level_navigation_cookie_context();
+            let request = request
+                .with_body_text(body_text)
+                .with_top_level_navigation_cookie_context();
             let mut request = request.with_browser_navigation_kind(browser_navigation_kind);
             if !infer_referrer_from_initiator {
                 request = request.without_inferred_referrer();
@@ -1327,6 +1330,7 @@ impl NavigationEngine {
             method,
             raw_url,
             body.map(bytes::Bytes::from),
+            None,
             request_headers,
             auth,
             FetchCancelHandle::new(),
@@ -1346,6 +1350,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<bytes::Bytes>,
+        body_text: Option<std::sync::Arc<str>>,
         request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
@@ -1361,6 +1366,7 @@ impl NavigationEngine {
             method,
             raw_url,
             body,
+            body_text,
             request_headers,
             auth,
             cancel_handle,
