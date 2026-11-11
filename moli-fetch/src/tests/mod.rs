@@ -359,6 +359,10 @@ fn request_apply_redirect_status_rewrites_post_to_get_and_drops_body_headers() {
     request.apply_redirect_status(303);
 
     assert_eq!(request.method, "GET");
+    assert_eq!(
+        request.cookie_context,
+        NetworkCookieRequestContext::subresource("GET")
+    );
     assert!(request.body.is_none());
     assert!(
         !request
