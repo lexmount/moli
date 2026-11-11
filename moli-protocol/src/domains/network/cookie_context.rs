@@ -22,12 +22,12 @@ fn cookie_request_context_from_initiator(
                 .with_initiator_url(previous_request_url, initiator_url);
             (
                 site_context_downgrade_type(
-                    previous.site_context.context,
-                    current.site_context.context,
+                    previous.site_context().context,
+                    current.site_context().context,
                 ),
                 site_context_downgrade_type(
-                    previous.site_context.schemeful_context,
-                    current.site_context.schemeful_context,
+                    previous.site_context().schemeful_context,
+                    current.site_context().schemeful_context,
                 ),
             )
         })
@@ -39,8 +39,6 @@ fn cookie_request_context_from_initiator(
                 request_url,
                 current.initiator_url.as_ref(),
                 &current.browser_context,
-                current.request_type,
-                current.is_method_safe,
             )
         })
         .unwrap_or_else(NetworkSiteContextMetadata::none);

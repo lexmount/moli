@@ -37,12 +37,9 @@ fn request_for_pending_subresource(
         let mut request = dispatch.request.clone();
         request.url = request_url.clone();
         request.method = request_method.to_owned();
-        let method_context =
-            moli_cookie_jar::NetworkCookieRequestContext::subresource(request_method);
-        request.cookie_context.is_method_safe = method_context.is_method_safe;
+        request.cookie_context.set_request_method(request_method);
         request.cookie_context = request
             .cookie_context
-            .with_http_method(method_context.site_context_metadata.context.http_method)
             .recompute_site_context_for_request(request_url);
         request.body = request_body_bytes;
         request.request_headers = request_headers;
