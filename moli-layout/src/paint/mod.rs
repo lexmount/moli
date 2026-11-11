@@ -445,13 +445,17 @@ where
                 );
                 project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
             }
-            PaintOrderEvent::BoxCaret(id) => {
+            PaintOrderEvent::BoxCaret(id) | PaintOrderEvent::InlineSelection { owner: id, .. } => {
                 active_clips.transition_to(
                     projection,
                     projection.content_clips[id.index()],
                     &mut snapshot,
                 );
                 let space = &projection.coordinate_spaces[id.index() + 1];
+                let range = match event {
+                    PaintOrderEvent::InlineSelection { start, end, .. } => Some(start..end),
+                    _ => None,
+                };
                 project_selection(
                     &projection.world.boxes[id.index()],
                     space
@@ -459,7 +463,7 @@ where
                         .local_transform(),
                     current_cull.local_rect(space.paint.local_transform()),
                     &mut snapshot,
-                    None,
+                    range.as_ref(),
                 );
             }
             PaintOrderEvent::InlineBox { owner, fragment } => {

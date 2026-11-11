@@ -853,6 +853,7 @@ where
                 PaintOrderEvent::BoxOutsetShadow(_)
                 | PaintOrderEvent::BoxContents(_)
                 | PaintOrderEvent::BoxCaret(_)
+                | PaintOrderEvent::InlineSelection { .. }
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}
