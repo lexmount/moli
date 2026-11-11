@@ -37,7 +37,7 @@ use support::FixtureServer;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
-    sync::{Mutex, oneshot},
+    sync::{Mutex, Notify, oneshot},
     task::JoinHandle,
 };
 use url::Url;
@@ -3269,36 +3269,64 @@ async fn live_page_subresource_response_wait_allows_unrelated_evaluate_while_pen
     Ok(())
 }
 
+async fn spawn_gated_async_response_server() -> Result<(String, Arc<Notify>, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}", listener.local_addr()?);
+    let release = Arc::new(Notify::new());
+    let server_release = release.clone();
+    let server = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let release = server_release.clone();
+            tokio::spawn(async move {
+                let Ok(request) = read_http_request_head(&mut stream).await else {
+                    return;
+                };
+                let (content_type, body) =
+                    if request_path(&request).as_deref() == Some("/wait-until-slow-data") {
+                        release.notified().await;
+                        ("text/plain", "settled-slow")
+                    } else {
+                        ("text/html", "<!doctype html><html><body>ok</body></html>")
+                    };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    Ok((url, release, server))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn window_fetch_returns_before_slow_network_response() -> Result<()> {
-    let server = FixtureServer::spawn().await?;
+    let (url, release_response, server) = spawn_gated_async_response_server().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let mut page = browser
         .fetch_with_wait_until(
-            &server.url("/static"),
+            &format!("{url}/static"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
         )
         .await?;
 
-    let started = std::time::Instant::now();
-    let value = page
-        .evaluate_runtime_expression_async(
+    let value = tokio::time::timeout(
+        Duration::from_secs(2),
+        page.evaluate_runtime_expression_async(
             "fetch('/wait-until-slow-data').then(r => r.text()).then(text => { document.body.setAttribute('data-fetch-state', text); }); document.body.setAttribute('data-fetch-returned', '1'); 'returned';",
-        )
-        .await?;
+        ),
+    )
+    .await
+    .inspect_err(|_| release_response.notify_one())
+    .context("fetch() must return while its network response is gated")??;
     assert_eq!(value["value"], serde_json::json!("returned"));
-    assert!(
-        started.elapsed() < Duration::from_millis(200),
-        "fetch() should return a promise without waiting for the network response"
-    );
-    assert!(
-        page.serialize_html_async()
-            .await?
-            .contains("data-fetch-returned=\"1\"")
-    );
+    let before_response = page.serialize_html_async().await?;
+    assert!(before_response.contains("data-fetch-returned=\"1\""));
+    assert!(!before_response.contains("data-fetch-state="));
 
+    release_response.notify_one();
     browser
         .wait_for_page_network_idle(&mut page, Duration::from_secs(2))
         .await?;
@@ -3308,40 +3336,38 @@ async fn window_fetch_returns_before_slow_network_response() -> Result<()> {
             .contains("data-fetch-state=\"settled-slow\"")
     );
 
-    server.shutdown().await;
+    server.abort();
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn async_xhr_send_returns_before_slow_network_response() -> Result<()> {
-    let server = FixtureServer::spawn().await?;
+    let (url, release_response, server) = spawn_gated_async_response_server().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let mut page = browser
         .fetch_with_wait_until(
-            &server.url("/static"),
+            &format!("{url}/static"),
             RenderedDomWaitUntil::Load,
             Duration::from_secs(5),
         )
         .await?;
 
-    let started = std::time::Instant::now();
-    let value = page
-        .evaluate_runtime_expression_async(
+    let value = tokio::time::timeout(
+        Duration::from_secs(2),
+        page.evaluate_runtime_expression_async(
             "const xhr = new XMLHttpRequest(); xhr.open('GET', '/wait-until-slow-data'); xhr.onload = () => { document.body.setAttribute('data-xhr-state', xhr.responseText); }; xhr.send(); document.body.setAttribute('data-xhr-returned', '1'); 'returned';",
-        )
-        .await?;
+        ),
+    )
+    .await
+    .inspect_err(|_| release_response.notify_one())
+    .context("async XMLHttpRequest.send() must return while its response is gated")??;
     assert_eq!(value["value"], serde_json::json!("returned"));
-    assert!(
-        started.elapsed() < Duration::from_millis(200),
-        "async XMLHttpRequest.send() should not wait for the network response"
-    );
-    assert!(
-        page.serialize_html_async()
-            .await?
-            .contains("data-xhr-returned=\"1\"")
-    );
+    let before_response = page.serialize_html_async().await?;
+    assert!(before_response.contains("data-xhr-returned=\"1\""));
+    assert!(!before_response.contains("data-xhr-state="));
 
+    release_response.notify_one();
     browser
         .wait_for_page_network_idle(&mut page, Duration::from_secs(2))
         .await?;
@@ -3351,7 +3377,7 @@ async fn async_xhr_send_returns_before_slow_network_response() -> Result<()> {
             .contains("data-xhr-state=\"settled-slow\"")
     );
 
-    server.shutdown().await;
+    server.abort();
     Ok(())
 }
 
