@@ -65,6 +65,7 @@ impl WorkerModuleMap {
                     fetch_id,
                     key,
                     options.initiator_url.clone(),
+                    options.referrer_url.clone(),
                     options.csp_source,
                     self.credentials_mode,
                     options.referrer_policy.clone(),
@@ -159,6 +160,7 @@ mod tests {
         let key = WorkerModuleKey::javascript_or_wasm(url.clone());
         let options = WorkerModuleGraphFetchOptions {
             root_source_location: None,
+            referrer_url: url.clone(),
             initiator_url: url,
             csp_source: WorkerModuleGraphFetchCspSource::DynamicImportGraph,
             referrer_policy: None,

@@ -81,6 +81,9 @@ impl module_tree::ModuleScriptTreeHost for WorkerModuleTreeHost<'_, '_, '_> {
             );
         }
         let mut options = self.options.clone();
+        if let Some(referrer) = request.referrer.url {
+            options.referrer_url = referrer;
+        }
         options.referrer_policy =
             native_referrer_policy(request.fetch_metadata.referrer_policy).map(str::to_owned);
         // Keep the Worker inside-settings initiator. The common tree's parent
