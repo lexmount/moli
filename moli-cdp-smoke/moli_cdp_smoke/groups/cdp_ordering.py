@@ -2,7 +2,8 @@
 
 Use the actual WebSocket order, retaining replies received while waiting for
 another id. Timeouts only bound liveness; no sleep or retry proves ordering.
-The six mutation cases explicitly distinguish Moli's current owner-only entry
+The pending-evaluation frame and download cases are also calibrated against Chromium
+156.0.8078.73 (2026-11-12). The six mutation cases explicitly distinguish Moli's current owner-only entry
 from Chromium's ordinary-pause capability. They are not CDP-wide requirements.
 """
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -279,6 +281,96 @@ async def _pause(wire: _Wire, page: _Page, *, instrumentation: bool = False) -> 
     return outer
 
 
+async def _frame_facts_during_pending_evaluation(
+    wire: _Wire, page: _Page, _is_moli: bool
+) -> dict[str, Any]:
+    # A second command proves the first evaluation reached its unresolved
+    # Promise. Event receipt and exact frame identity establish order; no timer
+    # or assumption about an otherwise empty protocol queue is involved.
+    checks = []
+    frame_id = None
+    for method, mutation in [
+        ("Page.frameAttached", "globalThis.__dependencyFrame = document.createElement('iframe');"
+         "document.body.append(globalThis.__dependencyFrame);"),
+        ("Page.frameDetached", "globalThis.__dependencyFrame.remove();"),
+    ]:
+        start = len(wire.messages)
+        pending = await wire.send("Runtime.evaluate", {
+            "expression": "(() => {" + mutation
+                + "return new Promise(resolve => { globalThis.__dependencyRelease = resolve; }); })()",
+            "awaitPromise": True, "returnByValue": True,
+        }, page.session)
+        assert_equal(await wire.evaluate(page.session,
+            "typeof globalThis.__dependencyRelease === 'function'"), True,
+            "mutation reached its unresolved Promise")
+        event = await wire.until(
+            lambda message: message.get("sessionId") == page.session
+                and message.get("method") == method
+                and (message.get("params", {}).get("parentFrameId") == page.frame
+                     if frame_id is None else message.get("params", {}).get("frameId") == frame_id),
+            method + " while the invoking evaluation is pending", after=start)
+        if frame_id is None:
+            frame_id = event["params"]["frameId"]
+        assert_equal(wire.has_response(pending), False,
+                     "frame fact must not depend on the original Runtime reply")
+        await wire.evaluate(page.session,
+            "globalThis.__dependencyRelease('released'); globalThis.__dependencyRelease = null; 1")
+        reply = await wire.response(pending)
+        assert_equal(reply["result"]["result"].get("value"), "released",
+                     "the original evaluation resumes with its real result")
+        matches = [message for message in wire.messages[start:]
+                   if message.get("sessionId") == page.session and message.get("method") == method
+                   and message.get("params", {}).get("frameId") == frame_id]
+        assert_equal(len(matches), 1, "each frame lifecycle fact is delivered once")
+        event_index = wire.messages.index(event)
+        if event_index >= wire.index(pending):
+            raise SmokeError(method + " overtook its recorded reply position")
+        checks.append({"method": method, "frame": frame_id,
+                       "eventIndex": event_index, "replyIndex": wire.index(pending)})
+    return {"checks": checks}
+
+
+async def _download_during_pending_evaluation(
+    wire: _Wire, page: _Page, _is_moli: bool
+) -> dict[str, Any]:
+    info = await wire.call("Target.getTargetInfo", session=page.session)
+    context = info["targetInfo"]["browserContextId"]
+    with tempfile.TemporaryDirectory(prefix="moli-ordering-download-") as download_path:
+        await wire.call("Browser.setDownloadBehavior", {
+            "behavior": "allow", "downloadPath": download_path,
+            "browserContextId": context, "eventsEnabled": True,
+        })
+        start = len(wire.messages)
+        pending = await wire.send("Runtime.evaluate", {
+            "expression": "(() => { const a = document.createElement('a');"
+                "a.href='data:text/plain,download-probe'; a.download='probe.txt';"
+                "document.body.append(a); a.click();"
+                "return new Promise(resolve => { globalThis.__downloadRelease = resolve; }); })()",
+            "awaitPromise": True, "returnByValue": True, "userGesture": True,
+        }, page.session)
+        assert_equal(await wire.evaluate(page.session,
+            "typeof globalThis.__downloadRelease === 'function'"), True,
+            "download activation reached its unresolved Promise")
+        event = await wire.until(lambda message: message.get("method") == "Browser.downloadWillBegin",
+                                 "download start while Runtime reply remains pending", after=start)
+        assert_equal(wire.has_response(pending), False,
+                     "download activation must not depend on its invoking Runtime reply")
+        guid = event["params"]["guid"]
+        await wire.until(lambda message: message.get("method") == "Browser.downloadProgress"
+                         and message["params"].get("guid") == guid
+                         and message["params"].get("state") == "completed",
+                         "exact download completion while evaluation remains pending", after=start)
+        assert_equal(wire.has_response(pending), False,
+                     "download completion must remain independent of the unresolved Promise")
+        await wire.evaluate(page.session,
+            "globalThis.__downloadRelease('released'); globalThis.__downloadRelease = null; 1")
+        reply = await wire.response(pending)
+        assert_equal(reply["result"]["result"].get("value"), "released",
+                     "download does not alter the eventual JavaScript result")
+        return {"guid": guid, "eventIndex": wire.messages.index(event),
+                "replyIndex": wire.index(pending)}
+
+
 async def _normal_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
     await wire.evaluate(page.session,
         "document.getElementById('probe').setAttribute('style', 'outline-width: 3px'); void 0")
@@ -469,6 +561,8 @@ async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[
         ("native_terminal_notification_prefix", _native_prefix),
         ("isolated_world_notification_prefix", _world_prefix),
         ("deferred_reply_later_resolver", _deferred_reply),
+        ("frame_facts_during_pending_evaluation", _frame_facts_during_pending_evaluation),
+        ("download_during_pending_evaluation", _download_during_pending_evaluation),
         ("normal_pause_native_queries", _normal_pause),
         ("normal_pause_dom_agent_commands", _paused_dom_agent),
         ("instrumentation_pause_io_only", _instrumentation_pause),

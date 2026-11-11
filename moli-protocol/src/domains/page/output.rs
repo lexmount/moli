@@ -581,6 +581,36 @@ impl PagePreparedOutputs {
     }
 
     #[cfg(test)]
+    pub(crate) fn from_child_frame_tree_event_for_test(
+        binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
+        frame_id: String,
+        parent_frame_id: Option<String>,
+    ) -> Self {
+        let event = match parent_frame_id {
+            Some(parent_frame_id) => PagePreparedChildFrameTreeEvent::Attached {
+                frame_id,
+                parent_frame_id,
+            },
+            None => PagePreparedChildFrameTreeEvent::Detached { frame_id },
+        };
+        let document = PagePreparedChildFrameDocumentActivity::from_parts(
+            12.5,
+            vec![event],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            String::new(),
+            String::new(),
+        );
+        Self {
+            child_frame_activities: vec![PagePreparedChildFrameActivity::from_document(
+                binding, document,
+            )],
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_child_frame_activity_for_test(
         binding: crate::conn::TargetRootDocumentProtocolAttachmentIdentity,
     ) -> Self {
@@ -715,31 +745,6 @@ impl PagePreparedOutputSlot {
         &mut self,
     ) -> Option<PagePreparedTopLevelLocationNavigation> {
         self.outputs.top_level_location_navigation.take()
-    }
-
-    pub(in crate::domains) fn top_level_location_navigation_runtime_command_cause(
-        &self,
-    ) -> Option<&RendererRuntimeCommandCausalIdentity> {
-        self.outputs
-            .top_level_location_navigation
-            .as_ref()
-            .and_then(PagePreparedTopLevelLocationNavigation::runtime_command_cause)
-    }
-
-    pub(in crate::domains) fn take_top_level_location_navigation_for_runtime_command(
-        &mut self,
-        cause: &RendererRuntimeCommandCausalIdentity,
-    ) -> Option<Self> {
-        let navigation = (self.top_level_location_navigation_runtime_command_cause()
-            == Some(cause))
-        .then(|| self.outputs.top_level_location_navigation.take())
-        .flatten()?;
-        Some(Self {
-            outputs: PagePreparedOutputs {
-                top_level_location_navigation: Some(navigation),
-                ..Default::default()
-            },
-        })
     }
 
     pub(crate) fn take_top_level_history_traversal(

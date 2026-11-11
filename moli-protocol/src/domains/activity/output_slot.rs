@@ -104,6 +104,12 @@ impl ProtocolOutputSlot {
         self,
     ) -> ProtocolOutputResponseOrder {
         match self {
+            // Only the producer's explicit response ordering is a reply
+            // dependency. Captured facts and accepted owner requests must not
+            // inherit one from their output family or source Page.
+            Self::RuntimeInspectorPostResponseMessages => {
+                ProtocolOutputResponseOrder::AfterResponse
+            }
             Self::CloseAuxiliaryWindow
             | Self::NavigateAuxiliaryWindow
             | Self::TopLevelLocationNavigation
@@ -112,10 +118,7 @@ impl ProtocolOutputSlot {
             | Self::SharedWorkerTargetLifecycle
             | Self::ServiceWorkerTargetLifecycle
             | Self::ChildFrameActivity
-            | Self::RuntimeInspectorPostResponseMessages => {
-                ProtocolOutputResponseOrder::AfterResponse
-            }
-            Self::PendingSubresourceContinueEvents
+            | Self::PendingSubresourceContinueEvents
             // Blink's file-input activation probe queues
             // Page.fileChooserOpened synchronously. A script may continue into
             // document.open(), but Chromium still flushes the chooser event
@@ -303,15 +306,17 @@ mod tests {
                 OwnerAction,
                 BeforeResponse,
             ),
-            (TopLevelLocationNavigation, OwnerAction, AfterResponse),
-            (TopLevelHistoryTraversal, OwnerAction, AfterResponse),
+            (TopLevelLocationNavigation, OwnerAction, BeforeResponse),
+            (TopLevelHistoryTraversal, OwnerAction, BeforeResponse),
+            (CloseAuxiliaryWindow, OwnerAction, BeforeResponse),
+            (NavigateAuxiliaryWindow, OwnerAction, BeforeResponse),
             (FileChooser, OwnerAction, BeforeResponse),
-            (Download, OwnerAction, AfterResponse),
+            (Download, OwnerAction, BeforeResponse),
             (JavascriptDialog, OwnerAction, BeforeResponse),
             (WindowOpen, ProtocolObservation, BeforeResponse),
             (Popup, OwnerAction, BeforeResponse),
-            (SharedWorkerTargetLifecycle, OwnerAction, AfterResponse),
-            (ServiceWorkerTargetLifecycle, OwnerAction, AfterResponse),
+            (SharedWorkerTargetLifecycle, OwnerAction, BeforeResponse),
+            (ServiceWorkerTargetLifecycle, OwnerAction, BeforeResponse),
             (DedicatedWorkerTargetLifecycle, OwnerAction, BeforeResponse),
             (Audits, ProtocolObservation, BeforeResponse),
             (Console, ProtocolObservation, BeforeResponse),
@@ -335,7 +340,7 @@ mod tests {
             (DocumentLifecycle, ProtocolObservation, BeforeResponse),
             (RuntimeObservable, OwnerAction, BeforeResponse),
             (WebMcp, ProtocolObservation, BeforeResponse),
-            (ChildFrameActivity, OwnerAction, AfterResponse),
+            (ChildFrameActivity, OwnerAction, BeforeResponse),
             (SameDocumentNavigation, OwnerAction, BeforeResponse),
             (SessionHistoryUpdate, OwnerAction, BeforeResponse),
         ];
