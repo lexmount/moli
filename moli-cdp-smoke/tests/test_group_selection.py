@@ -48,7 +48,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("puppeteer", DEFAULT_GROUP_NAMES)
         self.assertEqual(
             tuple(group.name for group in MANAGED_EXTERNAL_GROUPS),
-            ("puppeteer",),
+            ("protocol-schema", "puppeteer"),
         )
 
     def test_only_external_environment_groups_remain_opt_in(self) -> None:
