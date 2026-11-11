@@ -1,6 +1,9 @@
 () => {
   const samples = [];
-  const boxes = ['input', 'atomic', 'inner', 'outer-atomic', 'inner-atomic', 'nested-inner'];
+  const boxes = [
+    'input', 'atomic', 'inner', 'outer-atomic', 'inner-atomic', 'nested-inner',
+    'atomic-block', 'block-child',
+  ];
   for (const id of boxes) {
     const rect = document.getElementById(id).getBoundingClientRect();
     if (rect.width <= 4 || rect.height <= 4) {
