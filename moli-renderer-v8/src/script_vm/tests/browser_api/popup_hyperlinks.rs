@@ -297,3 +297,57 @@ for (let index = 0; index < realms.length; index++) {
         "[]"
     );
 }
+
+#[test]
+fn accesskey_document_is_frozen_before_keydown_adoption() {
+    for owner in 0..2 {
+        for destination in ["other", "windowless"] {
+            for phase in ["capture", "target", "bubble"] {
+                let mut vm = new_storage_test_vm("https://accesskey-adoption.test/");
+                vm.eval(&format!(
+                    "globalThis.sourceOwner={owner};globalThis.destinationKind='{destination}';globalThis.listenerPhase='{phase}'"
+                ))
+                .unwrap();
+                vm.eval(
+                    r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+if (!document.body) root.appendChild(document.createElement('body'));
+document.body.innerHTML = '<button accesskey=g>main</button><iframe id=child></iframe>';
+const realms = [window, document.getElementById('child').contentWindow];
+realms[1].document.body.innerHTML = '<button accesskey=g>child</button>';
+const sourceDocument = realms[sourceOwner].document;
+const destination = destinationKind === 'other' ? realms[1 - sourceOwner].document
+  : sourceDocument.implementation.createHTMLDocument('');
+const source = sourceDocument.body.appendChild(sourceDocument.createElement('input'));
+globalThis.adopted = false;
+globalThis.accesskeyClicks = [];
+for (let index = 0; index < realms.length; index++) {
+  const w = realms[index];
+  w.document.querySelector('button').addEventListener('click', event => {
+    accesskeyClicks.push([
+      index, event.view === w, Object.getPrototypeOf(event) === w.PointerEvent.prototype
+    ]);
+  });
+}
+const listenerTarget = listenerPhase === 'target' ? source : sourceDocument;
+listenerTarget.addEventListener('keydown', () => {
+  destination.body.appendChild(destination.adoptNode(source));
+  adopted = true;
+}, {once: true, capture: listenerPhase === 'capture'});
+source.focus();
+"#,
+                )
+                .unwrap();
+                let modifiers = if cfg!(target_os = "macos") { 3 } else { 9 };
+                vm.dispatch_key_event("keydown", "g", "KeyG", "", modifiers, false, false)
+                    .unwrap();
+                assert_eq!(
+                    vm.eval("JSON.stringify([adopted, source.ownerDocument === destination, accesskeyClicks])")
+                        .unwrap(),
+                    format!("[true,true,[[{owner},true,true]]]"),
+                    "owner {owner}, destination {destination}, phase {phase}"
+                );
+            }
+        }
+    }
+}

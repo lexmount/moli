@@ -1425,6 +1425,20 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     }
     let target_object = event_target_object(scope, host_ptr, dispatch_target)?;
     let event_type = normalize_public_event_record(scope, event, target_object.into())?;
+    // Keyboard input belongs to its dispatch document even if a listener adopts
+    // the target into another document before the default action runs.
+    let access_key_document = if event_type == "keydown" {
+        let host = unsafe { &*host_ptr };
+        match dispatch_target {
+            EventTargetHandle::Node(handle) => host.dom_host().owner_document_handle(handle),
+            EventTargetHandle::Window => Some(host.document_handle()),
+            EventTargetHandle::ChildWindow(window) => {
+                host.child_browsing_context_document_handle(window.child_handle())
+            }
+        }
+    } else {
+        None
+    };
 
     let bubbles = event_bool_property(scope, event, "bubbles");
     let original_related_target = event_related_target_handle(scope, host_ptr, event);
@@ -1813,12 +1827,11 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
         crate::native_bridge::element::perform_tab_focus_default_action_for_dispatched_event(
             scope, host_ptr, event,
         );
-        crate::native_bridge::element::perform_access_key_default_action_for_dispatched_event(
-            scope,
-            host_ptr,
-            event,
-            dispatch_target,
-        );
+        if let Some(document) = access_key_document {
+            crate::native_bridge::element::perform_access_key_default_action_for_dispatched_event(
+                scope, host_ptr, event, document,
+            );
+        }
     }
     set_event_phase(scope, event, 0);
     set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
