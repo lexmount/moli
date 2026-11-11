@@ -2456,3 +2456,5 @@ mod rtc_data_channel_init;
 mod rtc_data_channel_send;
 mod rtc_stats;
 mod rtp_transceivers;
+
+mod opaque_permissions_policy;

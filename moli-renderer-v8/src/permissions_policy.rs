@@ -2,8 +2,10 @@ use std::sync::Arc;
 use url::Url;
 
 mod cross_origin_isolation;
+mod document_feature;
 mod sensors;
 use cross_origin_isolation::CrossOriginIsolationPermission;
+use document_feature::DocumentFeaturePolicy;
 pub(crate) use sensors::SensorPermission;
 use sensors::SensorPermissionsPolicy;
 
@@ -13,17 +15,17 @@ use sensors::SensorPermissionsPolicy;
 /// container cannot delegate tools to an origin excluded by its parent header.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentPermissionsPolicy {
-    fullscreen: bool,
-    gamepad: bool,
-    midi: bool,
+    fullscreen: DocumentFeaturePolicy,
+    gamepad: DocumentFeaturePolicy,
+    midi: DocumentFeaturePolicy,
     encrypted_media: bool,
     encrypted_media_allowlists: Vec<(url::Origin, OriginAllowlist)>,
     payment: bool,
     payment_allowlists: Vec<(url::Origin, OriginAllowlist)>,
     tools: bool,
     tools_allowlist: Option<OriginAllowlist>,
-    synchronous_xhr: bool,
-    focus_without_user_activation: bool,
+    synchronous_xhr: DocumentFeaturePolicy,
+    focus_without_user_activation: DocumentFeaturePolicy,
     sensors: SensorPermissionsPolicy,
     cross_origin_isolation: CrossOriginIsolationPermission,
 }
@@ -31,17 +33,17 @@ pub(crate) struct DocumentPermissionsPolicy {
 impl Default for DocumentPermissionsPolicy {
     fn default() -> Self {
         Self {
-            fullscreen: true,
-            gamepad: true,
-            midi: true,
+            fullscreen: DocumentFeaturePolicy::default(),
+            gamepad: DocumentFeaturePolicy::default(),
+            midi: DocumentFeaturePolicy::default(),
             encrypted_media: true,
             encrypted_media_allowlists: Vec::new(),
             payment: true,
             payment_allowlists: Vec::new(),
             tools: true,
             tools_allowlist: None,
-            synchronous_xhr: true,
-            focus_without_user_activation: true,
+            synchronous_xhr: DocumentFeaturePolicy::default(),
+            focus_without_user_activation: DocumentFeaturePolicy::default(),
             sensors: SensorPermissionsPolicy::default(),
             cross_origin_isolation: CrossOriginIsolationPermission::default(),
         }
@@ -57,24 +59,24 @@ impl DocumentPermissionsPolicy {
         self.sensors.enabled(sensor)
     }
 
-    pub(crate) const fn fullscreen_enabled(&self) -> bool {
-        self.fullscreen
+    pub(crate) fn fullscreen_enabled(&self) -> bool {
+        self.fullscreen.enabled()
     }
 
-    pub(crate) const fn synchronous_xhr_enabled(&self) -> bool {
-        self.synchronous_xhr
+    pub(crate) fn synchronous_xhr_enabled(&self) -> bool {
+        self.synchronous_xhr.enabled()
     }
 
-    pub(crate) const fn gamepad_enabled(&self) -> bool {
-        self.gamepad
+    pub(crate) fn gamepad_enabled(&self) -> bool {
+        self.gamepad.enabled()
     }
 
-    pub(crate) const fn focus_without_user_activation_enabled(&self) -> bool {
-        self.focus_without_user_activation
+    pub(crate) fn focus_without_user_activation_enabled(&self) -> bool {
+        self.focus_without_user_activation.enabled()
     }
 
-    pub(crate) const fn midi_enabled(&self) -> bool {
-        self.midi
+    pub(crate) fn midi_enabled(&self) -> bool {
+        self.midi.enabled()
     }
 
     pub(crate) const fn encrypted_media_enabled(&self) -> bool {
@@ -91,9 +93,9 @@ impl DocumentPermissionsPolicy {
 
     pub(crate) fn intersect(&self, other: &Self) -> Self {
         Self {
-            fullscreen: self.fullscreen && other.fullscreen,
-            gamepad: self.gamepad && other.gamepad,
-            midi: self.midi && other.midi,
+            fullscreen: self.fullscreen.intersect(&other.fullscreen),
+            gamepad: self.gamepad.intersect(&other.gamepad),
+            midi: self.midi.intersect(&other.midi),
             encrypted_media: self.encrypted_media && other.encrypted_media,
             encrypted_media_allowlists: self
                 .encrypted_media_allowlists
@@ -110,9 +112,10 @@ impl DocumentPermissionsPolicy {
                 .collect(),
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
-            synchronous_xhr: self.synchronous_xhr && other.synchronous_xhr,
-            focus_without_user_activation: self.focus_without_user_activation
-                && other.focus_without_user_activation,
+            synchronous_xhr: self.synchronous_xhr.intersect(&other.synchronous_xhr),
+            focus_without_user_activation: self
+                .focus_without_user_activation
+                .intersect(&other.focus_without_user_activation),
             sensors: self.sensors.intersect(&other.sensors),
             cross_origin_isolation: self
                 .cross_origin_isolation
@@ -138,18 +141,20 @@ impl DocumentPermissionsPolicy {
                     policy.sensors.declare(sensor, allowlist, document_url);
                 }
                 if feature.trim().eq_ignore_ascii_case("fullscreen") {
-                    policy.fullscreen = allowed;
+                    policy.fullscreen.declare(allowlist, document_url);
                 } else if feature.trim().eq_ignore_ascii_case("gamepad") {
-                    policy.gamepad = allowed;
+                    policy.gamepad.declare(allowlist, document_url);
                 } else if feature.trim().eq_ignore_ascii_case("midi") {
-                    policy.midi = allowed;
+                    policy.midi.declare(allowlist, document_url);
                 } else if feature.trim().eq_ignore_ascii_case("sync-xhr") {
-                    policy.synchronous_xhr = allowed;
+                    policy.synchronous_xhr.declare(allowlist, document_url);
                 } else if feature
                     .trim()
                     .eq_ignore_ascii_case("focus-without-user-activation")
                 {
-                    policy.focus_without_user_activation = allowed;
+                    policy
+                        .focus_without_user_activation
+                        .declare(allowlist, document_url);
                 }
                 if feature.trim().eq_ignore_ascii_case("payment") {
                     policy.payment = allowed;
@@ -254,9 +259,15 @@ impl DocumentPermissionsPolicy {
         )
         .unwrap_or(same_origin);
         Self {
-            fullscreen: self.fullscreen && fullscreen,
-            gamepad: self.gamepad && gamepad,
-            midi: self.midi && midi,
+            fullscreen: self
+                .fullscreen
+                .delegated_to_child(parent_origin, child_origin, fullscreen),
+            gamepad: self
+                .gamepad
+                .delegated_to_child(parent_origin, child_origin, gamepad),
+            midi: self
+                .midi
+                .delegated_to_child(parent_origin, child_origin, midi),
             encrypted_media: self.encrypted_media
                 && self.encrypted_media_allows_origin(child_origin)
                 && encrypted_media,
@@ -268,9 +279,16 @@ impl DocumentPermissionsPolicy {
                 && self.tools_allows_origin(child_origin, parent_origin)
                 && tools,
             tools_allowlist: None,
-            synchronous_xhr: self.synchronous_xhr && synchronous_xhr,
-            focus_without_user_activation: self.focus_without_user_activation
-                && focus_without_user_activation,
+            synchronous_xhr: self.synchronous_xhr.delegated_to_child(
+                parent_origin,
+                child_origin,
+                synchronous_xhr,
+            ),
+            focus_without_user_activation: self.focus_without_user_activation.delegated_to_child(
+                parent_origin,
+                child_origin,
+                focus_without_user_activation,
+            ),
             sensors: self.sensors.delegated_to_child(
                 parent_origin,
                 child_origin,
@@ -288,6 +306,13 @@ impl DocumentPermissionsPolicy {
 
     pub(crate) fn for_document_origin(&self, origin: &url::Origin) -> Self {
         Self {
+            fullscreen: self.fullscreen.for_document_origin(origin),
+            gamepad: self.gamepad.for_document_origin(origin),
+            midi: self.midi.for_document_origin(origin),
+            synchronous_xhr: self.synchronous_xhr.for_document_origin(origin),
+            focus_without_user_activation: self
+                .focus_without_user_activation
+                .for_document_origin(origin),
             tools: self.tools && self.tools_allows_origin(origin, origin),
             payment: self.payment && self.payment_allows_origin(origin),
             encrypted_media: self.encrypted_media && self.encrypted_media_allows_origin(origin),
@@ -392,7 +417,7 @@ fn iframe_allow_feature(
         }
         let allowlist = tokens.collect::<Vec<_>>();
         if allowlist.is_empty() {
-            return Some(child_origin == source_origin);
+            return Some(iframe_src_origin_matches(child_origin, source_origin));
         }
         if allowlist
             .iter()
@@ -402,7 +427,8 @@ fn iframe_allow_feature(
         }
         Some(allowlist.into_iter().any(|token| {
             token == "*"
-                || (token.eq_ignore_ascii_case("'src'") && child_origin == source_origin)
+                || (token.eq_ignore_ascii_case("'src'")
+                    && iframe_src_origin_matches(child_origin, source_origin))
                 || (token.eq_ignore_ascii_case("'self'") && child_origin == parent_origin)
                 || Url::parse(token.trim_matches(['\'', '"']))
                     .ok()
@@ -412,6 +438,16 @@ fn iframe_allow_feature(
                     })
         }))
     })
+}
+
+// 'src' may designate an opaque document. That allowlist permission does not
+// change origin identity or make unrelated opaque origins match 'self'.
+fn iframe_src_origin_matches(child: &url::Origin, source: &url::Origin) -> bool {
+    child == source
+        || matches!(
+            (child, source),
+            (url::Origin::Opaque(_), url::Origin::Opaque(_))
+        )
 }
 
 fn token_origin_matches(token: &str, url: &Url) -> bool {
@@ -424,6 +460,66 @@ fn token_origin_matches(token: &str, url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_src_permissions_do_not_override_parent_feature_declarations() {
+        let parent_url = url("https://parent.test/");
+        let parent = parent_url.origin();
+        let child = url::Origin::new_opaque();
+        let declared = url::Origin::new_opaque();
+        assert_ne!(child, declared);
+        let features: [(&str, fn(&DocumentPermissionsPolicy) -> bool); 5] = [
+            ("fullscreen", DocumentPermissionsPolicy::fullscreen_enabled),
+            ("gamepad", DocumentPermissionsPolicy::gamepad_enabled),
+            ("midi", DocumentPermissionsPolicy::midi_enabled),
+            (
+                "sync-xhr",
+                DocumentPermissionsPolicy::synchronous_xhr_enabled,
+            ),
+            (
+                "focus-without-user-activation",
+                DocumentPermissionsPolicy::focus_without_user_activation_enabled,
+            ),
+        ];
+        for (feature, enabled) in features {
+            for allow in [
+                feature.to_owned(),
+                format!("{feature} 'src'"),
+                format!("{feature} *"),
+            ] {
+                let delegate = |policy: &DocumentPermissionsPolicy| {
+                    policy.delegated_to_child(&parent, &child, &declared, Some(&allow), false)
+                };
+                assert!(
+                    enabled(&delegate(&DocumentPermissionsPolicy::default())),
+                    "{allow}"
+                );
+                for restriction in ["()", "(self)"] {
+                    let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
+                        &[(
+                            "Permissions-Policy".to_owned(),
+                            format!("{feature}={restriction}").into_bytes(),
+                        )],
+                        &parent_url,
+                    );
+                    assert!(
+                        !enabled(&delegate(&policy)),
+                        "{feature}={restriction}; {allow}"
+                    );
+                }
+            }
+            let allow = format!("{feature} 'self'");
+            assert!(!enabled(
+                &DocumentPermissionsPolicy::default().delegated_to_child(
+                    &parent,
+                    &child,
+                    &declared,
+                    Some(&allow),
+                    false,
+                )
+            ));
+        }
+    }
 
     impl DocumentPermissionsPolicy {
         fn delegated_to_child_urls(
@@ -793,13 +889,14 @@ mod tests {
         assert!(!denied.synchronous_xhr_enabled());
         assert!(!denied.focus_without_user_activation_enabled());
 
-        let parent_denied = DocumentPermissionsPolicy {
-            fullscreen: false,
-            gamepad: false,
-            synchronous_xhr: false,
-            focus_without_user_activation: false,
-            ..Default::default()
-        };
+        let parent_denied = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[(
+                "Permissions-Policy".to_owned(),
+                b"fullscreen=(), gamepad=(), sync-xhr=(), focus-without-user-activation=()"
+                    .to_vec(),
+            )],
+            &parent,
+        );
         let delegated = parent_denied.delegated_to_child_urls_with_fullscreen(
             &parent,
             &url("https://other.test/child"),
