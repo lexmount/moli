@@ -124,9 +124,13 @@ pub(super) fn create_navigation_entry<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let public_id = navigation_entry_public_token(id);
     let public_key = navigation_entry_public_token(key);
+    let secure_context = navigation_current_entry(scope, owner)
+        .and_then(|entry| native::entry(scope, entry))
+        .is_some_and(|entry| entry.borrow().secure_context);
     let entry = HistoryEntry {
         url: url.to_owned(),
         inherited_origin: None,
+        secure_context,
         referrer_policy: referrer_policy.map(str::to_owned),
         history_state: None,
         navigation_state: None,
@@ -139,6 +143,31 @@ pub(super) fn create_navigation_entry<'s>(
     }
     .into_ref();
     wrappers::for_window(scope, owner, entry)
+}
+
+pub(crate) fn set_current_history_document_secure_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    secure_context: bool,
+) {
+    let Some(history) =
+        window_history_for_holder(scope, owner).and_then(|history| native::history(scope, history))
+    else {
+        return;
+    };
+    let history = history.borrow();
+    let Some(document) = history
+        .current_entry()
+        .map(|entry| entry.borrow().document.clone())
+    else {
+        return;
+    };
+    for entry in history.entries() {
+        let mut entry = entry.borrow_mut();
+        if entry.document == document {
+            entry.secure_context = secure_context;
+        }
+    }
 }
 
 pub(super) fn new_navigation_entry_id() -> NavigationHistoryEntryId {

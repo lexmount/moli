@@ -371,6 +371,7 @@ pub(super) struct LightweightPopupDocumentState {
     pub(super) base_url: Url,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) document_domain_override: Option<String>,
+    secure_context: bool,
 }
 
 struct LightweightPopupDocumentRecord {
@@ -470,11 +471,12 @@ fn inherit_lightweight_popup_opener_sandbox(
 }
 
 impl LightweightPopupDocumentState {
-    fn new(base_url: Url, policy_container: DocumentPolicyContainer) -> Self {
+    fn new(base_url: Url, policy_container: DocumentPolicyContainer, secure_context: bool) -> Self {
         Self {
             base_url,
             policy_container,
             document_domain_override: None,
+            secure_context,
         }
     }
 
@@ -485,10 +487,11 @@ impl LightweightPopupDocumentState {
 
     fn apply_navigation_response(
         mut self,
-        base_url: Url,
+        document_url: Url,
         response: DocumentPolicyContainer,
     ) -> Self {
-        self.base_url = base_url;
+        self.secure_context = moli_url::is_potentially_trustworthy_url(&document_url);
+        self.base_url = document_url;
         self.document_domain_override = None;
         self.policy_container.referrer_policy = response.referrer_policy;
         self.policy_container.cross_origin_embedder_policy = response.cross_origin_embedder_policy;
@@ -772,8 +775,9 @@ impl JsContextHost {
         let initial_referrer = creator_policy_container.document_referrer.clone();
         let opener_endpoint =
             lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
+        let creator_scope = self.entered_owner_dispatch_scope(scope);
         let creator_resource_authority = self
-            .document_resource_loader_for_dispatch_scope(self.entered_owner_dispatch_scope(scope))
+            .document_resource_loader_for_dispatch_scope(creator_scope)
             .expect("new popup Document requires its creator's exact resource authority")
             .clone();
         let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
@@ -905,8 +909,16 @@ impl JsContextHost {
             &mut initial_policy_container.sandbox,
             opener_sandbox_policy,
         );
-        let initial_document_state =
-            LightweightPopupDocumentState::new(initial_base_url.clone(), initial_policy_container);
+        let secure_context = if moli_url::is_about_blank(&initial_url) {
+            self.window_secure_context_for_dispatch_scope(scope, creator_scope)
+        } else {
+            moli_url::is_potentially_trustworthy_url(&initial_url)
+        };
+        let initial_document_state = LightweightPopupDocumentState::new(
+            initial_base_url.clone(),
+            initial_policy_container,
+            secure_context,
+        );
         let initial_resource_origin = initial_origin.serialized_origin();
         let session_storage_store = match opener {
             Some(opener) => self.cloned_lightweight_popup_session_storage_store(
@@ -947,6 +959,11 @@ impl JsContextHost {
                 })),
                 navigation_id: LightweightPopupNavigationId::new(1),
             },
+        );
+        crate::context_bootstrap::set_current_history_document_secure_context(
+            scope,
+            window,
+            secure_context,
         );
         crate::context_bootstrap::install_window_bar_props(
             scope,
@@ -1047,8 +1064,16 @@ impl JsContextHost {
         let parsed_url = Url::parse(href).ok()?;
         let initial_base_url = lightweight_popup_initial_base_url(&parsed_url, creator_base_url);
         let window = self.lightweight_popup_window(scope, popup_id)?;
-        let mut navigation_state =
-            LightweightPopupDocumentState::new(initial_base_url, creator_policy_container);
+        let initiator_endpoint =
+            lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
+        let initiator_scope = initiator_endpoint
+            .map(|endpoint| endpoint.dispatch_scope())
+            .unwrap_or_else(|| self.entered_owner_dispatch_scope(scope));
+        let mut navigation_state = LightweightPopupDocumentState::new(
+            initial_base_url,
+            creator_policy_container,
+            self.window_secure_context_for_dispatch_scope(scope, initiator_scope),
+        );
         let opener_sandbox_policy = self
             .lightweight_popup_record(popup_id)
             .and_then(|record| record.opener_sandbox_policy);
@@ -1056,8 +1081,6 @@ impl JsContextHost {
             &mut navigation_state.policy_container.sandbox,
             opener_sandbox_policy,
         );
-        let initiator_endpoint =
-            lightweight_popup_initiator_endpoint(scope, opener, opener_child_handle);
         let previous_url =
             lightweight_popup_location_href(scope, window).unwrap_or_else(about_blank_url);
         let target_url = parsed_url;
@@ -1125,6 +1148,11 @@ impl JsContextHost {
             if !self.lightweight_popup_committed_navigation_task_is_current(navigation_task) {
                 return Some(window);
             }
+            crate::context_bootstrap::set_current_history_document_secure_context(
+                scope,
+                window,
+                self.lightweight_popup_document_is_secure_context(popup_id),
+            );
             self.unregister_service_worker_popup_client(popup_id);
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             true
@@ -1203,6 +1231,25 @@ impl JsContextHost {
     pub(crate) fn lightweight_popup_document_url(&self, popup_id: u64) -> Option<Url> {
         self.lightweight_popup_document_record(popup_id)
             .map(|document| document.url.clone())
+    }
+
+    pub(crate) fn lightweight_popup_document_is_secure_context(&self, popup_id: u64) -> bool {
+        self.lightweight_popup_document_record(popup_id)
+            .is_some_and(|document| document.state.secure_context)
+    }
+
+    pub(crate) fn window_secure_context_for_dispatch_scope(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        dispatch_scope: OwnerDispatchScope,
+    ) -> bool {
+        // Lightweight popups can share the opener's V8 realm while owning
+        // a different Document and security state.
+        if let OwnerDispatchScope::LightweightPopup(popup_id) = dispatch_scope {
+            return self.lightweight_popup_document_is_secure_context(popup_id);
+        }
+        let global = scope.get_current_context().global(scope);
+        crate::context_bootstrap::window_realm_secure_context_available(scope, global)
     }
 
     pub(crate) fn lightweight_popup_session_storage_store(
@@ -1485,6 +1532,11 @@ impl JsContextHost {
             &document_referrer,
         );
         apply_local_window_location_navigation(scope, window, target_url, effective_kind);
+        crate::context_bootstrap::set_current_history_document_secure_context(
+            scope,
+            window,
+            self.lightweight_popup_document_is_secure_context(popup_id),
+        );
         sync_window_location_history_navigation_runtime_surface(scope, window);
     }
 
@@ -1719,8 +1771,10 @@ impl JsContextHost {
         let document_owner = navigation_task.document_owner();
         if moli_url::is_about_blank(&target_url) {
             navigation_state.reset_for_empty_document(target_url.clone());
-            let inherited_origin = self
-                .window_access_origin_for_dispatch_scope(self.entered_owner_dispatch_scope(scope));
+            let initiator_scope = self.entered_owner_dispatch_scope(scope);
+            navigation_state.secure_context =
+                self.window_secure_context_for_dispatch_scope(scope, initiator_scope);
+            let inherited_origin = self.window_access_origin_for_dispatch_scope(initiator_scope);
             if !self.commit_lightweight_popup_document(
                 scope,
                 window,
@@ -1794,6 +1848,14 @@ impl JsContextHost {
         let Some(target_url) = Url::parse(target_url).ok() else {
             return false;
         };
+        let Some(target_entry) = entry_seed
+            .entries
+            .iter()
+            .find(|entry| entry.history_index == entry_seed.current_index)
+        else {
+            return false;
+        };
+        let target_secure_context = target_entry.secure_context;
         let previous_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id))
             .unwrap_or_else(about_blank_url);
@@ -1824,6 +1886,7 @@ impl JsContextHost {
         );
         if moli_url::is_about_blank(&target_url) {
             navigation_state.reset_for_empty_document(target_url.clone());
+            navigation_state.secure_context = target_secure_context;
             if !self.commit_lightweight_popup_document(
                 scope,
                 window,
@@ -2635,6 +2698,11 @@ impl JsContextHost {
                 if !self.lightweight_popup_committed_navigation_task_is_current(task) {
                     return PopupDocumentLoadApplication::Applied { body_activity };
                 }
+                crate::context_bootstrap::set_current_history_document_secure_context(
+                    scope,
+                    window,
+                    self.lightweight_popup_document_is_secure_context(popup_id),
+                );
                 if matches!(final_url.scheme(), "http" | "https") {
                     let _ = self.register_or_update_service_worker_popup_client(
                         document_owner,

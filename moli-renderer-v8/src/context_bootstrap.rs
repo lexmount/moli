@@ -89,6 +89,7 @@ mod navigation_callbacks;
 mod navigation_cancellation;
 mod navigation_cross_document;
 mod navigation_entry;
+pub(crate) use navigation_entry::set_current_history_document_secure_context;
 mod navigation_entry_state;
 mod navigation_event_worlds;
 mod navigation_events;
