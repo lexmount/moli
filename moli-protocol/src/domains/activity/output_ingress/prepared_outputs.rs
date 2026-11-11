@@ -1,8 +1,6 @@
 use anyhow::Result;
 
-use moli_core::{
-    RendererOwnerAction, RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
-};
+use moli_core::{RendererOwnerAction, RendererProtocolObservation};
 
 use super::super::contextual_projection::ProtocolOutputProjectionContext;
 use super::super::output_payloads::{ProtocolOutputPayload, ProtocolOutputPayloads};
@@ -10,6 +8,7 @@ use super::super::output_slot::{
     ProtocolOutputDelivery, ProtocolOutputResponseOrder, ProtocolOutputSink, ProtocolOutputSlot,
 };
 use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};
+#[cfg(test)]
 use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIGATION};
 
 /// One move-owned protocol projection batch prepared from concrete output.
@@ -629,31 +628,6 @@ impl PreparedProtocolOutputs {
             ),
             emit_root_network_idle_after_projection: false,
         }
-    }
-
-    pub(in crate::domains::activity) fn top_level_location_navigation_runtime_command_cause(
-        &self,
-    ) -> Option<&RendererRuntimeCommandCausalIdentity> {
-        self.payloads
-            .page()
-            .and_then(PagePreparedOutputSlot::top_level_location_navigation_runtime_command_cause)
-    }
-
-    pub(in crate::domains::activity) fn take_top_level_location_navigation_for_runtime_command(
-        &mut self,
-        cause: &RendererRuntimeCommandCausalIdentity,
-    ) -> Option<Self> {
-        let navigation_payload = self
-            .payloads
-            .page_mut()?
-            .take_top_level_location_navigation_for_runtime_command(cause)?;
-        self.ordered_slots
-            .retain(|slot| *slot != SLOT_TOP_LEVEL_LOCATION_NAVIGATION);
-        Some(Self {
-            ordered_slots: vec![SLOT_TOP_LEVEL_LOCATION_NAVIGATION],
-            payloads: ProtocolOutputPayloads::from_slot(navigation_payload),
-            emit_root_network_idle_after_projection: false,
-        })
     }
 
     fn emit_root_network_idle_if_ready(

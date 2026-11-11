@@ -43,6 +43,7 @@ pub(in crate::domains) struct ProtocolOutputPayloads {
 }
 
 impl ProtocolOutputPayloads {
+    #[cfg(test)]
     pub(in crate::domains) fn from_slot<S>(slot: S) -> Self
     where
         S: Into<ProtocolOutputPayload>,
@@ -106,10 +107,6 @@ impl ProtocolOutputPayloads {
         &mut self,
     ) -> Option<&mut ObservablePreparedOutputSlot> {
         self.observable.as_mut()
-    }
-
-    pub(in crate::domains) fn page(&self) -> Option<&PagePreparedOutputSlot> {
-        self.page.as_ref()
     }
 
     pub(in crate::domains) fn page_mut(&mut self) -> Option<&mut PagePreparedOutputSlot> {

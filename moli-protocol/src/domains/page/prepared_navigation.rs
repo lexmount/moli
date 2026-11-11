@@ -1,4 +1,3 @@
-use moli_core::RendererRuntimeCommandCausalIdentity;
 use moli_core::page::{
     RendererDocumentLifecycleIdentity, RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererPendingSameDocumentNavigation,
@@ -75,9 +74,5 @@ impl PagePreparedTopLevelLocationNavigation {
         RendererDocumentSourcedTopLevelLocationNavigation,
     ) {
         (self.owner, self.navigation)
-    }
-
-    pub(super) fn runtime_command_cause(&self) -> Option<&RendererRuntimeCommandCausalIdentity> {
-        self.navigation.runtime_command_cause()
     }
 }

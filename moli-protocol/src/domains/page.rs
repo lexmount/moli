@@ -17,6 +17,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
     PrintToPdfTransferMode, SetBypassCspParams, SetDocumentContentParams,
     SetInterceptFileChooserDialogParams, SetLifecycleEventsEnabledParams as LifecycleParams,
 };
+use moli_core::RendererDocumentTitleChanged;
 use moli_core::page::{
     ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
@@ -31,7 +32,6 @@ use moli_core::page::{
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotRegion,
     RendererSetDocumentContentResult, RendererVisualStateToken,
 };
-use moli_core::{RendererDocumentTitleChanged, RendererRuntimeCommandCausalIdentity};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
