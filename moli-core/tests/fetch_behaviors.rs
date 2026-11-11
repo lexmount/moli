@@ -21,6 +21,9 @@ mod font_binary;
 #[path = "fetch_behaviors/fetch_resource_timing.rs"]
 mod fetch_resource_timing;
 
+#[path = "fetch_behaviors/fetch_abort_timing.rs"]
+mod fetch_abort_timing;
+
 fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapshot> {
     page.script_execution().global(name)
 }
