@@ -158,6 +158,11 @@ pub(super) fn pause_streaming_response_stage_navigation_into_buffer(
         &pending.navigation,
         pending.request_cookie_report.as_ref(),
     );
+    update_navigation_request_for_response(
+        &mut pending.navigation,
+        &final_url,
+        &response_head.redirect_chain,
+    );
     let mut response_extra_info_events = Vec::new();
     body_progress_source.emit_response_extra_info_before_pause(
         &mut response_extra_info_events,
@@ -255,6 +260,11 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
     let final_url = response.response().final_url.clone();
     let response_headers = response.response().headers.clone();
     let request_cookie_report = response.response().request_cookie_report.clone();
+    update_navigation_request_for_response(
+        &mut pending.navigation,
+        &final_url,
+        &response.response().redirect_chain,
+    );
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
     conn.register_pending_fetch_response_transfer_for_owner(
         &pending.navigation.owner,
@@ -340,6 +350,33 @@ fn routable_stage_owner_session_id(
     fallback_session_id.map(str::to_owned)
 }
 
+fn update_navigation_request_for_response(
+    navigation: &mut NavigationDispatchState,
+    final_url: &Url,
+    redirects: &[moli_fetch::RedirectInfo],
+) {
+    // Request-stage interception already applied its redirect hops. Only
+    // reconstruct hops followed internally by the transport for this response.
+    if redirects.len() > navigation.redirect_chain.len() {
+        let mut request = moli_fetch::Request::get_with_url(navigation.requested_url.clone())
+            .with_redirect_headers(navigation.redirect_headers.take());
+        request.method = navigation.request_method.clone();
+        request.body = navigation.clone_request_body_bytes();
+        request.request_headers = navigation.request_headers.clone();
+        for redirect in &redirects[navigation.redirect_chain.len()..] {
+            request.apply_redirect_status(redirect.status);
+        }
+        navigation.request_method = request.method;
+        navigation.request_headers = request.request_headers;
+        navigation.request_body_bytes = request.body;
+        if navigation.request_body_bytes.is_none() {
+            navigation.request_body = None;
+        }
+    }
+    navigation.requested_url = final_url.clone();
+    navigation.redirect_chain = redirects.to_vec();
+}
+
 pub(super) fn register_navigation_auth_required_event(
     conn: &mut CdpConnection,
     pending: &PendingFetchNavigation,
@@ -349,24 +386,7 @@ pub(super) fn register_navigation_auth_required_event(
 ) -> crate::conn::BackgroundProtocolEvent {
     let mut navigation = pending.navigation.clone();
     let head = response.response();
-    if !head.redirect_chain.is_empty() {
-        let mut request = moli_fetch::Request::get_with_url(navigation.requested_url.clone())
-            .with_redirect_headers(navigation.redirect_headers.take());
-        request.method = navigation.request_method.clone();
-        request.body = navigation.clone_request_body_bytes();
-        request.request_headers = navigation.request_headers.clone();
-        for redirect in &head.redirect_chain {
-            request.apply_redirect_status(redirect.status);
-        }
-        navigation.requested_url = head.final_url.clone();
-        navigation.request_method = request.method;
-        navigation.request_headers = request.request_headers;
-        navigation.request_body_bytes = request.body;
-        if navigation.request_body_bytes.is_none() {
-            navigation.request_body = None;
-        }
-    }
-    navigation.redirect_chain = head.redirect_chain.clone();
+    update_navigation_request_for_response(&mut navigation, &head.final_url, &head.redirect_chain);
     let blocked_intercepts = navigation_auth_required_blocked_intercepts(conn, pending);
     let mut pending_auth = crate::conn::PendingFetchAuthNavigation {
         auth_retry_budget: pending.auth_retry_budget.clone(),

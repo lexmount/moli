@@ -159,6 +159,19 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
             )
             for stage in ("Request", "Response")
         ),
+        *(
+            NavigationOutcomeContract(
+                f"navigate_redirect_fail_request_{name}_response",
+                "A response-stage failure after a redirect commits an error Document "
+                "whose unreachable URL and history identify the final request.",
+                partial(_fail_request, stage="Response", reason=reason,
+                        error_text=error_text, redirect=True),
+            )
+            for name, reason, error_text in (
+                ("blocked_by_client", "BlockedByClient", "net::ERR_BLOCKED_BY_CLIENT"),
+                ("timed_out", "TimedOut", "net::ERR_TIMED_OUT"),
+            )
+        ),
     )
 
 
@@ -466,10 +479,12 @@ async def _transport_failure(state: SmokeState) -> dict[str, Any]:
 
 
 async def _fail_request(
-    state: SmokeState, *, stage: str, reason: str, error_text: str
+    state: SmokeState, *, stage: str, reason: str, error_text: str, redirect: bool = False
 ) -> dict[str, Any]:
     async with _new_probe(state) as probe:
-        url = f"{state.fixture}/plain?failed-navigation={reason}-{stage}"
+        url = (f"{state.fixture}/redirect-start" if redirect
+               else f"{state.fixture}/plain?failed-navigation={reason}-{stage}")
+        failed_url = f"{state.fixture}/redirect-final" if redirect else url
         await _evaluate_value(
             probe.cdp, "document.body.innerHTML='<input id=retainedField value=retained>'"
         )
@@ -478,12 +493,13 @@ async def _fail_request(
         probe.cdp.once("Fetch.requestPaused", lambda params: paused.set_result(params))
         await probe.cdp.send(
             "Fetch.enable",
-            {"patterns": [{"urlPattern": url, "resourceType": "Document", "requestStage": stage}]},
+            {"patterns": [{"urlPattern": failed_url, "resourceType": "Document", "requestStage": stage}]},
         )
         navigation = asyncio.create_task(probe.cdp.send("Page.navigate", {"url": url}))
         result: dict[str, Any] | None = None
         try:
             request = await paused
+            assert_equal(request["request"]["url"], failed_url, "paused request URL")
             assert_equal(
                 "responseStatusCode" in request, stage == "Response", "Fetch pause stage"
             )
@@ -507,17 +523,22 @@ async def _fail_request(
             assert_equal(result.get("errorText"), error_text, "failed navigation errorText")
             assert_equal(result.get("isDownload"), False, "failed navigation isDownload")
         await wait_until(
-            lambda: _loading_failure_for_url(probe.events, url) is not None,
+            lambda: _loading_failure_for_url(probe.events, failed_url) is not None,
             "failed main-document Network.loadingFailed",
         )
-        failure = _loading_failure_for_url(probe.events, url)
+        failure = _loading_failure_for_url(probe.events, failed_url)
         if failure is None:
             raise SmokeError("missing main-document Network.loadingFailed")
         assert_equal(failure["params"].get("errorText"), error_text, "Network failure errorText")
         requests = [event for event in _document_request_events(probe.events)
-                    if _request_url(event) == url]
+                    if _request_url(event) == failed_url]
         assert_equal(len(requests), 1, "failed navigation Document request count")
         request_id = requests[0]["params"].get("requestId")
+        chain = [event for event in _document_request_events(probe.events)
+                 if event["params"].get("requestId") == request_id]
+        assert_equal([_request_url(event) for event in chain],
+                     [url, failed_url] if redirect else [url],
+                     "failed navigation redirect chain")
 
         if reason == "Aborted":
             snapshot = await _active_document_snapshot(probe.cdp)
@@ -552,11 +573,14 @@ async def _fail_request(
                 and event["params"]["frame"].get("loaderId") == result.get("loaderId")
             )
             assert_equal(frame.get("url"), "chrome-error://chromewebdata/", "error frame URL")
-            assert_equal(frame.get("unreachableUrl"), url, "error frame unreachable URL")
+            assert_equal(frame.get("unreachableUrl"), failed_url, "error frame unreachable URL")
+            frame_tree = await probe.cdp.send("Page.getFrameTree")
+            assert_equal(frame_tree["frameTree"]["frame"].get("unreachableUrl"), failed_url,
+                         "error frame tree unreachable URL")
             failed_history = await probe.cdp.send("Page.getNavigationHistory")
             assert_equal(
                 failed_history["entries"][failed_history["currentIndex"]].get("url"),
-                url, "error Document history URL",
+                failed_url, "error Document history URL",
             )
             assert_equal(
                 sum(event["method"] == "Page.loadEventFired" for event in probe.events),
@@ -606,6 +630,7 @@ async def _fail_request(
         assert_equal(await _evaluate_value(probe.cdp, "6 * 7"), 42, "responsive next Document")
         return {
             "reason": reason, "fetchStage": stage, "requestId": request_id,
+            "requestedUrl": url, "failedUrl": failed_url,
             "networkErrorText": error_text, "activeUrlAfterFailure": snapshot.get("href"),
             "oldRealmRetained": snapshot.get("marker") == _OLD_DOCUMENT_MARKER,
             "nextActiveUrl": next_snapshot.get("href"), "outcome": outcome,

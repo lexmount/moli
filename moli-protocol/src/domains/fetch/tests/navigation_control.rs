@@ -322,21 +322,50 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_paused_navigation_commits_error_document_and_recovers() {
-    async fn handler() -> impl IntoResponse {
+    async fn handler(method: Method, headers: HeaderMap) -> impl IntoResponse {
         (
-            [(CONTENT_TYPE.as_str(), "text/html")],
+            [
+                (CONTENT_TYPE.as_str(), "text/html".to_owned()),
+                ("x-request-method", method.to_string()),
+                (
+                    "x-request-content-type",
+                    headers
+                        .get(CONTENT_TYPE)
+                        .map(|value| value.to_str().unwrap().to_owned())
+                        .unwrap_or_default(),
+                ),
+            ],
             "<html><body>next</body></html>",
         )
     }
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/failed", get(handler)))
-            .await
-            .unwrap();
+        let app = Router::new()
+            .route("/failed", any(handler))
+            .route(
+                "/redirect",
+                get(|| async { (StatusCode::FOUND, [("location", "/failed")]) }),
+            )
+            .route(
+                "/see-other",
+                any(|| async { axum::response::Redirect::to("/failed") }),
+            )
+            .route(
+                "/temporary",
+                any(|| async { axum::response::Redirect::temporary("/failed") }),
+            );
+        axum::serve(listener, app).await.unwrap();
     });
 
-    for stage in ["Request", "Response"] {
+    for (stage, route) in [
+        ("Request", "/failed"),
+        ("Response", "/failed"),
+        ("Request", "/redirect"),
+        ("Response", "/redirect"),
+        ("Response", "/see-other"),
+        ("Response", "/temporary"),
+    ] {
         for (reason, error_text) in [
             ("BlockedByClient", "net::ERR_BLOCKED_BY_CLIENT"),
             ("TimedOut", "net::ERR_TIMED_OUT"),
@@ -357,29 +386,116 @@ async fn failed_paused_navigation_commits_error_document_and_recovers() {
             ctx.sent.clear();
 
             let failed_url = format!("http://{addr}/failed");
+            let initial_url = format!("http://{addr}{route}");
+            let override_post = matches!(route, "/see-other" | "/temporary");
+            if override_post {
+                ctx.process_async(json!({
+                    "id": 317, "method": "Network.enable", "sessionId": "SID-1"
+                }))
+                .await;
+                ctx.expect_result(317, json!({}), Some("SID-1"));
+                ctx.process_async(json!({
+                    "id": 316, "method": "Network.setExtraHTTPHeaders", "sessionId": "SID-1",
+                    "params": {"headers": {"Content-Type": "text/plain", "X-Request": "preserved"}}
+                }))
+                .await;
+                ctx.expect_result(316, json!({}), Some("SID-1"));
+            }
             ctx.process_async(json!({
                 "id": 306, "method": "Fetch.enable", "sessionId": "SID-1",
                 "params": {"patterns": [{
-                    "urlPattern": failed_url, "resourceType": "Document", "requestStage": stage
+                    "urlPattern": if override_post { &initial_url } else { &failed_url },
+                    "resourceType": "Document",
+                    "requestStage": if override_post { "Request" } else { stage }
                 }]}
             }))
             .await;
             ctx.expect_result(306, json!({}), Some("SID-1"));
             ctx.process_async(json!({
                 "id": 307, "method": "Page.navigate", "sessionId": "SID-1",
-                "params": {"url": failed_url}
+                "params": {"url": initial_url}
             }))
             .await;
             wait_until_scheduler_message(&mut ctx, "main-document Fetch pause", |message| {
                 message["method"] == json!("Fetch.requestPaused")
             })
             .await;
+            if override_post {
+                let request = ctx
+                    .sent
+                    .iter()
+                    .find(|message| message["method"] == "Fetch.requestPaused")
+                    .unwrap()
+                    .clone();
+                // Let the transport follow redirects internally, as it does
+                // when only response-stage interception is configured.
+                ctx.process_async(json!({
+                    "id": 314, "method": "Fetch.enable", "sessionId": "SID-1",
+                    "params": {"patterns": [{
+                        "urlPattern": failed_url, "resourceType": "Document",
+                        "requestStage": "Response"
+                    }]}
+                }))
+                .await;
+                ctx.expect_result(314, json!({}), Some("SID-1"));
+                ctx.process_async(json!({
+                    "id": 315, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+                    "params": {
+                        "requestId": request["params"]["requestId"], "method": "POST",
+                        "postData": BASE64_STANDARD.encode(b"body"), "interceptResponse": true
+                    }
+                }))
+                .await;
+                wait_until_scheduler_message(&mut ctx, "redirect response pause", |message| {
+                    message["method"] == "Fetch.requestPaused"
+                        && message["params"]["responseStatusCode"] == 200
+                })
+                .await;
+                ctx.expect_result(315, json!({}), Some("SID-1"));
+            }
             let pause = ctx
                 .sent
                 .iter()
-                .find(|message| message["method"] == "Fetch.requestPaused")
+                .find(|message| {
+                    message["method"] == "Fetch.requestPaused"
+                        && message["params"]["responseStatusCode"].is_number()
+                            == (stage == "Response")
+                })
                 .unwrap()
                 .clone();
+            assert_eq!(pause["params"]["request"]["url"], failed_url);
+            if override_post {
+                let expected_method = if route == "/temporary" { "POST" } else { "GET" };
+                let expected_content_type = if route == "/temporary" {
+                    "text/plain"
+                } else {
+                    ""
+                };
+                assert_eq!(pause["params"]["request"]["method"], expected_method);
+                let headers = pause["params"]["request"]["headers"].as_object().unwrap();
+                let header_value = |name: &str| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .and_then(|(_, value)| value.as_str())
+                        .unwrap_or_default()
+                };
+                assert_eq!(header_value("X-Request"), "preserved", "{pause:?}");
+                assert_eq!(header_value("Content-Type"), expected_content_type);
+                for (name, value) in [
+                    ("x-request-method", expected_method),
+                    ("x-request-content-type", expected_content_type),
+                ] {
+                    assert!(
+                        pause["params"]["responseHeaders"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|header| header["name"] == name && header["value"] == value),
+                        "server received different request metadata: {pause:?}"
+                    );
+                }
+            }
             assert_eq!(
                 pause["params"]["responseStatusCode"].is_number(),
                 stage == "Response"
@@ -440,6 +556,25 @@ async fn failed_paused_navigation_commits_error_document_and_recovers() {
                     "value": 42, "href": NETWORK_ERROR_PAGE_URL, "old": false, "field": null
                 }),
                 "{stage} {reason}: {evaluation:?}"
+            );
+            ctx.process_async(json!({
+                "id": 312, "method": "Page.getFrameTree", "sessionId": "SID-1"
+            }))
+            .await;
+            let frame_tree = take_response_by_id(&mut ctx, 312);
+            assert_eq!(
+                frame_tree["result"]["frameTree"]["frame"]["unreachableUrl"], failed_url,
+                "{route} {stage} {reason}: {frame_tree:?}"
+            );
+            ctx.process_async(json!({
+                "id": 313, "method": "Page.getNavigationHistory", "sessionId": "SID-1"
+            }))
+            .await;
+            let history = take_response_by_id(&mut ctx, 313);
+            let current_index = history["result"]["currentIndex"].as_u64().unwrap() as usize;
+            assert_eq!(
+                history["result"]["entries"][current_index]["url"], failed_url,
+                "{route} {stage} {reason}: {history:?}"
             );
 
             ctx.process_async(json!({"id": 310, "method": "Fetch.disable", "sessionId": "SID-1"}))
