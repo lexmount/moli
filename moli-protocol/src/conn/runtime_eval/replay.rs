@@ -276,19 +276,100 @@ impl CdpConnection {
             );
             return events;
         };
+        self.finish_renderer_call_replay_output(context, &owner, output, &mut events);
+        events
+    }
+
+    fn finish_renderer_call_replay_output(
+        &mut self,
+        context: RendererCallReplayContext,
+        owner: &CommandOwnerScope,
+        output: RendererRuntimeCommandOutput,
+        events: &mut Vec<BackgroundProtocolEvent>,
+    ) {
         if output
-            .protocol_response(context.correlation.renderer_call_id().get())
+            .protocol_response_payload(context.correlation.renderer_call_id().get())
             .is_some()
         {
             let _ = context.response_sender.send_output(output);
         } else {
-            let _ = self.route_renderer_runtime_command_output_for_owner_into(
-                output,
-                None,
-                &owner,
-                &mut events,
-            );
+            let _ = self
+                .route_renderer_runtime_command_output_for_owner_into(output, None, owner, events);
         }
-        events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_response_forwarding_keeps_the_source_and_delivered_payload_opaque() {
+        for body in [
+            format!(
+                r#""result":{{"scriptSource":"{}"}}"#,
+                "x".repeat(1024 * 1024)
+            ),
+            format!(
+                r#""result":{{"value":{}0{}}}"#,
+                "[".repeat(150),
+                "]".repeat(150)
+            ),
+            r#""error":{"code":-32000,"message":"\ud800"}"#.to_owned(),
+        ] {
+            let mut conn = CdpConnection::default();
+            let mut browser = BrowserContext::new("BID-raw-replay".to_owned());
+            browser.set_active_target_id("TID-raw-replay");
+            browser.attach_active_session("SID-raw-replay");
+            conn.install_browser_context_fixture_for_test(browser);
+            let attachment = RendererAgentAttachmentId::allocate();
+            let command = ParsedCdpCommand::parse_str(
+                r#"{"id":73,"method":"Debugger.getScriptSource","params":{"scriptId":"1"}}"#,
+            )
+            .unwrap();
+            let (correlation, response_sender, receiver) = conn
+                .try_register_renderer_call_for_session_owner(
+                    Some("SID-raw-replay"),
+                    73,
+                    Some(attachment),
+                    RendererCommandDescriptor::from_frontend_policy(
+                        command.json().to_owned(),
+                        command.renderer_policy(),
+                        RendererInspectorResponseDelivery::AdapterReply,
+                    ),
+                )
+                .unwrap()
+                .into_parts();
+            let call_id = correlation.renderer_call_id().get();
+            let raw = format!(r#"{{"id":{call_id},{body}}}"#);
+            let source = InspectorJson::from_slice(raw.as_bytes()).unwrap();
+            let output = RendererRuntimeCommandOutput::from_inspector_message(
+                RendererRuntimeInspectorMessage::protocol(source.clone()),
+            );
+            let context = RendererCallReplayContext {
+                frontend_session_id: Some("SID-raw-replay".to_owned()),
+                correlation,
+                delivery: RendererInspectorResponseDelivery::AdapterReply,
+                response_sender,
+                attachment,
+            };
+            let owner = CommandOwnerScope::capture(&conn, Some("SID-raw-replay"));
+            let mut events = Vec::new();
+            assert!(!source.is_materialized());
+
+            conn.finish_renderer_call_replay_output(context, &owner, output, &mut events);
+
+            assert!(events.is_empty());
+            assert!(!source.is_materialized());
+            let completion = receiver.unwrap().try_recv().unwrap();
+            assert_eq!(completion.call_id, call_id);
+            assert_eq!(completion.renderer_agent_attachment_id(), Some(attachment));
+            let payload = completion
+                .output
+                .protocol_response_payload(call_id)
+                .unwrap();
+            assert!(!payload.is_materialized());
+            assert_eq!(payload.to_string(), raw);
+        }
     }
 }
