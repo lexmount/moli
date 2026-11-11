@@ -1216,6 +1216,31 @@ fn serializes_service_worker_target_lifecycle_automation_events_to_context_event
 }
 
 #[test]
+fn alert_close_acknowledgement_is_independent_of_the_handling_decision() {
+    for (prompt_type, accepted, expected) in [
+        ("alert", false, true),
+        ("alert", true, true),
+        ("confirm", false, false),
+        ("confirm", true, true),
+        ("prompt", false, false),
+        ("prompt", true, true),
+    ] {
+        let closed = super::super::bidi_event_from_automation_event(
+            &AutomationEvent::UserPromptClosed(UserPromptClosedEvent {
+                target_id: Some(DevToolsTargetId::from("TARGET-1")),
+                frame_id: DevToolsFrameId::from("FRAME-1"),
+                prompt_type: prompt_type.to_owned(),
+                accepted,
+                user_text: String::new(),
+            }),
+        )
+        .expect("typed close event");
+        assert_eq!(closed["params"]["accepted"], expected, "{prompt_type}");
+        assert_eq!(closed["params"]["type"], prompt_type);
+    }
+}
+
+#[test]
 fn serializes_user_prompt_events_to_bidi_browsing_context_events() {
     let opened = super::super::bidi_event_from_protocol_message(&json!({
         "method": "Page.javascriptDialogOpening",

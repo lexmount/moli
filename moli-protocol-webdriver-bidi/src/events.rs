@@ -363,9 +363,11 @@ pub(crate) fn user_prompt_opened_event(
 }
 
 fn user_prompt_closed_event(event: &UserPromptClosedEvent) -> Option<Value> {
+    // HTML acknowledges alert closures regardless of the handling decision.
+    let accepted = event.prompt_type == "alert" || event.accepted;
     let mut params = json!({
         "context": event.frame_id.as_str(),
-        "accepted": event.accepted,
+        "accepted": accepted,
         "type": event.prompt_type,
     });
     if event.prompt_type == "prompt"

@@ -15,6 +15,111 @@ async fn dialog_session(
 }
 
 #[tokio::test]
+async fn websocket_bidi_alert_dismissal_reports_acknowledged_close() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    for (prompt_type, handler, accepted, expected_result) in [
+        ("alert", "dismiss", true, json!({"type": "undefined"})),
+        ("alert", "ignore", true, json!({"type": "undefined"})),
+        (
+            "confirm",
+            "dismiss",
+            false,
+            json!({"type": "boolean", "value": false}),
+        ),
+    ] {
+        let mut behavior = json!({"default": "ignore"});
+        behavior[prompt_type] = json!(handler);
+        let (mut socket, context) = dialog_session(addr, behavior).await;
+        let subscribed = send_bidi_command(
+            &mut socket,
+            3,
+            "session.subscribe",
+            json!({"events": ["browsingContext.userPromptOpened", "browsingContext.userPromptClosed"]}),
+        )
+        .await;
+        assert_eq!(subscribed["type"], "success");
+        socket
+            .send(WsMessage::Text(
+                json!({
+                    "id": 4, "method": "script.evaluate", "params": {
+                        "expression": format!("{prompt_type}('acknowledged close')"),
+                        "target": {"context": context}, "awaitPromise": false,
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let mut messages = Vec::new();
+        if handler == "ignore" {
+            messages = collect_bidi_messages_until_method_count(
+                &mut socket,
+                messages,
+                "browsingContext.userPromptOpened",
+                1,
+            )
+            .await;
+            socket
+                .send(WsMessage::Text(
+                    json!({
+                        "id": 5, "method": "browsingContext.handleUserPrompt", "params": {
+                            "context": context, "accept": false,
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        messages = collect_bidi_messages_until(
+            &mut socket,
+            messages,
+            |messages| {
+                messages.iter().any(|message| message["id"] == 4)
+                    && (handler != "ignore" || messages.iter().any(|message| message["id"] == 5))
+                    && bidi_events_by_method(messages, "browsingContext.userPromptOpened").len()
+                        == 1
+                    && bidi_events_by_method(messages, "browsingContext.userPromptClosed").len()
+                        == 1
+            },
+            "dismissal responses and close event",
+        )
+        .await;
+        let opened = bidi_events_by_method(&messages, "browsingContext.userPromptOpened");
+        assert_eq!(opened[0]["params"]["handler"], handler);
+        let closed = bidi_events_by_method(&messages, "browsingContext.userPromptClosed");
+        assert_eq!(closed[0]["params"]["type"], prompt_type);
+        assert_eq!(
+            closed[0]["params"]["accepted"], accepted,
+            "{prompt_type}/{handler}"
+        );
+        assert_eq!(
+            bidi_message_by_id(&messages, 4)["result"]["result"],
+            expected_result
+        );
+        if handler == "ignore" {
+            assert_eq!(bidi_message_by_id(&messages, 5)["type"], "success");
+        }
+        let repeated = send_bidi_command(
+            &mut socket,
+            6,
+            "browsingContext.handleUserPrompt",
+            json!({"context": context}),
+        )
+        .await;
+        assert_bidi_error(
+            &repeated,
+            "no such alert",
+            "dialog acknowledgement is one-shot",
+        );
+        socket.close(None).await.unwrap();
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_ignored_dialog_returns_the_handled_result() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut socket, context) = dialog_session(addr, json!({"default": "ignore"})).await;
