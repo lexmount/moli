@@ -797,17 +797,12 @@ impl ScriptVm {
                     | PendingSubresourceContinuation::Beacon(_)
             ))
         .then(|| {
-            if !started.head.redirect_chain.is_empty()
-                && !window_fetch_redirect_policy_was_checked(&pending, &started.head)
-            {
-                detached_window_fetch_csp_redirect_failure_message(
-                    &self._context_host,
-                    &pending,
-                    &started.head.final_url,
-                )
-            } else {
-                None
-            }
+            detached_window_fetch_csp_response_failure_message(
+                &self._context_host,
+                &pending,
+                &started.head,
+                started.skip_fetch_security_validation,
+            )
             .or_else(|| {
                 if started.skip_fetch_security_validation {
                     return None;
@@ -882,6 +877,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                skip_fetch_security_validation: started.skip_fetch_security_validation,
                 response_filter: started.response_filter,
                 pending,
                 request_url: started.request_url,
@@ -1029,17 +1025,13 @@ impl ScriptVm {
                     pending.execution_context.dispatch_scope(),
                 );
 
-            let streaming_start_error = if !started.head.redirect_chain.is_empty()
-                && !window_fetch_redirect_policy_was_checked(&pending, &started.head) {
-                document_connect_csp_redirect_failure_message(
+            let streaming_start_error = document_connect_csp_response_failure_message(
                     scope,
                     &self._context_host,
                     &pending,
-                    &started.head.final_url,
+                    &started.head,
+                    started.skip_fetch_security_validation,
                 )
-            } else {
-                None
-            }
             .or_else(|| {
                 if started.skip_fetch_security_validation {
                     return None;
@@ -1052,7 +1044,7 @@ impl ScriptVm {
                 )
                 .then(|| {
                     crate::network_host::validate_fetch_response_headers(
-                        &pending.request_origin(),
+                        &pending.request_origin,
                         &started.head,
                         pending.request_mode,
                         pending.network_credentials_mode(),
@@ -1266,11 +1258,15 @@ impl ScriptVm {
             }
 
             let mut observable_head = started.head.clone();
-            if pending.info.resource_type == SubresourceResourceType::Xhr && !started.response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
-                observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
-                    &pending.request_origin,
+            if pending.info.resource_type == SubresourceResourceType::Xhr {
+                let filter = window_subresource_response_filter(
+                    &pending,
                     &observable_head,
-                    pending.credentials_mode,
+                    &started.request_method,
+                    started.response_filter.as_ref(),
+                );
+                observable_head.headers = crate::network_host::xhr_response_headers_for_filter(
+                    &pending.request_origin, &observable_head, &filter, pending.credentials_mode,
                     pending.load.request_client().web_security_disabled(),
                 );
             }
@@ -1335,6 +1331,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: started.skip_fetch_security_validation,
                         response_filter: started.response_filter,
                         pending,
                         request_url: started.request_url.clone(),
@@ -1515,6 +1512,7 @@ impl ScriptVm {
             let disk_pool = pending.load.request_client().disk_pool();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
+                        skip_fetch_security_validation: started.skip_fetch_security_validation,
                         response_filter: started.response_filter,
                     pending,
                     request_url: started.request_url.clone(),
@@ -2322,6 +2320,12 @@ impl ScriptVm {
                             trace_fields,
                             close_started,
                         );
+                        let filter = window_subresource_response_filter(
+                            &streaming.pending,
+                            &streaming.head,
+                            &streaming.request_method,
+                            streaming.response_filter.as_ref(),
+                        );
                         let record_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         let request_handle = streaming.pending.info.network_request_handle;
@@ -2382,7 +2386,6 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
-                        let request_origin = streaming.pending.request_origin();
                         if let PendingSubresourceContinuation::Xhr { xhr, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -2391,19 +2394,14 @@ impl ScriptVm {
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
-                            if !streaming
-                                .response_filter
-                                .as_ref()
-                                .is_some_and(|filter| filter.is_readable())
-                            {
-                                observable_head.headers =
-                                    crate::network_host::filter_cors_exposed_response_headers(
-                                        &request_origin,
-                                        &observable_head,
-                                        streaming.pending.credentials_mode,
-                                        streaming.pending.load.request_client().web_security_disabled(),
-                                    );
-                            }
+                            observable_head.headers =
+                                crate::network_host::xhr_response_headers_for_filter(
+                                    &streaming.pending.request_origin,
+                                    &observable_head,
+                                    &filter,
+                                    streaming.pending.credentials_mode,
+                                    streaming.pending.load.request_client().web_security_disabled(),
+                                );
                             // XHR still exposes a complete response at DONE. Keep the
                             // network transfer and CDP record streaming/spooled, and
                             // materialize only at this Web-visible completion boundary.

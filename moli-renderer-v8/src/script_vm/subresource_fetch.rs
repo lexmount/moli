@@ -80,12 +80,16 @@ fn validate_pending_window_fetch_integrity(
     )
 }
 
-fn document_connect_csp_redirect_failure_message<'s>(
+fn document_connect_csp_response_failure_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context_host: &Rc<RefCell<PageScriptHost>>,
     pending: &PendingSubresourceFetchState,
-    final_url: &Url,
+    head: &moli_fetch::ResponseHead,
+    trusted_response: bool,
 ) -> Option<String> {
+    if !trusted_response && head.redirect_chain.is_empty() {
+        return None;
+    }
     if !matches!(
         pending.info.resource_type,
         SubresourceResourceType::EventSource
@@ -96,7 +100,9 @@ fn document_connect_csp_redirect_failure_message<'s>(
     }
 
     let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
-    if redirect_state.was_checked(final_url) {
+    if redirect_state.was_checked(&head.final_url)
+        || window_fetch_redirect_policy_was_checked(pending, head)
+    {
         return None;
     }
     let operation = match pending.info.resource_type {
@@ -106,8 +112,13 @@ fn document_connect_csp_redirect_failure_message<'s>(
     };
     // Synthetic responses still need validation against the accepting Document,
     // while the producer already checked every real redirect before sending it.
+    let redirect_status = if head.redirect_chain.is_empty() {
+        ContentSecurityPolicyRedirectStatus::NoRedirect
+    } else {
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect
+    };
     let (report_only, enforced) = policy
-        .check_redirect(&pending.info.document_url, final_url)
+        .check_url(&pending.info.document_url, &head.final_url, redirect_status)
         .into_violations();
     let mut failure = None;
     for (is_enforced, mut violation) in report_only
@@ -182,23 +193,30 @@ fn window_fetch_redirect_policy_was_checked(
         })
 }
 
-fn detached_window_fetch_csp_redirect_failure_message(
+fn detached_window_fetch_csp_response_failure_message(
     context_host: &Rc<RefCell<PageScriptHost>>,
     pending: &PendingSubresourceFetchState,
-    final_url: &Url,
+    head: &moli_fetch::ResponseHead,
+    trusted_response: bool,
 ) -> Option<String> {
-    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
-    if redirect_state.was_checked(final_url) {
+    if !trusted_response && head.redirect_chain.is_empty() {
         return None;
     }
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(&head.final_url)
+        || window_fetch_redirect_policy_was_checked(pending, head)
+    {
+        return None;
+    }
+    let redirect_status = if head.redirect_chain.is_empty() {
+        ContentSecurityPolicyRedirectStatus::NoRedirect
+    } else {
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect
+    };
     let (reports, enforced) = policy
-        .check_url(
-            &pending.info.document_url,
-            final_url,
-            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
-        )
+        .check_url(&pending.info.document_url, &head.final_url, redirect_status)
         .into_violations();
-    let error = enforced.first().map(|violation| {
+    let failure = enforced.first().map(|violation| {
         crate::document_runtime::document_content_security_policy_error_message(violation, "fetch")
     });
     for mut violation in reports.into_iter().chain(enforced) {
@@ -212,7 +230,28 @@ fn detached_window_fetch_csp_redirect_failure_message(
             &violation,
         );
     }
-    error
+    failure
+}
+
+fn window_subresource_response_filter(
+    pending: &PendingSubresourceFetchState,
+    head: &moli_fetch::ResponseHead,
+    method: &str,
+    supplied: Option<&crate::types::AsyncSubresourceFetchResponseFilter>,
+) -> crate::types::AsyncSubresourceFetchResponseFilter {
+    supplied.cloned().unwrap_or_else(|| {
+        crate::network_host::FetchResponseRequest {
+            method,
+            mode: pending.request_mode,
+            redirect_mode: pending
+                .continuation
+                .window_fetch()
+                .map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+                    fetch.redirect_mode()
+                }),
+        }
+        .network_response_filter(&pending.request_origin, head, pending.credentials_mode)
+    })
 }
 
 enum MediaSubresourceTerminal<'a> {
@@ -733,4 +772,90 @@ fn trace_async_subresource_stage(
             elapsed_us = %started.elapsed().as_micros(),
         );
     }
+}
+
+fn document_connect_csp_redirect_failure_message<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
+    pending: &PendingSubresourceFetchState,
+    final_url: &Url,
+) -> Option<String> {
+    if !matches!(
+        pending.info.resource_type,
+        SubresourceResourceType::EventSource
+            | SubresourceResourceType::Fetch
+            | SubresourceResourceType::Xhr
+    ) {
+        return None;
+    }
+
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(final_url) {
+        return None;
+    }
+    let operation = match pending.info.resource_type {
+        SubresourceResourceType::EventSource => "EventSource",
+        SubresourceResourceType::Xhr => "XMLHttpRequest",
+        _ => "fetch",
+    };
+    // Synthetic responses still need validation against the accepting Document,
+    // while the producer already checked every real redirect before sending it.
+    let (report_only, enforced) = policy
+        .check_redirect(&pending.info.document_url, final_url)
+        .into_violations();
+    let mut failure = None;
+    for (is_enforced, mut violation) in report_only
+        .into_iter()
+        .map(|violation| (false, violation))
+        .chain(enforced.into_iter().map(|violation| (true, violation)))
+    {
+        report_window_csp_redirect_violation(
+            scope,
+            context_host,
+            report_context,
+            &pending.info.url,
+            &mut violation,
+        );
+        if is_enforced && failure.is_none() {
+            failure = Some(
+                crate::document_runtime::document_content_security_policy_error_message(
+                    &violation, operation,
+                ),
+            );
+        }
+    }
+    failure
+}
+
+fn detached_window_fetch_csp_redirect_failure_message(
+    context_host: &Rc<RefCell<PageScriptHost>>,
+    pending: &PendingSubresourceFetchState,
+    final_url: &Url,
+) -> Option<String> {
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(final_url) {
+        return None;
+    }
+    let (reports, enforced) = policy
+        .check_url(
+            &pending.info.document_url,
+            final_url,
+            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+        )
+        .into_violations();
+    let error = enforced.first().map(|violation| {
+        crate::document_runtime::document_content_security_policy_error_message(violation, "fetch")
+    });
+    for mut violation in reports.into_iter().chain(enforced) {
+        violation.blocked_uri =
+            crate::content_security_policy::csp_url_for_report(&pending.info.url);
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+            .apply_to(&mut violation);
+        crate::network_host::send_content_security_policy_violation_report_from_window_context(
+            &mut context_host.borrow_mut(),
+            report_context,
+            &violation,
+        );
+    }
+    error
 }

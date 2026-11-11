@@ -1170,10 +1170,10 @@ impl ScriptVm {
                 host.window_redirect_owner(internal_id),
             )
         };
+        let preflight_headers = request.request_headers.to_byte_strings();
         let request = completion_tx.observe_subresource_request(request, internal_id);
         let request =
             crate::network_host::observe_async_xhr_upload(request, &completion_tx, internal_id);
-        let preflight_request_headers = request.request_headers.to_byte_strings();
         task_runner.spawn(async move {
             let result = if let Some(error) = source_policy_error {
                 Err(error)
@@ -1191,7 +1191,7 @@ impl ScriptVm {
                     request_client,
                     request,
                     cancel_handle,
-                    preflight_request_headers,
+                    preflight_headers,
                     redirect_owner.as_ref(),
                 )
                 .await

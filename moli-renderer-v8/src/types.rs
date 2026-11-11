@@ -772,10 +772,6 @@ impl PendingSubresourceFetchState {
             .network_credentials_mode(self.request_mode, self.credentials_mode)
     }
 
-    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
-        self.request_origin.clone()
-    }
-
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
@@ -1500,6 +1496,7 @@ impl StreamingSubresourceBody {
 }
 
 pub(super) struct StreamingSubresourceFetchState {
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
