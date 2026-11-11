@@ -544,6 +544,7 @@ fn service_worker_request_cache_label(cache_mode: RequestCacheMode) -> &'static 
 pub(crate) enum ServiceWorkerRequestDestination {
     Empty,
     Audio,
+    AudioWorklet,
     Document,
     Font,
     Iframe,
@@ -566,6 +567,7 @@ impl ServiceWorkerRequestDestination {
         match self {
             Self::Empty => "",
             Self::Audio => "audio",
+            Self::AudioWorklet => "audioworklet",
             Self::Document => "document",
             Self::Font => "font",
             Self::Iframe => "iframe",

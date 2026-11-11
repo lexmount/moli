@@ -439,6 +439,7 @@ pub(super) fn evaluate_module_worker_bootstrap_source(
         target: WorkerModuleTreeTarget::Bootstrap,
         options: WorkerModuleGraphFetchOptions {
             root_source_location: None,
+            referrer_url: root_url.clone(),
             initiator_url: static_import_initiator_url.unwrap_or(root_url),
             csp_source: WorkerModuleGraphFetchCspSource::StaticModuleGraph,
             browser_request_metadata: BrowserRequestMetadata::Worker,
@@ -848,6 +849,7 @@ pub(super) fn run_next_worker_dynamic_module_import(scope: &mut v8::PinScope<'_,
     });
     let options = WorkerModuleGraphFetchOptions {
         root_source_location: Some((key.clone(), job.source_location.clone())),
+        referrer_url: job.base_url.clone(),
         initiator_url: job.fetch_initiator_url.clone(),
         csp_source: WorkerModuleGraphFetchCspSource::DynamicImportGraph,
         browser_request_metadata: job.browser_request_metadata(),
@@ -1399,6 +1401,7 @@ struct WorkerDynamicModuleEvaluation {
 #[derive(Clone)]
 struct WorkerModuleGraphFetchOptions {
     initiator_url: Url,
+    referrer_url: Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     referrer_policy: Option<String>,
     browser_request_metadata: BrowserRequestMetadata,
@@ -1410,6 +1413,7 @@ pub(super) struct WorkerModuleGraphFetchRequest {
     fetch_id: WorkerModuleGraphFetchId,
     key: WorkerModuleKey,
     initiator_url: Url,
+    referrer_url: Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     credentials_mode: RequestCredentialsMode,
     referrer_policy: Option<String>,
@@ -1428,6 +1432,7 @@ impl WorkerModuleGraphFetchRequest {
         fetch_id: WorkerModuleGraphFetchId,
         key: WorkerModuleKey,
         initiator_url: Url,
+        referrer_url: Url,
         csp_source: WorkerModuleGraphFetchCspSource,
         credentials_mode: RequestCredentialsMode,
         referrer_policy: Option<String>,
@@ -1437,6 +1442,7 @@ impl WorkerModuleGraphFetchRequest {
             fetch_id,
             key,
             initiator_url,
+            referrer_url,
             csp_source,
             credentials_mode,
             referrer_policy,
@@ -1471,6 +1477,10 @@ impl WorkerModuleGraphFetchRequest {
 
     pub(super) fn initiator_url(&self) -> &Url {
         &self.initiator_url
+    }
+
+    pub(super) fn referrer_url(&self) -> &Url {
+        &self.referrer_url
     }
 
     pub(super) fn csp_source(&self) -> WorkerModuleGraphFetchCspSource {
@@ -2744,14 +2754,11 @@ fn audio_worklet_dynamic_import(
 }
 
 fn audio_worklet_bootstrap_module_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {
-    let global = scope.get_current_context().global(scope);
-    global
-        .get(
-            scope,
-            v8str(scope, "__moliAudioWorkletBootstrapModuleUrl").into(),
-        )
-        .and_then(|value| value.to_string(scope))
-        .and_then(|value| Url::parse(&value.to_rust_string_lossy(scope)).ok())
+    super::global_scope::get_worker_state(scope)?
+        .borrow()
+        .audio_worklet_fetch_context
+        .as_ref()
+        .map(|context| context.module_url.clone())
 }
 
 fn reject_audio_worklet_dynamic_import<'s>(

@@ -112,6 +112,11 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         }
     };
     let worker = args.this();
+    let audio_worklet_module_url = v8::Local::<v8::Object>::try_from(args.get(1))
+        .ok()
+        .and_then(|options| get_private_value(scope, options, AUDIO_WORKLET_WORKER_OPTION_SLOT))
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .and_then(|value| Url::parse(&value.to_rust_string_lossy(scope)).ok());
     WorkerObjectDeclaration::new()
         .initialize(scope, worker)
         .expect("Worker declaration should initialize");
@@ -304,14 +309,32 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             };
             let parent_service_worker_client_id =
                 host.service_worker_client_id_for_worker_owner(owner_scope);
-            let reserved_service_worker_client_id =
+            let reserved_service_worker_client_id = if audio_worklet_module_url.is_some() {
+                None
+            } else {
                 reserve_inherited_service_worker_worker_client_for_local_script(
                     host.browser_context_runtime(),
                     &resolved_url,
                     creator_storage_key.serialized_storage_key(),
                     secure_context,
                     parent_service_worker_client_id,
-                );
+                )
+            };
+            let audio_worklet_fetch_context = audio_worklet_module_url.map(|module_url| {
+                let document_url = creator_document_loader
+                    .fetch_context()
+                    .document_url()
+                    .clone();
+                crate::worker::AudioWorkletFetchContext {
+                    module_url,
+                    referrer_url: host
+                        .document_referrer_source_url_for_dispatch_scope(dispatch_scope)
+                        .unwrap_or_else(|| document_url.clone()),
+                    document_url,
+                    origin: creator_document_loader.fetch_context().request_origin(),
+                    service_worker_client_id: parent_service_worker_client_id,
+                }
+            });
             let mut worker_policy_context = creator_policy_context;
             if resolved_url.scheme() == "data" {
                 worker_policy_context.cross_origin_isolated = false;
@@ -371,6 +394,9 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             );
             if let Some(client_id) = reserved_service_worker_client_id {
                 options = options.with_reserved_service_worker_client_id(client_id);
+            }
+            if let Some(context) = audio_worklet_fetch_context {
+                options = options.with_audio_worklet_fetch_context(context);
             }
             let wait_for_debugger = options.pause_evaluation_until_debugger;
             let worker_id = host.register_worker(
