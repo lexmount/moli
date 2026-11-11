@@ -204,6 +204,18 @@ pub(crate) fn structured_serialize_value<'s>(
     serialize_for_wire_for_runtime(scope, value)
 }
 
+/// Fetch serializes an abort reason synchronously, preserving native errors
+/// and object graphs. A cloning failure is caught and uses AbortError in the
+/// receiving realm; it must not replace the caller's own rejection reason.
+pub(crate) fn structured_serialize_fetch_abort_reason<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    reason: v8::Local<'s, v8::Value>,
+) -> Option<V8StructuredClonePayload> {
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    structured_serialize_value(&mut scope, reason)
+}
+
 pub(crate) fn structured_serialize_value_for_storage<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,

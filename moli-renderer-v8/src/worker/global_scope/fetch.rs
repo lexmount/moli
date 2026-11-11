@@ -1261,8 +1261,13 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
     };
     for (_, pending) in rejected {
         pending.timing.abort(scope);
+        let reason_payload = crate::context_bootstrap::structured_serialize_fetch_abort_reason(scope, reason);
+        if let Some(runtime) = state.borrow().service_worker_runtime.clone() && let Some(handle) = pending.load.fetch_cancel_handle() {
+            runtime.abort_controlled_fetch_with_handle_and_reason(&handle, reason_payload);
+        }
         pending.load.cancel();
         if let Some(body_source_id) = pending.streaming_body_source_id {
+
 
 
             crate::network_host::abort_pending_network_body_stream(scope, body_source_id, reason);
