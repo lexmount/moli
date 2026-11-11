@@ -18,9 +18,11 @@ use super::{
 };
 use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn project_inline_box_fragments<N>(
     world: &LayoutWorld<N>,
     owner: &LayoutBox<N>,
+    selected_fragment: Option<usize>,
     paint_space: PaintSpace,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
@@ -42,7 +44,10 @@ pub(super) fn project_inline_box_fragments<N>(
         - owner_layout.padding.right)
         .max(0.0);
 
-    for fragment in &context.fragments.boxes {
+    let fragments = selected_fragment.map_or(context.fragments.boxes.as_slice(), |index| {
+        &context.fragments.boxes[index..index + 1]
+    });
+    for fragment in fragments {
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
             continue;
         };

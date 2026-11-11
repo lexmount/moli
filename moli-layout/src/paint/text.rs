@@ -113,12 +113,20 @@ fn project_text_phase<N>(
             transform,
             local_cull,
             snapshot,
+            None,
         );
     }
 
     let text: Option<std::sync::Arc<str>> = (snapshot.retain_text_semantics
         && phase == TextPaintPhase::Foreground)
         .then(|| std::sync::Arc::from(context.text.as_str()));
+    let paint = TextRunPaint {
+        origin_x,
+        origin_y,
+        transform,
+        phase,
+        text,
+    };
     for (line_index, line) in text_layout.lines().enumerate() {
         let mut mapped_run = None;
         let mut cluster_ranges = Vec::new().into_iter();
@@ -152,7 +160,7 @@ fn project_text_phase<N>(
                 PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run,
             };
             let run = glyph_run.run();
-            if text.is_some() && mapped_run != Some(run.index()) {
+            if paint.text.is_some() && mapped_run != Some(run.index()) {
                 cluster_ranges = glyph_cluster_ranges(run).into_iter();
                 mapped_run = Some(run.index());
             }
@@ -160,7 +168,7 @@ fn project_text_phase<N>(
             // the same Parley run keep their original cluster associations.
             let clusters = cluster_ranges
                 .by_ref()
-                .take(if text.is_some() {
+                .take(if paint.text.is_some() {
                     glyph_run.glyphs().count()
                 } else {
                     0
@@ -177,22 +185,43 @@ fn project_text_phase<N>(
             let vertical_offset = line_placement
                 .map(|placement| placement.item_offset(item_index))
                 .unwrap_or_default();
-            let glyphs = glyph_run
-                .positioned_glyphs()
-                .map(|glyph| PaintGlyph {
-                    id: glyph.id,
-                    x: origin_x + glyph.x,
-                    y: origin_y + glyph.y + vertical_offset,
-                })
-                .collect::<Vec<_>>();
-            if glyphs.is_empty() {
-                continue;
-            }
-            let font = snapshot.intern_font(&run.font().font);
-            let synthesis = run.synthesis();
-            let glyph_embolden = if glyph_run.style().brush.synthetic_bold
-                && synthesis.embolden_with_threshold(0.0)
-            {
+            paint.project_run(&glyph_run, vertical_offset, clusters, snapshot);
+        }
+    }
+}
+
+struct TextRunPaint {
+    origin_x: f32,
+    origin_y: f32,
+    transform: LayoutTransform2D,
+    phase: TextPaintPhase,
+    text: Option<std::sync::Arc<str>>,
+}
+
+impl TextRunPaint {
+    fn project_run(
+        &self,
+        glyph_run: &parley::GlyphRun<'_, crate::stylo_to_parley::TextBrush>,
+        vertical_offset: f32,
+        clusters: Vec<std::ops::Range<usize>>,
+        snapshot: &mut PaintSnapshot,
+    ) {
+        let glyphs = glyph_run
+            .positioned_glyphs()
+            .map(|glyph| PaintGlyph {
+                id: glyph.id,
+                x: self.origin_x + glyph.x,
+                y: self.origin_y + glyph.y + vertical_offset,
+            })
+            .collect::<Vec<_>>();
+        if glyphs.is_empty() {
+            return;
+        }
+        let run = glyph_run.run();
+        let font = snapshot.intern_font(&run.font().font);
+        let synthesis = run.synthesis();
+        let glyph_embolden =
+            if glyph_run.style().brush.synthetic_bold && synthesis.embolden_with_threshold(0.0) {
                 let font_size = run.font_size().max(0.0);
                 crate::PaintPoint::new(
                     (SYNTHETIC_EMBOLDEN_X_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
@@ -201,100 +230,234 @@ fn project_text_phase<N>(
             } else {
                 crate::PaintPoint::ZERO
             };
-            let owned_run = PaintGlyphRun {
-                font,
-                font_size: run.font_size(),
-                normalized_coords: run
-                    .normalized_coords()
-                    .iter()
-                    .map(|coord| coord.to_bits())
-                    .collect(),
-                color: if phase == TextPaintPhase::ClipMask {
-                    PaintColor::BLACK
-                } else {
-                    glyph_run.style().brush.color
-                },
-                glyph_skew_radians: synthesis.skew().map(f32::to_radians),
-                glyph_embolden,
-                glyphs,
-                text: text.as_ref().map(|text| crate::PaintTextSemantics {
-                    text: text.clone(),
-                    clusters,
-                }),
-                transform,
-                // Text clipping uses both fill and stroke as opaque ink,
-                // even when the authored stroke color is transparent.
-                stroke: glyph_run.style().brush.stroke.map(|mut stroke| {
-                    if phase == TextPaintPhase::ClipMask {
-                        stroke.color = PaintColor::BLACK;
-                    }
-                    stroke
-                }),
-            };
-            let brush = &glyph_run.style().brush;
-            if phase == TextPaintPhase::Foreground {
-                for shadow in brush.shadows.iter().rev() {
-                    snapshot.push_fragment(PaintFragment::TextShadow(PaintTextShadow {
-                        run: owned_run.clone(),
-                        color: shadow.color,
-                        offset: shadow.offset,
-                        blur_radius: shadow.blur_radius,
-                    }));
-                }
-            }
-
-            let metrics = run.font_metrics();
-            let baseline = origin_y + glyph_run.baseline() + vertical_offset;
-            let x = origin_x + glyph_run.offset();
-            let width = glyph_run.advance().max(0.0);
-            let decoration = brush.decoration;
-            let decoration_color = if phase == TextPaintPhase::ClipMask {
+        let owned_run = PaintGlyphRun {
+            font,
+            font_size: run.font_size(),
+            normalized_coords: run
+                .normalized_coords()
+                .iter()
+                .map(|coord| coord.to_bits())
+                .collect(),
+            color: if self.phase == TextPaintPhase::ClipMask {
                 PaintColor::BLACK
             } else {
-                decoration.color
-            };
-            let thickness = decoration
-                .thickness
-                .unwrap_or(metrics.underline_size.max(1.0))
-                .max(0.5);
-            let decoration_fragment = |y: f32| {
-                (width > 0.0 && decoration_color.alpha > 0.0).then_some(
-                    PaintFragment::TextDecoration(PaintTextDecoration {
-                        x,
-                        y,
-                        width,
-                        thickness,
-                        color: decoration_color,
-                        style: decoration.style,
-                        transform,
-                    }),
-                )
-            };
-            if decoration.underline {
-                let y = decoration.underline_offset.map_or_else(
-                    || baseline - metrics.underline_offset + thickness * 0.5,
-                    |offset| baseline + offset + thickness * 0.5,
-                );
-                if let Some(fragment) = decoration_fragment(y) {
-                    snapshot.push_fragment(fragment);
+                glyph_run.style().brush.color
+            },
+            glyph_skew_radians: synthesis.skew().map(f32::to_radians),
+            glyph_embolden,
+            glyphs,
+            text: self.text.as_ref().map(|text| crate::PaintTextSemantics {
+                text: text.clone(),
+                clusters,
+            }),
+            transform: self.transform,
+            // Text clipping uses both fill and stroke as opaque ink,
+            // even when the authored stroke color is transparent.
+            stroke: glyph_run.style().brush.stroke.map(|mut stroke| {
+                if self.phase == TextPaintPhase::ClipMask {
+                    stroke.color = PaintColor::BLACK;
                 }
+                stroke
+            }),
+        };
+        let brush = &glyph_run.style().brush;
+        if self.phase == TextPaintPhase::Foreground {
+            for shadow in brush.shadows.iter().rev() {
+                snapshot.push_fragment(PaintFragment::TextShadow(PaintTextShadow {
+                    run: owned_run.clone(),
+                    color: shadow.color,
+                    offset: shadow.offset,
+                    blur_radius: shadow.blur_radius,
+                }));
             }
-            if decoration.overline
-                && let Some(fragment) =
-                    decoration_fragment(baseline - metrics.ascent + thickness * 0.5)
-            {
-                snapshot.push_fragment(fragment);
-            }
+        }
 
-            snapshot.push_fragment(PaintFragment::GlyphRun(owned_run));
-
-            if decoration.line_through
-                && let Some(fragment) =
-                    decoration_fragment(baseline - metrics.strikethrough_offset + thickness * 0.5)
-            {
+        let metrics = run.font_metrics();
+        let baseline = self.origin_y + glyph_run.baseline() + vertical_offset;
+        let x = self.origin_x + glyph_run.offset();
+        let width = glyph_run.advance().max(0.0);
+        let decoration = brush.decoration;
+        let decoration_color = if self.phase == TextPaintPhase::ClipMask {
+            PaintColor::BLACK
+        } else {
+            decoration.color
+        };
+        let thickness = decoration
+            .thickness
+            .unwrap_or(metrics.underline_size.max(1.0))
+            .max(0.5);
+        let decoration_fragment = |y: f32| {
+            (width > 0.0 && decoration_color.alpha > 0.0).then_some(PaintFragment::TextDecoration(
+                PaintTextDecoration {
+                    x,
+                    y,
+                    width,
+                    thickness,
+                    color: decoration_color,
+                    style: decoration.style,
+                    transform: self.transform,
+                },
+            ))
+        };
+        if decoration.underline {
+            let y = decoration.underline_offset.map_or_else(
+                || baseline - metrics.underline_offset + thickness * 0.5,
+                |offset| baseline + offset + thickness * 0.5,
+            );
+            if let Some(fragment) = decoration_fragment(y) {
                 snapshot.push_fragment(fragment);
             }
         }
+        if decoration.overline
+            && let Some(fragment) = decoration_fragment(baseline - metrics.ascent + thickness * 0.5)
+        {
+            snapshot.push_fragment(fragment);
+        }
+
+        snapshot.push_fragment(PaintFragment::GlyphRun(owned_run));
+
+        if decoration.line_through
+            && let Some(fragment) =
+                decoration_fragment(baseline - metrics.strikethrough_offset + thickness * 0.5)
+        {
+            snapshot.push_fragment(fragment);
+        }
+    }
+}
+
+/// Borrow the shaped runs once per line; fragment-level events must not replay
+/// shaping iteration or copy the complete semantic text for every run.
+pub(super) struct InlineTextPaint<'a> {
+    context: &'a InlineFormattingContext,
+    text: Option<std::sync::Arc<str>>,
+    lines: std::collections::HashMap<usize, InlineTextLine<'a>>,
+}
+
+struct InlineTextLine<'a> {
+    items: Vec<PositionedLayoutItem<'a, crate::stylo_to_parley::TextBrush>>,
+    clusters: Vec<Vec<std::ops::Range<usize>>>,
+}
+
+impl<'a> InlineTextPaint<'a> {
+    pub(super) fn new(context: &'a InlineFormattingContext, retain_text: bool) -> Self {
+        Self {
+            context,
+            text: retain_text.then(|| std::sync::Arc::from(context.text.as_str())),
+            lines: std::collections::HashMap::new(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn project_run<N>(
+        &mut self,
+        layout_box: &LayoutBox<N>,
+        line_index: usize,
+        item_index: usize,
+        transform: LayoutTransform2D,
+        local_cull: Option<LayoutRect>,
+        metrics: &mut PaintProjectionMetrics,
+        snapshot: &mut PaintSnapshot,
+    ) {
+        let context = self.context;
+        let text_layout = context.laid_out.as_ref().unwrap();
+        let origin_x = layout_box.final_layout.border.left + layout_box.final_layout.padding.left;
+        let origin_y = layout_box.final_layout.border.top + layout_box.final_layout.padding.top;
+        let culled =
+            local_cull.is_some_and(|cull| {
+                context.fragments.lines.get(line_index).is_some_and(|line| {
+                    match line.paint_bounds {
+                        InlinePaintBounds::Empty => true,
+                        InlinePaintBounds::Unbounded => false,
+                        InlinePaintBounds::Bounded(bounds) => !rects_intersect(
+                            LayoutRect::new(
+                                origin_x + bounds.x,
+                                origin_y + bounds.y,
+                                bounds.width,
+                                bounds.height,
+                            ),
+                            cull,
+                        ),
+                    }
+                })
+            });
+        let line = self.lines.entry(line_index).or_insert_with(|| {
+            metrics.text_line_count = metrics.text_line_count.saturating_add(1);
+            if culled {
+                metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
+            }
+            let items = text_layout
+                .get(line_index)
+                .unwrap()
+                .items()
+                .collect::<Vec<_>>();
+            let mut mapped_run = None;
+            let mut ranges = Vec::new().into_iter();
+            let clusters = items
+                .iter()
+                .map(|item| {
+                    let PositionedLayoutItem::GlyphRun(glyphs) = item else {
+                        return Vec::new();
+                    };
+                    if self.text.is_none() && context.selection.is_none() {
+                        return Vec::new();
+                    }
+                    if mapped_run != Some(glyphs.run().index()) {
+                        ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+                        mapped_run = Some(glyphs.run().index());
+                    }
+                    ranges.by_ref().take(glyphs.glyphs().count()).collect()
+                })
+                .collect();
+            InlineTextLine { items, clusters }
+        });
+        if culled {
+            return;
+        }
+        let PositionedLayoutItem::GlyphRun(glyphs) = &line.items[item_index] else {
+            return;
+        };
+        if !glyphs.style().brush.paint {
+            return;
+        }
+        let clusters = std::mem::take(&mut line.clusters[item_index]);
+        if context.selection.is_some()
+            && let Some(range) = clusters
+                .iter()
+                .cloned()
+                .reduce(|range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end))
+        {
+            project_selection(
+                context,
+                text_layout,
+                origin_x,
+                origin_y,
+                transform,
+                local_cull,
+                snapshot,
+                Some(&range),
+            );
+        }
+        let paint = TextRunPaint {
+            origin_x,
+            origin_y,
+            transform,
+            phase: TextPaintPhase::Foreground,
+            text: self.text.clone(),
+        };
+        let vertical_offset = context
+            .line_placements
+            .get(line_index)
+            .map_or(0.0, |line| line.item_offset(item_index));
+        paint.project_run(
+            glyphs,
+            vertical_offset,
+            if paint.text.is_some() {
+                clusters
+            } else {
+                Vec::new()
+            },
+            snapshot,
+        );
     }
 }
 
@@ -322,6 +485,7 @@ fn glyph_cluster_ranges(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_selection(
     context: &InlineFormattingContext,
     text_layout: &parley::Layout<crate::stylo_to_parley::TextBrush>,
@@ -330,12 +494,20 @@ fn project_selection(
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
+    text_range: Option<&std::ops::Range<usize>>,
 ) {
     let Some(selection) = context.selection.as_ref() else {
         return;
     };
     match selection {
         InlineSelection::Range(range) => {
+            let range = text_range.map_or_else(
+                || range.clone(),
+                |text| range.start.max(text.start)..range.end.min(text.end),
+            );
+            if range.is_empty() {
+                return;
+            }
             let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
             let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
             Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
@@ -363,6 +535,11 @@ fn project_selection(
             });
         }
         InlineSelection::Caret { offset, color } => {
+            if text_range.is_some_and(|range| {
+                !(range.contains(offset) || *offset == context.text.len() && range.end == *offset)
+            }) {
+                return;
+            }
             let cursor = Cursor::from_byte_index(text_layout, *offset, Affinity::Downstream);
             let rect = cursor.geometry(text_layout, 1.5);
             let line_index = text_layout

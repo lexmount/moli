@@ -1433,22 +1433,48 @@ async fn get_node_for_location_hits_atomic_input_in_front_of_wrapping_label() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hits() {
+    assert_inline_hit_fixture(
+        include_str!("atomic_inline_hit_test.html"),
+        include_str!("atomic_inline_hit_test.js"),
+        &[
+            "input",
+            "atomic",
+            "inner",
+            "outer-atomic",
+            "inner-atomic",
+            "nested-inner",
+            "atomic-block",
+            "block-child",
+        ],
+        68,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_node_for_location_preserves_atomic_inline_local_and_sibling_paint_order() {
+    assert_inline_hit_fixture(
+        include_str!("atomic_inline_paint_order.html"),
+        include_str!("atomic_inline_paint_order.js"),
+        &[
+            "floating-order",
+            "later-order",
+            "atomic-top-order",
+            "bare-order",
+        ],
+        12,
+    )
+    .await;
+}
+
+async fn assert_inline_hit_fixture(html: &str, script: &str, ids: &[&str], sample_count: usize) {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    navigate_to_data_html_async(&mut ctx, 1, include_str!("atomic_inline_hit_test.html")).await;
+    navigate_to_data_html_async(&mut ctx, 1, html).await;
 
     let mut command_id = 2;
     let mut backend_ids = std::collections::HashMap::new();
-    for id in [
-        "input",
-        "atomic",
-        "inner",
-        "outer-atomic",
-        "inner-atomic",
-        "nested-inner",
-        "atomic-block",
-        "block-child",
-    ] {
+    for &id in ids {
         let backend_id = renderer_backend_node_id_for_live_expression(
             &mut ctx,
             command_id,
@@ -1464,7 +1490,7 @@ async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hi
         "id": command_id,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": format!("({})()", include_str!("atomic_inline_hit_test.js")),
+            "expression": format!("({script})()"),
             "returnByValue": true
         }
     }))
@@ -1473,7 +1499,7 @@ async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hi
     let samples = response["result"]["result"]["value"]
         .as_array()
         .unwrap_or_else(|| panic!("the hit-test fixture must return samples: {response}"));
-    assert_eq!(samples.len(), 68);
+    assert_eq!(samples.len(), sample_count);
 
     for sample in samples {
         command_id += 1;
@@ -1491,7 +1517,30 @@ async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hi
             "CDP must hit the descendant or atomic border at {sample}: {hit}"
         );
         assert_eq!(sample["elementFromPoint"], expected, "{sample}");
-        assert_eq!(sample["elementsFromPoint"], expected, "{sample}");
+        let expected_elements = sample["expectedElements"].as_str().unwrap_or(expected);
+        assert_eq!(sample["elementsFromPoint"], expected_elements, "{sample}");
+    }
+    if samples.iter().any(|sample| sample["pixel"].is_array()) {
+        use base64::Engine as _;
+        command_id += 1;
+        ctx.process_async(json!({"id": command_id, "method": "Page.captureScreenshot"}))
+            .await;
+        let response = take_response_by_id(&mut ctx, command_id);
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(response["result"]["data"].as_str().unwrap())
+            .unwrap();
+        let image = moli_image::decode_png(&png).unwrap();
+        for sample in samples.iter().filter(|sample| sample["pixel"].is_array()) {
+            let x = sample["x"].as_u64().unwrap() as u32;
+            let y = sample["y"].as_u64().unwrap() as u32;
+            assert!(x < image.width && y < image.height);
+            let offset = ((y * image.width + x) * 4) as usize;
+            assert_eq!(
+                json!(image.rgba[offset..offset + 4]),
+                sample["pixel"],
+                "{sample}"
+            );
+        }
     }
 }
 
