@@ -2,11 +2,11 @@ use super::super::delivery::{queue_xhr_failure_delivery, queue_xhr_response_deli
 use super::super::*;
 use super::request::PreparedXhrSendRequest;
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+    service_worker_fetch_request_metadata,
 };
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, RequestRedirectMode,
-    should_request_be_blocked_due_to_bad_port,
+    FetchCancelHandle, RequestRedirectMode, should_request_be_blocked_due_to_bad_port,
 };
 
 pub(super) fn record_intercepted_xhr(
@@ -122,11 +122,7 @@ pub(super) fn dispatch_service_worker_xhr(
         prepared.credentials_mode,
         RequestRedirectMode::Follow,
         None,
-        ServiceWorkerFetchRequestMetadata {
-            mixed_content_policy: Default::default(),
-            use_cors_preflight: prepared.use_cors_preflight,
-            ..ServiceWorkerFetchRequestMetadata::default()
-        },
+        service_worker_fetch_request_metadata(&prepared.request()),
     );
     let dispatch = ServiceWorkerFetchDispatch {
         request_body_owner: None,
@@ -313,24 +309,9 @@ pub(super) fn spawn_network_xhr_fetch(
     prepared: PreparedXhrSendRequest,
     request_client: ResourceRequestClient,
 ) -> u64 {
-    let mut request = Request::new_bytes(
-        &prepared.method,
-        prepared.resolved_url.as_str(),
-        prepared.send_body.clone(),
-        prepared.request_headers.clone(),
-    )
-    .expect("xhr request url was already resolved")
-    .with_initiator_url(&prepared.document_url)
-    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
-        document_referrer_policy: prepared.document_referrer_policy.clone(),
-        ..Default::default()
-    })
-    .with_request_origin(prepared.request_origin.clone())
-    .with_credentials_mode(prepared.credentials_mode)
-    .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
-    .with_use_cors_preflight(prepared.use_cors_preflight)
-    .with_subframe_context(prepared.frame_id.is_some());
+    let mut request = prepared
+        .request()
+        .with_subframe_context(prepared.frame_id.is_some());
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),

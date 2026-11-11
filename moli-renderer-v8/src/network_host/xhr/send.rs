@@ -26,7 +26,7 @@ use super::events::{
 use super::*;
 use crate::runtime::RendererPageContextCancelReason;
 use crossbeam_channel::{after, bounded, never};
-use moli_fetch::{BrowserRequestMetadata, FetchCancelHandle, RequestMode};
+use moli_fetch::{FetchCancelHandle, RequestMode};
 use std::{thread, time::Duration};
 
 pub(super) fn xhr_send_callback<'s>(
@@ -298,24 +298,7 @@ fn send_synchronous_network_xhr(
     timing.capture_window_initiator(scope, host);
     let csp = crate::network_host::WindowCspRequestContext::capture(scope, host, prepared.owner)
         .expect("synchronous XHR prepared a live Document request authority");
-    let mut request = Request::new_bytes(
-        &prepared.method,
-        prepared.resolved_url.as_str(),
-        prepared.send_body.clone(),
-        prepared.request_headers.clone(),
-    )
-    .expect("xhr request url was already resolved")
-    .with_page_network_policy()
-    .with_initiator_url(&prepared.document_url)
-    .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
-        document_referrer_policy: prepared.document_referrer_policy.clone(),
-        ..Default::default()
-    })
-    .with_request_origin(prepared.request_origin.clone())
-    .with_credentials_mode(prepared.credentials_mode)
-    .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
-    .with_use_cors_preflight(prepared.use_cors_preflight);
+    let mut request = prepared.request().with_page_network_policy();
     if let Some(check) = csp.redirect_check(
         scope,
         &prepared.document_url,
