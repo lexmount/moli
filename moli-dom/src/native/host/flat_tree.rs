@@ -31,16 +31,21 @@ impl DomHost {
     }
 
     pub fn active_modal_dialog_for_document(&self, document: DomHandle) -> Option<DomHandle> {
-        self.nodes().iter().rev().find_map(|node| {
-            if !node.is_connected() || self.owner_document_handle(node.id()) != Some(document) {
-                return None;
-            }
-            let element = node.as_element()?;
-            (element.is_html_element("dialog")
-                && element.dialog_modal()
-                && element.has_attribute("open"))
-            .then_some(node.id())
-        })
+        self.node(document)?
+            .as_document()?
+            .modal_dialogs()
+            .iter()
+            .rev()
+            .copied()
+            .find(|handle| {
+                self.is_connected(*handle)
+                    && self.owner_document_handle(*handle) == Some(document)
+                    && self.element(*handle).is_some_and(|element| {
+                        element.is_html_element("dialog")
+                            && element.dialog_modal()
+                            && element.has_attribute("open")
+                    })
+            })
     }
 
     pub fn is_inert_in_document(&self, node: DomHandle) -> bool {

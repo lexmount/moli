@@ -613,7 +613,9 @@ fn exec_command_select_all_target(
     runtime: &PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
-    let active_modal_dialog = current_modal_dialog(runtime, document_handle);
+    let active_modal_dialog = runtime
+        .dom_host()
+        .active_modal_dialog_for_document(document_handle);
     if let Some(active) = runtime.active_element_handle()
         && let Some(editing_host) = contenteditable_editing_host(runtime, active)
         && active_modal_dialog
@@ -631,27 +633,6 @@ fn exec_command_select_all_target(
         .body_handle(dom, document_handle)
         .or_else(|| document.document_element_handle(dom, document_handle))
         .or(Some(document_handle))
-}
-
-fn current_modal_dialog(runtime: &PageScriptHost, document: DomHandle) -> Option<DomHandle> {
-    runtime
-        .dom_host()
-        .dom()
-        .nodes()
-        .iter()
-        .rev()
-        .find_map(|node| {
-            if !node.is_connected()
-                || runtime.dom_host().owner_document_handle(node.id()) != Some(document)
-            {
-                return None;
-            }
-            let element = node.as_element()?;
-            (element.is_html_element("dialog")
-                && element.dialog_modal()
-                && element.attribute("open").is_some())
-            .then_some(node.id())
-        })
 }
 
 fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {

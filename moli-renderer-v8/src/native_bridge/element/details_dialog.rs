@@ -503,11 +503,15 @@ pub(crate) fn perform_dialog_escape_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
+    document: DomHandle,
 ) {
     if event_string_property(scope, event, "key").as_deref() != Some("Escape") {
         return;
     }
-    let Some(handle) = topmost_open_modal_dialog(unsafe { &*runtime_ptr }) else {
+    let Some(handle) = unsafe { &*runtime_ptr }
+        .dom_host()
+        .active_modal_dialog_for_document(document)
+    else {
         return;
     };
     let Some(cancel_event) = construct_simple_event(scope, "cancel", false, true, false) else {
@@ -517,26 +521,6 @@ pub(crate) fn perform_dialog_escape_default_action_for_dispatched_event(
     if outcome.allows_default() {
         close_dialog_element(scope, runtime_ptr, handle, None);
     }
-}
-
-/// Returns the last connected `<dialog>` that is open as a modal dialog.
-fn topmost_open_modal_dialog(runtime: &PageScriptHost) -> Option<DomHandle> {
-    runtime
-        .dom_host()
-        .dom()
-        .nodes()
-        .iter()
-        .rev()
-        .find_map(|node| {
-            if !node.is_connected() {
-                return None;
-            }
-            let element = node.as_element()?;
-            (element.is_html_element("dialog")
-                && element.dialog_modal()
-                && element.attribute("open").is_some())
-            .then_some(node.id())
-        })
 }
 
 fn event_string_property(
