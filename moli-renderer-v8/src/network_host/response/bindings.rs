@@ -19,12 +19,6 @@ struct ResponseInstanceDeclaration {
     status_text: String,
     #[webapi(slot = RESPONSE_OK_SLOT)]
     ok: bool,
-    #[webapi(slot = RESPONSE_URL_SLOT, init = "")]
-    url: (),
-    #[webapi(slot = RESPONSE_REDIRECTED_SLOT, init = false)]
-    redirected: (),
-    #[webapi(slot = RESPONSE_TYPE_SLOT, init = string("default"))]
-    response_type: (),
     #[webapi(slot = RESPONSE_BODY_USED_SLOT, init = false)]
     body_used: (),
 }
@@ -88,6 +82,8 @@ pub(crate) fn response_constructor_callback<'s>(
     ResponseInstanceDeclaration::new(status as f64, status_text, (200..300).contains(&status))
         .initialize(scope, obj)
         .expect("Response instance declaration should initialize");
+
+    super::metadata::set_response_metadata(scope, obj, &Default::default());
 
     let default_content_type = body.as_ref().and_then(|body| body.content_type.as_deref());
     install_response_headers(scope, obj, &init.headers, default_content_type);

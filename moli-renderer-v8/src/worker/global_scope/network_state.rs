@@ -74,7 +74,7 @@ impl WorkerFetchResponse {
         &self,
     ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
         match self {
-            Self::Filtered { filter, .. } => Some(*filter),
+            Self::Filtered { filter, .. } => Some(filter.clone()),
             _ => None,
         }
     }

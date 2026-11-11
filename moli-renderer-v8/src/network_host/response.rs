@@ -2,6 +2,9 @@ mod bindings;
 mod body_methods;
 mod cors;
 mod materialize;
+mod metadata;
+pub(in crate::network_host) use metadata::{RESPONSE_METADATA_SLOT, response_metadata_attribute};
+pub(crate) use metadata::{fetch_response_metadata, set_response_metadata};
 
 use super::headers::{
     HeadersGuard, build_headers_object_with_state, filter_headers_for_guard,
@@ -27,9 +30,8 @@ pub(crate) use self::materialize::materialize_response_object;
 pub(crate) use self::materialize::{
     FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode_with_filter,
-    build_fetch_response_object_from_stream_for_request_mode,
-    build_fetch_response_object_from_stream_for_request_mode_with_filter,
+    build_fetch_response_object_from_body_source_for_request_mode_with_metadata,
+    build_fetch_response_object_from_stream_for_request_mode_with_metadata,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
@@ -38,3 +40,6 @@ pub(crate) use self::materialize::{
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, network_response_filter,
 };
+
+#[cfg(test)]
+pub(crate) use materialize::build_fetch_response_object_from_stream_for_request_mode;
