@@ -109,9 +109,7 @@ pub(crate) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, install_request_bindings,
-    install_response_bindings, set_request_destination_for_service_worker_fetch_event,
-    set_request_mode_for_service_worker_fetch_event,
-    set_request_reload_navigation_for_service_worker_fetch_event,
+    install_response_bindings,
 };
 pub(in crate::network_host) use self::fetch_surface::{
     mark_request_object, request_slot_bool, request_slot_object, request_slot_value,
@@ -132,6 +130,7 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
+pub(crate) use self::request::build_service_worker_request_object;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{

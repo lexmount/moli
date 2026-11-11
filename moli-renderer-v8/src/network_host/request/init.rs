@@ -96,7 +96,7 @@ pub(super) struct RequestPriorityWebIdl(pub(super) FetchPriorityHint);
 #[webidl(prefix = "RequestInit")]
 pub(crate) struct RequestInitMembers<'s> {
     // Keep the opaque BodyInit value until native extraction, matching Blink.
-    #[webidl(nullable, converter = "raw")]
+    #[webidl(converter = "raw")]
     pub(super) body: Option<v8::Local<'s, v8::Value>>,
     #[webidl(with = request_init_signal_member)]
     pub(super) signal: Option<Option<v8::Global<v8::Object>>>,
@@ -120,8 +120,26 @@ pub(crate) struct RequestInitMembers<'s> {
 }
 
 impl RequestInitMembers<'_> {
-    pub(crate) fn body_is_present(&self) -> bool {
+    pub(super) fn has_any_member(&self) -> bool {
         self.body.is_some()
+            || self.signal.is_some()
+            || self.method.is_some()
+            || self.cache.is_some()
+            || self.mode.is_some()
+            || self.redirect.is_some()
+            || self.referrer.is_some()
+            || self.referrer_policy.is_some()
+            || self.integrity.is_some()
+            || self.duplex.is_some()
+            || self.headers.is_some()
+            || self.credentials_mode.is_some()
+            || self.priority.is_some()
+            || self.keepalive.is_some()
+    }
+
+    pub(crate) fn body_is_present(&self) -> bool {
+        // Explicit null is an init member but does not replace an input body.
+        self.body.is_some_and(|body| !body.is_null_or_undefined())
     }
 }
 
