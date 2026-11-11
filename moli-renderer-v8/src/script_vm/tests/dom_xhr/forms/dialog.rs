@@ -554,3 +554,82 @@ document.addEventListener('keydown', event => {{
         }
     }
 }
+
+#[tokio::test]
+async fn dialog_escape_cancel_reentry_is_bound_to_original_opening() {
+    for (action, expected, queues_close) in [
+        ("dialog.close(); dialog.showModal()", "[true,false]", true),
+        ("dialog.close(); dialog.show()", "[true,false]", true),
+        ("dialog.close()", "[false,false]", true),
+        (
+            "dialogProbe.dialogs.second.showModal()",
+            "[false,true]",
+            true,
+        ),
+        ("dialog.showModal()", "[false,false]", true),
+        (
+            "dialog.removeAttribute('open'); dialog.setAttribute('open', '')",
+            "[true,false]",
+            false,
+        ),
+        (
+            "dialog.setAttribute('open', 'still-open')",
+            "[false,false]",
+            true,
+        ),
+        (
+            "dialog.setAttributeNS('urn:probe', 'x:open', ''); dialog.removeAttributeNS('urn:probe', 'open')",
+            "[false,false]",
+            true,
+        ),
+    ] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://dialog-escape-reentrant-cancel.test/",
+            &loader,
+        );
+        vm.eval(&format!(
+            r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+dialogProbe.dialogs.first.addEventListener('cancel', () => {{
+  const dialog = dialogProbe.dialogs.first;
+  {action};
+}}, {{once:true}});
+"#,
+            fixture = include_str!("dialog_escape_order.js"),
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval(
+                "JSON.stringify([dialogProbe.dialogs.first.open, dialogProbe.dialogs.second.open])"
+            )
+            .unwrap(),
+            expected,
+            "cancel action: {action}"
+        );
+        assert_eq!(
+            vm.run_one_user_interaction_executor_turn(&loader)
+                .await
+                .unwrap(),
+            queues_close,
+            "cancel action: {action}"
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(dialogProbe.events.map(event => event.type))")
+                .unwrap(),
+            if queues_close {
+                r#"["cancel","close"]"#
+            } else {
+                r#"["cancel"]"#
+            },
+            "cancel action: {action}"
+        );
+        assert!(
+            !vm.run_one_user_interaction_executor_turn(&loader)
+                .await
+                .unwrap(),
+            "cancel action must not queue a second close: {action}"
+        );
+    }
+}
