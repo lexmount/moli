@@ -93,9 +93,7 @@ struct JsRuntimeInner {
 
 /// A renderer-owner lifetime capability. Keeping its recursive actor/channel
 /// graph behind this interface also bounds Send/Sync proofs in protocol crates.
-pub(in crate::runtime) trait RendererRuntimeLease:
-    Send + Sync + std::fmt::Debug
-{
+pub(crate) trait RendererRuntimeLease: Send + Sync + std::fmt::Debug {
     fn into_runtime(self: Arc<Self>) -> JsRuntime;
     fn cancel_page_producers(&self);
     fn cancel_pending_auxiliary_page(&self, reservation: RendererPageReservationToken);

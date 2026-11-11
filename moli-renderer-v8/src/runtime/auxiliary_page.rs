@@ -87,6 +87,14 @@ impl RendererAuxiliaryPageAllocator {
         Self { owner, source_page }
     }
 
+    pub(crate) fn runtime_lease(&self) -> Option<Arc<dyn RendererRuntimeLease>> {
+        self.owner
+            .owner_state
+            .runtime_handle
+            .get()
+            .and_then(super::page::RendererProducerShutdownHandle::upgrade_runtime)
+    }
+
     pub(crate) fn stage_in_scope<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -109,11 +117,7 @@ impl RendererAuxiliaryPageAllocator {
                 reservation: RendererPageReservationToken::new(self.owner.local_host_id, page_id),
                 popup_id: init.window.id(),
                 runtime: self
-                    .owner
-                    .owner_state
-                    .runtime_handle
-                    .get()
-                    .and_then(super::page::RendererProducerShutdownHandle::upgrade_runtime)
+                    .runtime_lease()
                     .ok_or_else(|| anyhow!("auxiliary creator renderer is shutting down"))?,
             }),
         };

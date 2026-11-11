@@ -115,6 +115,7 @@ pub use self::page_surface::{
 
 pub(crate) use self::browser_context_runtime::RendererOutputTransportSenderSlot;
 pub(in crate::runtime) use self::document_lifecycle_turn::PendingDocumentLifecycleTurn;
+pub(crate) use self::page::RendererRuntimeLease;
 pub(crate) use self::page_turn_scheduler::{
     PageOwnerBlockedReason, PageOwnerTurnOutcome, PageOwnerTurnReadiness,
 };

@@ -91,7 +91,7 @@ pub use resource_store::{
 };
 pub(crate) use run_owner::ServiceWorkerRunOwner;
 pub(crate) use service::{
-    ServiceWorkerRuntimeService,
+    SERVICE_WORKER_DEFAULT_IDLE_DELAY_MS, ServiceWorkerRuntimeService,
     new_service_worker_runtime_service_with_resource_store_and_browser_resource_runtime_binding,
 };
 pub(crate) use snapshots::{

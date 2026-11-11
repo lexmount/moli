@@ -1241,7 +1241,10 @@ mod tests {
             1
         );
 
-        runtime.inner.shared_worker_runtime.get_or_init();
+        runtime
+            .inner
+            .shared_worker_runtime
+            .get_or_init(runtime.browser_resource_runtime().resource_task_runner());
         runtime.service_worker_runtime();
         assert_eq!(
             runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],

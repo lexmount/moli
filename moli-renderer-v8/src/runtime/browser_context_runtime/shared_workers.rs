@@ -76,7 +76,10 @@ impl LazySharedWorkerRuntime {
         }
     }
 
-    pub(super) fn get_or_init(&self) -> crate::shared_worker_runtime::SharedWorkerRuntimeService {
+    pub(super) fn get_or_init(
+        &self,
+        resource_task_runner: crate::network::RendererResourceTaskRunner,
+    ) -> crate::shared_worker_runtime::SharedWorkerRuntimeService {
         let mut state = self.state.lock();
         if let LazySharedWorkerRuntimeState::Live(service) = &*state {
             return service.clone();
@@ -93,6 +96,7 @@ impl LazySharedWorkerRuntime {
         let service = crate::shared_worker_runtime::
             new_shared_worker_runtime_service_with_client_owner_id_allocator(
                 self.client_owner_id_allocator.clone(),
+                resource_task_runner,
             );
         service.configure_target_output_streams(
             self.browser_context_runtime_id,
@@ -180,7 +184,7 @@ impl RendererBrowserContextRuntime {
     ) -> SharedWorkerClientId {
         self.inner
             .shared_worker_runtime
-            .get_or_init()
+            .get_or_init(self.browser_resource_runtime().resource_task_runner())
             .connect(descriptor, params)
     }
 

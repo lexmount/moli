@@ -84,6 +84,7 @@ pub(crate) struct SharedWorkerLaunchContext {
     pub(super) request_client: ResourceRequestClient,
     pub(super) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) execution_policy: SharedWorkerExecutionPolicy,
+    pub(crate) service_lane_owner: Option<std::sync::Arc<dyn crate::runtime::RendererRuntimeLease>>,
 }
 
 #[derive(Clone)]
@@ -216,6 +217,7 @@ impl SharedWorkerLaunchContext {
             request_client,
             resource_task_runner,
             execution_policy,
+            service_lane_owner: None,
         }
     }
 }
