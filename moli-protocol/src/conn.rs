@@ -226,7 +226,7 @@ impl CdpTargetHostLifecycleObserver {
 /// associated with this exact command.
 #[must_use = "dropping the permit cancels observers waiting for this command response"]
 pub struct CommandResponseFlushPermit {
-    sender: tokio::sync::watch::Sender<bool>,
+    sender: Option<tokio::sync::watch::Sender<bool>>,
     deferred_releases: Arc<Mutex<CommandResponseFlushDeferredReleases>>,
 }
 
@@ -356,10 +356,11 @@ impl CommandResponseFlushPermit {
         }
     }
 
-    pub fn finish(self) {
-        let releases = self.finish_deferred_releases();
-        let _ = self.sender.send(true);
-        for release in releases {
+    pub fn finish(mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(true);
+        }
+        for release in self.finish_deferred_releases() {
             release.run();
         }
     }
@@ -367,6 +368,9 @@ impl CommandResponseFlushPermit {
 
 impl Drop for CommandResponseFlushPermit {
     fn drop(&mut self) {
+        // Publish abandonment before waking owner work. A wake must never
+        // race the sender's field destruction and still observe Pending.
+        drop(self.sender.take());
         for release in self.finish_deferred_releases() {
             release.run();
         }
@@ -383,7 +387,43 @@ pub struct CommandResponseFlushContext {
     deferred_releases: Option<Arc<Mutex<CommandResponseFlushDeferredReleases>>>,
 }
 
+/// Observation of the existing command-output permit, including abandonment.
+/// Cancellation ends an owner-action dependency without claiming that a
+/// response was sent. Protocol observers may still discard canceled output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandResponseFlushState {
+    NotRequired,
+    Pending,
+    Flushed,
+    Cancelled,
+}
+
+impl std::fmt::Debug for CommandResponseFlushContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("CommandResponseFlushContext")
+            .field(&self.state())
+            .finish()
+    }
+}
+
 impl CommandResponseFlushContext {
+    pub fn state(&self) -> CommandResponseFlushState {
+        let Some(receiver) = &self.receiver else {
+            return CommandResponseFlushState::NotRequired;
+        };
+        // Read closure before the last value: a successful send followed by
+        // permit destruction must remain Flushed, rather than Cancelled.
+        let closed = receiver.has_changed().is_err();
+        if *receiver.borrow() {
+            CommandResponseFlushState::Flushed
+        } else if closed {
+            CommandResponseFlushState::Cancelled
+        } else {
+            CommandResponseFlushState::Pending
+        }
+    }
+
     fn new(
         receiver: tokio::sync::watch::Receiver<bool>,
         deferred_releases: Arc<Mutex<CommandResponseFlushDeferredReleases>>,
@@ -402,7 +442,10 @@ impl CommandResponseFlushContext {
         self.receiver.clone()
     }
 
-    pub(crate) fn defer_until_response_flush(&self, release: impl FnOnce() + Send + 'static) {
+    /// Releases owner work when the boundary finishes or is abandoned.
+    /// This is also suitable for waking readiness observers. It is not a
+    /// success notification; use `state()` to distinguish flush and cancel.
+    pub fn defer_until_response_flush(&self, release: impl FnOnce() + Send + 'static) {
         let release = CommandResponseFlushRelease::new(release);
         let immediate = match &self.deferred_releases {
             Some(deferred_releases) => {
@@ -2338,20 +2381,17 @@ impl CdpConnection {
         let attachments = self
             .page_event_protocol_attachments_for_owner(owner)
             .ok_or(SettlementError::SubscribedAttachmentUnavailable)?;
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let output = crate::domains::activity::ProtocolOutputWork::root_frame_stopped_loading(
-            attachments,
-            binding.frame_id,
-            binding.loader_id,
-        );
-        let work = crate::domains::activity::ProtocolSchedulerWork::protocol_observation(
-            publish_sequence,
-            output,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |publish_sequence| {
+            let output = crate::domains::activity::ProtocolOutputWork::root_frame_stopped_loading(
+                attachments,
+                binding.frame_id,
+                binding.loader_id,
+            );
+            crate::domains::activity::ProtocolSchedulerWork::protocol_observation(
+                publish_sequence,
+                output,
+            )
+        });
         Ok(Settlement::Published)
     }
 
@@ -2552,6 +2592,17 @@ impl CdpConnection {
         self.scheduler_state.take_scheduler_events()
     }
 
+    pub(crate) fn publish_protocol_work(
+        &mut self,
+        build: impl FnOnce(crate::ProtocolWorkPublishSequence) -> crate::ProtocolSchedulerWork,
+    ) {
+        self.scheduler_state.publish_protocol_work(build);
+    }
+
+    pub fn take_published_protocol_work(&mut self) -> Vec<crate::ProtocolSchedulerWork> {
+        self.scheduler_state.take_published_protocol_work()
+    }
+
     pub(crate) fn push_scheduler_event(&mut self, event: CdpSchedulerEvent) {
         self.scheduler_state.push_scheduler_event(event);
     }
@@ -2563,7 +2614,7 @@ impl CdpConnection {
         let deferred_releases: Arc<Mutex<CommandResponseFlushDeferredReleases>> = Arc::default();
         (
             CommandResponseFlushPermit {
-                sender,
+                sender: Some(sender),
                 deferred_releases: deferred_releases.clone(),
             },
             CommandResponseFlushContext::new(receiver, deferred_releases),
@@ -2707,15 +2758,11 @@ impl CdpConnection {
                 LoadPublicationState::Interrupted => false,
             };
             let action = publication.publish(self, run_post_load, &mut output);
-            let sequence = self
-                .scheduler_state
-                .allocate_protocol_work_publish_sequence();
-            let work =
+            self.publish_protocol_work(move |sequence| {
                 crate::domains::activity::ProtocolSchedulerWork::main_document_load_owner_action(
                     sequence, action,
-                );
-            self.scheduler_state
-                .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+                )
+            });
         }
         output.into_events()
     }
@@ -2758,62 +2805,73 @@ impl CdpConnection {
         let target_id = pending.navigation.frame_id.clone();
         let prepared =
             crate::domains::page::PreparedRendererNavigation::prepare_fetch_request(self, pending);
-        let sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::navigation_request_continuation(
-            sequence, prepared, target_id,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |sequence| {
+            crate::domains::activity::ProtocolSchedulerWork::navigation_request_continuation(
+                sequence, prepared, target_id,
+            )
+        });
     }
 
     pub(crate) fn publish_top_level_navigation_owner_action(
         &mut self,
         action: TopLevelNavigationOwnerAction,
     ) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work =
+        self.publish_protocol_work(move |publish_sequence| {
             crate::domains::activity::ProtocolSchedulerWork::top_level_navigation_owner_action(
                 publish_sequence,
                 action,
-            );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+            )
+        });
     }
 
     pub(crate) fn publish_popup_target_navigation_owner_action(
         &mut self,
         action: PopupTargetNavigationOwnerAction,
     ) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work =
+        self.publish_popup_target_navigation_after_command_output(
+            action,
+            CommandResponseFlushContext::default(),
+        );
+    }
+
+    pub(crate) fn publish_popup_target_navigation_after_command_output(
+        &mut self,
+        action: PopupTargetNavigationOwnerAction,
+        output: CommandResponseFlushContext,
+    ) {
+        self.publish_protocol_work(move |publish_sequence| {
             crate::domains::activity::ProtocolSchedulerWork::popup_target_navigation_owner_action(
                 publish_sequence,
                 action,
-            );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+            )
+            .after_command_output(output)
+        });
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_page_target_termination_owner_action(
         &mut self,
         action: crate::domains::page::PageTargetTerminationOwnerAction,
     ) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work =
+        self.publish_page_target_termination_after_command_output(
+            action,
+            CommandResponseFlushContext::default(),
+        );
+    }
+
+    pub(crate) fn publish_page_target_termination_after_command_output(
+        &mut self,
+        action: crate::domains::page::PageTargetTerminationOwnerAction,
+        output: CommandResponseFlushContext,
+    ) {
+        self.publish_protocol_work(move |publish_sequence| {
+            let work =
             crate::domains::activity::ProtocolSchedulerWork::page_target_termination_owner_action(
                 publish_sequence,
                 action,
             );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+            work.after_command_output(output)
+        });
     }
 
     pub(crate) fn enqueue_navigation_background_event(&mut self, event: NavigationBackgroundEvent) {

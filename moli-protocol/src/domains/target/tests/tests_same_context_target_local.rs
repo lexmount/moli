@@ -2103,11 +2103,20 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     assert_eq!(paused["method"], "Fetch.requestPaused");
     let network_id = paused["params"]["networkId"].clone();
 
-    ctx.process_async(json!({
-        "id": 22,
-        "method": "Target.closeTarget",
-        "params": { "targetId": "TID-000000000A" }
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 22,
+            "method": "Target.closeTarget",
+            "params": { "targetId": "TID-000000000A" }
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(22, json!({ "success": true }), None);
 
@@ -2234,11 +2243,20 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     let network_id = paused["params"]["networkId"].clone();
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 26,
-        "method": "Target.closeTarget",
-        "params": { "targetId": "TID-000000000A" }
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 26,
+            "method": "Target.closeTarget",
+            "params": { "targetId": "TID-000000000A" }
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(26, json!({ "success": true }), None);
 
@@ -2386,11 +2404,20 @@ async fn close_target_aborts_paused_response_stage_runtime_xhr_subresource() {
     let network_id = paused["params"]["networkId"].clone();
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 30,
-        "method": "Target.closeTarget",
-        "params": { "targetId": "TID-000000000A" }
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 30,
+            "method": "Target.closeTarget",
+            "params": { "targetId": "TID-000000000A" }
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.wait_until_scheduler_state("original session retirement", |conn| {
         !conn.has_attached_devtools_session("SID-1")
@@ -2577,11 +2604,20 @@ async fn close_target_aborts_paused_runtime_xhr_auth_subresource() {
     assert!(auth_required["params"].get("networkId").is_none());
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 36,
-        "method": "Target.closeTarget",
-        "params": { "targetId": "TID-000000000A" }
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 36,
+            "method": "Target.closeTarget",
+            "params": { "targetId": "TID-000000000A" }
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(36, json!({ "success": true }), None);
     crate::testing::wait_until_message(

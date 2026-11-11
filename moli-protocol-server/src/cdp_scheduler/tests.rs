@@ -521,6 +521,234 @@ fn root_frame_stopped_loading_work(publish_sequence: u64, frame_id: &str) -> Pro
     )
 }
 
+#[test]
+fn delayed_command_wake_cannot_hold_or_reorder_published_work() {
+    use moli_protocol::CommandResponseFlushState;
+    use moli_protocol::test_support::{
+        command_output_with_scheduler_events, publish_protocol_work,
+    };
+
+    let mut conn = CdpConnection::new();
+    let (permit, context) = conn.begin_command_response_flush_permit();
+    publish_protocol_work(&mut conn, |sequence| {
+        root_frame_stopped_loading_work(sequence, "FRAME-first")
+    });
+    let held_command = command_output_with_scheduler_events(conn.take_scheduler_events());
+    publish_protocol_work(&mut conn, |sequence| {
+        root_frame_stopped_loading_work(sequence, "FRAME-second")
+    });
+    let later_wake = conn.take_scheduler_events();
+    assert!(matches!(
+        later_wake.as_slice(),
+        [CdpSchedulerEvent::ProtocolWorkReady]
+    ));
+    let (mut scheduler, _receivers) = CdpScheduler::new(conn);
+
+    // The first command has not even materialized its output yet. A later
+    // wake still admits both concrete publications, in their original order.
+    scheduler.apply_scheduler_events(later_wake);
+    let sequences = scheduler
+        .queues
+        .protocol_residences
+        .iter()
+        .map(|residence| match residence {
+            ProtocolSchedulerResidence::ProtocolWork { work, .. } => work.publish_sequence().get(),
+            _ => panic!("only concrete work was published"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sequences, [1, 2]);
+    assert_eq!(context.state(), CommandResponseFlushState::Pending);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor,
+        "ordinary work has no blanket command-output dependency"
+    );
+
+    for _ in 0..2 {
+        scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+        assert_eq!(
+            scheduler.next_protocol_scheduler_step(),
+            ProtocolSchedulerStep::CompleteReadyResidence
+        );
+        let _ = scheduler.complete_next_protocol_residence();
+    }
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+    let super::CommandTaskStep::Complete(output) =
+        scheduler.materialize_command_dispatch_step(held_command)
+    else {
+        panic!("the held command has a completed output plan");
+    };
+    assert_eq!(
+        scheduler.queues.protocol_residence_len(),
+        0,
+        "a stale wake must not duplicate already consumed publications"
+    );
+    let (_, _, _, _, _, release) = output
+        .with_output_release_permit(super::CommandOutputReleasePermit::new(permit, None))
+        .into_parts();
+    assert_eq!(context.state(), CommandResponseFlushState::Pending);
+    assert!(
+        scheduler
+            .finish_command_dispatch_output_flush(release)
+            .is_empty()
+    );
+    assert_eq!(context.state(), CommandResponseFlushState::Flushed);
+}
+
+#[test]
+fn lifecycle_work_observes_only_its_existing_command_output_permit() {
+    use moli_protocol::CommandResponseFlushState;
+    use moli_protocol::test_support::publish_retired_target_termination_after_command_output;
+
+    let mut conn = CdpConnection::new();
+    let (first_permit, first) = conn.begin_command_response_flush_permit();
+    let (second_permit, second) = conn.begin_command_response_flush_permit();
+    publish_retired_target_termination_after_command_output(&mut conn, "TID-first", first.clone());
+    publish_retired_target_termination_after_command_output(
+        &mut conn,
+        "TID-second",
+        second.clone(),
+    );
+    let wake = conn.take_scheduler_events();
+    let (mut scheduler, _receivers) = CdpScheduler::new(conn);
+    scheduler.apply_scheduler_events(wake);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+
+    let _ = scheduler.finish_command_dispatch_output_flush(Some(
+        super::CommandOutputReleasePermit::new(second_permit, None),
+    ));
+    assert_eq!(first.state(), CommandResponseFlushState::Pending);
+    assert_eq!(second.state(), CommandResponseFlushState::Flushed);
+    assert_eq!(
+        scheduler.next_ungated_protocol_residence_index(),
+        Some(1),
+        "an independent target need not wait for an earlier command"
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    let _ = scheduler.complete_next_protocol_residence();
+    assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+
+    let _ = scheduler.finish_command_dispatch_output_flush(Some(
+        super::CommandOutputReleasePermit::new(first_permit, None),
+    ));
+    assert_eq!(first.state(), CommandResponseFlushState::Flushed);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    let _ = scheduler.complete_next_protocol_residence();
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+}
+
+#[tokio::test]
+async fn abandoned_command_output_wakes_lifecycle_work_without_reporting_a_flush() {
+    use futures_util::FutureExt as _;
+    use moli_protocol::CommandResponseFlushState;
+    use moli_protocol::test_support::publish_retired_target_termination_after_command_output;
+
+    let mut conn = CdpConnection::new();
+    let (permit, context) = conn.begin_command_response_flush_permit();
+    publish_retired_target_termination_after_command_output(
+        &mut conn,
+        "TID-abandoned",
+        context.clone(),
+    );
+    let wake = conn.take_scheduler_events();
+    let (mut scheduler, _receivers) = CdpScheduler::new(conn);
+    scheduler.apply_scheduler_events(wake);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+    let ready = scheduler.state.scheduler_events_ready();
+    while ready.notified().now_or_never().is_some() {}
+
+    std::thread::spawn(move || drop(permit)).join().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), ready.notified())
+        .await
+        .expect("abandoning the original permit wakes its scheduler dependency");
+    assert_eq!(context.state(), CommandResponseFlushState::Cancelled);
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    );
+    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    let _ = scheduler.complete_next_protocol_residence();
+    assert_eq!(
+        scheduler.queues.protocol_residence_len(),
+        0,
+        "abandonment must not leave cleanup parked forever"
+    );
+}
+
+#[test]
+fn command_dependent_retirement_does_not_block_its_targets_output() {
+    use moli_protocol::test_support::{
+        publish_protocol_work, publish_retired_target_termination_after_command_output,
+    };
+    for snapshot in [false, true] {
+        let mut conn = CdpConnection::new();
+        let (permit, context) = conn.begin_command_response_flush_permit();
+        publish_retired_target_termination_after_command_output(
+            &mut conn,
+            "TID-held",
+            context.clone(),
+        );
+        publish_protocol_work(&mut conn, |sequence| {
+            root_frame_stopped_loading_work_for_target(
+                sequence,
+                vec![None],
+                "BID-held".into(),
+                "TID-held".into(),
+                "FRAME-held".into(),
+                "LOADER-held".into(),
+            )
+        });
+        let wake = conn.take_scheduler_events();
+        let (mut scheduler, _receivers) = CdpScheduler::new(conn);
+        scheduler.apply_scheduler_events(wake);
+        assert_eq!(
+            scheduler.next_ungated_protocol_residence_index(),
+            Some(1),
+            "a pending owner action cannot turn its command dependency into an output barrier"
+        );
+        if snapshot {
+            let pending = std::mem::take(&mut scheduler.queues.protocol_residences);
+            let _ = scheduler.complete_protocol_residence_snapshot(pending);
+        } else {
+            scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+            let _ = scheduler.complete_next_protocol_residence();
+        }
+        assert_eq!(
+            context.state(),
+            moli_protocol::CommandResponseFlushState::Pending
+        );
+        assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+        assert!(
+            matches!(scheduler.queues.protocol_residences.front(), Some(ProtocolSchedulerResidence::ProtocolWork { work, .. }) if work.publish_sequence().get() == 1)
+        );
+        let _ = scheduler.finish_command_dispatch_output_flush(Some(
+            super::CommandOutputReleasePermit::new(permit, None),
+        ));
+        scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+        let _ = scheduler.complete_next_protocol_residence();
+        assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+    }
+}
+
 fn future_load_candidate(
     publication: &moli_core::RendererOutputTransportMessage,
 ) -> DeferredMainDocumentLoadPredecessorCandidate {
@@ -619,9 +847,8 @@ fn pending_renderer_projection_keeps_its_load_window_while_peer_work_advances() 
         Vec::new(),
         Some(candidate),
     );
-    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-        work: root_frame_stopped_loading_work(1, "FRAME-peer"),
-    }]);
+    scheduler
+        .apply_protocol_work_publications(vec![root_frame_stopped_loading_work(1, "FRAME-peer")]);
     assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
     scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
     let snapshot = scheduler.queues.take_external_load_wait_snapshot();
@@ -660,12 +887,12 @@ fn renderer_owner_work_waits_for_its_original_projection_and_exact_load() {
     scheduler
         .queues
         .enqueue_pending_renderer_output_projection(cursor, vec![load], None);
-    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-        work: moli_protocol::test_support::protocol_work_from_renderer_output(
+    scheduler.apply_protocol_work_publications(vec![
+        moli_protocol::test_support::protocol_work_from_renderer_output(
             root_frame_stopped_loading_work(1, "FRAME-source"),
             cursor,
         ),
-    }]);
+    ]);
     let Some(ProtocolSchedulerResidence::ProtocolWork {
         load_predecessors, ..
     }) = scheduler.queues.protocol_residences.get(1)
@@ -787,20 +1014,16 @@ fn fenced_creation_stays_in_the_complete_source_publication() {
     let mut queues = SchedulerQueues::default();
     queues.enqueue_pending_renderer_output_projection(creation, Vec::new(), None);
     queues.complete_renderer_output_projection(creation, ProtocolOutputSequence::empty());
-    queues.enqueue_protocol_work(
-        protocol_work_from_renderer_output(
-            renderer_fenced_output_work(
-                1,
-                vec![BackgroundProtocolEvent::immediate(
-                    json!({"method":"Target.targetCreated"}),
-                )],
-                vec![RendererOutputFence::new_for_test(native)],
-            ),
-            creation,
+    queues.enqueue_protocol_work(protocol_work_from_renderer_output(
+        renderer_fenced_output_work(
+            1,
+            vec![BackgroundProtocolEvent::immediate(
+                json!({"method":"Target.targetCreated"}),
+            )],
+            vec![RendererOutputFence::new_for_test(native)],
         ),
-        Vec::new(),
-        None,
-    );
+        creation,
+    ));
     assert_eq!(
         queues.protocol_residence_len(),
         1,
@@ -834,29 +1057,41 @@ fn fenced_creation_stays_in_the_complete_source_publication() {
 }
 
 #[test]
-fn command_completion_admits_work_sequence_before_reply_without_running_it() {
-    let (mut scheduler, _tasks) = CdpScheduler::new(CdpConnection::new());
+fn command_output_keeps_its_response_while_admitting_shared_publications() {
+    use moli_protocol::test_support::publish_protocol_work;
+    let mut conn = CdpConnection::new();
+    publish_protocol_work(&mut conn, |sequence| {
+        root_frame_stopped_loading_work(sequence, "FRAME-source")
+    });
     let response = json!({"id":41,"result":{}});
     let complete = moli_protocol::test_support::command_completion_with_scheduler_events(
         vec![BackgroundProtocolEvent::immediate(response.clone())],
-        vec![CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work(1, "FRAME-source"),
-        }],
+        conn.take_scheduler_events(),
     );
+    publish_protocol_work(&mut conn, |sequence| {
+        root_frame_stopped_loading_work(sequence, "FRAME-peer")
+    });
+    let later_wake = conn.take_scheduler_events();
+    let (mut scheduler, _tasks) = CdpScheduler::new(conn);
     let super::CommandTaskStep::Complete(output) =
         scheduler.materialize_command_dispatch_step(complete)
     else {
         panic!("finite completion");
     };
-    let (output, _, _, _, after_reply, _, _) = output.into_parts();
+    let (output, _, _, _, _, release) = output.into_parts();
     assert_eq!(output.into_messages(), [response]);
-    assert_eq!(after_reply.len(), 1);
-    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
-    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-        work: root_frame_stopped_loading_work(2, "FRAME-peer"),
-    }]);
-    scheduler.finish_command_dispatch_output_flush(after_reply, None);
     assert_eq!(scheduler.queues.protocol_residence_len(), 2);
+    scheduler.apply_scheduler_events(later_wake);
+    assert!(
+        scheduler
+            .finish_command_dispatch_output_flush(release)
+            .is_empty()
+    );
+    assert_eq!(
+        scheduler.queues.protocol_residence_len(),
+        2,
+        "the command's later wake must not duplicate work"
+    );
 }
 
 #[test]
@@ -901,11 +1136,7 @@ fn concrete_renderer_output_precedes_work_published_by_the_same_ingress() {
         vec![load],
         None,
     );
-    queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        None,
-    );
+    queues.enqueue_protocol_work(root_frame_stopped_loading_work(1, "FRAME-1"));
 
     assert!(matches!(
         queues.protocol_residences.front(),
@@ -922,20 +1153,28 @@ fn concrete_renderer_output_precedes_work_published_by_the_same_ingress() {
 #[test]
 fn protocol_work_published_by_held_ingress_inherits_exact_load_predecessor() {
     let load = deferred_main_document_load_observation_id(1);
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
-    scheduler.apply_scheduler_events_with_load_predecessors(
-        vec![CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work(1, "FRAME-1"),
-        }],
-        &[load],
+    scheduler.queues.enqueue_renderer_output_publication(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Page.loadEventFired"})]),
+        vec![load],
         None,
     );
-
-    assert_eq!(
-        scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+    scheduler.apply_protocol_work_publications(vec![
+        moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-1"),
+            cursor,
+        ),
+    ]);
+    assert!(
+        matches!(scheduler.queues.protocol_residences.back(), Some(ProtocolSchedulerResidence::ProtocolWork { load_predecessors, .. }) if load_predecessors == &[load])
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+
+    // Even an explicit client-turn yield cannot release work inherited from
+    // this still-held source; the exact load observation remains necessary.
+    scheduler.queues.satisfy_client_turn_predecessor_at(1);
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::Wait,
@@ -963,9 +1202,10 @@ fn newly_published_load_binds_every_residence_from_deferred_renderer_ingress() {
         Some(candidate),
     );
     queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        Some(candidate),
+        moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-1"),
+            cursor,
+        ),
     );
 
     assert_eq!(
@@ -1086,9 +1326,10 @@ fn client_turn_yield_closes_the_provisional_load_binding_window() {
         Some(candidate),
     );
     queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        Some(candidate),
+        moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-1"),
+            cursor,
+        ),
     );
 
     queues.satisfy_front_client_turn_predecessor();
@@ -1120,11 +1361,7 @@ fn client_turn_yield_closes_candidate_behind_an_unrelated_front_residence() {
     let interest = load_interest_for_publication(&publication);
     let unrelated_later_load = deferred_main_document_load_observation_id(1);
     let mut queues = SchedulerQueues::default();
-    queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        None,
-    );
+    queues.enqueue_protocol_work(root_frame_stopped_loading_work(1, "FRAME-1"));
     queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -1265,9 +1502,10 @@ fn provisional_load_binding_prevents_specialized_wait_drain_from_overtaking_ingr
         Some(candidate),
     );
     queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        Some(candidate),
+        moli_protocol::test_support::protocol_work_from_renderer_output(
+            root_frame_stopped_loading_work(1, "FRAME-1"),
+            cursor,
+        ),
     );
 
     assert!(
@@ -1452,9 +1690,7 @@ async fn specialized_wait_yield_closes_candidate_retained_in_the_main_fifo() {
         Vec::new(),
         Some(candidate),
     );
-    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-        work: root_frame_stopped_loading_work(1, "FRAME-1"),
-    }]);
+    scheduler.apply_protocol_work_publications(vec![root_frame_stopped_loading_work(1, "FRAME-1")]);
 
     let _ = scheduler.complete_ready_protocol_residences_for_external_load_wait();
 
@@ -1550,9 +1786,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
 #[test]
 fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
-    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-        work: root_frame_stopped_loading_work(1, "FRAME-1"),
-    }]);
+    scheduler.apply_protocol_work_publications(vec![root_frame_stopped_loading_work(1, "FRAME-1")]);
 
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
@@ -1579,13 +1813,9 @@ fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
 #[test]
 fn concrete_protocol_output_preserves_protocol_publish_order() {
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
-    scheduler.apply_scheduler_events(vec![
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work(1, "FRAME-1"),
-        },
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work(2, "FRAME-2"),
-        },
+    scheduler.apply_protocol_work_publications(vec![
+        root_frame_stopped_loading_work(1, "FRAME-1"),
+        root_frame_stopped_loading_work(2, "FRAME-2"),
     ]);
 
     let sequences = scheduler
@@ -1604,27 +1834,15 @@ fn concrete_protocol_output_preserves_protocol_publish_order() {
 #[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_duplicate_publication_sequence() {
     let mut queues = SchedulerQueues::default();
-    queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1"),
-        Vec::new(),
-        None,
-    );
-    queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(1, "FRAME-1-DUPLICATE"),
-        Vec::new(),
-        None,
-    );
+    queues.enqueue_protocol_work(root_frame_stopped_loading_work(1, "FRAME-1"));
+    queues.enqueue_protocol_work(root_frame_stopped_loading_work(1, "FRAME-1-DUPLICATE"));
 }
 
 #[test]
 #[should_panic(expected = "protocol work must be admitted in exact publication order")]
 fn concrete_protocol_output_rejects_missing_earlier_publication() {
     let mut queues = SchedulerQueues::default();
-    queues.enqueue_protocol_work(
-        root_frame_stopped_loading_work(2, "FRAME-2"),
-        Vec::new(),
-        None,
-    );
+    queues.enqueue_protocol_work(root_frame_stopped_loading_work(2, "FRAME-2"));
 }
 
 #[tokio::test]
@@ -1717,27 +1935,23 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
     let navigation_target_id = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
-    scheduler.apply_scheduler_events(vec![
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work_for_target(
-                1,
-                vec![Some("SID-A".to_owned())],
-                browser_context_id.clone(),
-                navigation_target_id,
-                "FRAME-A".to_owned(),
-                "LOADER-A".to_owned(),
-            ),
-        },
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work_for_target(
-                2,
-                vec![Some("SID-B".to_owned())],
-                browser_context_id,
-                "TID-independent".to_owned(),
-                "FRAME-B".to_owned(),
-                "LOADER-B".to_owned(),
-            ),
-        },
+    scheduler.apply_protocol_work_publications(vec![
+        root_frame_stopped_loading_work_for_target(
+            1,
+            vec![Some("SID-A".to_owned())],
+            browser_context_id.clone(),
+            navigation_target_id,
+            "FRAME-A".to_owned(),
+            "LOADER-A".to_owned(),
+        ),
+        root_frame_stopped_loading_work_for_target(
+            2,
+            vec![Some("SID-B".to_owned())],
+            browser_context_id,
+            "TID-independent".to_owned(),
+            "FRAME-B".to_owned(),
+            "LOADER-B".to_owned(),
+        ),
     ]);
 
     assert_eq!(
@@ -1775,27 +1989,23 @@ async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
     let target_a = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
-    scheduler.apply_scheduler_events(vec![
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work_for_target(
-                1,
-                vec![Some("SID-A".to_owned())],
-                browser_context_id.clone(),
-                target_a,
-                "FRAME-A".to_owned(),
-                "LOADER-A".to_owned(),
-            ),
-        },
-        CdpSchedulerEvent::ProtocolWorkPublished {
-            work: root_frame_stopped_loading_work_for_target(
-                2,
-                vec![Some("SID-B".to_owned())],
-                browser_context_id,
-                "TID-B".to_owned(),
-                "FRAME-B".to_owned(),
-                "LOADER-B".to_owned(),
-            ),
-        },
+    scheduler.apply_protocol_work_publications(vec![
+        root_frame_stopped_loading_work_for_target(
+            1,
+            vec![Some("SID-A".to_owned())],
+            browser_context_id.clone(),
+            target_a,
+            "FRAME-A".to_owned(),
+            "LOADER-A".to_owned(),
+        ),
+        root_frame_stopped_loading_work_for_target(
+            2,
+            vec![Some("SID-B".to_owned())],
+            browser_context_id,
+            "TID-B".to_owned(),
+            "FRAME-B".to_owned(),
+            "LOADER-B".to_owned(),
+        ),
     ]);
     let snapshot = std::mem::take(&mut scheduler.queues.protocol_residences);
 
@@ -1846,40 +2056,53 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
         let target = navigation.target_id().to_owned();
         let context = conn.default_browser_context_id().to_owned();
         let (mut scheduler, _protocol_completions) = CdpScheduler::new(conn);
-        let events = vec![
-            CdpSchedulerEvent::ProtocolWorkPublished {
-                work: root_frame_stopped_loading_work_for_target(
-                    1,
-                    vec![None],
-                    context.clone(),
-                    target.clone(),
-                    "FRAME-pending".to_owned(),
-                    "LOADER-pending".to_owned(),
-                ),
-            },
-            CdpSchedulerEvent::ProtocolWorkPublished {
-                work: moli_protocol::test_support::retired_location_navigation_work_for_target(
-                    2,
-                    context,
-                    target,
-                    root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
-                ),
-            },
+        let publications = vec![
+            root_frame_stopped_loading_work_for_target(
+                1,
+                vec![None],
+                context.clone(),
+                target.clone(),
+                "FRAME-pending".to_owned(),
+                "LOADER-pending".to_owned(),
+            ),
+            moli_protocol::test_support::retired_location_navigation_work_for_target(
+                2,
+                context,
+                target.clone(),
+                root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
+            ),
         ];
         if inherits_load_predecessor {
             // A navigation published by a still-loading document must reach
             // its owner before that load completes, so it can cancel the load.
-            scheduler.apply_scheduler_events_with_load_predecessors(
-                events,
-                &[deferred_main_document_load_observation_id(1)],
+            let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+            let cursor = publication_cursor(&publication);
+            scheduler.queues.enqueue_renderer_output_publication(
+                cursor,
+                ProtocolOutputSequence::from_background_event(network_response_event_for_target(
+                    DevToolsNetworkResourceType::Xhr,
+                    "REQ-held-source",
+                    &target,
+                )),
+                vec![deferred_main_document_load_observation_id(1)],
                 None,
             );
+            scheduler.apply_protocol_work_publications(
+                publications
+                    .into_iter()
+                    .map(|work| {
+                        moli_protocol::test_support::protocol_work_from_renderer_output(
+                            work, cursor,
+                        )
+                    })
+                    .collect(),
+            );
         } else {
-            scheduler.apply_scheduler_events(events);
+            scheduler.apply_protocol_work_publications(publications);
         }
         assert_eq!(
             scheduler.next_ungated_protocol_residence_index(),
-            Some(1),
+            Some(if inherits_load_predecessor { 2 } else { 1 }),
             "replacement must reach its owner even behind a load-blocked observation"
         );
         if snapshot_drain {
@@ -1895,7 +2118,7 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
         }
         assert_eq!(
             scheduler.queues.protocol_residences.len(),
-            1,
+            if inherits_load_predecessor { 2 } else { 1 },
             "the held observation remains, while the replacement action is consumed"
         );
         assert!(
@@ -1914,6 +2137,16 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
                 .with_state(|state| state.settle_background_navigation_for_test(&navigation))
                 .unwrap()
         );
+        if inherits_load_predecessor {
+            assert_eq!(
+                scheduler.next_ungated_protocol_residence_index(),
+                None,
+                "settling a navigation request does not settle the separate exact load observation"
+            );
+            scheduler
+                .queues
+                .satisfy_load_predecessor(deferred_main_document_load_observation_id(1));
+        }
         assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
     }
 }

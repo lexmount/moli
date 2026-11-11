@@ -39,10 +39,11 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn publish_page_output_close(
         self,
         action: crate::domains::page::PageTargetTerminationOwnerAction,
+        output: crate::conn::CommandResponseFlushContext,
     ) {
         if action.is_current_host(self.connection) {
             self.connection
-                .publish_page_target_termination_owner_action(action);
+                .publish_page_target_termination_after_command_output(action, output);
         }
     }
     pub(crate) fn fail_popup_initial_document(self, failed: FailedInitialDocumentPageBuild) {
@@ -74,10 +75,10 @@ impl ProtocolWorkflowState<'_> {
         if current_page.is_some() && current_page != expected_page {
             return;
         }
-        let start = conn.scheduler_state.scheduler_event_count();
+        let start = conn.scheduler_state.protocol_work_publication_mark();
         if initialized && current_page.is_some() {
             if let Some((_, Some(target_id))) = conn.target_owner_identity_for_owner(&owner) {
-                crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(conn, &target_id);
+                crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(conn, &target_id, &Default::default());
             }
         } else {
             let target_id = conn

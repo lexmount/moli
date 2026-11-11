@@ -539,18 +539,22 @@ pub(super) fn prepare_initial_target_url_navigation(
 pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_resume(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
+    response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> bool {
     let Some((_, Some(target_id))) = conn.target_owner_identity_for_session(session_id) else {
         return false;
     };
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
-        conn, &target_id,
+        conn,
+        &target_id,
+        response_flush,
     )
 }
 
 pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
     conn: &mut CdpConnection,
     target_id: &str,
+    response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> bool {
     if conn.target_has_waiting_for_debugger_session(target_id) {
         return false;
@@ -585,7 +589,7 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_bar
     ) else {
         return false;
     };
-    conn.publish_popup_target_navigation_owner_action(action);
+    conn.publish_popup_target_navigation_after_command_output(action, response_flush.clone());
     true
 }
 

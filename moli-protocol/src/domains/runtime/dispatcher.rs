@@ -745,6 +745,7 @@ pub(crate) fn try_start_worker_emulation_command_dispatch(
 pub(crate) fn try_start_runtime_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> Option<RuntimeCommandTaskStep> {
     let Some(action) = cmd.parse_action::<RuntimeAction>() else {
         return Some(RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -782,9 +783,9 @@ pub(crate) fn try_start_runtime_command_dispatch(
         MainRuntimeCommand::DiscardConsoleEntries => {
             Some(start_runtime_discard_console_entries_command(conn, cmd))
         }
-        MainRuntimeCommand::RunIfWaitingForDebugger => {
-            Some(start_runtime_run_if_waiting_for_debugger_command(conn, cmd))
-        }
+        MainRuntimeCommand::RunIfWaitingForDebugger => Some(
+            start_runtime_run_if_waiting_for_debugger_command(conn, cmd, response_flush),
+        ),
         MainRuntimeCommand::DevToolsScript(command) => Some(
             start_cdp_devtools_script_runtime_command(conn, cmd, command),
         ),

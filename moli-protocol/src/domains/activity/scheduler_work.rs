@@ -74,7 +74,21 @@ pub struct ProtocolSchedulerWork {
     publish_sequence: ProtocolWorkPublishSequence,
     renderer_output_source: Option<Box<RendererOutputCursor>>,
     delivery_predecessor: Option<RendererOutputCursor>,
+    execution: ProtocolWorkExecution,
     payload: ProtocolSchedulerWorkPayload,
+}
+
+/// Execution dependencies belong to the concrete producer, separately from
+/// publication order and client-visible protocol output ordering.
+#[derive(Debug)]
+enum ProtocolWorkExecution {
+    ClientTurn,
+    /// An already-admitted owner turn whose continuation can unblock a
+    /// renderer fence. It must not wait for another adapter turn.
+    OwnerContinuation,
+    /// A lifecycle action which would retire a resource still needed to
+    /// deliver this exact command's output. Observe its existing permit.
+    AfterCommandOutput(Box<crate::CommandResponseFlushContext>),
 }
 
 #[derive(Debug)]
@@ -104,7 +118,8 @@ impl fmt::Debug for ProtocolSchedulerWork {
         let mut debug = formatter.debug_struct("ProtocolSchedulerWork");
         debug
             .field("publish_sequence", &self.publish_sequence)
-            .field("kind", &self.kind());
+            .field("kind", &self.kind())
+            .field("execution", &self.execution);
         match &self.payload {
             ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
                 debug.field("output", output);
@@ -161,6 +176,32 @@ impl fmt::Debug for ProtocolSchedulerWork {
 }
 
 impl ProtocolSchedulerWork {
+    pub fn can_start_on_admission(&self) -> bool {
+        matches!(self.execution, ProtocolWorkExecution::OwnerContinuation)
+    }
+
+    pub fn command_output_dependency(&self) -> Option<&crate::CommandResponseFlushContext> {
+        match &self.execution {
+            ProtocolWorkExecution::AfterCommandOutput(context) => Some(context),
+            ProtocolWorkExecution::ClientTurn | ProtocolWorkExecution::OwnerContinuation => None,
+        }
+    }
+
+    pub fn is_waiting_for_command_output(&self) -> bool {
+        self.command_output_dependency()
+            .is_some_and(|context| context.state() == crate::CommandResponseFlushState::Pending)
+    }
+
+    pub(crate) fn after_command_output(
+        mut self,
+        context: crate::CommandResponseFlushContext,
+    ) -> Self {
+        if context.is_active() {
+            self.execution = ProtocolWorkExecution::AfterCommandOutput(Box::new(context));
+        }
+        self
+    }
+
     pub(crate) fn renderer_fenced_output(
         publish_sequence: ProtocolWorkPublishSequence,
         events: Vec<BackgroundProtocolEvent>,
@@ -171,6 +212,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::RendererFencedOutput(
                 RendererFencedProtocolOutput {
                     events,
@@ -223,6 +265,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::ProtocolObservation(output),
         }
     }
@@ -235,6 +278,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(Box::new(
                 completion,
             )),
@@ -249,6 +293,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action),
         }
     }
@@ -261,6 +306,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(action),
         }
     }
@@ -274,6 +320,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::NavigationRequestContinuation(
                 Box::new(navigation),
                 target_id,
@@ -289,6 +336,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action),
         }
     }
@@ -301,6 +349,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::ClientTurn,
             payload: ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(action),
         }
     }
@@ -313,6 +362,7 @@ impl ProtocolSchedulerWork {
             publish_sequence,
             renderer_output_source: None,
             delivery_predecessor: None,
+            execution: ProtocolWorkExecution::OwnerContinuation,
             payload: ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(pending),
         }
     }

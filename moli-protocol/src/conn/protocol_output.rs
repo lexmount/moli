@@ -48,17 +48,14 @@ impl CdpConnection {
         predecessor: moli_core::RendererOutputFence,
         target_id: Option<String>,
     ) {
-        let sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
-            sequence,
-            events,
-            vec![predecessor],
-            target_id,
-        );
-        self.scheduler_state
-            .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |sequence| {
+            crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+                sequence,
+                events,
+                vec![predecessor],
+                target_id,
+            )
+        });
     }
 
     pub(crate) fn publish_renderer_fenced_protocol_output_after(
@@ -67,17 +64,14 @@ impl CdpConnection {
         predecessors: Vec<moli_core::RendererOutputFence>,
         target_id: Option<String>,
     ) {
-        let sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
-            sequence,
-            events,
-            predecessors,
-            target_id,
-        );
-        self.scheduler_state
-            .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |sequence| {
+            crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+                sequence,
+                events,
+                predecessors,
+                target_id,
+            )
+        });
     }
 
     pub(crate) fn publish_output_after_renderer_delivery(
@@ -90,18 +84,17 @@ impl CdpConnection {
             return events;
         };
         if !events.is_empty() {
-            let sequence = self
-                .scheduler_state
-                .allocate_protocol_work_publish_sequence();
-            let mut work = crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
-                sequence,
-                events,
-                Vec::new(),
-                target_id,
-            );
-            work.bind_renderer_delivery_predecessor(predecessor);
-            self.scheduler_state
-                .push_scheduler_event(super::CdpSchedulerEvent::ProtocolWorkPublished { work });
+            self.publish_protocol_work(move |sequence| {
+                let mut work =
+                    crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+                        sequence,
+                        events,
+                        Vec::new(),
+                        target_id,
+                    );
+                work.bind_renderer_delivery_predecessor(predecessor);
+                work
+            });
         }
         Vec::new()
     }

@@ -217,12 +217,9 @@ async fn target_termination_uses_direct_state_and_preserves_a_peers_selection() 
         });
         context.with_fixture(|conn| conn.publish_page_target_termination_owner_action(action));
         let work = context.with_fixture(|conn| {
-            conn.take_scheduler_events()
+            conn.take_published_protocol_work()
                 .into_iter()
-                .find_map(|event| match event {
-                    CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
-                    _ => None,
-                })
+                .next()
                 .unwrap()
         });
         let owner = context.state;
@@ -392,17 +389,9 @@ async fn queued_termination_cannot_destroy_a_recreated_page_or_tab_with_the_same
         );
         conn.publish_page_target_termination_owner_action(action);
         conn
-            .take_scheduler_events()
-            .into_iter()
-            .find_map(|event| match event {
-                CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.kind()
-                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction =>
-                {
-                    Some(work)
-                }
-                _ => None,
-            })
+            .take_published_protocol_work()
+            .into_iter().find(|work| work.kind()
+                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction)
             .unwrap()
         })).unwrap();
         let pending = handle
@@ -724,10 +713,20 @@ async fn intercepted_target_close_retains_cleanup_across_cancelled_and_discarded
                     .all(|message| message["method"] != "Target.targetDestroyed"
                         && message["method"] != "Target.detachedFromTarget")
             );
-            let work = scheduler.into_iter().find_map(|event| match event {
-                CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction => Some(work),
-                _ => None,
-            }).expect("destruction is handed to ordered-ingress owner work");
+            assert!(
+                scheduler
+                    .iter()
+                    .any(|event| matches!(event, CdpSchedulerEvent::ProtocolWorkReady))
+            );
+            let work = handle
+                .with_state(|state| state.take_published_protocol_work())
+                .unwrap()
+                .into_iter()
+                .find(|work| {
+                    work.kind()
+                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                })
+                .expect("destruction is handed to ordered-ingress owner work");
             handle
                 .with_state(|state| {
                     assert!(

@@ -180,6 +180,7 @@ impl PageRuntimeCommandContinuation {
         mut self,
         conn: &mut CdpConnection,
         response: Result<moli_core::RendererRuntimeInspectorAsyncCompletion>,
+        response_flush: &crate::conn::CommandResponseFlushContext,
     ) -> PageRuntimeCompletion {
         if !self.owns_current_host(conn) {
             if let Ok(response) = response
@@ -207,10 +208,14 @@ impl PageRuntimeCommandContinuation {
                 );
             }
         }
-        self.finish_routed(conn)
+        self.finish_routed(conn, response_flush)
     }
 
-    pub(super) fn finish_routed(self, conn: &mut CdpConnection) -> PageRuntimeCompletion {
+    pub(super) fn finish_routed(
+        self,
+        conn: &mut CdpConnection,
+        response_flush: &crate::conn::CommandResponseFlushContext,
+    ) -> PageRuntimeCompletion {
         if !self.owns_current_host(conn) {
             return self.finish_retired();
         }
@@ -330,6 +335,7 @@ impl PageRuntimeCommandContinuation {
             routed_output,
             succeeded,
             timing_started,
+            response_flush,
         ))
         .into()
     }
@@ -338,6 +344,7 @@ impl PageRuntimeCommandContinuation {
         self,
         conn: &mut CdpConnection,
         result: Result<CompletedRuntimeBindingPageCommandDispatch>,
+        response_flush: &crate::conn::CommandResponseFlushContext,
     ) -> PageRuntimeCompletion {
         if !self.owns_current_host(conn) {
             return self.finish_retired();
@@ -363,6 +370,7 @@ impl PageRuntimeCommandContinuation {
             self.routed_output,
             true,
             timing_started,
+            response_flush,
         ))
         .into()
     }
@@ -374,6 +382,7 @@ fn finish_runtime_inspector_tail(
     routed_output: RuntimeInspectorRoutedOutput,
     succeeded: bool,
     timing_started: Option<std::time::Instant>,
+    response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> CommandOutputPlan {
     if succeeded {
         if !completed.release_object_ids.is_empty() {
@@ -394,6 +403,7 @@ fn finish_runtime_inspector_tail(
             crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
                 conn,
                 completed.session_id(),
+                response_flush,
             );
         }
     }

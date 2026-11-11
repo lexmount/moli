@@ -999,12 +999,8 @@ fn run_deep_protocol_value_test(name: &'static str, test: impl FnOnce() + Send +
 fn take_only_protocol_work(
     conn: &mut CdpConnection,
 ) -> crate::domains::activity::ProtocolSchedulerWork {
-    let scheduler_events = conn.take_scheduler_events();
-    let [CdpSchedulerEvent::ProtocolWorkPublished { work }] = <[_; 1]>::try_from(scheduler_events)
-        .expect("test action must publish exactly one protocol work")
-    else {
-        unreachable!("array pattern fixes the only event kind")
-    };
+    let [work] = <[_; 1]>::try_from(conn.take_published_protocol_work())
+        .expect("test action must publish exactly one protocol work");
     work
 }
 
@@ -1057,9 +1053,9 @@ fn bidi_channel_listener_owner_work_publishes_concrete_scheduler_work() {
     let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "wake");
     conn.publish_bidi_channel_listener_start(listener);
 
-    let scheduler_events = conn.take_scheduler_events();
-    let [CdpSchedulerEvent::ProtocolWorkPublished { work }] = scheduler_events.as_slice() else {
-        panic!("listener start must publish one concrete protocol work: {scheduler_events:?}");
+    let publications = conn.take_published_protocol_work();
+    let [work] = publications.as_slice() else {
+        panic!("listener start must publish one concrete protocol work: {publications:?}");
     };
     assert_eq!(
         work.kind(),
@@ -1079,13 +1075,10 @@ fn bidi_channel_actions_keep_causal_publication_order() {
     let owner = listener.owner().clone();
     conn.publish_bidi_channel_listener_start(listener);
     conn.publish_bidi_channel_object_group_release(owner, "webdriver-bidi-channel-ordered");
-    let scheduler_events = conn.take_scheduler_events();
-    let works = scheduler_events
+    let publications = conn.take_published_protocol_work();
+    let works = publications
         .iter()
-        .map(|event| {
-            let CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-                panic!("BiDi action must not fall back to source-shaped capture: {event:?}");
-            };
+        .map(|work| {
             (
                 work.publish_sequence().get(),
                 work.bidi_channel_owner_action_kind(),

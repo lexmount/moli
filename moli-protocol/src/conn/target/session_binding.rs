@@ -878,6 +878,7 @@ impl CdpConnection {
             crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
                 self,
                 target_id,
+                &crate::conn::CommandResponseFlushContext::default(),
             );
         }
         plan

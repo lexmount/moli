@@ -89,10 +89,15 @@ async fn proxy(
 }
 
 fn release_work(conn: &mut CdpConnection) -> Vec<ProtocolSchedulerWork> {
-    conn.take_scheduler_events().into_iter().filter_map(|event| match event {
-        CdpSchedulerEvent::ProtocolWorkPublished { work } if work.bidi_channel_owner_action_kind() == Some(crate::conn::bidi_channel_work::BidiChannelOwnerActionKind::ReleaseObjectGroup) => Some(work),
-        _ => None,
-    }).collect()
+    conn.take_published_protocol_work()
+        .into_iter()
+        .filter(|work| {
+            work.bidi_channel_owner_action_kind()
+                == Some(
+                    crate::conn::bidi_channel_work::BidiChannelOwnerActionKind::ReleaseObjectGroup,
+                )
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -177,7 +182,7 @@ async fn listener_hands_off_its_promise_without_blocking_peer_commands() {
             };
             assert_eq!(message.channel, "owned-channel");
             assert_eq!(message.data.value, json!("payload"));
-            let restarts = conn.take_scheduler_events().into_iter().filter(|event| matches!(event, CdpSchedulerEvent::ProtocolWorkPublished { work } if work.bidi_channel_owner_action_kind() == Some(crate::conn::bidi_channel_work::BidiChannelOwnerActionKind::StartListener))).count();
+            let restarts = conn.take_published_protocol_work().into_iter().filter(|work| work.bidi_channel_owner_action_kind() == Some(crate::conn::bidi_channel_work::BidiChannelOwnerActionKind::StartListener)).count();
             assert_eq!(restarts, 1);
         });
         assert!(matches!(

@@ -16,7 +16,7 @@ use moli_protocol::{
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsDocumentResidenceIdentity,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
-    PendingPageScreencastCapture, ProtocolSchedulerWorkKind,
+    PendingPageScreencastCapture, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
     automation::{
         AutomationCommand, AutomationResult, DevToolsError, DevToolsNavigationWait,
         FrontendProtocol,
@@ -50,7 +50,7 @@ pub(crate) use adapter_scheduler::{
 pub(crate) use automation_dispatch::{
     AutomationCommandProgress, AutomationWorkflowReady, PendingAutomationExecution,
 };
-pub(crate) use command_dispatch::{CommandTurnOutput, PostFlushSchedulerEvents};
+pub(crate) use command_dispatch::CommandTurnOutput;
 pub(crate) use frontend_control::CdpOwnerActorLifecycle;
 use protocol_residence::{ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues};
 use runtime_command_barrier::CommandOutputReleasePermit;
@@ -244,7 +244,7 @@ pub(crate) type CdpBackgroundNavigationCompletionReceiver =
     mpsc::UnboundedReceiver<BackgroundNavigationCompletion>;
 pub(crate) type CdpRendererPublicationReceiver = moli_core::RendererOutputTransportReceiver;
 pub(crate) struct CdpSchedulerEventReceivers {
-    pub(crate) state_events_ready: std::rc::Rc<tokio::sync::Notify>,
+    pub(crate) state_events_ready: std::sync::Arc<tokio::sync::Notify>,
     pub(crate) protocol_work_completion_rx:
         mpsc::UnboundedReceiver<protocol_task::ProtocolWorkCompletion>,
     pub(crate) document_activity_completion_rx:
@@ -1038,31 +1038,16 @@ impl CdpScheduler {
                     scheduler_events,
                     renderer_output_predecessor,
                 ) = result.into_renderer_owner_turn_parts();
-                // Managed task progress is independent of reply delivery. Owner
-                // work still retains its ordinary post-response execution turn.
-                let (tasks, scheduler_events): (Vec<_>, Vec<_>) =
-                    scheduler_events.into_iter().partition(|event| {
-                        matches!(event, CdpSchedulerEvent::ProtocolTaskPrepared { .. })
-                    });
-                self.apply_scheduler_events(tasks);
-                for event in &scheduler_events {
-                    if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
-                        self.queues
-                            .admit_protocol_work_publish_sequence(work.publish_sequence());
-                    }
-                }
-                let scheduler_events = PostFlushSchedulerEvents {
-                    events: scheduler_events,
-                };
-                let output = self.route_background_events_around_inflight_navigation(events);
+                // Outcomes carry wakes only; concrete work remains in the
+                // connection-owned FIFO until this common admission boundary.
+                self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Complete(Box::new(
                     CommandTurnOutput::new_with_post_response_events(
-                        output,
+                        self.route_background_events_around_inflight_navigation(events),
                         self.route_background_events_around_inflight_navigation(
                             post_response_events,
                         )
                         .into_background_events(),
-                        scheduler_events,
                     )
                     .with_renderer_output_boundary(
                         renderer_output_boundary,
@@ -2192,6 +2177,13 @@ impl CdpScheduler {
                 self.queues.restore_snapshot_to_front(retained);
                 return out;
             }
+            // This is an execution dependency of this action, not a barrier
+            // on later output from its target. Such output can be needed to
+            // finish the very command whose permit the action observes.
+            if residence.waits_for_command_output() {
+                retained.push_back(residence);
+                continue;
+            }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(&residence);
             if self.protocol_residence_waits_for_navigation(
                 &residence,
@@ -2295,6 +2287,9 @@ impl CdpScheduler {
         // NavigationRequest ownership.
         let mut blocked_target_ids = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
+            if residence.waits_for_command_output() {
+                continue;
+            }
             if self.queues.renderer_output_source_is_pending(residence) {
                 continue;
             }
@@ -2663,16 +2658,6 @@ impl CdpScheduler {
         load_predecessors: &[DeferredMainDocumentLoadObservationId],
         future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
     ) {
-        self.apply_scheduler_events_inner(events, load_predecessors, future_load_predecessor, true);
-    }
-
-    fn apply_scheduler_events_inner(
-        &mut self,
-        events: Vec<CdpSchedulerEvent>,
-        load_predecessors: &[DeferredMainDocumentLoadObservationId],
-        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
-        admit_work_sequence: bool,
-    ) {
         for event in events {
             if moli_trace::cdp_runtime_trace_enabled() {
                 tracing::info!(
@@ -2699,48 +2684,12 @@ impl CdpScheduler {
                     }
                     self.protocol_tasks.start(pending);
                 }
-                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
-                    // The background navigation already owns its execution
-                    // turn. Poll its continuation immediately: a command may
-                    // be waiting for it while driving only concrete producer
-                    // and state inputs, without entering the adapter turn queue.
-                    let work = if work.kind()
-                        == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
-                    {
-                        let sequence = work.publish_sequence();
-                        match self.try_start_protocol_work(work) {
-                            Ok(()) => {
-                                if admit_work_sequence {
-                                    self.queues.admit_protocol_work_publish_sequence(sequence);
-                                }
-                                continue;
-                            }
-                            Err(work) => *work,
-                        }
-                    } else {
-                        work
-                    };
-                    if moli_trace::cdp_nav_timing_enabled() {
-                        tracing::info!(
-                            publish_sequence = work.publish_sequence().get(),
-                            ?work,
-                            kind = ?work.kind(),
-                            stage = "scheduler_protocol_work_published"
-                        );
-                    }
-                    if admit_work_sequence {
-                        self.queues.enqueue_protocol_work(
-                            work,
-                            load_predecessors.to_vec(),
-                            future_load_predecessor,
-                        );
-                    } else {
-                        self.queues.enqueue_admitted_protocol_work(
-                            work,
-                            load_predecessors.to_vec(),
-                            future_load_predecessor,
-                        );
-                    }
+                CdpSchedulerEvent::ProtocolWorkReady => {
+                    let publications = self
+                        .state
+                        .with_state(|state| state.take_published_protocol_work())
+                        .expect("live protocol actor state");
+                    self.apply_protocol_work_publications(publications);
                 }
                 CdpSchedulerEvent::PageScreencastStarted { registration } => {
                     self.register_page_screencast(registration, TokioInstant::now());
@@ -2753,6 +2702,36 @@ impl CdpScheduler {
                     protocol_residence_len = self.queues.protocol_residence_len(),
                 );
             }
+        }
+    }
+
+    fn apply_protocol_work_publications(&mut self, publications: Vec<ProtocolSchedulerWork>) {
+        for work in publications {
+            if let Some(output) = work.command_output_dependency() {
+                let ready = self.state.scheduler_events_ready();
+                output.defer_until_response_flush(move || ready.notify_one());
+            }
+            // An already-admitted owner continuation declares its own turn.
+            // Neither command output handling nor the adapter infers this from
+            // the domain's work kind.
+            if work.can_start_on_admission() {
+                self.queues
+                    .admit_protocol_work_publish_sequence(work.publish_sequence());
+                self.try_start_protocol_work(work).unwrap_or_else(|work| {
+                    panic!("an admission continuation must own its workflow: {work:?}")
+                });
+                continue;
+            }
+            if moli_trace::cdp_nav_timing_enabled() {
+                tracing::info!(
+                    publish_sequence = work.publish_sequence().get(),
+                    ?work,
+                    stage = "scheduler_protocol_work_published"
+                );
+            }
+            // Renderer-derived dependencies belong to each publication's
+            // concrete source, not to whichever wake happens to drain the FIFO.
+            self.queues.enqueue_protocol_work(work);
         }
     }
 
@@ -3068,18 +3047,15 @@ impl CdpScheduler {
 
     pub(crate) fn finish_command_dispatch_output_flush(
         &mut self,
-        post_flush_scheduler_events: PostFlushSchedulerEvents,
         output_release_permit: Option<CommandOutputReleasePermit>,
     ) -> ProtocolOutputSequence {
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_runtime",
-                stage = "command_post_flush_scheduler_events",
-                events = post_flush_scheduler_events.len(),
+                stage = "command_output_boundary_finish",
                 protocol_residence_len = self.queues.protocol_residence_len(),
             );
         }
-        self.apply_scheduler_events_inner(post_flush_scheduler_events.events, &[], None, false);
         let Some(permit) = output_release_permit else {
             return ProtocolOutputSequence::empty();
         };

@@ -328,7 +328,13 @@ impl PreparedPageTargetCloseCommand {
             response.extend_background_events(events);
             conn.extend_scheduler_events(scheduler_events);
         } else if has_predecessor {
-            conn.publish_page_target_termination_owner_action(self.action);
+            // Retiring this host can detach the transport route used by the
+            // closing command. Its output boundary, rather than every command
+            // publication, is the dependency of this particular owner action.
+            conn.publish_page_target_termination_after_command_output(
+                self.action,
+                context.response_flush().clone(),
+            );
         }
         if output.closes_default_target
             && (deferred_close

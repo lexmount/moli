@@ -40,8 +40,8 @@ use super::{
     CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpOwnerActorLifecycle,
     CdpRendererPublicationReceiver, CdpScheduler, CdpSchedulerEventReceivers,
     CommandOutputReleasePermit, CommandStartAction, CommandTaskStep, CommandTurnOutput,
-    PostFlushSchedulerEvents, ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance,
-    ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
+    ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
+    ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
@@ -161,7 +161,7 @@ enum SchedulerInput {
 }
 
 struct SchedulerInputReceivers {
-    state_events_ready: std::rc::Rc<tokio::sync::Notify>,
+    state_events_ready: std::sync::Arc<tokio::sync::Notify>,
     protocol_work_completion_rx:
         mpsc::UnboundedReceiver<super::protocol_task::ProtocolWorkCompletion>,
     document_activity_completion_rx:
@@ -932,7 +932,6 @@ enum RuntimeDeferredReplyFlushItem {
 }
 
 struct RuntimeDeferredReplyCompletedCommand {
-    post_flush_scheduler_events: PostFlushSchedulerEvents,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
 
@@ -996,7 +995,6 @@ impl RuntimeDeferredReplyCompletion {
             post_renderer_output,
             renderer_output_boundary,
             post_response_events,
-            post_flush_scheduler_events,
             renderer_output_predecessor,
             output_release_permit,
         ) = self.output.into_parts();
@@ -1012,7 +1010,6 @@ impl RuntimeDeferredReplyCompletion {
             completion_output,
             post_response_events,
             RuntimeDeferredReplyCompletedCommand {
-                post_flush_scheduler_events,
                 output_release_permit,
             },
         )
@@ -1175,10 +1172,8 @@ async fn finish_runtime_deferred_reply_completed_command(
     scheduler: &mut CdpScheduler,
     completed: RuntimeDeferredReplyCompletedCommand,
 ) -> ProtocolOutputSequence {
-    let mut followup_output = scheduler.finish_command_dispatch_output_flush(
-        completed.post_flush_scheduler_events,
-        completed.output_release_permit,
-    );
+    let mut followup_output =
+        scheduler.finish_command_dispatch_output_flush(completed.output_release_permit);
     followup_output.append(scheduler.complete_ready_protocol_residences_after_command());
     followup_output
 }
@@ -1221,16 +1216,15 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
         .state
         .with_state(|state| state.forget_scheduler_deferred_inspector_reply(pending.pending))
         .expect("live protocol actor state");
-    let command_output = (CommandTurnOutput::new(
-        ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_error(
+    let command_output = (CommandTurnOutput::new(ProtocolOutputSequence::from_background_event(
+        BackgroundProtocolEvent::command_error(
             Some(command_id),
             None,
             -32000,
             "RuntimeDeferredReplyLooseProtocolResponse".to_owned(),
             None,
-        )),
-        PostFlushSchedulerEvents::default(),
-    ))
+        ),
+    )))
     .with_output_release_permit(pending.output_release_permit);
     Ok(RuntimeDeferredReplyAdvance::Complete(Box::new(
         RuntimeDeferredReplyCompletion {
@@ -1390,8 +1384,8 @@ fn runtime_deferred_reply_unexpected_pending_output(
     session_id: Option<&str>,
     pending_kind: &str,
 ) -> CommandTurnOutput {
-    CommandTurnOutput::new(
-        ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_error(
+    CommandTurnOutput::new(ProtocolOutputSequence::from_background_event(
+        BackgroundProtocolEvent::command_error(
             command_id,
             session_id,
             -32000,
@@ -1399,9 +1393,8 @@ fn runtime_deferred_reply_unexpected_pending_output(
             Some(json!({
                 "pendingKind": pending_kind,
             })),
-        )),
-        PostFlushSchedulerEvents::default(),
-    )
+        ),
+    ))
 }
 
 async fn handle_adapter_scheduler_input(
@@ -1976,7 +1969,6 @@ async fn flush_completed_command_output(
         post_renderer_output,
         renderer_output_boundary,
         post_response_events,
-        post_flush_scheduler_events,
         renderer_output_predecessor,
         output_release_permit,
     ) = output.into_parts();
@@ -1988,7 +1980,6 @@ async fn flush_completed_command_output(
         take_internal_command_response(metadata, &mut protocol_output, frontend_router, scheduler);
     let messages = protocol_output.len();
     let post_response_event_count = post_response_events.len();
-    let post_flush_event_count = post_flush_scheduler_events.len();
     let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
     if trace_started.is_some() {
         tracing::info!(
@@ -1996,7 +1987,6 @@ async fn flush_completed_command_output(
             stage = "command_output_flush_start",
             messages,
             post_response_events = post_response_event_count,
-            post_flush_events = post_flush_event_count,
         );
     }
     if !flush_protocol_output_with_runtime_deferred_reply_routing(
@@ -2060,8 +2050,7 @@ async fn flush_completed_command_output(
     {
         return false;
     }
-    let released_output = scheduler
-        .finish_command_dispatch_output_flush(post_flush_scheduler_events, output_release_permit);
+    let released_output = scheduler.finish_command_dispatch_output_flush(output_release_permit);
     if !released_output.is_empty()
         && !flush_protocol_output_with_runtime_deferred_reply_routing(
             frontend_router,
@@ -2091,7 +2080,6 @@ async fn flush_completed_command_output(
             stage = "command_output_flush_done",
             messages,
             post_response_events = post_response_event_count,
-            post_flush_events = post_flush_event_count,
             elapsed_us = %started.elapsed().as_micros(),
         );
     }
@@ -2604,7 +2592,6 @@ mod tests {
                 dependencies.extend([first, second].map(RendererOutputFence::new_for_test));
                 let output = CommandTurnOutput::new(
                     ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_success(metadata.id, metadata.session_id.as_deref(), json!({}))),
-                    PostFlushSchedulerEvents::default(),
                 ).with_renderer_output_dependencies(dependencies)
                     .with_output_release_permit(CommandOutputReleasePermit::new(permit, None));
                 let publication = |cursor| RendererOutputTransportMessage::Publication(RendererOutputPublication::new_for_test(

@@ -869,7 +869,7 @@ impl CdpConnection {
                     }
                 },
             ),
-            "Runtime" => crate::domains::runtime::try_start_runtime_command_dispatch(self, &cmd)
+            "Runtime" => crate::domains::runtime::try_start_runtime_command_dispatch(self, &cmd, command_context.response_flush())
             .map(|step| match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))

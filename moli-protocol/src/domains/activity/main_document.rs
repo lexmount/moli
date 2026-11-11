@@ -918,13 +918,10 @@ mod tests {
     }
 
     fn take_deferred_load_work_for_test(conn: &mut CdpConnection) -> ProtocolSchedulerWork {
-        let [event]: [crate::conn::CdpSchedulerEvent; 1] = conn
-            .take_scheduler_events()
+        let [work]: [crate::ProtocolSchedulerWork; 1] = conn
+            .take_published_protocol_work()
             .try_into()
             .expect("one exact deferred-load work publication");
-        let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-            panic!("deferred load must publish concrete protocol scheduler work");
-        };
         assert_eq!(
             work.kind(),
             ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
@@ -1772,12 +1769,24 @@ mod tests {
             0,
             "post-load work never generates the load event"
         );
+        // Consume the original durable publications before inspecting a
+        // duplicate completion. Wakes can legitimately repeat while that
+        // original FIFO remains nonempty.
+        let _original = handle
+            .with_state(|state| state.take_published_protocol_work())
+            .unwrap();
         let duplicate = pending.wait().await;
         let (events, scheduler) = handle
             .with_state(|state| state.complete_owned_protocol_scheduler_work(duplicate))
             .unwrap()
             .into_protocol_event_parts();
         assert!(events.is_empty() && scheduler.is_empty());
+        assert!(
+            handle
+                .with_state(|state| state.take_published_protocol_work())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

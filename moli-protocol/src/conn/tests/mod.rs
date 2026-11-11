@@ -419,6 +419,10 @@ fn command_response_flush_permit_is_unique_and_scoped_to_its_context() {
     let mut conn = CdpConnection::new();
 
     let (first_permit, first_context) = conn.begin_command_response_flush_permit();
+    assert_eq!(
+        first_context.state(),
+        super::CommandResponseFlushState::Pending
+    );
     let first_receiver = first_context
         .receiver()
         .expect("first command should install a response flush observer");
@@ -429,6 +433,14 @@ fn command_response_flush_permit_is_unique_and_scoped_to_its_context() {
         .expect("second command should install a response flush observer");
 
     second_permit.finish();
+    assert_eq!(
+        first_context.state(),
+        super::CommandResponseFlushState::Pending
+    );
+    assert_eq!(
+        second_context.state(),
+        super::CommandResponseFlushState::Flushed
+    );
 
     assert!(
         !*first_receiver.borrow(),
@@ -440,6 +452,10 @@ fn command_response_flush_permit_is_unique_and_scoped_to_its_context() {
     );
 
     first_permit.finish();
+    assert_eq!(
+        first_context.state(),
+        super::CommandResponseFlushState::Flushed
+    );
     assert!(
         *first_receiver.borrow(),
         "the earlier command should remain releasable by its unique permit"
@@ -455,6 +471,7 @@ fn dropping_command_response_flush_permit_cancels_its_observers() {
         .expect("command should install a response flush observer");
 
     drop(permit);
+    assert_eq!(context.state(), super::CommandResponseFlushState::Cancelled);
 
     assert!(
         receiver.has_changed().is_err(),
@@ -508,6 +525,10 @@ fn abandoned_command_response_flush_permit_releases_fail_open() {
 #[test]
 fn missing_command_response_flush_context_releases_immediately() {
     let context = CommandResponseFlushContext::default();
+    assert_eq!(
+        context.state(),
+        super::CommandResponseFlushState::NotRequired
+    );
     let releases = Arc::new(AtomicUsize::new(0));
     let release_counter = releases.clone();
     context.defer_until_response_flush(move || {
@@ -515,6 +536,35 @@ fn missing_command_response_flush_context_releases_immediately() {
     });
 
     assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn command_output_release_callbacks_already_observe_the_terminal_state() {
+    for flush in [false, true] {
+        let mut conn = CdpConnection::new();
+        let (permit, context) = conn.begin_command_response_flush_permit();
+        let observed = context.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        context.defer_until_response_flush(move || sender.send(observed.state()).unwrap());
+        std::thread::spawn(move || {
+            if flush {
+                permit.finish();
+            } else {
+                drop(permit);
+            }
+        })
+        .join()
+        .unwrap();
+        let expected = if flush {
+            super::CommandResponseFlushState::Flushed
+        } else {
+            super::CommandResponseFlushState::Cancelled
+        };
+        assert_eq!(receiver.recv().unwrap(), expected);
+        // Observers registered after release see the same settled boundary.
+        let observed = context.clone();
+        context.defer_until_response_flush(move || assert_eq!(observed.state(), expected));
+    }
 }
 
 #[test]

@@ -182,19 +182,16 @@ async fn background_protocol_completion_rejoins_waits_and_keeps_its_original_pub
                     assert!(predecessor.is_empty());
                     assert!(events.is_empty(), "the finite admission does not publish a source result");
                     let mut work = None;
-                    let mut other_events = Vec::new();
-                    for event in scheduler_events {
-                        match event {
-                            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work: candidate }
-                                if candidate.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction => {
+                    for candidate in ctx.with_fixture(|conn| conn.take_published_protocol_work()) {
+                            if candidate.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction {
                                 assert_eq!(candidate.navigation_dependency(), ProtocolNavigationDependency::ReplacesPendingLoad);
                                 assert_eq!(candidate.navigation_gate_target_id(), Some("TID-1"));
                                 assert!(work.replace(candidate).is_none());
+                            } else {
+                                panic!("unexpected work: {candidate:?}");
                             }
-                            event => other_events.push(event),
-                        }
                     }
-                    ctx.route_direct_command_output_for_test(Vec::new(), other_events).await;
+                    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events).await;
                     let pending = ctx.with_fixture(|conn| conn.try_start_owned_protocol_scheduler_work(work.unwrap())
                         .unwrap_or_else(|_| panic!("navigation uses the existing owner-work supervisor"))
                         .expect("the prepared tail has native work"));

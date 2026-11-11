@@ -913,16 +913,10 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
 
     let work = ctx.with_fixture(|conn| {
         conn.publish_popup_target_navigation_owner_action(action);
-        conn.take_scheduler_events()
+        conn.take_published_protocol_work()
             .into_iter()
-            .find_map(|event| match event {
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.kind()
-                        == crate::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction =>
-                {
-                    Some(work)
-                }
-                _ => None,
+            .find(|work| {
+                work.kind() == crate::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
             })
             .unwrap()
     });

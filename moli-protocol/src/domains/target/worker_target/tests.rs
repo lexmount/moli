@@ -1041,7 +1041,11 @@ async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retiremen
     );
     let Some(crate::domains::runtime::RuntimeCommandTaskStep::Complete(run_plan)) = ctx
         .with_fixture(|conn| {
-            crate::domains::runtime::try_start_runtime_command_dispatch(conn, &run_cmd)
+            crate::domains::runtime::try_start_runtime_command_dispatch(
+                conn,
+                &run_cmd,
+                &Default::default(),
+            )
         })
     else {
         panic!("failed DedicatedWorker debugger resume should complete synchronously");

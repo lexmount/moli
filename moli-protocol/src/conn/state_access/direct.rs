@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
+    sync::{Arc, Weak as SyncWeak},
 };
 
 use anyhow::Context as _;
@@ -16,7 +17,7 @@ use super::{CdpConnection, ProtocolWorkflowState};
 pub struct ProtocolStateOwner {
     connection: Rc<RefCell<CdpConnection>>,
     deferred_cleanup: Rc<RefCell<Vec<super::StateOperation>>>,
-    events_ready: Rc<tokio::sync::Notify>,
+    events_ready: Arc<tokio::sync::Notify>,
 }
 
 impl ProtocolStateOwner {
@@ -24,7 +25,7 @@ impl ProtocolStateOwner {
         let owner = Self {
             connection: Rc::new(RefCell::new(connection)),
             deferred_cleanup: Rc::default(),
-            events_ready: Rc::default(),
+            events_ready: Arc::default(),
         };
         owner.connection.borrow_mut().state_access = Some(owner.handle());
         owner
@@ -41,13 +42,13 @@ impl ProtocolStateOwner {
         ProtocolStateHandle {
             connection: Rc::downgrade(&self.connection),
             deferred_cleanup: Rc::downgrade(&self.deferred_cleanup),
-            events_ready: Rc::downgrade(&self.events_ready),
+            events_ready: Arc::downgrade(&self.events_ready),
         }
     }
 
     /// Coalesced notification for durable scheduler events already produced by
     /// synchronous operations. It carries no operation or connection access.
-    pub fn scheduler_events_ready(&self) -> Rc<tokio::sync::Notify> {
+    pub fn scheduler_events_ready(&self) -> Arc<tokio::sync::Notify> {
         self.events_ready.clone()
     }
 }
@@ -62,7 +63,7 @@ pub struct ProtocolOwnerClosed;
 pub struct ProtocolStateHandle {
     connection: Weak<RefCell<CdpConnection>>,
     deferred_cleanup: Weak<RefCell<Vec<super::StateOperation>>>,
-    events_ready: Weak<tokio::sync::Notify>,
+    events_ready: SyncWeak<tokio::sync::Notify>,
 }
 
 // A task-local cancellation guard may be dropped by a state operation. The
