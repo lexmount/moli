@@ -434,7 +434,7 @@ pub(crate) struct ServiceWorkerMessageCompletion {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerFetchRequest {
-    pub(crate) client_id: ServiceWorkerClientId,
+    pub(crate) client_id: Option<ServiceWorkerClientId>,
     pub(crate) resulting_client_id: Option<ServiceWorkerClientId>,
     pub(crate) url: Url,
     pub(crate) method: String,

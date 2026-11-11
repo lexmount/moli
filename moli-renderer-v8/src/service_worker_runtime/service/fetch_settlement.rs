@@ -219,6 +219,31 @@ fn apply_service_worker_synthetic_redirect(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) async fn await_synchronous_fetch<T>(
+        &self,
+        fetch: impl std::future::Future<Output = Result<T, String>>,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) -> Result<T, String> {
+        let (wake_tx, mut wake_rx) =
+            crate::service_worker_runtime::service_worker_owner_wake_channel();
+        self.add_owner_wake_sender(wake_tx);
+        tokio::pin!(fetch);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_handle.cancelled() => {
+                    return Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+                }
+                result = &mut fetch => return result,
+                Some(crate::service_worker_runtime::ServiceWorkerRuntimeOwnerWake::ServiceLane) = wake_rx.recv() => {
+                    // The requesting realm is blocked. Process native Service
+                    // Worker replies without entering that realm's task queue.
+                    self.drain_service_lane();
+                }
+            }
+        }
+    }
+
     pub(crate) async fn fetch_subresource_for_client(
         &self,
         client_id: ServiceWorkerClientId,
@@ -249,7 +274,7 @@ impl ServiceWorkerRuntimeService {
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 body_stream: None,
-                client_id,
+                client_id: Some(client_id),
                 resulting_client_id: None,
                 url: request.url.clone(),
                 method: request.method.clone(),
@@ -305,6 +330,7 @@ impl ServiceWorkerRuntimeService {
     pub(crate) async fn fetch_main_resource_for_worker_client(
         &self,
         client_id: ServiceWorkerClientId,
+        creator_client_id: Option<ServiceWorkerClientId>,
         request: &moli_fetch::Request,
         request_client: &ResourceRequestClient,
         resource_task_runner: crate::network::RendererResourceTaskRunner,
@@ -330,7 +356,7 @@ impl ServiceWorkerRuntimeService {
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 body_stream: None,
-                client_id,
+                client_id: creator_client_id,
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
                 method: request.method.clone(),
@@ -1406,7 +1432,7 @@ mod tests {
                 internal_id,
                 owner: Some(ServiceWorkerRunOwner::new(version_id, run.clone())),
                 cors_preflight_request_headers: Vec::new(),
-                client_id,
+                client_id: Some(client_id),
                 resulting_client_id: None,
                 destination,
                 is_reload: false,
@@ -2669,7 +2695,7 @@ mod tests {
             internal_id: 312,
             owner: Some(ServiceWorkerRunOwner::fresh(ServiceWorkerVersionId(1))),
             cors_preflight_request_headers: Vec::new(),
-            client_id: ServiceWorkerClientId::from_u64_for_test(0),
+            client_id: Some(ServiceWorkerClientId::from_u64_for_test(0)),
             resulting_client_id: None,
             destination: ServiceWorkerRequestDestination::Empty,
             is_reload: false,

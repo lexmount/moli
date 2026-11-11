@@ -1235,7 +1235,11 @@ fn new_service_worker_fetch_event<'s>(
     handled: v8::Local<'s, v8::Promise>,
     preload_response: v8::Local<'s, v8::Promise>,
 ) -> v8::Local<'s, v8::Object> {
-    let client_id = service_worker_exposed_client_id(event.request.client_id);
+    let client_id = event
+        .request
+        .client_id
+        .map(service_worker_exposed_client_id)
+        .unwrap_or_default();
     let resulting_client_id = event
         .request
         .resulting_client_id
