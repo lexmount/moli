@@ -63,74 +63,85 @@ pub(crate) struct NewPopupTarget {
     tab_target_id: String,
     auto_attached_tab_sessions: Vec<(Option<String>, String, CdpSessionRoute)>,
     auto_attached_page_sessions: Vec<(Option<String>, String, CdpSessionRoute)>,
-    requested_url: String,
     disposition: moli_core::page::RendererPopupDisposition,
 }
 
 impl PreparedPopupTarget {
-    pub(crate) async fn run_using(
+    /// A browser-side commit. Native initialization is supervised separately;
+    /// it never retains this publication's projection context or completion.
+    pub(crate) fn commit(
         self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver,
-        context: &mut crate::conn::CommandWorkflowContext,
-    ) -> Result<Option<String>> {
-        let Self::New(prepared) = self else {
-            let Self::Existing(target_id) = self else {
+        conn: &mut CdpConnection,
+        predecessor: Option<moli_core::RendererOutputCursor>,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) -> Option<String> {
+        let Self::New(mut prepared) = self else {
+            let Self::Existing(id) = self else {
                 unreachable!()
             };
-            return Ok(Some(target_id));
+            return Some(id);
         };
         let target_id = prepared.target_id.clone();
-        let browser_context_id = prepared.browser_context_id.clone();
-        let ensure_target = target_id.clone();
-        let ensure_context = browser_context_id.clone();
-        let start = driver.with_state(move |state| {
-            state.start_popup_initial_document(ensure_context, ensure_target)
-        })?;
-        let announced = start.is_some();
-        let start = if let Some((pending, events)) = start {
-            context.context_mut().protocol_events_mut().extend(events);
-            // The exact Page output owner and control route now exist. Publish
-            // its creation before adoption can wait for a dialog in that Page.
-            context.publish_projection_prefix(driver, Some(target_id.clone()))?;
-            Some(pending)
-        } else {
-            None
-        };
-        let ensured = match start {
-            Some(Some(pending)) => match pending.wait().await {
-                Ok(completed) => match completed.install_using(driver).await {
-                    Ok(_) => true,
-                    Err(error) => {
-                        tracing::debug!(%error, %target_id, "failed to install popup initial document");
+        let route = conn.target_session_route_for_target_id(&target_id)?;
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
+        let host = conn.page_target_host_identity_for_owner(&owner)?;
+        conn.browser_context_by_id_mut(&prepared.browser_context_id)?
+            .page_target_mut(&target_id)?
+            .creation_output_predecessor = predecessor;
+        // Routes and debugger-start policy are browser-side state. Commit
+        // them before collecting Native build inputs, without awaiting agents.
+        let mut attached = Vec::new();
+        commit_popup_attachments(conn, &mut attached, &mut prepared)
+            .expect("staged popup owns its Page and Tab routes");
+        let created = popup_target_created_events(conn, &prepared.browser_context_id, &target_id)
+            .expect("staged popup owns its creation snapshot");
+        if prepared.disposition != moli_core::page::RendererPopupDisposition::Background
+            && let Some(activation) =
+                PopupTargetActivationAction::capture(conn, &prepared.browser_context_id, &target_id)
+        {
+            crate::conn::PendingProtocolSchedulerWork::publish_popup_activation(conn, activation);
+        }
+        let pending = conn.start_initial_document_page_ensure_for_owner(&owner);
+        let page_owner = conn
+            .pending_target_page_residence_identity_for_owner(&owner)
+            .or_else(|| conn.target_page_residence_identity_for_owner(&owner));
+        out.extend(created);
+        out.extend(attached);
+        let access = conn.protocol_state_access();
+        let workflow_access = access.clone();
+        let initialization = async move {
+            let mut driver = crate::conn::ProtocolWorkflowDriver::new(workflow_access);
+            let initialized = match pending {
+                Ok(Some(pending)) => match pending.wait().await {
+                    Ok(completed) => match completed.install_using(&mut driver).await {
+                        Ok(_) => true,
+                        Err(error) => {
+                            tracing::debug!(%error, "popup initialization failed during install");
+                            false
+                        }
+                    },
+                    Err(failed) => {
+                        let _ = driver
+                            .with_state(move |state| state.fail_popup_initial_document(failed));
                         false
                     }
                 },
-                Err(failed) => {
-                    driver.with_state(move |state| state.fail_popup_initial_document(failed))?;
+                Ok(None) => true,
+                Err(error) => {
+                    tracing::debug!(%error, "popup initialization failed to start");
                     false
                 }
-            },
-            Some(None) => true,
-            None => false,
+            };
+            let _ = driver.with_state(move |state| {
+                state.finish_popup_initialization(owner, host, page_owner, initialized, predecessor)
+            });
         };
-        let target = if ensured {
-            let (target, events) =
-                driver.with_state(move |state| state.finish_popup_target(prepared))?;
-            context.context_mut().protocol_events_mut().extend(events);
-            target
-        } else {
-            None
-        };
-        if target.is_none() {
-            let (pending, events) = driver.with_state(move |state| {
-                state.prepare_popup_rollback(browser_context_id, target_id, announced)
-            })?;
-            if let Some(pending) = pending {
-                pending.run_using(driver).await?;
-            }
-            context.context_mut().protocol_events_mut().extend(events);
-        }
-        Ok(target)
+        let pending = crate::conn::PendingProtocolSchedulerWork::for_popup_initialization(
+            Box::pin(initialization),
+            access,
+        );
+        conn.push_scheduler_event(crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending });
+        Some(target_id)
     }
 }
 
@@ -197,15 +208,8 @@ pub(crate) fn prepare_popup_target(
     .map(str::to_owned);
     if let Some(existing_target_id) = existing_target_id {
         if !navigation_requested {
-            if disposition != moli_core::page::RendererPopupDisposition::Background
-                && let Some(activation) = PopupTargetActivationAction::capture(
-                    conn,
-                    &browser_context_id,
-                    &existing_target_id,
-                )
-            {
-                conn.publish_popup_target_activation_action(activation);
-            }
+            // Resolving an existing named Window without a URL does not make
+            // another foreground-selection request (also verified on Chrome).
             return Some(PreparedPopupTarget::Existing(existing_target_id));
         }
         // Compare the current Document before publishing the requested URL.
@@ -226,18 +230,19 @@ pub(crate) fn prepare_popup_target(
                         .same_origin(&initiator.origin())
                     })
             });
-        let navigation =
-            popup_target_has_loaded_page(conn, &browser_context_id, &existing_target_id)
-                .then(|| {
-                    PopupTargetNavigationOwnerAction::capture(
-                        conn,
-                        &browser_context_id,
-                        &existing_target_id,
-                        url.clone(),
-                        PopupTargetNavigationKind::NamedTargetReuse { replace_current },
-                    )
-                })
-                .flatten();
+        let has_loaded_page =
+            popup_target_has_loaded_page(conn, &browser_context_id, &existing_target_id);
+        let navigation = has_loaded_page
+            .then(|| {
+                PopupTargetNavigationOwnerAction::capture(
+                    conn,
+                    &browser_context_id,
+                    &existing_target_id,
+                    url.clone(),
+                    PopupTargetNavigationKind::NamedTargetReuse { replace_current },
+                )
+            })
+            .flatten();
         let activation = (disposition != moli_core::page::RendererPopupDisposition::Background)
             .then(|| {
                 PopupTargetActivationAction::capture(conn, &browser_context_id, &existing_target_id)
@@ -263,9 +268,24 @@ pub(crate) fn prepare_popup_target(
                         .with_initial_document_environment(initial_document_environment)
                         .with_navigation_initiator(navigation_initiator),
                 );
+            } else if !has_loaded_page {
+                // Keep the latest accepted request while the same Host joins
+                // adoption. Never reuse the first URL's response or initiator.
+                conn.browser_context_by_id_mut(&browser_context_id)
+                    .and_then(|context| context.page_target_mut(&existing_target_id))
+                    .expect("accepted named target remains registered")
+                    .owner_state
+                    .pending_popup_navigation = Some(crate::conn::PendingPopupNavigation {
+                    url,
+                    response: document_response,
+                    environment: initial_document_environment,
+                    initiator: navigation_initiator,
+                });
             }
             if let Some(activation) = activation {
-                conn.publish_popup_target_activation_action(activation);
+                crate::conn::PendingProtocolSchedulerWork::publish_popup_activation(
+                    conn, activation,
+                );
             }
         }
         return target_url_updated.then_some(PreparedPopupTarget::Existing(existing_target_id));
@@ -376,6 +396,7 @@ pub(crate) fn prepare_popup_target(
             .pending_popup_navigation = Some(crate::conn::PendingPopupNavigation {
             url: requested_url.clone(),
             response: document_response,
+            environment: initial_document_environment,
             initiator: navigation_initiator,
         });
     }
@@ -421,7 +442,6 @@ pub(crate) fn prepare_popup_target(
         tab_target_id,
         auto_attached_tab_sessions,
         auto_attached_page_sessions,
-        requested_url,
         disposition,
     }))
 }
@@ -431,72 +451,37 @@ pub(crate) fn popup_target_created_events(
     browser_context_id: &str,
     target_id: &str,
 ) -> Option<Vec<BackgroundProtocolEvent>> {
-    let target_info = conn
-        .browser_context_by_id(browser_context_id)
-        .and_then(|context| context.devtools_target_info(target_id))?;
+    conn.browser_context_by_id(browser_context_id)?
+        .devtools_target_info(target_id)?;
     let mut out = Vec::new();
-    if conn.has_any_target_discovery() {
-        push_target_created_events(conn, &mut out, target_id);
-    } else {
-        // Automation observes the browsing context independently of CDP
-        // discovery and before its Inspector adoption completes.
-        out.push(BackgroundProtocolEvent::automation_only(
-            events::target_created_automation_event(target_info),
-        ));
-    }
+    push_target_created_events(conn, &mut out, target_id);
     Some(out)
 }
 
-pub(crate) fn finish_popup_target(
+fn commit_popup_attachments(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    prepared: NewPopupTarget,
-) -> Option<String> {
-    let NewPopupTarget {
-        browser_context_id,
-        target_id,
-        tab_target_id,
-        auto_attached_tab_sessions,
-        auto_attached_page_sessions,
-        requested_url,
-        disposition,
-    } = prepared;
+    prepared: &mut NewPopupTarget,
+) -> Option<()> {
     let target_info = conn
-        .browser_context_by_id(&browser_context_id)
-        .and_then(|browser_context| browser_context.devtools_target_info(&target_id))?;
-    let tab_target_info = conn.tab_target_info(&tab_target_id)?;
+        .browser_context_by_id(&prepared.browser_context_id)?
+        .devtools_target_info(&prepared.target_id)?;
+    let tab_info = conn.tab_target_info(&prepared.tab_target_id)?;
     push_committed_auto_attached_session_events(
         conn,
         out,
-        &auto_attached_tab_sessions,
-        &tab_target_id,
-        tab_target_info,
+        &std::mem::take(&mut prepared.auto_attached_tab_sessions),
+        &prepared.tab_target_id,
+        tab_info,
     );
     push_committed_auto_attached_session_events(
         conn,
         out,
-        &auto_attached_page_sessions,
-        &target_id,
+        &std::mem::take(&mut prepared.auto_attached_page_sessions),
+        &prepared.target_id,
         target_info,
     );
-    if !conn.target_has_waiting_for_debugger_session(&target_id)
-        && let Some(navigation) = PopupTargetNavigationOwnerAction::capture(
-            conn,
-            &browser_context_id,
-            &target_id,
-            requested_url,
-            PopupTargetNavigationKind::InitialDocument,
-        )
-    {
-        conn.publish_popup_target_navigation_owner_action(navigation);
-    }
-    if disposition != moli_core::page::RendererPopupDisposition::Background
-        && let Some(activation) =
-            PopupTargetActivationAction::capture(conn, &browser_context_id, &target_id)
-    {
-        conn.publish_popup_target_activation_action(activation);
-    }
-    Some(target_id)
+    Some(())
 }
 
 fn push_committed_auto_attached_session_events(
@@ -637,7 +622,7 @@ impl PreparedPopupNavigation {
             url,
             kind,
             mut document_response,
-            initial_document_environment,
+            mut initial_document_environment,
             mut navigation_initiator,
         ) = action.into_parts();
         let target_is_current = conn
@@ -690,6 +675,7 @@ impl PreparedPopupNavigation {
             .filter(|pending| pending.url == url)
         {
             document_response = pending.response;
+            initial_document_environment = pending.environment;
             navigation_initiator = pending.initiator;
         }
         let auxiliary_navigation = match kind {
@@ -762,8 +748,13 @@ pub(crate) fn prepare_popup_target_activation(
     conn: &mut CdpConnection,
     action: &PopupTargetActivationAction,
 ) -> Result<Option<super::activation::PreparedTargetActivation>, crate::automation::DevToolsError> {
+    // A renderer action from an inactive BrowserContext must not steal the
+    // frontend's selected context. Explicit Target.activateTarget is separate.
     if !action.is_current(conn)
-        || !popup_target_has_loaded_page(conn, action.browser_context_id(), action.target_id())
+        || conn
+            .browser_context
+            .as_ref()
+            .is_none_or(|context| context.id != action.browser_context_id())
     {
         return Ok(None);
     }
@@ -787,4 +778,164 @@ fn emit_target_info_changed_for_target_background_event(
     out.extend(
         conn.target_info_changed_event_plan_for_observable_target(browser_context_id, target_id),
     );
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use super::*;
+    use crate::conn::{BrowserContext, CommandOwnerScope, ProtocolStateOwner};
+    use futures_util::FutureExt as _;
+
+    #[tokio::test]
+    async fn creation_finishes_while_initialization_is_held_and_close_revokes_the_waiter() {
+        for close_before_ready in [false, true] {
+            let mut conn = CdpConnection::new();
+            let mut browser = BrowserContext::new("BID-held-popup".into());
+            browser.set_active_target_id("TID-opener");
+            browser.stage_background_target(
+                "TID-held-popup".into(),
+                None,
+                "about:blank".into(),
+                Some("about:blank".into()),
+                None,
+            );
+            conn.browser_context = Some(browser);
+            let tab_target_id = conn.register_top_level_page_target("TID-held-popup");
+            let route = conn
+                .target_session_route_for_target_id("TID-held-popup")
+                .unwrap();
+            let owner = CommandOwnerScope::for_route(route);
+            // A real initial-build join receipt is the deterministic adoption
+            // barrier. No renderer task or timer can make it ready by chance.
+            conn.runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .start_initial_document_page_build();
+            let state = ProtocolStateOwner::new(conn);
+            let target_owner = owner.clone();
+            let (target, events, pending) = state
+                .with_state(move |state| {
+                    state.fixture(|conn| {
+                        let mut events = Vec::new();
+                        let target = PreparedPopupTarget::New(NewPopupTarget {
+                            browser_context_id: "BID-held-popup".into(),
+                            target_id: "TID-held-popup".into(),
+                            tab_target_id,
+                            auto_attached_tab_sessions: Vec::new(),
+                            auto_attached_page_sessions: Vec::new(),
+                            disposition: moli_core::page::RendererPopupDisposition::Background,
+                        })
+                        .commit(conn, None, &mut events);
+                        let mut tasks = conn.take_scheduler_events().into_iter().filter_map(
+                            |event| match event {
+                                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared {
+                                    pending,
+                                } => Some(pending),
+                                _ => None,
+                            },
+                        );
+                        let pending = tasks.next().expect("one supervised initialization");
+                        assert!(tasks.next().is_none());
+                        (target, events, pending)
+                    })
+                })
+                .unwrap();
+            assert_eq!(target.as_deref(), Some("TID-held-popup"));
+            assert!(events.into_iter().any(|event| matches!(event.into_parts().1,
+                Some(crate::automation::AutomationEvent::TargetCreated(event)) if event.target_id.as_str() == "TID-held-popup")));
+            assert!(pending.renderer_projection_cursor().is_none());
+            assert!(
+                pending.clone().wait().now_or_never().is_none(),
+                "creation does not await adoption"
+            );
+            let terminate = state
+                .with_state(move |state| {
+                    state.fixture(|conn| {
+                        conn.browser_context_by_id_mut("BID-held-popup")
+                            .unwrap()
+                            .remember_target_window_name("held-window", "TID-held-popup");
+                        let page = moli_core::PageId::new_for_testing(131);
+                        let document = moli_core::page::RendererDocumentLifecycleIdentity {
+                            frame: moli_core::page::RendererFrameToken { page_id: page },
+                            document: moli_core::page::RendererDocumentToken::new_for_testing(
+                                page, 1,
+                            ),
+                            epoch: moli_core::page::RendererLifecycleEpoch(1),
+                        };
+                        let activation = moli_core::page::RendererPendingPopupActivation::window(
+                            document,
+                            moli_core::page::RendererWindowDocumentSource::RootFrame,
+                            true,
+                            None,
+                            "https://example.test/latest".into(),
+                            "held-window".into(),
+                            moli_core::page::RendererPopupDisposition::Background,
+                        );
+                        assert!(matches!(
+                            prepare_popup_target(
+                                conn,
+                                &mut Vec::new(),
+                                PopupTargetCreation::new("BID-held-popup".into(), activation, None)
+                            ),
+                            Some(PreparedPopupTarget::Existing(_))
+                        ));
+                        assert_eq!(
+                            conn.browser_context_by_id("BID-held-popup")
+                                .unwrap()
+                                .page_target("TID-held-popup")
+                                .unwrap()
+                                .owner_state
+                                .pending_popup_navigation
+                                .as_ref()
+                                .unwrap()
+                                .url,
+                            "https://example.test/latest"
+                        );
+                        if close_before_ready {
+                            let action =
+                                crate::domains::page::PageTargetTerminationOwnerAction::new(
+                                    conn,
+                                    target_owner,
+                                    "TID-held-popup".into(),
+                                );
+                            crate::domains::page::TargetTermination::prepare(conn, action)
+                        } else {
+                            conn.runtime_session_owner_slot_mut_for_owner(&target_owner)
+                                .unwrap()
+                                .fail_initial_document_page_build(
+                                    "injected adoption failure".into(),
+                                );
+                            None
+                        }
+                    })
+                })
+                .unwrap();
+            let completed = pending.wait().await;
+            state
+                .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
+                .unwrap();
+            if let Some(terminate) = terminate {
+                let completed = terminate
+                    .run(&mut crate::conn::ProtocolWorkflowDriver::new(
+                        state.handle(),
+                    ))
+                    .await;
+                state
+                    .with_state(move |state| state.fixture(|conn| completed.finish(conn)))
+                    .unwrap();
+            }
+            state
+                .with_state(|state| {
+                    state.fixture(|conn| {
+                        assert!(
+                            conn.browser_context_by_id("BID-held-popup")
+                                .unwrap()
+                                .page_target("TID-held-popup")
+                                .is_none(),
+                            "a failed or closed initialization never resurrects the target"
+                        );
+                    })
+                })
+                .unwrap();
+        }
+    }
 }

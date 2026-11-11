@@ -456,9 +456,7 @@ mod tests {
                 let (events, scheduler) = outcome.into_protocol_event_parts();
                 assert!(events.is_empty());
                 for event in scheduler {
-                    let crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared {
-                        pending,
-                    } = event
+                    let crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending } = event
                     else {
                         panic!("expected the exact renderer projection");
                     };

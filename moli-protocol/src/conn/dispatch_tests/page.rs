@@ -20,7 +20,13 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
         ))
         .await;
     let create_predecessor = create_outcome.renderer_output_predecessor();
-    let (create_result, create_events) = create_outcome.into_parts();
+    let (create_result, create_events, native_events) =
+        create_outcome.into_parts_with_protocol_events();
+    assert!(
+        native_events
+            .into_iter()
+            .all(|event| event.into_wire_message().is_none())
+    );
     assert!(create_events.is_empty());
     if let Some(predecessor) = create_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)

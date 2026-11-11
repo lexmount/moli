@@ -67,7 +67,7 @@ fn take_work(events: Vec<CdpSchedulerEvent>) -> Vec<PendingProtocolSchedulerWork
     events
         .into_iter()
         .map(|event| match event {
-            CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => pending,
+            CdpSchedulerEvent::ProtocolTaskPrepared { pending } => pending,
             _ => panic!("a Worker publication must retain one original projection workflow"),
         })
         .collect()

@@ -370,7 +370,7 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
     ctx.with_fixture(|conn| conn.insert_browser_context(default_context));
     ctx.with_fixture(|conn| conn.insert_browser_context(reference_context));
 
-    let (create_result, create_events) = ctx
+    let (create_result, create_events, native_events) = ctx
         .execute_owned_automation_command_for_test(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: AutomationContext {
@@ -385,8 +385,14 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
             },
         ))
         .await
-        .into_parts();
+        .into_parts_with_protocol_events();
     assert!(create_events.is_empty());
+    assert_eq!(native_events.len(), 1);
+    assert!(
+        native_events
+            .into_iter()
+            .all(|event| event.into_wire_message().is_none())
+    );
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target from reference context should succeed")
     else {
@@ -435,7 +441,7 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
     ctx.with_fixture(|conn| conn.insert_browser_context(reference_context));
     ctx.with_fixture(|conn| conn.insert_browser_context(explicit_context));
 
-    let (create_result, create_events) = ctx
+    let (create_result, create_events, native_events) = ctx
         .execute_owned_automation_command_for_test(AutomationCommand::CreateTarget(
             DevToolsCreateTargetCommand {
                 context: AutomationContext {
@@ -450,8 +456,14 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
             },
         ))
         .await
-        .into_parts();
+        .into_parts_with_protocol_events();
     assert!(create_events.is_empty());
+    assert_eq!(native_events.len(), 1);
+    assert!(
+        native_events
+            .into_iter()
+            .all(|event| event.into_wire_message().is_none())
+    );
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("explicit browser context target creation should succeed")
     else {

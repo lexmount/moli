@@ -15,7 +15,6 @@ pub(super) fn register_shared_worker_target(
         return outputs;
     }
     let target_id = conn.gen_target_id();
-    let should_emit_created = conn.has_any_target_discovery();
     let auto_attach_owners = shared_worker_auto_attach_owner_sessions(conn);
     let attached_sessions = auto_attach_owners
         .iter()
@@ -39,13 +38,9 @@ pub(super) fn register_shared_worker_target(
             info.url,
             info.name,
         ));
-        if should_emit_created {
-            let snapshot = context.devtools_target_info(&target_id);
-            debug_assert!(snapshot.is_some());
-            snapshot
-        } else {
-            None
-        }
+        let snapshot = context.devtools_target_info(&target_id);
+        debug_assert!(snapshot.is_some());
+        snapshot
     };
     let mut attached_outputs = Vec::new();
     for (owner_session_id, session_id, waiting_for_debugger) in attached_sessions {
@@ -127,7 +122,6 @@ pub(super) fn remove_shared_worker_target_with_reason(
     reason: &'static str,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    let should_emit_destroyed = conn.has_any_target_discovery();
     let target_id = {
         let Some(context) = conn.browser_context_by_id(browser_context_id) else {
             return outputs;
@@ -140,9 +134,7 @@ pub(super) fn remove_shared_worker_target_with_reason(
         };
         target_id
     };
-    let destroyed_delta = should_emit_destroyed
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return outputs;
     };

@@ -49,7 +49,14 @@ impl CdpCommandTaskStep {
     }
 }
 
+struct PendingInitialDocumentCommand {
+    waiter: InitialDocumentPageBuildWaiter,
+    command: ParsedCdpCommand,
+    host: ProtocolPageHostScope,
+}
+
 enum PendingCdpCommandDispatchKind {
+    InitialDocument(PendingInitialDocumentCommand),
     Workflow(super::command_workflow::PendingCommandWorkflowRecovery),
     Native(crate::domains::native::PendingNativeCommand),
     Runtime(Box<crate::domains::runtime::PendingRuntimeCommandDispatch>),
@@ -73,6 +80,11 @@ enum PendingCdpCommandDispatchKind {
 }
 
 enum CompletedCdpCommandDispatchKind {
+    InitialDocument {
+        command: ParsedCdpCommand,
+        host: ProtocolPageHostScope,
+        result: Result<(), String>,
+    },
     Workflow(super::command_workflow::CompletedCommandWorkflow),
     Native(crate::domains::native::CompletedNativeCommand),
     Runtime(Box<crate::domains::runtime::CompletedRuntimeCommandDispatch>),
@@ -98,6 +110,7 @@ enum CompletedCdpCommandDispatchKind {
 impl PendingCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::InitialDocument { .. } => "InitialDocument",
             Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
@@ -125,6 +138,7 @@ impl PendingCdpCommandDispatchKind {
 impl CompletedCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::InitialDocument { .. } => "InitialDocument",
             Self::Workflow(_) => "Workflow",
             Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
@@ -186,6 +200,9 @@ impl PendingCdpCommandDispatch {
 
     pub fn command_id(&self) -> Option<u64> {
         match &self.inner {
+            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
+                Some(pending.command.request().id())
+            }
             PendingCdpCommandDispatchKind::Native(pending) => Some(pending.command_id()),
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.command_id(),
             _ => None,
@@ -194,6 +211,9 @@ impl PendingCdpCommandDispatch {
 
     pub fn session_id(&self) -> Option<&str> {
         match &self.inner {
+            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
+                pending.command.request().session_id()
+            }
             PendingCdpCommandDispatchKind::Native(pending) => pending.session_id(),
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.session_id(),
             _ => None,
@@ -294,6 +314,14 @@ impl PendingCdpCommandDispatch {
             );
         }
         let inner = match self.inner {
+            PendingCdpCommandDispatchKind::InitialDocument(pending) => {
+                let result = pending.waiter.wait().await;
+                CompletedCdpCommandDispatchKind::InitialDocument {
+                    command: pending.command,
+                    host: pending.host,
+                    result,
+                }
+            }
             PendingCdpCommandDispatchKind::Workflow(pending) => {
                 CompletedCdpCommandDispatchKind::Workflow(pending.wait().await)
             }
@@ -781,6 +809,38 @@ impl CdpConnection {
                 Some(req.id()),
                 req.session_id(),
             );
+        }
+        // A command's agent readiness is independent of the publication that
+        // created its Target. Join the existing build; never create a second
+        // installer or make modal handling / close wait for adoption.
+        let method = req.method();
+        let needs_page = (method.starts_with("Runtime.")
+            && !matches!(method, "Runtime.terminateExecution" | "Runtime.disable"))
+            || matches!(
+                method,
+                "Page.enable"
+                    | "Page.navigate"
+                    | "Page.getFrameTree"
+                    | "Page.getResourceTree"
+                    | "Page.createIsolatedWorld"
+            );
+        if needs_page {
+            let owner = CommandOwnerScope::capture(self, req.session_id());
+            if let Some(waiter) = self
+                .runtime_session_owner_slot_for_owner(&owner)
+                .and_then(|slot| slot.initial_document_page_build_waiter())
+                && let Ok(host) = ProtocolPageHostScope::capture(self, &owner)
+            {
+                let command =
+                    ParsedCdpCommand::parse_str(command.json()).expect("already parsed command");
+                return self.pending_step(PendingCdpCommandDispatchKind::InitialDocument(
+                    PendingInitialDocumentCommand {
+                        waiter,
+                        command,
+                        host,
+                    },
+                ));
+            }
         }
         let cmd = Cmd::from_parsed(command)
             .expect("validated domain-qualified command must produce a command view")
@@ -1315,6 +1375,23 @@ impl CdpConnection {
     ) -> CdpCommandTaskStep {
         let mut out = Vec::new();
         match *completed.inner {
+            CompletedCdpCommandDispatchKind::InitialDocument {
+                command,
+                host,
+                result,
+            } => {
+                if result.is_ok() && host.can_start_operation(self) {
+                    return self
+                        .start_parsed_command_dispatch_with_context(&command, command_context);
+                }
+                return self.complete_with_output_plan(
+                    command_context,
+                    CommandOutputPlan::error(-32000, "Target initial document is unavailable"),
+                    Some(command.request().id()),
+                    command.request().session_id(),
+                );
+            }
+
             CompletedCdpCommandDispatchKind::Fetch(completed) => {
                 let command_id = completed.command_id();
                 let session_id = completed.session_id().map(str::to_owned);

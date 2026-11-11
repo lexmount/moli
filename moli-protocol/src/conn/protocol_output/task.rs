@@ -26,6 +26,7 @@ pub struct PendingProtocolSchedulerWork {
 enum PendingProtocolWork {
     Workflow(super::workflow::PendingProtocolWorkflow),
     RendererOutputProjection(super::renderer::PendingRendererOutputProjection),
+    PopupInitialization(Shared<LocalBoxFuture<'static, ()>>),
     Termination(TargetTermination),
     PopupActivation(PendingPopupActivation),
     BidiChannel(PendingBidiChannel),
@@ -36,6 +37,7 @@ enum PendingProtocolWork {
 struct PendingPopupActivation {
     pending: Shared<LocalBoxFuture<'static, Option<TargetActivationOutput>>>,
     action: Rc<crate::conn::PopupTargetActivationAction>,
+    delivery_predecessor: Option<moli_core::RendererOutputCursor>,
     committed: Rc<Cell<bool>>,
 }
 
@@ -88,7 +90,9 @@ impl PendingPopupActivation {
         }
         .boxed_local()
         .shared();
+        let delivery_predecessor = conn.target_creation_output_predecessor(action.target_id());
         Some(Self {
+            delivery_predecessor,
             pending,
             action: Rc::new(action),
             committed: Rc::new(Cell::new(false)),
@@ -109,6 +113,7 @@ enum CompletedProtocolWork {
         super::renderer::PendingRendererOutputProjection,
         super::renderer::SharedRendererProjectionResult,
     ),
+    PopupInitialization,
     Termination(Box<CompletedTargetTermination>),
     PopupActivation(PendingPopupActivation, Option<TargetActivationOutput>),
     BidiChannel(PendingBidiChannel, crate::conn::BidiChannelOutput),
@@ -123,6 +128,7 @@ impl std::fmt::Debug for PendingProtocolSchedulerWork {
         let kind = match &self.work {
             PendingProtocolWork::Workflow(_) => "Workflow",
             PendingProtocolWork::RendererOutputProjection(_) => "RendererOutputProjection",
+            PendingProtocolWork::PopupInitialization(_) => "PopupInitialization",
             PendingProtocolWork::Termination(_) => "Termination",
             PendingProtocolWork::PopupActivation(_) => "PopupActivation",
             PendingProtocolWork::BidiChannel(_) => "BidiChannel",
@@ -172,9 +178,55 @@ impl CompletedProtocolSchedulerWork {
 }
 
 impl PendingProtocolSchedulerWork {
+    /// Commit browser selection now; supervise only its Native synchronization.
+    pub(crate) fn publish_popup_activation(
+        conn: &mut CdpConnection,
+        action: crate::conn::PopupTargetActivationAction,
+    ) {
+        let access = conn.protocol_state_access();
+        if let Some(activation) = PendingPopupActivation::prepare(conn, action, access.clone()) {
+            let pending = Self {
+                work: PendingProtocolWork::PopupActivation(activation),
+                access,
+            };
+            conn.scheduler_state.push_scheduler_event(
+                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending },
+            );
+        }
+    }
+
     pub fn renderer_projection_cursor(&self) -> Option<moli_core::RendererOutputCursor> {
         match &self.work {
             PendingProtocolWork::RendererOutputProjection(projection) => Some(projection.cursor()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn for_termination(
+        termination: TargetTermination,
+        access: ProtocolStateHandle,
+    ) -> Self {
+        Self {
+            work: PendingProtocolWork::Termination(termination),
+            access,
+        }
+    }
+
+    pub(crate) fn for_popup_initialization(
+        pending: LocalBoxFuture<'static, ()>,
+        access: ProtocolStateHandle,
+    ) -> Self {
+        Self {
+            work: PendingProtocolWork::PopupInitialization(pending.shared()),
+            access,
+        }
+    }
+
+    pub fn renderer_delivery_predecessor(&self) -> Option<moli_core::RendererOutputCursor> {
+        match &self.work {
+            PendingProtocolWork::RendererOutputProjection(projection) => {
+                projection.delivery_predecessor()
+            }
             _ => None,
         }
     }
@@ -227,7 +279,6 @@ impl PendingProtocolSchedulerWork {
                 | ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::TopLevelNavigationOwnerAction
                 | ProtocolSchedulerWorkKind::NavigationRequestContinuationOwnerAction
-                | ProtocolSchedulerWorkKind::PopupTargetActivationAction
                 | ProtocolSchedulerWorkKind::BidiChannelOwnerAction
                 | ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction
         )
@@ -239,6 +290,12 @@ impl PendingProtocolSchedulerWork {
                 let completed = pending.wait().await;
                 CompletedProtocolSchedulerWork {
                     work: CompletedProtocolWork::Workflow(pending, completed),
+                }
+            }
+            PendingProtocolWork::PopupInitialization(pending) => {
+                pending.await;
+                CompletedProtocolSchedulerWork {
+                    work: CompletedProtocolWork::PopupInitialization,
                 }
             }
             PendingProtocolWork::RendererOutputProjection(projection) => {
@@ -380,10 +437,6 @@ impl CdpConnection {
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 TargetTermination::prepare(self, action).map(PendingProtocolWork::Termination)
             }
-            ReadyProtocolSchedulerWork::PopupTargetActivationAction(action) => {
-                PendingPopupActivation::prepare(self, action, access.clone())
-                    .map(PendingProtocolWork::PopupActivation)
-            }
             ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action) => {
                 PendingBidiChannel::prepare(self, action, access.clone())
                     .map(PendingProtocolWork::BidiChannel)
@@ -399,6 +452,9 @@ impl CdpConnection {
     ) -> CdpTurnOutcome {
         match completed.work {
             CompletedProtocolWork::Workflow(pending, completed) => pending.finish(self, completed),
+            CompletedProtocolWork::PopupInitialization => {
+                CdpTurnOutcome::new_with_protocol_events(Vec::new(), self.take_scheduler_events())
+            }
             CompletedProtocolWork::RendererOutputProjection(projection, result) => {
                 projection.finish(self, result)
             }
@@ -425,6 +481,11 @@ impl CdpConnection {
                     } else {
                         Vec::new()
                     };
+                let events = self.publish_output_after_renderer_delivery(
+                    events,
+                    activation.delivery_predecessor,
+                    Some(activation.action.target_id().to_owned()),
+                );
                 CdpTurnOutcome::new_with_protocol_events(events, self.take_scheduler_events())
             }
         }
@@ -791,9 +852,7 @@ mod tests {
         let (mut projected_events, scheduler_events) = output.into_protocol_event_parts();
         let mut queue = std::collections::VecDeque::from(scheduler_events);
         while let Some(event) = queue.pop_front() {
-            let crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } =
-                event
-            else {
+            let crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending } = event else {
                 panic!("the original FIFO only admits its concrete renderer projection");
             };
             let completed = ctx.drive_owned_wait(pending.wait()).await;
@@ -851,17 +910,22 @@ mod tests {
                 .unwrap();
             let owner = context.state;
             let handle = owner.handle();
-            let work = ProtocolSchedulerWork::popup_target_activation_action(
-                ProtocolWorkPublishSequence::new(1),
-                action,
-            );
             let mut pending = handle
-                .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
-                .unwrap()
-                .unwrap_or_else(|_| {
-                    panic!("popup activation must use the existing owned-work supervisor")
+                .with_state(|state| {
+                    state.fixture(|conn| {
+                        PendingProtocolSchedulerWork::publish_popup_activation(conn, action);
+                        conn.take_scheduler_events()
+                            .into_iter()
+                            .find_map(|event| match event {
+                                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared {
+                                    pending,
+                                } => Some(pending),
+                                _ => None,
+                            })
+                            .expect("finite selection transfers its Native synchronization")
+                    })
                 })
-                .expect("the live popup owns its surface update");
+                .unwrap();
             let PendingProtocolWork::PopupActivation(activation) = &mut pending.work else {
                 panic!("popup work keeps its activation kind");
             };
@@ -966,19 +1030,15 @@ mod tests {
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-popup-second"))
             .await;
         context.with_fixture(|conn| assert!(!action.is_current(conn)));
-        let work = ProtocolSchedulerWork::popup_target_activation_action(
-            ProtocolWorkPublishSequence::new(1),
-            action,
-        );
-        let owner = context.state;
-        assert!(
-            owner
-                .handle()
-                .with_state(|state| state.try_start_owned_protocol_scheduler_work(work))
-                .unwrap()
-                .unwrap_or_else(|_| panic!("a stale popup action is consumed without legacy work"))
-                .is_none()
-        );
+        context.with_fixture(|conn| {
+            let before = conn.scheduler_state.scheduler_event_count();
+            PendingProtocolSchedulerWork::publish_popup_activation(conn, action);
+            assert_eq!(
+                conn.scheduler_state.scheduler_event_count(),
+                before,
+                "a stale selection cannot start another task"
+            );
+        });
         drop(old);
     }
 }

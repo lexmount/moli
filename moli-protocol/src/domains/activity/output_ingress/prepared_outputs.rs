@@ -117,8 +117,11 @@ impl PreparedProtocolOutputs {
             .any(|slot| mode.admits(slot))
         {
             let step_owner = owner.clone();
+            let source = driver.renderer_output_source();
             let (remaining, pending) = context.with_state(driver, move |state, context| {
-                state.prepare_protocol_output_projection_step(self, step_owner, context, mode)
+                state.prepare_protocol_output_projection_step(
+                    self, step_owner, context, mode, source,
+                )
             })?;
             self = remaining;
             if let Some(pending) = pending
@@ -140,6 +143,7 @@ impl PreparedProtocolOutputs {
         owner: CommandOwnerScope,
         context: &mut crate::conn::CommandWorkflowContext,
         mode: ProtocolOutputProjectionMode,
+        source: Option<moli_core::RendererOutputCursor>,
     ) -> (
         Self,
         Option<super::super::output_slot::PreparedProtocolOutputWait>,
@@ -153,7 +157,8 @@ impl PreparedProtocolOutputs {
             let pending = if slot
                 .project_finite(
                     conn,
-                    &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut()),
+                    &mut ProtocolOutputProjectionContext::new(&owner, context.context_mut())
+                        .with_renderer_source(source),
                     &mut self.payloads,
                 )
                 .is_ok()

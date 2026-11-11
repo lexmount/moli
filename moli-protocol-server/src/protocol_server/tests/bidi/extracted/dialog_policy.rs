@@ -430,20 +430,25 @@ async fn websocket_bidi_attached_session_inherits_classic_dialog_policy() {
 
 #[tokio::test]
 async fn websocket_bidi_popup_creation_precedes_manually_handled_prompt() {
-    assert_popup_creation_precedes_prompt("ignore", false).await;
+    assert_popup_creation_precedes_prompt("ignore", false, false).await;
 }
 
 #[tokio::test]
 async fn websocket_bidi_popup_creation_precedes_automatically_handled_prompt() {
-    assert_popup_creation_precedes_prompt("accept", false).await;
+    assert_popup_creation_precedes_prompt("accept", false, false).await;
 }
 
 #[tokio::test]
 async fn websocket_bidi_popup_creation_precedes_close_during_prompt() {
-    assert_popup_creation_precedes_prompt("ignore", true).await;
+    assert_popup_creation_precedes_prompt("ignore", true, false).await;
 }
 
-async fn assert_popup_creation_precedes_prompt(handler: &str, close_popup: bool) {
+#[tokio::test]
+async fn websocket_bidi_popup_creation_progresses_with_preload_channel_startup() {
+    assert_popup_creation_precedes_prompt("ignore", false, true).await;
+}
+
+async fn assert_popup_creation_precedes_prompt(handler: &str, close_popup: bool, preload: bool) {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut socket, context) = dialog_session(addr, json!({"default": handler})).await;
     let subscribed = send_bidi_command_response(
@@ -457,6 +462,13 @@ async fn assert_popup_creation_precedes_prompt(handler: &str, close_popup: bool)
     )
     .await;
     assert_eq!(subscribed["type"], "success");
+    if preload {
+        let result = send_bidi_command_response(&mut socket, 30, "script.addPreloadScript", json!({
+            "functionDeclaration":"(channel) => { globalThis.__popupPreload = () => channel('popup'); }",
+            "arguments":[{"type":"channel","value":{"channel":"popup-initialization"}}]
+        })).await;
+        assert_eq!(result["type"], "success");
+    }
     socket.send(WsMessage::Text(json!({
         "id": 4, "method": "script.evaluate", "params": {
             "expression": "(() => { const child = window.open('about:blank'); return child.confirm('creation order'); })()",
@@ -561,6 +573,22 @@ async fn assert_popup_creation_precedes_prompt(handler: &str, close_popup: bool)
             })
             .unwrap();
         assert!(created.unwrap() < destroyed);
+        let closed = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message["method"] == "browsingContext.userPromptClosed"
+                    && message["params"]["context"] == popup
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            closed.len(),
+            1,
+            "target termination owns one prompt close fact"
+        );
+        assert_eq!(closed[0].1["params"]["accepted"], false);
+        assert!(created.unwrap() < closed[0].0 && closed[0].0 < destroyed);
+
         assert_eq!(
             messages
                 .iter()

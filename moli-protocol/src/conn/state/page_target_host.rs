@@ -42,6 +42,9 @@ pub struct PageTargetHost {
     target_id: String,
     lifetime: Arc<()>,
     pub(crate) closing: bool,
+    /// Complete publication that announces this host. This is a delivery
+    /// predecessor, never partial completion or initialization ownership.
+    pub(crate) creation_output_predecessor: Option<moli_core::RendererOutputCursor>,
     pub(crate) window_id: u32,
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
@@ -68,6 +71,7 @@ impl PageTargetHost {
             target_id,
             lifetime: Arc::new(()),
             closing: false,
+            creation_output_predecessor: None,
             window_id: 0,
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),

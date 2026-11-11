@@ -47,6 +47,7 @@ struct TargetTerminationCommit {
     host: crate::conn::PageTargetHostIdentity,
     tab_target_id: Option<String>,
     closure: PreparedTargetHostClosure,
+    creation_predecessor: Option<moli_core::RendererOutputCursor>,
     events: Vec<BackgroundProtocolEvent>,
 }
 
@@ -111,6 +112,7 @@ impl TargetTermination {
             TargetTerminationCause::Target => "Target closed",
             TargetTerminationCause::BrowserContext => "Browser context disposed",
         };
+        let creation_predecessor = conn.target_creation_output_predecessor(&target_id);
         let page = conn.start_page_target_close(&target_id, &mut events, reason)?;
         let page_sessions = PreparedClosedTargetSessions::prepare(
             conn,
@@ -144,6 +146,7 @@ impl TargetTermination {
                 host,
                 tab_target_id,
                 closure,
+                creation_predecessor,
                 events,
             }))),
             cause,
@@ -295,6 +298,11 @@ impl CompletedTargetTermination {
         if matches!(self.termination.cause, TargetTerminationCause::Target) {
             conn.release_idle_navigation_engine_memory_after_target_close();
         }
+        let events = conn.publish_output_after_renderer_delivery(
+            events,
+            commit.creation_predecessor,
+            Some(commit.target_id),
+        );
         crate::conn::CdpTurnOutcome::new_with_protocol_events(events, conn.take_scheduler_events())
     }
 }

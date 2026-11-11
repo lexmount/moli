@@ -102,60 +102,34 @@ impl PendingProtocolWorkflow {
 }
 
 impl CdpConnection {
-    pub(crate) fn publish_projected_protocol_prefix(
-        &mut self,
-        context: CommandDispatchContext,
-        source: moli_core::RendererOutputCursor,
-        target_id: Option<String>,
-    ) {
-        let events = self.finish_protocol_output_projection_inner(context, target_id, Some(source));
-        debug_assert!(events.is_empty(), "the entire prefix enters ordered output");
-    }
-
     pub(crate) fn finish_protocol_output_projection(
-        &mut self,
-        context: CommandDispatchContext,
-        target_id: Option<String>,
-    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
-        self.finish_protocol_output_projection_inner(context, target_id, None)
-    }
-
-    fn finish_protocol_output_projection_inner(
         &mut self,
         mut context: CommandDispatchContext,
         target_id: Option<String>,
-        prefix_source: Option<moli_core::RendererOutputCursor>,
     ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         let (mut events, boundary, mut after) = context.take_renderer_fenced_protocol_events();
         after.extend(context.take_post_response_events());
         let dependencies = context.take_renderer_output_dependencies();
         if let Some(boundary) = boundary {
-            if (prefix_source.is_some() || !dependencies.is_empty()) && !events.is_empty() {
-                self.publish_materialized_protocol_output(
+            if !dependencies.is_empty() && !events.is_empty() {
+                self.publish_renderer_fenced_protocol_output_after(
                     std::mem::take(&mut events),
                     dependencies.clone().into_iter().collect(),
                     target_id.clone(),
-                    prefix_source,
                 );
             }
             // The insertion also releases independently transported Native
             // observations. Its receipt must survive an empty wire suffix.
             let mut predecessors = dependencies.into_iter().collect::<Vec<_>>();
             predecessors.push(boundary);
-            self.publish_materialized_protocol_output(
-                after,
-                predecessors,
-                target_id,
-                prefix_source,
-            );
+            self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
         } else {
             events.extend(after);
-            if (prefix_source.is_some() || !dependencies.is_empty()) && !events.is_empty() {
-                self.publish_materialized_protocol_output(
+            if !dependencies.is_empty() && !events.is_empty() {
+                self.publish_renderer_fenced_protocol_output_after(
                     std::mem::take(&mut events),
                     dependencies.into_iter().collect(),
                     target_id,
-                    prefix_source,
                 );
             }
         }
@@ -163,29 +137,6 @@ impl CdpConnection {
             context.take_runtime_output_projection_permits(),
         );
         events
-    }
-
-    fn publish_materialized_protocol_output(
-        &mut self,
-        events: Vec<crate::conn::BackgroundProtocolEvent>,
-        predecessors: Vec<moli_core::RendererOutputFence>,
-        target_id: Option<String>,
-        prefix_source: Option<moli_core::RendererOutputCursor>,
-    ) {
-        if let Some(source) = prefix_source {
-            self.scheduler_state.push_scheduler_event(
-                crate::conn::CdpSchedulerEvent::RendererOutputPrefixPublished {
-                    prefix: crate::conn::RendererOutputProjectionPrefix {
-                        source,
-                        events,
-                        predecessors,
-                        target_id,
-                    },
-                },
-            );
-        } else {
-            self.publish_renderer_fenced_protocol_output_after(events, predecessors, target_id);
-        }
     }
 }
 

@@ -9,11 +9,8 @@ const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
-    RendererOutputProjectionPrepared {
+    ProtocolTaskPrepared {
         pending: super::PendingProtocolSchedulerWork,
-    },
-    RendererOutputPrefixPublished {
-        prefix: RendererOutputProjectionPrefix,
     },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
@@ -21,37 +18,6 @@ pub enum CdpSchedulerEvent {
     PageScreencastStarted {
         registration: crate::domains::page::PageScreencastRegistration,
     },
-}
-
-/// A materialized prefix of a still-pending renderer publication. Its Native
-/// cursor, rather than a post-command work sequence, owns its output order.
-#[derive(Debug)]
-pub struct RendererOutputProjectionPrefix {
-    pub(crate) source: moli_core::RendererOutputCursor,
-    pub(crate) events: Vec<BackgroundProtocolEvent>,
-    pub(crate) predecessors: Vec<moli_core::RendererOutputFence>,
-    pub(crate) target_id: Option<String>,
-}
-
-impl RendererOutputProjectionPrefix {
-    pub fn source(&self) -> moli_core::RendererOutputCursor {
-        self.source
-    }
-
-    pub fn predecessors(&self) -> &[moli_core::RendererOutputFence] {
-        &self.predecessors
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        moli_core::RendererOutputCursor,
-        Vec<BackgroundProtocolEvent>,
-        Vec<moli_core::RendererOutputFence>,
-        Option<String>,
-    ) {
-        (self.source, self.events, self.predecessors, self.target_id)
-    }
 }
 
 #[derive(Debug)]
@@ -326,6 +292,18 @@ impl CdpConnectionSchedulerState {
 
     pub(super) fn scheduler_event_count(&self) -> usize {
         self.scheduler_events.len()
+    }
+
+    pub(super) fn bind_renderer_delivery_predecessor_since(
+        &mut self,
+        start: usize,
+        predecessor: moli_core::RendererOutputCursor,
+    ) {
+        for event in &mut self.scheduler_events[start..] {
+            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
+                work.bind_renderer_delivery_predecessor(predecessor);
+            }
+        }
     }
 
     pub(super) fn bind_renderer_output_source_since(

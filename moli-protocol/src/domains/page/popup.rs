@@ -1,4 +1,3 @@
-use anyhow::Result;
 use moli_core::page::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupActivationSource,
     RendererWindowDocumentSource,
@@ -78,35 +77,37 @@ pub(super) fn emit_window_open_events(
     }
 }
 
-pub(crate) struct PreparedPopupOutputProjection(Vec<PagePreparedPopupActivation>);
-
-impl PreparedPopupOutputProjection {
-    pub(in crate::domains) fn take(
-        payloads: &mut crate::domains::activity::ProtocolOutputPayloads,
-    ) -> Option<Self> {
-        payloads.page_mut()?.take_popup_activations().map(Self)
-    }
-
-    pub(crate) async fn run(
-        self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver,
-        context: &mut crate::conn::CommandWorkflowContext,
-    ) -> Result<()> {
-        for activation in self.0 {
-            let (browser_context_id, popup_id, prepared, events) =
-                driver.with_state(move |state| state.prepare_popup_output(activation))?;
-            context.context_mut().protocol_events_mut().extend(events);
-            let target_id = if let Some(prepared) = prepared {
-                prepared.run_using(driver, context).await?
-            } else {
-                None
-            };
-            let events = driver.with_state(move |state| {
-                state.settle_popup_output(browser_context_id, popup_id, target_id)
-            })?;
-            context.context_mut().protocol_events_mut().extend(events);
-        }
-        Ok(())
+/// Commits an accepted popup without waiting for its Native Page adoption.
+pub(in crate::domains) fn project_popup_creation(
+    conn: &mut CdpConnection,
+    context: &mut crate::domains::activity::ProtocolOutputProjectionContext<'_>,
+    payloads: &mut crate::domains::activity::ProtocolOutputPayloads,
+) {
+    let Some(activations) = payloads
+        .page_mut()
+        .and_then(|page| page.take_popup_activations())
+    else {
+        return;
+    };
+    for activation in activations {
+        let (browser_context_id, popup_id, prepared, events) = activation.prepare_output(conn);
+        context.command.protocol_events_mut().extend(events);
+        let target_id = prepared.and_then(|prepared| {
+            prepared.commit(
+                conn,
+                context.renderer_source,
+                context.command.protocol_events_mut(),
+            )
+        });
+        context
+            .command
+            .protocol_events_mut()
+            .extend(super::settle_popup_output(
+                conn,
+                &browser_context_id,
+                popup_id,
+                target_id.as_deref(),
+            ));
     }
 }
 
@@ -257,20 +258,20 @@ mod tests {
         owner: TargetPageResidenceIdentity,
         activations: Vec<RendererPendingPopupActivation>,
     ) {
-        let projection = PreparedPopupOutputProjection(
-            activations
-                .into_iter()
-                .map(|activation| {
+        ctx.with_fixture(|conn| {
+            for activation in activations {
+                let (browser_context_id, popup_id, prepared, mut events) =
                     PagePreparedPopupActivation::from_renderer_for_test(owner.clone(), activation)
-                })
-                .collect(),
-        );
-        let mut command = crate::conn::CommandDispatchContext::default();
-        ctx.run_fixture_projection(&mut command, move |driver, context| {
-            Box::pin(projection.run(driver, context))
-        })
-        .await
-        .unwrap();
+                        .prepare_output(conn);
+                let target = prepared.and_then(|prepared| prepared.commit(conn, None, &mut events));
+                events.extend(super::super::settle_popup_output(
+                    conn,
+                    &browser_context_id,
+                    popup_id,
+                    target.as_deref(),
+                ));
+            }
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]

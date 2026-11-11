@@ -24,7 +24,7 @@ use moli_protocol::{
         DevToolsNavigationWait, DevToolsRemoteHandleId, DevToolsSessionId,
         DevToolsSetFileInputFilesCommand, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
         FrontendProtocol, NavigationFrameEvent, NavigationFrameEventKind, NavigationLifecycleEvent,
-        TargetLifecycleEvent, webdriver_bidi_navigation_id_from_loader_id,
+        webdriver_bidi_navigation_id_from_loader_id,
     },
     conn::RuntimeInspectorResponseReady,
 };
@@ -812,9 +812,6 @@ async fn handle_bidi_socket_message(
     } else {
         match (automation_command, input_command) {
             (Some(dispatch), None) => {
-                let observe_context_created = bidi
-                    .subscribed_contexts_for_bidi_event("browsingContext.contextCreated")
-                    .is_some();
                 start_bidi_automation_command(
                     scheduler,
                     receivers,
@@ -824,7 +821,6 @@ async fn handle_bidi_socket_message(
                     pending_navigation_candidate
                         .as_ref()
                         .map(|candidate| candidate.background_command_id),
-                    observe_context_created,
                     bidi.subscribed_contexts_for_bidi_event("browsingContext.load")
                         .is_some(),
                 )
@@ -1592,11 +1588,8 @@ struct BidiPendingRuntimeCommand {
 
 struct BidiDevToolsCommandCompletion {
     id: u64,
-    session_id: String,
     event_sources: BidiDevToolsEventSources,
     event_context: Option<String>,
-    close_target_event: Option<TargetLifecycleEvent>,
-    create_target_browser_context_id: Option<moli_protocol::automation::DevToolsBrowserContextId>,
     observe_browsing_context_load: bool,
     script_may_create_targets: bool,
     previous_target_discovery: Option<bool>,
@@ -1696,22 +1689,6 @@ impl BidiDevToolsEventSources {
     fn push_automation_event(&mut self, event: AutomationEvent) {
         self.sources
             .push(BidiDevToolsEventSource::AutomationEvent(Box::new(event)));
-    }
-
-    fn push_missing_target_destroyed_event(&mut self, event: TargetLifecycleEvent) {
-        let already_emitted = self.sources.iter().any(|source| {
-            let automation_event = match source {
-                BidiDevToolsEventSource::AutomationEvent(event) => event.as_ref(),
-                BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { automation_event, .. } => automation_event.as_ref(),
-                _ => return false,
-            };
-            matches!(automation_event, AutomationEvent::TargetDestroyed(existing) if existing.target_id == event.target_id)
-        });
-        // The close command needs a fallback when CDP discovery is disabled,
-        // but must not repeat a Native destruction already in its output.
-        if !already_emitted {
-            self.push_automation_event(AutomationEvent::TargetDestroyed(event));
-        }
     }
 
     fn push_background_event(&mut self, event: BackgroundProtocolEvent) {
@@ -2205,7 +2182,6 @@ async fn start_bidi_automation_command(
     bidi: &BidiConnectionState,
     mut dispatch: BidiDevToolsCommandDispatch,
     background_command_id: Option<u64>,
-    observe_context_created: bool,
     observe_browsing_context_load: bool,
 ) -> BidiDevToolsCommandStart {
     dispatch
@@ -2214,10 +2190,6 @@ async fn start_bidi_automation_command(
             bidi.file_prompt_handler_for_script_commands(),
         );
     let event_context = bidi_event_context_from_automation_command(&dispatch.command);
-    let close_target_id = match &dispatch.command {
-        AutomationCommand::CloseTarget(command) => Some(command.target_id.as_str().to_owned()),
-        _ => None,
-    };
     let script_may_create_targets = matches!(
         &dispatch.command,
         AutomationCommand::EvaluateScript(_) | AutomationCommand::CallFunction(_)
@@ -2238,16 +2210,6 @@ async fn start_bidi_automation_command(
         };
     event_sources
         .extend_protocol_output(scheduler.complete_ready_protocol_residences_after_command());
-    let close_target_event = if let Some(target_id) = close_target_id.as_deref() {
-        bidi_target_lifecycle_event_for_target(
-            scheduler,
-            &mut event_sources,
-            &dispatch.session_id,
-            target_id,
-        )
-    } else {
-        None
-    };
     if let Some(error) = validate_bidi_top_level_context_command(
         scheduler,
         &mut event_sources,
@@ -2262,20 +2224,12 @@ async fn start_bidi_automation_command(
             event_context,
         });
     }
-    let previous_target_discovery = ((observe_context_created || observe_browsing_context_load)
-        && script_may_create_targets)
+    let previous_target_discovery = (observe_browsing_context_load && script_may_create_targets)
         .then(|| scheduler.replace_target_discovery_enabled(true));
-    let create_target_browser_context_id = match &dispatch.command {
-        AutomationCommand::CreateTarget(command) => command.browser_context_id.clone(),
-        _ => None,
-    };
     let completion = BidiDevToolsCommandCompletion {
         id: dispatch.id,
-        session_id: dispatch.session_id.clone(),
         event_sources,
         event_context,
-        close_target_event,
-        create_target_browser_context_id,
         observe_browsing_context_load,
         script_may_create_targets,
         previous_target_discovery,
@@ -2335,11 +2289,8 @@ async fn complete_bidi_automation_command_execution(
 ) -> BidiDevToolsCommandOutput {
     let BidiDevToolsCommandCompletion {
         id,
-        session_id,
         mut event_sources,
         event_context,
-        close_target_event,
-        create_target_browser_context_id,
         observe_browsing_context_load,
         script_may_create_targets,
         previous_target_discovery,
@@ -2358,36 +2309,6 @@ async fn complete_bidi_automation_command_execution(
                 failure,
             );
         }
-    }
-    let created_target_id = match &execution.result {
-        Ok(AutomationResult::CreateTarget(result)) => Some(result.target_id.as_str().to_owned()),
-        _ => None,
-    };
-    let close_succeeded = matches!(&execution.result, Ok(AutomationResult::CloseTarget(_)));
-    if let Some(target_id) = created_target_id.as_deref() {
-        let mut event = match bidi_target_lifecycle_event_for_target(
-            scheduler,
-            &mut event_sources,
-            &session_id,
-            target_id,
-        ) {
-            Some(event) => event,
-            None => TargetLifecycleEvent {
-                target_id: DevToolsTargetId::from(target_id),
-                browser_context_id: create_target_browser_context_id.clone(),
-                kind: DevToolsTargetKind::Page,
-                url: "about:blank".to_owned(),
-                target_info: None,
-            },
-        };
-        if let Some(browser_context_id) = create_target_browser_context_id {
-            event.browser_context_id = Some(browser_context_id);
-            event.target_info = None;
-        }
-        event_sources.push_automation_event(AutomationEvent::TargetCreated(event));
-    }
-    if close_succeeded && let Some(event) = close_target_event {
-        event_sources.push_missing_target_destroyed_event(event);
     }
     if observe_browsing_context_load && script_may_create_targets {
         event_sources.push_initial_load_events_for_script_created_targets();
@@ -3204,16 +3125,6 @@ fn validate_bidi_top_level_context_command(
     }
 }
 
-fn bidi_target_lifecycle_event_for_target(
-    scheduler: &mut CdpScheduler,
-    event_sources: &mut BidiDevToolsEventSources,
-    session_id: &str,
-    target_id: &str,
-) -> Option<TargetLifecycleEvent> {
-    let result = bidi_target_info_for_target(scheduler, event_sources, session_id, target_id)?;
-    target_lifecycle_event_from_target_info(result)
-}
-
 fn bidi_target_info_for_target(
     scheduler: &mut CdpScheduler,
     event_sources: &mut BidiDevToolsEventSources,
@@ -3235,19 +3146,6 @@ fn bidi_target_info_for_target(
         return None;
     };
     Some(result.target_info)
-}
-
-fn target_lifecycle_event_from_target_info(
-    info: DevToolsTargetInfo,
-) -> Option<TargetLifecycleEvent> {
-    let target_id = info.target_id.clone()?;
-    Some(TargetLifecycleEvent {
-        target_id,
-        browser_context_id: info.browser_context_id.clone(),
-        kind: info.kind,
-        url: info.url.clone(),
-        target_info: Some(info),
-    })
 }
 
 fn bidi_event_context_from_automation_command(command: &AutomationCommand) -> Option<String> {

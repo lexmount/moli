@@ -10,6 +10,37 @@ fn runtime_inspector_messages(messages: Vec<Value>) -> Vec<RendererRuntimeInspec
         .collect()
 }
 
+fn assert_native_creation_without_cdp_output(
+    conn: &mut CdpConnection,
+    outputs: TargetPreparedOutputs,
+) {
+    let mut outputs = outputs.worker_target_lifecycle_outputs;
+    assert_eq!(
+        outputs.len(),
+        1,
+        "one creation fact, no automatic attachment"
+    );
+    let delta = match outputs.pop().unwrap() {
+        WorkerTargetLifecycleOutput::SharedWorkerCreated { target_delta }
+        | WorkerTargetLifecycleOutput::DedicatedWorkerCreated { target_delta, .. }
+        | WorkerTargetLifecycleOutput::ServiceWorkerCreated { target_delta, .. } => target_delta,
+        other => panic!("expected a Native creation fact, got {other:?}"),
+    };
+    let events = conn
+        .prepared_target_host_delta_event_plan(delta)
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert!(
+        events[0].clone().into_wire_message().is_none(),
+        "disabled discovery stays silent on CDP"
+    );
+    assert!(matches!(
+        events[0].clone().into_parts().1,
+        Some(crate::automation::AutomationEvent::TargetCreated(_))
+    ));
+}
+
 fn target_info_id(target_info: &DevToolsTargetInfo) -> &str {
     target_info
         .target_id
@@ -1124,7 +1155,7 @@ async fn dedicated_worker_destruction_retires_state_without_target_discovery() {
             dedicated_worker_info(13, owner_renderer_page, "https://example.test/worker.js"),
         )
     });
-    assert!(outputs.worker_target_lifecycle_outputs.is_empty());
+    ctx.with_fixture(|conn| assert_native_creation_without_cdp_output(conn, outputs));
     let target_id = ctx.with_fixture(|conn| {
         conn.browser_context
             .as_ref()
@@ -1149,7 +1180,12 @@ async fn dedicated_worker_destruction_retires_state_without_target_discovery() {
     });
     let events = drain_target_lifecycle_events_for_test(&mut ctx, retirement).await;
 
-    assert!(events.is_empty(), "disabled discovery must remain silent");
+    assert!(
+        protocol_messages(&events).is_empty(),
+        "disabled discovery must remain silent on CDP"
+    );
+    assert_eq!(events.iter().filter(|event| matches!((*event).clone().into_parts().1,
+        Some(crate::automation::AutomationEvent::TargetDestroyed(event)) if event.target_id.as_str() == target_id)).count(), 1);
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -1356,10 +1392,8 @@ fn shared_worker_target_registration_tracks_undiscovered_targets_without_events(
     let mut conn = CdpConnection::default();
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
-    assert!(
-        register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(9)).is_empty(),
-        "target discovery disabled should suppress immediate targetCreated"
-    );
+    let outputs = register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(9));
+    assert_native_creation_without_cdp_output(&mut conn, outputs);
     let infos = conn.browser_context.as_ref().unwrap().target_infos();
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0]["type"], "shared_worker");
@@ -1663,7 +1697,8 @@ fn service_worker_target_registration_respects_auto_attach_filter() {
 fn service_worker_target_registration_auto_attaches_related_newer_version() {
     let mut conn = CdpConnection::default();
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
-    assert!(register_service_worker_target(&mut conn, "BID-1", service_worker_info(7)).is_empty());
+    let initial = register_service_worker_target(&mut conn, "BID-1", service_worker_info(7));
+    assert_native_creation_without_cdp_output(&mut conn, initial);
 
     conn.set_service_worker_auto_attach_related_owner(
         None,
@@ -1676,21 +1711,19 @@ fn service_worker_target_registration_auto_attaches_related_newer_version() {
         true,
     );
 
-    assert!(
-        register_service_worker_target(&mut conn, "BID-1", service_worker_info(6)).is_empty(),
-        "older versions are not related autoAttach candidates"
-    );
+    let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(6));
+    assert_native_creation_without_cdp_output(&mut conn, outputs);
     let mut different_registration = service_worker_info(8);
     different_registration.registration_id = 42;
-    assert!(
-        register_service_worker_target(&mut conn, "BID-1", different_registration).is_empty(),
-        "different registrations are not related autoAttach candidates"
-    );
+    let outputs = register_service_worker_target(&mut conn, "BID-1", different_registration);
+    assert_native_creation_without_cdp_output(&mut conn, outputs);
 
     let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(9))
         .worker_target_lifecycle_outputs;
-    assert_eq!(outputs.len(), 1);
-    let (attachment, prepared_attach) = service_worker_attached_output(&outputs[0])
+    assert_eq!(outputs.len(), 2);
+    let (attachment, prepared_attach) = outputs
+        .iter()
+        .find_map(service_worker_attached_output)
         .expect("expected newer related service worker to auto attach");
     let session_id = attachment.session_id();
     let target_info = prepared_attach.target_info();
@@ -2382,10 +2415,8 @@ async fn service_worker_restart_emits_reload_before_new_runtime_context() {
 fn service_worker_version_state_updates_without_a_domain_listener() {
     let mut conn = CdpConnection::default();
     conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
-    assert!(
-        register_service_worker_target(&mut conn, "BID-1", service_worker_info(31)).is_empty(),
-        "an undiscovered target without domain listeners should not manufacture output"
-    );
+    let initial = register_service_worker_target(&mut conn, "BID-1", service_worker_info(31));
+    assert_native_creation_without_cdp_output(&mut conn, initial);
 
     let outputs = record_service_worker_target_version_updated(
         &mut conn,
@@ -2588,8 +2619,10 @@ fn shared_worker_target_registration_auto_attaches_when_enabled() {
 
     let outputs = register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(11))
         .worker_target_lifecycle_outputs;
-    assert_eq!(outputs.len(), 1);
-    let (attachment, prepared_attach) = shared_worker_attached_output(&outputs[0])
+    assert_eq!(outputs.len(), 2);
+    let (attachment, prepared_attach) = outputs
+        .iter()
+        .find_map(shared_worker_attached_output)
         .expect("auto-attach should prepare an exact Target.attachedToTarget");
     assert!(prepared_attach.target_info().attached);
     assert_eq!(

@@ -118,7 +118,7 @@ fn emit_attached_to_target_with_waiting_from_cdp_value(
     );
 }
 
-pub(super) fn target_created_automation_event(target_info: DevToolsTargetInfo) -> AutomationEvent {
+pub(crate) fn target_created_automation_event(target_info: DevToolsTargetInfo) -> AutomationEvent {
     let target_id = target_info
         .target_id
         .clone()

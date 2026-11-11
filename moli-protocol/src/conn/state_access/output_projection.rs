@@ -34,11 +34,12 @@ impl ProtocolWorkflowState<'_> {
         owner: crate::conn::CommandOwnerScope,
         context: &mut CommandWorkflowContext,
         mode: crate::domains::activity::ProtocolOutputProjectionMode,
+        source: Option<moli_core::RendererOutputCursor>,
     ) -> (
         crate::domains::activity::PreparedProtocolOutputs,
         Option<crate::domains::activity::PreparedProtocolOutputWait>,
     ) {
-        outputs.prepare_next_projection_step(self.connection, owner, context, mode)
+        outputs.prepare_next_projection_step(self.connection, owner, context, mode, source)
     }
 
     pub(crate) fn finish_protocol_output_projection(
@@ -61,7 +62,7 @@ impl ProtocolWorkflowState<'_> {
         crate::domains::activity::PreparedPublicationOutputProjection,
         Option<crate::domains::activity::PreparedProtocolOutputWait>,
     ) {
-        let pending = projection.prepare_until_wait(self.connection, access, context);
+        let pending = projection.prepare_until_wait(self.connection, access, context, None);
         (projection, pending)
     }
 }

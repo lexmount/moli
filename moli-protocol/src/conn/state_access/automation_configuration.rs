@@ -890,9 +890,7 @@ mod tests {
             let mut events = std::collections::VecDeque::from(events);
             while let Some(event) = events.pop_front() {
                 let pending = match event {
-                    CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
-                        Some(pending)
-                    }
+                    CdpSchedulerEvent::ProtocolTaskPrepared { pending } => Some(pending),
                     CdpSchedulerEvent::ProtocolWorkPublished { work } => handle
                         .with_state(|state| {
                             match state
@@ -913,8 +911,7 @@ mod tests {
                             }
                         })
                         .unwrap(),
-                    CdpSchedulerEvent::RendererOutputPrefixPublished { .. }
-                    | CdpSchedulerEvent::PageScreencastStarted { .. } => {
+                    CdpSchedulerEvent::PageScreencastStarted { .. } => {
                         panic!("navigation fixture does not request a screencast")
                     }
                 };

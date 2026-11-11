@@ -59,10 +59,12 @@ pub(crate) use navigation_cleanup::{
     PreparedNavigationFailureCleanup, prepare_failed_navigation_cleanup,
 };
 mod javascript_dialog;
-pub(crate) use javascript_dialog::dismiss_unhandled_javascript_dialogs;
 pub(in crate::domains) use javascript_dialog::emit_javascript_dialog_activity_background_events;
 pub(in crate::domains) use javascript_dialog::prepare_page_session_disposal;
 use javascript_dialog::*;
+pub(crate) use javascript_dialog::{
+    dismiss_javascript_dialogs_for_target_close, dismiss_unhandled_javascript_dialogs,
+};
 mod capture;
 mod completion;
 pub(crate) use preload::{
@@ -1675,7 +1677,7 @@ pub(crate) use completion::complete_finite as complete_finite_page_command;
 
 // ────────────────────────────────────────────────────────────────────────────
 
-pub(crate) use popup::{PagePreparedPopupActivation, PreparedPopupOutputProjection};
+pub(in crate::domains) use popup::project_popup_creation;
 
 pub(crate) fn settle_popup_output(
     conn: &mut CdpConnection,

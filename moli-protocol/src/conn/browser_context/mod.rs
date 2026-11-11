@@ -20,6 +20,4 @@ pub(crate) use runtime_owner::{
 };
 #[cfg(test)]
 pub(crate) use target_session_owner::{ClosedPageTarget, PendingPageTargetClose};
-pub(crate) use target_session_owner::{
-    CompletedPageTargetClose, PreparedPopupTargetRollback, TargetNavigationLoadInputs,
-};
+pub(crate) use target_session_owner::{CompletedPageTargetClose, TargetNavigationLoadInputs};
