@@ -698,17 +698,7 @@ impl JsContextHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
-        let (mut report_only_violation, mut enforced_violation) = check.into_violations();
-        if document_url.scheme() == "about" {
-            // Matching 'self' uses the inherited origin below; reports still
-            // identify the actual about:blank/about:srcdoc Document.
-            for violation in report_only_violation
-                .iter_mut()
-                .chain(enforced_violation.iter_mut())
-            {
-                violation.document_uri = "about".to_owned();
-            }
-        }
+        let (report_only_violation, enforced_violation) = check.into_violations();
         let host_ptr: *mut JsContextHost = self;
         if let Some(violation) = report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
@@ -731,14 +721,6 @@ impl JsContextHost {
         request_url: &url::Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyCheck> {
-        // Delivered policies retain their own self-origin in the CSP matcher.
-        // Unbound policies (such as local meta policies) still need a native
-        // receiver-origin fallback, independent of the mutable API base URL.
-        let inherited_origin_url = (document_url.scheme() == "about")
-            .then(|| self.window_document_origin(owner))
-            .flatten()
-            .and_then(|origin| url::Url::parse(&origin).ok());
-        let document_url = inherited_origin_url.as_ref().unwrap_or(document_url);
         match owner {
             OwnerDispatchScope::Top => {
                 // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
@@ -749,21 +731,32 @@ impl JsContextHost {
                     ),
                 )
             }
-            OwnerDispatchScope::Child(handle) => Some(
-                self.document_connect_csp_check_for_child_document_with_redirect_status(
-                    handle,
-                    document_url,
-                    request_url,
-                    redirect_status,
-                ),
-            ),
-            OwnerDispatchScope::LightweightPopup(popup_id) => self
-                .document_connect_csp_check_for_lightweight_popup_with_redirect_status(
-                    popup_id,
-                    document_url,
-                    request_url,
-                    redirect_status,
-                ),
+            OwnerDispatchScope::Child(_) | OwnerDispatchScope::LightweightPopup(_) => {
+                let snapshot = self.owner_document_policy_snapshot(owner)?;
+                let document_origin = self
+                    .window_document_origin(owner)
+                    .and_then(|origin| url::Url::parse(&origin).ok());
+                // Keep the actual Document URL for reports. Only unbound local
+                // policies use the receiver origin as a fallback for 'self'.
+                // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
+                Some(
+                    unsafe { &*self.runtime }
+                        .document_connect_csp_check_for_document_with_redirect_status(
+                            snapshot.document_handle,
+                            document_url,
+                            document_origin.as_ref(),
+                            &snapshot.policy_container.response_content_security_policies,
+                            &snapshot
+                                .policy_container
+                                .response_content_security_report_only_policies,
+                            &snapshot
+                                .policy_container
+                                .content_security_reporting_endpoints,
+                            request_url,
+                            redirect_status,
+                        ),
+                )
+            }
         }
     }
 
@@ -781,52 +774,6 @@ impl JsContextHost {
         )
         .map(|check| check.into_violations().1.is_none())
         .unwrap_or(true)
-    }
-
-    fn document_connect_csp_check_for_lightweight_popup_with_redirect_status(
-        &self,
-        popup_id: u64,
-        document_url: &url::Url,
-        request_url: &url::Url,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> Option<DocumentContentSecurityPolicyCheck> {
-        let policy_container = self.lightweight_popup_policy_container(popup_id)?;
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        Some(
-            unsafe { &*self.runtime }.document_connect_csp_check_for_document_with_redirect_status(
-                self.lightweight_popup_document_handle(popup_id),
-                document_url,
-                &policy_container.response_content_security_policies,
-                &policy_container.response_content_security_report_only_policies,
-                &policy_container.content_security_reporting_endpoints,
-                request_url,
-                redirect_status,
-            ),
-        )
-    }
-
-    fn document_connect_csp_check_for_child_document_with_redirect_status(
-        &self,
-        handle: DomHandle,
-        document_url: &url::Url,
-        request_url: &url::Url,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> DocumentContentSecurityPolicyCheck {
-        let response_policies = self.child_effective_response_content_security_policies(handle);
-        let response_report_only_policies =
-            self.child_effective_response_content_security_report_only_policies(handle);
-        let response_reporting_endpoints =
-            self.child_effective_content_security_reporting_endpoints(handle);
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.document_connect_csp_check_for_document_with_redirect_status(
-            self.child_browsing_context_document_handle(handle),
-            document_url,
-            &response_policies,
-            &response_report_only_policies,
-            &response_reporting_endpoints,
-            request_url,
-            redirect_status,
-        )
     }
 
     pub(crate) fn frame_navigation_csp_violation(

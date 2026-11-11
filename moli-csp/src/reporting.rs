@@ -9,6 +9,16 @@ pub fn content_security_policy_report_uri_endpoints(
     policy: &ContentSecurityPolicy,
     protected_url: &Url,
 ) -> Vec<String> {
+    if let Some(endpoints) = policy.report_uri_endpoints() {
+        return endpoints.to_vec();
+    }
+    resolve_report_uri_endpoints(policy, protected_url)
+}
+
+pub(crate) fn resolve_report_uri_endpoints(
+    policy: &ContentSecurityPolicy,
+    delivery_url: &Url,
+) -> Vec<String> {
     if policy.sources("report-to").is_some() {
         return Vec::new();
     }
@@ -16,7 +26,7 @@ pub fn content_security_policy_report_uri_endpoints(
         .sources("report-uri")
         .into_iter()
         .flatten()
-        .filter_map(|endpoint| protected_url.join(endpoint).ok())
+        .filter_map(|endpoint| delivery_url.join(endpoint).ok())
         .filter(|endpoint| matches!(endpoint.scheme(), "http" | "https"))
         .map(|endpoint| endpoint.to_string())
         .collect()

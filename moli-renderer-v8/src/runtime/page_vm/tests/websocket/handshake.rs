@@ -1,6 +1,106 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_inherited_csp_relative_report_uri_popup_posts_to_delivery_path() {
+    check_websocket_inherited_csp_relative_report_uri(false).await;
+}
+
+#[tokio::test]
+async fn websocket_inherited_csp_relative_report_uri_sandbox_srcdoc_posts_to_delivery_path() {
+    check_websocket_inherited_csp_relative_report_uri(true).await;
+}
+
+async fn check_websocket_inherited_csp_relative_report_uri(sandbox_srcdoc: bool) {
+    run_page_vm_async_test(async move {
+        for constructor in ["WebSocket", "WebSocketStream"] {
+            let (base_url, report_rx, server) = spawn_request_capture_http_server().await;
+            let document_url = Url::parse(&format!("{base_url}/app/page.html")).unwrap();
+            let mut page_vm = test_page_vm_with_document_url(document_url.clone());
+            page_vm.vm_mut().set_main_navigation_policy_container(
+                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                    &[("Content-Security-Policy".to_owned(),
+                        b"connect-src 'none'; report-uri csp-report".to_vec())],
+                    &document_url,
+                ),
+            );
+            page_vm.vm_mut().set_fetch_subresource_interception(
+                true, Some(SubresourceResourceType::WebSocket),
+            );
+            let script = format!(
+                r#"
+                const reportWindow = top.opener || top;
+                addEventListener('securitypolicyviolation', event => {{
+                    reportWindow.postMessage({{
+                        document: document.URL,
+                        directive: event.effectiveDirective,
+                        documentURI: event.documentURI,
+                    }}, '*');
+                }});
+                const base = document.createElement('base');
+                base.href = 'https://different.test/changed/';
+                document.head.appendChild(base);
+                new {constructor}('wss://blocked-report.test/socket');
+                void 0;
+                "#,
+            );
+            let local_executor = page_vm.local_executor.clone();
+            let request = local_executor.run(async move {
+                page_vm.vm_mut().eval(
+                    r#"
+                    globalThis.__inheritedCspReport = null;
+                    addEventListener('message', event => {
+                        __inheritedCspReport = event.data;
+                    });
+                    "#,
+                )?;
+                if sandbox_srcdoc {
+                    let markup = serde_json::to_string(&format!("<script>{script}</script>"))?;
+                    page_vm.vm_mut().eval(&format!(
+                        "const frame = document.createElement('iframe');\
+                         frame.sandbox = 'allow-scripts'; frame.srcdoc = {markup};\
+                         document.body.appendChild(frame);"
+                    ))?;
+                } else {
+                    let source = serde_json::to_string(&script)?;
+                    page_vm.vm_mut().eval(&format!(
+                        "globalThis.__reportPopup = open('about:blank');\
+                         __reportPopup.location.href = 'javascript:' + encodeURIComponent({source});"
+                    ))?;
+                }
+                drive_websocket_until_done(&mut page_vm,
+                    "__inheritedCspReport !== null", "inherited WebSocket CSP violation"
+                ).await?;
+                let observed: serde_json::Value = serde_json::from_str(
+                    &page_vm.vm_mut().eval("JSON.stringify(__inheritedCspReport)")?
+                )?;
+                assert_eq!(observed, json!({
+                    "document": if sandbox_srcdoc { "about:srcdoc" } else { "about:blank" },
+                    "directive": "connect-src",
+                    "documentURI": "about",
+                }));
+                assert!(page_vm.vm_mut().take_pending_subresource_fetch_infos().is_empty());
+                tokio::time::timeout(Duration::from_secs(5), report_rx)
+                    .await
+                    .map_err(|_| anyhow::anyhow!(
+                        "missing CSP report: {constructor}, sandbox_srcdoc={sandbox_srcdoc}"
+                    ))?
+                    .map_err(|_| anyhow::anyhow!("CSP report capture channel closed"))
+            }).await.expect("inherited CSP report test should run on owner lane");
+            server.await.expect("inherited CSP report server should finish");
+            assert!(request.starts_with("POST /app/csp-report HTTP/1.1\r\n"),
+                "report must use the full delivery URL: {constructor}, \
+                 sandbox_srcdoc={sandbox_srcdoc}, request={request}");
+            assert!(request.to_ascii_lowercase().contains("content-type: application/csp-report"));
+            let (_, body) = request.split_once("\r\n\r\n").expect("report request body");
+            let body: serde_json::Value = serde_json::from_str(body).expect("CSP report JSON");
+            assert_eq!(body["csp-report"]["document-uri"], "about");
+            assert_eq!(body["csp-report"]["effective-directive"], "connect-src");
+            assert_eq!(body["csp-report"]["disposition"], "enforce");
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn websocket_sandbox_srcdoc_inherits_csp_self_origin_with_opaque_handshake_origin() {
     run_page_vm_async_test(async move {
         for constructor in ["WebSocket", "WebSocketStream"] {
@@ -217,6 +317,12 @@ async fn websocket_popup_base_changes_preserve_inherited_handshake_origin() {
                         const base = document.createElement('base');
                         base.href = {base_literal};
                         document.head.appendChild(base);
+                        if ({same_origin}) {{
+                            const meta = document.createElement('meta');
+                            meta.httpEquiv = 'Content-Security-Policy';
+                            meta.content = "connect-src 'self'";
+                            document.head.appendChild(meta);
+                        }}
                         const socket = new {constructor}({input_literal});
                         opener.__popupWebSocketResult = [document.URL, socket.url].join('|');
                         void 0;"#

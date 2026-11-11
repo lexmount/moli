@@ -14,6 +14,7 @@ struct ParsedPolicy {
     serialized: String,
     policy: Policy,
     self_origin: Option<Url>,
+    report_uri_endpoints: Option<Vec<String>>,
 }
 
 impl ContentSecurityPolicy {
@@ -52,6 +53,7 @@ impl ContentSecurityPolicy {
             serialized,
             policy,
             self_origin: None,
+            report_uri_endpoints: None,
         }))
     }
 
@@ -78,6 +80,29 @@ impl ContentSecurityPolicy {
             .unwrap_or_else(|_| source_url.clone());
         Arc::make_mut(&mut self.0).self_origin = Some(origin_url);
         self
+    }
+
+    /// Capture the policy's source identity and resolve report destinations
+    /// against the full response URL before the policy can be inherited.
+    pub fn with_delivery_url(mut self, source_url: &Url) -> Self {
+        let endpoints = crate::reporting::resolve_report_uri_endpoints(&self, source_url);
+        self = self.with_self_origin(source_url);
+        Arc::make_mut(&mut self.0).report_uri_endpoints = Some(endpoints);
+        self
+    }
+
+    /// Supply the receiver origin for a local policy that has no delivery
+    /// identity. Never replace an inherited policy's captured self-origin.
+    pub fn with_fallback_self_origin(self, source_url: &Url) -> Self {
+        if self.0.self_origin.is_some() {
+            self
+        } else {
+            self.with_self_origin(source_url)
+        }
+    }
+
+    pub(crate) fn report_uri_endpoints(&self) -> Option<&[String]> {
+        self.0.report_uri_endpoints.as_deref()
     }
 
     pub(crate) fn self_origin<'a>(&'a self, protected_url: &'a Url) -> &'a Url {
@@ -122,6 +147,7 @@ impl PartialEq for ContentSecurityPolicy {
             && self.0.policy.source == other.0.policy.source
             && self.0.policy.disposition == other.0.policy.disposition
             && self.0.self_origin == other.0.self_origin
+            && self.0.report_uri_endpoints == other.0.report_uri_endpoints
     }
 }
 

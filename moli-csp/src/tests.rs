@@ -1985,6 +1985,68 @@ fn script_src_elem_directive_controls_strict_dynamic_script_element_requests() {
 }
 
 #[test]
+fn inherited_policy_reports_keep_delivery_path_and_document_attribution() {
+    for disposition in [
+        ContentSecurityPolicyDisposition::Enforce,
+        ContentSecurityPolicyDisposition::Report,
+    ] {
+        let policy = ContentSecurityPolicy::from_header(
+            "connect-src 'none'; report-uri csp-report /root-report https://reports.test/collect"
+                .to_owned(),
+            disposition,
+        )
+        .with_delivery_url(&request_url("https://app.test/app/page.html"));
+        for document in ["about:blank", "about:srcdoc", "https://other.test/changed/"] {
+            let document = request_url(document);
+            let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+                std::slice::from_ref(&policy),
+                &document,
+                &request_url("wss://blocked.test/socket"),
+                ContentSecurityPolicyResourceKind::DocumentConnect,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                disposition,
+                &ContentSecurityPolicyReportingEndpoints::default(),
+            ).expect("connect-src none must produce a violation");
+            assert_eq!(
+                violation.report_uri_endpoints,
+                [
+                    "https://app.test/app/csp-report",
+                    "https://app.test/root-report",
+                    "https://reports.test/collect",
+                ]
+            );
+            assert_eq!(violation.document_uri, csp_url_for_report(&document));
+            assert_eq!(violation.disposition, disposition);
+        }
+    }
+}
+
+#[test]
+fn cloned_policies_keep_independent_report_delivery_paths() {
+    let policy = ContentSecurityPolicy::from("connect-src 'none'; report-uri csp-report")
+        .with_delivery_url(&request_url("https://app.test/app/page.html"));
+    let other = policy
+        .clone()
+        .with_delivery_url(&request_url("https://app.test/other/page.html"));
+    assert_ne!(policy, other);
+    let document = request_url("about:srcdoc");
+    assert_eq!(
+        content_security_policy_report_uri_endpoints(&policy, &document),
+        ["https://app.test/app/csp-report"]
+    );
+    assert_eq!(
+        content_security_policy_report_uri_endpoints(&other, &document),
+        ["https://app.test/other/csp-report"]
+    );
+    assert_eq!(
+        policy
+            .clone()
+            .with_fallback_self_origin(&request_url("https://other.test/")),
+        policy
+    );
+}
+
+#[test]
 fn report_uri_endpoints_resolve_against_protected_url() {
     let endpoints = content_security_policy_report_uri_endpoints(
         &ContentSecurityPolicy::from(

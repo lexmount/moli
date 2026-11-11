@@ -163,7 +163,7 @@ impl DocumentPolicyContainer {
         let response_content_security_policies =
             response_content_security_policies_from_headers(headers)
                 .into_iter()
-                .map(|policy| policy.with_self_origin(final_url))
+                .map(|policy| policy.with_delivery_url(final_url))
                 .collect::<Vec<_>>();
         let sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
             &response_content_security_policies,
@@ -189,7 +189,7 @@ impl DocumentPolicyContainer {
             response_content_security_report_only_policies:
                 response_content_security_report_only_policies_from_headers(headers)
                     .into_iter()
-                    .map(|policy| policy.with_self_origin(final_url))
+                    .map(|policy| policy.with_delivery_url(final_url))
                     .collect(),
             content_security_reporting_endpoints:
                 crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
@@ -607,7 +607,9 @@ impl DocumentRuntime {
         self.policy_container.response_content_security_policies = policies
             .iter()
             .cloned()
-            .map(|policy| ContentSecurityPolicy::from(policy).with_self_origin(self.document_url()))
+            .map(|policy| {
+                ContentSecurityPolicy::from(policy).with_delivery_url(self.document_url())
+            })
             .collect();
         self.policy_container.sandbox =
             DocumentSandboxPolicy::from_response_content_security_policies(
@@ -630,7 +632,7 @@ impl DocumentRuntime {
             .cloned()
             .map(|policy| {
                 ContentSecurityPolicy::from_header(policy, ContentSecurityPolicyDisposition::Report)
-                    .with_self_origin(self.document_url())
+                    .with_delivery_url(self.document_url())
             })
             .collect();
     }
@@ -1396,17 +1398,23 @@ impl DocumentRuntime {
         &self,
         document_handle: Option<DomHandle>,
         document_url: &Url,
+        document_origin: Option<&Url>,
         response_policies: &[ContentSecurityPolicy],
         response_report_only_policies: &[ContentSecurityPolicy],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
-        let policies = self.document_content_security_policies_for_optional_document(
+        let mut policies = self.document_content_security_policies_for_optional_document(
             document_handle,
             response_policies,
             response_reporting_endpoints,
         );
+        if let Some(origin) = document_origin {
+            for policy in &mut policies {
+                policy.policy = policy.policy.clone().with_fallback_self_origin(origin);
+            }
+        }
         let enforced_violation = document_connect_policy_violation_from_document_policies(
             policies,
             document_url,
