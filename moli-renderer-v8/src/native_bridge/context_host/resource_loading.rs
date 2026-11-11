@@ -2529,9 +2529,12 @@ impl JsContextHost {
         let timing = (!streaming.head.preload_state.is_consumed())
             .then(|| aborted_fetch_timing(&streaming.pending))
             .flatten();
-        streaming.pending.load.cancel();
         self.browser_context_runtime
-            .abort_service_worker_fetch(internal_id);
+            .abort_service_worker_fetch_with_reason(
+                streaming.pending.load.fetch_cancel_handle().as_ref(),
+                None,
+            );
+        streaming.pending.load.cancel();
         self.record_streaming_subresource_fetch_failure(
             streaming,
             crate::network_host::ABORTED_ERROR_TEXT.to_owned(),
@@ -2813,9 +2816,6 @@ impl JsContextHost {
                     };
                 Some((target, entry))
             });
-        let _ = self
-            .browser_context_runtime
-            .abort_service_worker_fetch(internal_id);
         let aborted = self.abort_subresource_fetch(internal_id);
         if aborted && let Some((target, entry)) = entry {
             self.record_window_resource_timing(scope, target, entry);
@@ -2829,20 +2829,55 @@ impl JsContextHost {
     /// Requests held for authentication or response interception remain subject
     /// to timeout; their intermediate response is not the consumer's outcome.
     pub(crate) fn cancel_xhr_fetch_for_timeout(&mut self, internal_id: u64) -> bool {
+        let cancel_handle = self
+            .pending_window_xhr(internal_id)
+            .and_then(|pending| pending.load.fetch_cancel_handle());
         if self
             .pending_window_xhr(internal_id)
             .is_some_and(|pending| !pending.load.cancel_if_response_pending())
         {
             return false;
         }
-        let _ = self
-            .browser_context_runtime
-            .abort_service_worker_fetch(internal_id);
+        self.browser_context_runtime
+            .abort_service_worker_fetch_with_reason(cancel_handle.as_ref(), None);
         self.abort_subresource_fetch(internal_id);
         true
     }
 
     pub(crate) fn abort_subresource_fetch(&mut self, internal_id: u64) -> bool {
+        // The numeric ID is local to this host. Select its actual lease before
+        // asking the shared SW runtime to retire a request.
+        let cancel_handle = self
+            .pending_subresource_fetches
+            .get(&internal_id)
+            .or_else(|| {
+                self.in_flight_worker_subresource_fetches
+                    .get(&internal_id)
+                    .map(|entry| &entry.pending)
+            })
+            .or_else(|| {
+                self.running_subresource_fetches
+                    .get(&internal_id)
+                    .map(|entry| &entry.pending)
+            })
+            .or_else(|| {
+                self.streaming_subresource_fetches
+                    .get(&internal_id)
+                    .map(|entry| &entry.pending)
+            })
+            .or_else(|| {
+                self.pending_subresource_auths
+                    .get(&internal_id)
+                    .map(|entry| &entry.pending)
+            })
+            .or_else(|| {
+                self.pending_subresource_responses
+                    .get(&internal_id)
+                    .map(|entry| &entry.pending)
+            })
+            .and_then(|pending| pending.load.fetch_cancel_handle());
+        self.browser_context_runtime
+            .abort_service_worker_fetch_with_reason(cancel_handle.as_ref(), None);
         if self
             .pending_window_request_aborts
             .remove(&internal_id)
@@ -3017,9 +3052,6 @@ impl JsContextHost {
         // Cancel every captured transport before any terminal task can invoke
         // author callbacks and create replacement requests.
         for (internal_id, delivery) in requests {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             if self.abort_subresource_fetch(internal_id)
                 && let Some(delivery) = delivery
             {
@@ -3079,9 +3111,6 @@ impl JsContextHost {
 
         let mut aborted = 0;
         for internal_id in ordinary_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             aborted += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
@@ -3108,9 +3137,6 @@ impl JsContextHost {
 
         let mut retired = 0;
         for internal_id in internal_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             retired += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
@@ -3171,9 +3197,6 @@ impl JsContextHost {
 
         let mut aborted = 0;
         for internal_id in abort_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             aborted += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
@@ -3489,9 +3512,6 @@ impl JsContextHost {
 
         let mut retired = 0;
         for internal_id in internal_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             retired += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
@@ -3546,9 +3566,6 @@ impl JsContextHost {
         internal_ids.dedup();
         let mut cancelled = 0;
         for internal_id in internal_ids.iter().copied() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             cancelled += usize::from(self.abort_subresource_fetch(internal_id));
         }
         #[cfg(test)]
@@ -3608,9 +3625,6 @@ impl JsContextHost {
         internal_ids.dedup();
         let mut cancelled = 0;
         for internal_id in internal_ids {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             cancelled += usize::from(self.abort_subresource_fetch(internal_id));
         }
         if cancelled != 0 {
@@ -3635,9 +3649,12 @@ impl JsContextHost {
     )> {
         if let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) {
             let timing = aborted_fetch_timing(&pending);
-            pending.load.cancel();
             self.browser_context_runtime
-                .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
+                .abort_service_worker_fetch_with_reason(
+                    pending.load.fetch_cancel_handle().as_ref(),
+                    reason_payload.clone(),
+                );
+            pending.load.cancel();
             reject_fetch_continuation(scope, pending.continuation, reason);
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::Completed { internal_id },
@@ -3647,9 +3664,12 @@ impl JsContextHost {
 
         if let Some(running) = self.running_subresource_fetches.remove(&internal_id) {
             let timing = aborted_fetch_timing(&running.pending);
-            running.pending.load.cancel();
             self.browser_context_runtime
-                .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
+                .abort_service_worker_fetch_with_reason(
+                    running.pending.load.fetch_cancel_handle().as_ref(),
+                    reason_payload.clone(),
+                );
+            running.pending.load.cancel();
             reject_fetch_continuation(scope, running.pending.continuation, reason);
             self.finish_active_subresource_request();
             self.record_pending_subresource_continue_event(
@@ -3662,9 +3682,12 @@ impl JsContextHost {
             let timing = (!streaming.head.preload_state.is_consumed())
                 .then(|| aborted_fetch_timing(&streaming.pending))
                 .flatten();
-            streaming.pending.load.cancel();
             self.browser_context_runtime
-                .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
+                .abort_service_worker_fetch_with_reason(
+                    streaming.pending.load.fetch_cancel_handle().as_ref(),
+                    reason_payload.clone(),
+                );
+            streaming.pending.load.cancel();
             // Headers-first fetch may already have resolved the Response. In
             // that state aborting must error the body stream/materialization
             // promise, not only the original fetch continuation.
@@ -3688,9 +3711,12 @@ impl JsContextHost {
             let timing = (!auth.response.preload_state.is_consumed())
                 .then(|| aborted_fetch_timing(&pending))
                 .flatten();
-            pending.load.cancel();
             self.browser_context_runtime
-                .abort_service_worker_fetch_with_reason(internal_id, reason_payload.clone());
+                .abort_service_worker_fetch_with_reason(
+                    pending.load.fetch_cancel_handle().as_ref(),
+                    reason_payload.clone(),
+                );
+            pending.load.cancel();
             reject_fetch_continuation(scope, pending.continuation, reason);
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::Completed { internal_id },
@@ -3703,9 +3729,12 @@ impl JsContextHost {
             let timing = (!response.response.preload_state.is_consumed())
                 .then(|| aborted_fetch_timing(&pending))
                 .flatten();
-            pending.load.cancel();
             self.browser_context_runtime
-                .abort_service_worker_fetch_with_reason(internal_id, reason_payload);
+                .abort_service_worker_fetch_with_reason(
+                    pending.load.fetch_cancel_handle().as_ref(),
+                    reason_payload,
+                );
+            pending.load.cancel();
             reject_fetch_continuation(scope, pending.continuation, reason);
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::Completed { internal_id },

@@ -2549,6 +2549,7 @@ async fn write_script_response(
 
 mod audio_worklet_and_message_ports;
 mod blob_storage_key;
+mod fetch_abort_reason;
 mod message_port_transfer_semantics;
 mod nested_worker_main_script;
 mod service_and_shared_worker_lifecycle;

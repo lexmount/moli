@@ -1101,6 +1101,75 @@ fn restart_start_failure_rejects_pending_fetch_job() {
     );
 }
 #[test]
+fn abort_fetch_handle_distinguishes_requests_with_the_same_local_id() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let run = RendererServiceWorkerRunIdentity::fresh();
+    let document_url = url("https://example.test/app/page.html");
+    insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        url("https://example.test/app/"),
+        [document_url.clone()],
+    );
+    let client_id = client_id_for_document(&service, &document_url);
+    let event_ids = std::array::from_fn::<_, 2, _>(|_| {
+        ServiceWorkerEventId(service.inner.next_event_id.fetch_add(1, Ordering::Relaxed))
+    });
+    let handles = [
+        moli_fetch::FetchCancelHandle::new(),
+        moli_fetch::FetchCancelHandle::new(),
+    ];
+    let completion_queue = async_subresource_completion_queue();
+    {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.run = run.clone();
+        version.running_state = ServiceWorkerVersionRunningState::Running {
+            host: new_running_test_host(version_id, &run),
+        };
+        version.in_flight_event_count = 2;
+        for (index, handle) in handles.iter().enumerate() {
+            state.pending_fetch_jobs.insert(
+                event_ids[index],
+                test_fetch_job(
+                    &service,
+                    1,
+                    version_id,
+                    &run,
+                    client_id,
+                    document_url.clone(),
+                    url(&format!("https://example.test/app/data-{index}")),
+                    completion_queue.sender(),
+                    handle.clone(),
+                ),
+            );
+        }
+    }
+    let hop = handles[1].child_for_fetch_hop();
+    hop.cancel();
+    assert!(!service.abort_controlled_fetch_with_handle_and_reason(&hop, None));
+    assert!(!handles[1].is_cancelled());
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&handles[1].clone(), None));
+    assert!(!handles[0].is_cancelled());
+    assert!(handles[1].is_cancelled());
+    assert!(!service.abort_controlled_fetch_with_handle_and_reason(&handles[1], None));
+    {
+        let state = service.inner.state.lock();
+        assert!(state.pending_fetch_jobs.contains_key(&event_ids[0]));
+        assert!(!state.pending_fetch_jobs.contains_key(&event_ids[1]));
+        assert_eq!(state.versions[&version_id].in_flight_event_count, 1);
+    }
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&handles[0], None));
+    let state = service.inner.state.lock();
+    assert!(state.pending_fetch_jobs.is_empty());
+    assert_eq!(state.versions[&version_id].in_flight_event_count, 0);
+}
+
+#[test]
 fn abort_controlled_fetch_clears_running_job_and_ignores_late_completion() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
@@ -1146,7 +1215,7 @@ fn abort_controlled_fetch_clears_running_job_and_ignores_late_completion() {
         );
     }
 
-    assert!(service.abort_controlled_fetch(51));
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&cancel_handle, None));
     assert!(cancel_handle.is_cancelled());
     {
         let state = service.inner.state.lock();
@@ -1361,7 +1430,7 @@ fn abort_controlled_fetch_cancels_unstarted_navigation_preload() {
         navigation_preload_cancel_handle.clone(),
     );
 
-    assert!(service.abort_controlled_fetch(303));
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&fetch_cancel_handle, None));
 
     assert!(fetch_cancel_handle.is_cancelled());
     assert!(navigation_preload_cancel_handle.is_cancelled());
@@ -1427,7 +1496,7 @@ fn abort_controlled_fetch_records_aborted_network_diagnostic() {
         );
     }
 
-    assert!(service.abort_controlled_fetch(56));
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&cancel_handle, None));
     assert!(cancel_handle.is_cancelled());
     assert!(!completion_queue.has_ready_completion());
 
@@ -1508,7 +1577,7 @@ fn abort_controlled_fetch_cancels_running_stream_reader() {
         state.pending_fetch_jobs.insert(event_id, job);
     }
 
-    assert!(service.abort_controlled_fetch(55));
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&cancel_handle, None));
     assert!(cancel_handle.is_cancelled());
     match worker_rx.try_recv() {
         Ok(crate::worker::WorkerMessage::ServiceWorkerFetchRequestSignalAbort {
@@ -1588,7 +1657,10 @@ fn abort_main_worker_fetch_uses_event_id_and_ignores_late_completion() {
         state.pending_fetch_jobs.insert(event_id, job);
     }
 
-    assert!(!service.abort_controlled_fetch(0));
+    assert!(!service.abort_controlled_fetch_with_handle_and_reason(
+        &moli_fetch::FetchCancelHandle::new(),
+        None
+    ));
     assert!(!cancel_handle.is_cancelled());
     assert!(service.abort_controlled_fetch_event_with_reason(event_id, None));
     assert!(cancel_handle.is_cancelled());
@@ -1687,7 +1759,7 @@ fn abort_controlled_fetch_removes_pending_start_event() {
         version.in_flight_event_count = 1;
     }
 
-    assert!(service.abort_controlled_fetch(52));
+    assert!(service.abort_controlled_fetch_with_handle_and_reason(&cancel_handle, None));
     assert!(cancel_handle.is_cancelled());
     {
         let state = service.inner.state.lock();

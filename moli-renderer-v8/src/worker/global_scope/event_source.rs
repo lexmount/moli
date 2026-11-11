@@ -405,10 +405,12 @@ pub(crate) fn abort_worker_event_source(scope: &mut v8::PinScope<'_, '_>, id: u6
     let pending = state.borrow_mut().pending_fetches.remove(&id);
     if let Some(pending) = pending {
         pending.timing.abort(scope);
-        pending.load.cancel();
-        if let Some(runtime) = state.borrow().service_worker_runtime.clone() {
-            runtime.abort_controlled_fetch(u64::from(id));
+        if let Some(runtime) = state.borrow().service_worker_runtime.clone()
+            && let Some(handle) = pending.load.fetch_cancel_handle()
+        {
+            runtime.abort_controlled_fetch_with_handle_and_reason(&handle, None);
         }
+        pending.load.cancel();
         super::fetch::record_worker_fetch_failure(
             &state.borrow(),
             &pending,

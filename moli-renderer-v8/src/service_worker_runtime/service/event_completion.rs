@@ -1,22 +1,16 @@
 use super::*;
-use crate::service_worker_runtime::ServiceWorkerRequestDestination;
-
-enum FetchAbortTarget {
-    Subresource(u64),
+enum FetchAbortTarget<'a> {
     Event(ServiceWorkerEventId),
+    Handle(&'a moli_fetch::FetchCancelHandle),
 }
 
 impl ServiceWorkerRuntimeService {
-    pub(crate) fn abort_controlled_fetch(&self, internal_id: u64) -> bool {
-        self.abort_controlled_fetch_with_reason(internal_id, None)
-    }
-
-    pub(crate) fn abort_controlled_fetch_with_reason(
+    pub(crate) fn abort_controlled_fetch_with_handle_and_reason(
         &self,
-        internal_id: u64,
+        handle: &moli_fetch::FetchCancelHandle,
         reason: Option<crate::structured_clone::V8StructuredClonePayload>,
     ) -> bool {
-        self.abort_controlled_fetch_target(FetchAbortTarget::Subresource(internal_id), reason)
+        self.abort_controlled_fetch_target(FetchAbortTarget::Handle(handle), reason)
     }
 
     pub(super) fn abort_controlled_fetch_event_with_reason(
@@ -29,27 +23,19 @@ impl ServiceWorkerRuntimeService {
 
     fn abort_controlled_fetch_target(
         &self,
-        target: FetchAbortTarget,
+        target: FetchAbortTarget<'_>,
         reason: Option<crate::structured_clone::V8StructuredClonePayload>,
     ) -> bool {
         let aborted = {
             let mut state = self.inner.state.lock();
             let event_id = match target {
                 FetchAbortTarget::Event(event_id) => event_id,
-                FetchAbortTarget::Subresource(internal_id) => {
-                    let Some(event_id) =
-                        state.pending_fetch_jobs.iter().find_map(|(event_id, job)| {
-                            // Direct main requests have no subresource ID. Their
-                            // caller holds the actual event receipt instead.
-                            (job.internal_id == internal_id
-                                && !matches!(
-                                    job.destination,
-                                    ServiceWorkerRequestDestination::Worker
-                                        | ServiceWorkerRequestDestination::SharedWorker
-                                ))
-                            .then_some(*event_id)
-                        })
-                    else {
+                FetchAbortTarget::Handle(handle) => {
+                    let Some(event_id) = state.pending_fetch_jobs.iter().find_map(|(id, job)| {
+                        job.cancel_handle
+                            .same_cancellation_authority(handle)
+                            .then_some(*id)
+                    }) else {
                         return false;
                     };
                     event_id

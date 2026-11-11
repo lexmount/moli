@@ -13,8 +13,7 @@ use super::input::parse_window_fetch_input;
 use super::promise::{make_rejected_promise, make_rejected_promise_with_value};
 use super::*;
 use crate::native_bridge::abort::abort_error_value;
-use crate::structured_clone::V8StructuredClonePayload;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
+use moli_webapi_declare::WebApiObject;
 
 #[derive(Default, WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
@@ -50,11 +49,13 @@ fn window_fetch_abort_signal_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let host = unsafe { &mut *host_ptr };
     let reason = Some(args.this())
-        .and_then(|signal| host.abort_signal_reason(scope, signal))
+        .and_then(|signal| unsafe { (&mut *host_ptr).abort_signal_reason(scope, signal) })
         .unwrap_or_else(|| abort_error_value(scope));
-    let reason_payload = structured_serialize_fetch_abort_reason(scope, reason);
+    // Serialization can run author getters. Reacquire the host afterward.
+    let reason_payload =
+        crate::context_bootstrap::structured_serialize_fetch_abort_reason(scope, reason);
+    let host = unsafe { &mut *host_ptr };
     let upload = host.window_request_upload(internal_id);
     let timing = host.abort_fetch_promise(scope, internal_id, reason, reason_payload);
     if let Some(upload) = upload {
@@ -68,39 +69,6 @@ fn window_fetch_abort_signal_callback<'s>(
         crate::context_bootstrap::record_resource_performance_entry(scope, entry);
     }
     rv.set_undefined();
-}
-
-fn structured_serialize_fetch_abort_reason<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    reason: v8::Local<'s, v8::Value>,
-) -> Option<V8StructuredClonePayload> {
-    let clone_value = error_name_message_snapshot(scope, reason).unwrap_or(reason);
-    crate::context_bootstrap::structured_serialize_value_for_post_message(
-        scope,
-        clone_value,
-        None,
-        "AbortSignal",
-    )
-}
-
-fn error_name_message_snapshot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let error_constructor = crate::util::registered_ecmascript_constructor(scope, global, "Error")?;
-    if !value.instance_of(scope, error_constructor).unwrap_or(false) {
-        return None;
-    }
-    let object = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let snapshot = ObjectLiteralDeclaration::bind(scope);
-    for key in ["name", "message"] {
-        let key_value = v8str(scope, key);
-        if let Some(value) = object.get(scope, key_value.into()) {
-            snapshot.set_value_property(scope, key_value.into(), value);
-        }
-    }
-    Some(snapshot.into_value())
 }
 
 pub(crate) fn window_fetch_callback<'s>(

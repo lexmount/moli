@@ -590,6 +590,10 @@ impl ResourceLoadLease {
         }
     }
 
+    pub(crate) fn fetch_cancel_handle(&self) -> Option<FetchCancelHandle> {
+        self.registration.lifecycle.lock().cancel_handle.clone()
+    }
+
     pub(crate) fn attach_consumer_cancel(&self, consumer_cancel: impl FnOnce() + Send + 'static) {
         let mut consumer_cancel = Some(consumer_cancel);
         let cancel_immediately = {

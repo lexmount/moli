@@ -556,7 +556,8 @@ pub(crate) use self::shared::{
     prepare_value_for_window_post_message, runtime_message_allowed_for_current_target,
     runtime_message_allowed_for_target, shared_array_buffer_constructor_enabled_callback,
     structured_clone_value, structured_clone_value_with_options,
-    structured_deserialize_value_for_message_event, structured_serialize_value_for_post_message,
+    structured_deserialize_value_for_message_event, structured_serialize_fetch_abort_reason,
+    structured_serialize_value_for_post_message,
 };
 pub(crate) use self::shared::{
     console_arg_remote_object_json, console_label_arguments, current_console_stack,

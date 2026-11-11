@@ -1863,6 +1863,7 @@ async fn navigator_service_worker_fetch_abort_reason_reaches_fetch_event_request
                     if (client) {
                       client.postMessage(JSON.stringify({
                         aborted: signal.aborted,
+                        error: signal.reason instanceof Error,
                         name: signal.reason && signal.reason.name,
                         message: signal.reason && signal.reason.message
                       }));
@@ -1928,7 +1929,7 @@ async fn navigator_service_worker_fetch_abort_reason_reaches_fetch_event_request
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerAbortReasonProbe)",
-        r#"fetch-arrived|true:Error:page-abort|{"aborted":true,"name":"Error","message":"page-abort"}"#,
+        r#"fetch-arrived|true:Error:page-abort|{"aborted":true,"error":true,"name":"Error","message":"page-abort"}"#,
     )
     .await;
 
@@ -2047,7 +2048,7 @@ async fn navigator_service_worker_fetch_abort_reason_serializes_on_abort() {
         &browser_context_runtime,
         &loader,
         "String(globalThis.__serviceWorkerAbortReasonSerializationProbe)",
-        r#"fetch-arrived|error1|{"name":"error1","message":"serialization"}|true:error2:serialization|"#,
+        r#"fetch-arrived|error1|{"name":"Error","message":"serialization"}|true:error2:serialization|"#,
     )
     .await;
 

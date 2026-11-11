@@ -288,6 +288,12 @@ impl FetchCancelHandle {
         Self::default()
     }
 
+    /// Only clones of this handle share its cancellation authority. A child
+    /// retains separate authority even though parent cancellation propagates.
+    pub fn same_cancellation_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     /// Unconditionally requests cancellation of this handle and its descendants.
     /// This does not lock response selection or change the selected progress.
     /// An already committed result or a racing completion can therefore coexist
