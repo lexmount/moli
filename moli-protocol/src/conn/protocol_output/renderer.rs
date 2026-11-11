@@ -17,6 +17,7 @@ pub(super) type SharedRendererProjectionResult = SharedProtocolWorkflowResult;
 pub(super) struct PendingRendererOutputProjection {
     workflow: PendingProtocolWorkflow,
     cursor: RendererOutputCursor,
+    delivery_predecessor: Option<RendererOutputCursor>,
 }
 
 impl PendingRendererOutputProjection {
@@ -33,6 +34,9 @@ impl PendingRendererOutputProjection {
             } => target_id.clone(),
             crate::domains::activity::RendererPublicationOwner::BrowserContext { .. } => None,
         };
+        let delivery_predecessor = target_id
+            .as_deref()
+            .and_then(|id| conn.target_creation_output_predecessor(id));
         let projection = RendererOutputProjection::new(conn, publication, owner);
         let workflow = PreparedCommandWorkflow::new(move |mut context| async move {
             let mut driver = ProtocolWorkflowDriver::new(access);
@@ -46,7 +50,12 @@ impl PendingRendererOutputProjection {
             workflow: PendingProtocolWorkflow::prepare(workflow, target_id)
                 .with_renderer_source(Some(cursor)),
             cursor,
+            delivery_predecessor,
         }
+    }
+
+    pub(super) fn delivery_predecessor(&self) -> Option<RendererOutputCursor> {
+        self.delivery_predecessor
     }
 
     pub(super) fn cursor(&self) -> RendererOutputCursor {
@@ -136,9 +145,8 @@ impl CdpConnection {
                     PendingRendererOutputProjection::prepare(self, admitted, access.clone()),
                     access.clone(),
                 );
-                self.scheduler_state.push_scheduler_event(
-                    CdpSchedulerEvent::RendererOutputProjectionPrepared { pending },
-                );
+                self.scheduler_state
+                    .push_scheduler_event(CdpSchedulerEvent::ProtocolTaskPrepared { pending });
             }
         }
     }

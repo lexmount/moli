@@ -140,24 +140,25 @@ pub fn root_frame_stopped_loading_work(
     )
 }
 
+pub fn renderer_fenced_output_work(
+    sequence: u64,
+    events: Vec<crate::BackgroundProtocolEvent>,
+    predecessors: Vec<moli_core::RendererOutputFence>,
+) -> ProtocolSchedulerWork {
+    ProtocolSchedulerWork::renderer_fenced_output(
+        crate::ProtocolWorkPublishSequence::new(sequence),
+        events,
+        predecessors,
+        None,
+    )
+}
+
 pub fn protocol_work_from_renderer_output(
     mut work: ProtocolSchedulerWork,
     source: moli_core::RendererOutputCursor,
 ) -> ProtocolSchedulerWork {
     work.bind_renderer_output_source(source);
     work
-}
-
-pub fn projected_renderer_output_prefix(
-    source: moli_core::RendererOutputCursor,
-    events: Vec<crate::BackgroundProtocolEvent>,
-) -> crate::RendererOutputProjectionPrefix {
-    crate::RendererOutputProjectionPrefix {
-        source,
-        events,
-        predecessors: Vec::new(),
-        target_id: None,
-    }
 }
 
 pub fn command_completion_with_scheduler_events(

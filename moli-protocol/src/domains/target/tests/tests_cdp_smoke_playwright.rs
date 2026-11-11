@@ -85,6 +85,8 @@ async fn arm_popup_route(
     popup_session_id: &str,
     popup_url: &str,
 ) {
+    ctx.wait_for_initial_document_for_target(popup_target_id)
+        .await;
     ctx.with_fixture(|conn| {
         assert!(
             conn.target_has_waiting_for_debugger_session(popup_target_id),
@@ -920,6 +922,8 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
             })
             .unwrap()
     });
+    ctx.wait_for_initial_document_for_target(&popup_target_id)
+        .await;
     let outcome = ctx.run_fixture_scheduler_work(work).await;
     assert!(outcome.into_parts().0.is_empty());
     ctx.with_fixture(|conn| {

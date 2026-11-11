@@ -80,6 +80,7 @@ async fn assert_initial_document_frame_tree_waits_for_navigation(popup: bool) {
     // Chromium's initial DocumentLoader URL serializes as ":", although the
     // initial DOM document has location.href == "about:blank". Playwright
     // uses this distinction to wait for the popup's first real commit.
+    ctx.wait_for_initial_document_for_target(target).await;
     let mut initial_loader = None;
     for (id, method) in [(2003, "Page.getFrameTree"), (2004, "Page.getResourceTree")] {
         let raw = json!({ "id": id, "method": method, "sessionId": session }).to_string();

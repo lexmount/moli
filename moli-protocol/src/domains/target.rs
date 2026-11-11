@@ -25,6 +25,7 @@ mod browser_context_disposal;
 mod closing;
 mod creation;
 mod events;
+pub(crate) use events::target_created_automation_event;
 mod info;
 mod opening;
 pub(crate) use attachment::TargetDetachmentOutput;
@@ -58,9 +59,9 @@ pub(crate) enum TargetCommandFailureCleanup {
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use popup::{
-    NewPopupTarget, PopupTargetCreation, PopupTargetOpenerIdentity, PreparedPopupNavigation,
-    PreparedPopupTarget, emit_target_info_changed_for_owner_background_event, finish_popup_target,
-    popup_target_created_events, prepare_popup_target, prepare_popup_target_activation,
+    PopupTargetCreation, PopupTargetOpenerIdentity, PreparedPopupNavigation, PreparedPopupTarget,
+    emit_target_info_changed_for_owner_background_event, prepare_popup_target,
+    prepare_popup_target_activation,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };

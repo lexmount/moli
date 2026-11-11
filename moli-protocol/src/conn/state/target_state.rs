@@ -516,6 +516,7 @@ impl TargetInitialEmptyDocumentState {
 pub(crate) struct PendingPopupNavigation {
     pub(crate) url: String,
     pub(crate) response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    pub(crate) environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     pub(crate) initiator: Option<moli_core::page::RendererNavigationInitiator>,
 }
 

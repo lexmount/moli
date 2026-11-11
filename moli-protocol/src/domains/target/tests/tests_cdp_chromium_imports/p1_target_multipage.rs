@@ -1725,7 +1725,12 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .expect("popup target id")
         .to_owned();
 
-    ctx.remove_active_fixture_target().await;
+    ctx.process_async(json!({"id":260_031,"method":"Target.closeTarget","params":{"targetId":"TID-reset-opener"}})).await;
+    assert!(
+        take_response_by_id(&mut ctx, 260_031)
+            .get("error")
+            .is_none()
+    );
 
     ctx.with_fixture(|conn| {
         assert!(!{

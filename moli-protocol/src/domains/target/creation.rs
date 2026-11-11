@@ -49,13 +49,6 @@ pub(super) fn emit_target_creation_protocol_events(
     events: TargetCreationCommit,
     out: &mut impl events::CdpTargetAutomationEventSink,
 ) -> Result<(), DevToolsError> {
-    let has_discovery = conn.has_any_target_discovery();
-    if !has_discovery
-        && events.attached_tab_sessions.is_empty()
-        && events.attached_sessions.is_empty()
-    {
-        return Ok(());
-    }
     let bc = conn
         .browser_contexts()
         .find(|browser_context| {
@@ -70,10 +63,8 @@ pub(super) fn emit_target_creation_protocol_events(
     if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
         return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
     }
-    if has_discovery {
-        for event in conn.target_created_event_plan(&events.page_target_id) {
-            out.push_target_background_event(event);
-        }
+    for event in conn.target_created_event_plan(&events.page_target_id) {
+        out.push_target_background_event(event);
     }
     if let Some(tab_target_info) = conn.tab_target_info_for_page_target_info(&target_info) {
         let tab_target_id = tab_target_info

@@ -1614,7 +1614,11 @@ async fn resetting_opener_target_clears_live_opener_but_keeps_frame_attribution(
         json!("TID-opener-reset")
     );
 
-    ctx.remove_active_fixture_target().await;
+    ctx.process_async(
+        json!({"id":116,"method":"Target.closeTarget","params":{"targetId":"TID-opener-reset"}}),
+    )
+    .await;
+    assert!(take_response_by_id(&mut ctx, 116).get("error").is_none());
 
     ctx.with_fixture(|conn| {
         let browser_context = conn.browser_context.as_ref().unwrap();
@@ -1681,8 +1685,8 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
                 let browser_context = conn.browser_context.as_ref().unwrap();
 
                 browser_context
-                    .background_target(popup_target_id)
-                    .expect("background target must exist")
+                    .page_target(popup_target_id)
+                    .expect("popup target must exist")
                     .owner_state
                     .initial_empty_document_state()
                     .expect("popup target should record initial empty document")
@@ -1776,8 +1780,8 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
             let browser_context = conn.browser_context.as_ref().unwrap();
 
             browser_context
-                .background_target(&popup_target_id)
-                .expect("background target must exist")
+                .page_target(&popup_target_id)
+                .expect("popup target must exist")
                 .owner_state
                 .initial_empty_document_state()
                 .expect("popup target should still record initial empty document")
@@ -2134,12 +2138,19 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
         1,
         "same-command named reuse must create one target: {sent:?}"
     );
+    let target_id = sent
+        .iter()
+        .find(|message| message["method"] == "Target.targetCreated")
+        .unwrap()["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     ctx.with_fixture(|conn| {
         let browser_context = conn.browser_context.as_ref().unwrap();
         assert_eq!(browser_context.background_target_count(), 1);
         assert_eq!(
             browser_context
-                .background_target_at(0)
+                .page_target(&target_id)
                 .unwrap()
                 .target_url(),
             "https://example.com/second-popup"
@@ -2335,6 +2346,9 @@ async fn anchor_left_click_activates_blank_target_to_foreground() {
 
             let sent = ctx.take_all();
             let popup_target_id = popup_target_id_for_url(&sent, POPUP_URL);
+            ctx.wait_until_scheduler_state("foreground popup selection", |conn| {
+                conn.browser_context_by_id("BID-anchor-foreground").is_some_and(|context| context.active_target_id() == Some(popup_target_id.as_str()))
+            }).await;
             ctx.with_fixture(|conn| {
 let browser_context = conn
                 .browser_context_by_id("BID-anchor-foreground")
@@ -2410,6 +2424,10 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                     panic!("foreground popup should be auto-attached: {sent:#?}")
                 })
                 .to_owned();
+            // Created/attached no longer imply Page adoption. The Page command
+            // joins initialization while retaining the debugger navigation gate.
+            ctx.process_async(json!({"id":16_152,"method":"Page.enable","sessionId":popup_session_id})).await;
+            ctx.expect_result(16_152, json!({}), Some(&popup_session_id));
             ctx.with_fixture(|conn| { let browser_context = conn
                 .browser_context_by_id("BID-anchor-debugger-wait")
                 .expect("anchor browser context should remain available");
@@ -3317,7 +3335,7 @@ async fn tab_session_auto_attach_only_attaches_its_own_child_page() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
+async fn incomplete_popup_close_clears_tab_page_sessions_and_target_graph() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-popup-rollback", "TID-popup-opener");
 
@@ -3372,16 +3390,11 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     });
     ctx.with_fixture(|conn| assert_eq!(conn.tab_target_count(), 1));
 
-    {
-        let pending = ctx.with_fixture(|conn| {
-            conn.prepare_popup_target_rollback(Some("BID-popup-rollback"), page_target_id)
-        });
-        ctx.drive_owned_wait(
-            pending.run_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle())),
-        )
-        .await
-        .unwrap();
-    }
+    ctx.process_async(
+        json!({"id":901,"method":"Target.closeTarget","params":{"targetId":page_target_id}}),
+    )
+    .await;
+    assert!(ctx.take_response_by_id(901).get("error").is_none());
 
     ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some("SID-popup-tab")), None));
     ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some("SID-popup-page-primary")), None));
@@ -3406,7 +3419,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target_graph() {
+async fn incomplete_active_popup_close_clears_active_slot_sessions_and_target_graph() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc(&mut ctx, "BID-active-popup-rollback");
 
@@ -3461,16 +3474,11 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     });
     ctx.with_fixture(|conn| assert_eq!(conn.tab_target_count(), 1));
 
-    {
-        let pending = ctx.with_fixture(|conn| {
-            conn.prepare_popup_target_rollback(Some("BID-active-popup-rollback"), page_target_id)
-        });
-        ctx.drive_owned_wait(
-            pending.run_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle())),
-        )
-        .await
-        .unwrap();
-    }
+    ctx.process_async(
+        json!({"id":901,"method":"Target.closeTarget","params":{"targetId":page_target_id}}),
+    )
+    .await;
+    assert!(ctx.take_response_by_id(901).get("error").is_none());
 
     ctx.with_fixture(|conn| assert_eq!(conn.session_route(Some("SID-active-popup-tab")), None));
     ctx.with_fixture(|conn| {

@@ -2862,6 +2862,29 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             "prepared popup should create the owner popup target without reading a loaded page"
         )
     });
+    let initialization = ctx.with_fixture(|conn| {
+        let mut initialization = None;
+        let mut other = Vec::new();
+        for event in conn.take_scheduler_events() {
+            match event {
+                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending }
+                    if pending.renderer_projection_cursor().is_none() =>
+                {
+                    assert!(
+                        initialization.replace(pending).is_none(),
+                        "one initialization owner"
+                    );
+                }
+                event => other.push(event),
+            }
+        }
+        conn.extend_scheduler_events(other);
+        initialization.expect("creation transfers initialization to its own task")
+    });
+    let completed = ctx.drive_owned_wait(initialization.wait()).await;
+    let (_, scheduler_events) = ctx
+        .with_fixture(|conn| conn.complete_owned_protocol_scheduler_work(completed))
+        .into_protocol_event_parts();
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -2874,13 +2897,10 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             "target creation should install only the initial empty Document"
         )
     });
-    let scheduler_events = ctx.with_fixture(|conn| conn.take_scheduler_events());
-    assert!(matches!(
-        scheduler_events.as_slice(),
-        [crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }]
-            if work.kind()
-                == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
-    ));
+    assert_eq!(scheduler_events.iter().filter(|event| matches!(event,
+        crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
+            if work.kind() == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
+    )).count(), 1, "initialization publishes one navigation; Native publication tasks are independent");
 }
 
 #[tokio::test(flavor = "multi_thread")]

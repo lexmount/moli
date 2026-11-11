@@ -10,6 +10,7 @@ use crate::domains::network::{
 /// producer, or change the output families owned by the batch.
 pub(in crate::domains) struct ProtocolOutputProjectionContext<'a> {
     owner: &'a CommandOwnerScope,
+    pub(in crate::domains) renderer_source: Option<moli_core::RendererOutputCursor>,
     pub(in crate::domains) command: &'a mut CommandDispatchContext,
     pub(in crate::domains) subresource_frame_id: Option<&'a str>,
     pub(in crate::domains) subresource_timestamp: Option<f64>,
@@ -23,11 +24,20 @@ impl<'a> ProtocolOutputProjectionContext<'a> {
     ) -> Self {
         Self {
             owner,
+            renderer_source: None,
             command,
             subresource_frame_id: None,
             subresource_timestamp: None,
             subresource_network_request_id: None,
         }
+    }
+
+    pub(in crate::domains) fn with_renderer_source(
+        mut self,
+        source: Option<moli_core::RendererOutputCursor>,
+    ) -> Self {
+        self.renderer_source = source;
+        self
     }
 
     pub(in crate::domains) fn owner(&self) -> &CommandOwnerScope {
@@ -66,6 +76,7 @@ mod tests {
         let mut command = CommandDispatchContext::default();
         let context = ProtocolOutputProjectionContext {
             owner: &owner,
+            renderer_source: None,
             command: &mut command,
             subresource_frame_id: Some("frame-1"),
             subresource_timestamp: Some(12.5),

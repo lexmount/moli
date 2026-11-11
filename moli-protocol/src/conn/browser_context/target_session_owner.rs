@@ -1604,6 +1604,9 @@ impl CdpConnection {
         self.browser_context_by_id(&browser_context_id)?
             .page_target(target_id)?;
         let primary_owner = CommandOwnerScope::for_route(primary_route);
+        out.extend(
+            crate::domains::page::dismiss_javascript_dialogs_for_target_close(self, &primary_owner),
+        );
         let session_owners = self
             .page_event_session_ids_for_owner(&primary_owner)
             .into_iter()
@@ -1636,7 +1639,19 @@ impl CdpConnection {
 
         let (target, primary_session_id, attached_session_ids, collected_network_data_artifacts) = {
             let browser_context = self.browser_context_by_id_mut(&browser_context_id)?;
-            let target = browser_context.take_page_target_for_close(target_id)?;
+            let mut target = browser_context.take_page_target_for_close(target_id)?;
+            // Revoke installation and release modal waits in the finite close
+            // commit, before any queued Native teardown can wait on that Page.
+            target.javascript_dialog_state.clear();
+            target.runtime_slot.retire_javascript_dialog_scope();
+            if target
+                .runtime_slot
+                .has_initial_document_page_build_in_progress()
+            {
+                target
+                    .runtime_slot
+                    .fail_initial_document_page_build(reason.to_owned());
+            }
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
             let attached_session_ids = target
@@ -1661,48 +1676,6 @@ impl CdpConnection {
             },
             collected_network_data_artifacts,
         })
-    }
-
-    pub(crate) fn prepare_popup_target_rollback(
-        &mut self,
-        browser_context_id: Option<&str>,
-        target_id: &str,
-    ) -> PreparedPopupTargetRollback {
-        self.rollback_top_level_target_tab_sessions_without_event(target_id);
-
-        let browser_context_id = browser_context_id.map(str::to_owned).or_else(|| {
-            self.browser_contexts()
-                .find(|browser_context| {
-                    browser_context.is_active_target(target_id)
-                        || browser_context.background_target(target_id).is_some()
-                })
-                .map(|browser_context| browser_context.id.clone())
-        });
-
-        let mut page_session_ids = Vec::new();
-        let mut retired = None;
-        if let Some(browser_context_id) = browser_context_id {
-            let target = self
-                .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|browser_context| browser_context.take_page_target_for_close(target_id));
-            if let Some(target) = target {
-                page_session_ids.extend(
-                    target
-                        .devtools_sessions
-                        .attached_session_ids()
-                        .map(str::to_owned),
-                );
-                if let Some(session_id) = target.session_id() {
-                    page_session_ids.push(session_id.to_owned());
-                }
-                retired = Some(target);
-            }
-        }
-
-        PreparedPopupTargetRollback {
-            target: retired,
-            session_ids: page_session_ids,
-        }
     }
 
     pub(crate) fn target_session_owner_aggregate_fetch_config_for_owner(
@@ -2162,7 +2135,8 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         Some(crate::conn::TargetPageProtocolAttachmentIdentity::new(
-            self.target_page_residence_identity_for_owner(owner)?,
+            self.target_page_residence_identity_for_owner(owner)
+                .or_else(|| self.pending_target_page_residence_identity_for_owner(owner))?,
             owner.session_id().map(str::to_owned),
         ))
     }
@@ -2946,23 +2920,6 @@ impl CdpConnection {
         f: impl FnOnce(TargetSessionOwnerMut<'_>) -> R,
     ) -> Option<R> {
         self.target_session_owner_mut_for_owner(owner).map(f)
-    }
-}
-
-pub(crate) struct PreparedPopupTargetRollback {
-    target: Option<PageTargetHost>,
-    session_ids: Vec<String>,
-}
-
-impl PreparedPopupTargetRollback {
-    pub(crate) async fn run_using(
-        mut self,
-        driver: &mut crate::conn::ProtocolWorkflowDriver,
-    ) -> Result<()> {
-        if let Some(target) = self.target.as_mut() {
-            target.close_page_async().await;
-        }
-        driver.with_state(move |state| state.finish_popup_rollback(self.session_ids))
     }
 }
 

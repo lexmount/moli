@@ -51,7 +51,6 @@ pub(super) fn register_dedicated_worker_target(
         Err(_) => return outputs,
     };
     let owner_target_id = owner_page.target_id().unwrap_or_default().to_owned();
-    let should_emit_created = conn.has_any_target_discovery();
     let created_snapshot = {
         let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
             return TargetPreparedOutputs::default();
@@ -64,9 +63,7 @@ pub(super) fn register_dedicated_worker_target(
             info.name,
             owner_page_network_sessions.clone(),
         ));
-        should_emit_created
-            .then(|| context.devtools_target_info(&target_id))
-            .flatten()
+        context.devtools_target_info(&target_id)
     };
     if let Some(target_info) = created_snapshot {
         outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
@@ -768,10 +765,7 @@ pub(super) fn prepare_dedicated_worker_target_retirement(
         Some(target_id) => target_id.to_owned(),
         None => return outputs,
     };
-    let destroyed_delta = conn
-        .has_any_target_discovery()
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let mut detached_delta = conn
         .browser_context_by_id(browser_context_id)
         .and_then(|context| {

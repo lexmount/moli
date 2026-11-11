@@ -485,6 +485,7 @@ impl PreparedPublicationOutputProjection {
         conn: &mut CdpConnection,
         access: crate::conn::ProtocolStateHandle,
         context: &mut crate::conn::CommandWorkflowContext,
+        source: Option<RendererOutputCursor>,
     ) -> Option<super::PreparedProtocolOutputWait> {
         use super::ProtocolOutputProjectionMode;
         if let Some(prefix) = self.prefix.take() {
@@ -493,6 +494,7 @@ impl PreparedPublicationOutputProjection {
                 self.owner.clone(),
                 context,
                 ProtocolOutputProjectionMode::All,
+                source,
             );
             if pending.is_some() {
                 self.prefix = Some(prefix);
@@ -512,7 +514,7 @@ impl PreparedPublicationOutputProjection {
         };
         let outputs = std::mem::replace(&mut self.outputs, PreparedProtocolOutputs::empty());
         let (outputs, pending) =
-            outputs.prepare_next_projection_step(conn, self.owner.clone(), context, mode);
+            outputs.prepare_next_projection_step(conn, self.owner.clone(), context, mode, source);
         if pending.is_some() {
             self.outputs = outputs;
             return pending;
@@ -634,7 +636,7 @@ mod tests {
         let mut retained = Vec::new();
         while let Some(event) = queue.pop_front() {
             match event {
-                crate::conn::CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
+                crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending } => {
                     let completed = ctx.drive_owned_wait(pending.wait()).await;
                     let output = ctx
                         .state

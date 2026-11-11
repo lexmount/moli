@@ -117,11 +117,12 @@ async fn open_auto_attached_popup_from_session(
         .as_str()
         .expect("popup session id")
         .to_owned();
+    ctx.wait_for_initial_document_for_target(&target_id).await;
     ctx.with_fixture(|conn| {
         let popup_runtime = conn.runtime_session_owner_slot(Some(&popup_session_id))
             .expect("auto-attached popup runtime slot");
         assert!(popup_runtime.has_loaded_page(),
-            "window.open completion must leave a command-addressable popup Document; diagnostics={}",
+            "joining initialization must leave a command-addressable popup Document; diagnostics={}",
             popup_runtime.moli_memory_diagnostics());
     });
     (target_id, popup_session_id)

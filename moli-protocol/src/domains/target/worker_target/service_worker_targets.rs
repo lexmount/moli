@@ -15,7 +15,6 @@ pub(super) fn register_service_worker_target_with_active_run(
         return outputs;
     }
     let target_id = conn.gen_target_id();
-    let should_emit_created = conn.has_any_target_discovery();
     let mut auto_attach_owners = service_worker_auto_attach_owner_sessions(conn)
         .into_iter()
         .map(|owner_session_id| {
@@ -71,13 +70,8 @@ pub(super) fn register_service_worker_target_with_active_run(
         let version = target
             .version_identity(browser_context_id)
             .expect("inserted service-worker target must own its version scope");
-        let snapshot = if should_emit_created {
-            let snapshot = context.devtools_target_info(&target_id);
-            debug_assert!(snapshot.is_some());
-            snapshot
-        } else {
-            None
-        };
+        let snapshot = context.devtools_target_info(&target_id);
+        debug_assert!(snapshot.is_some());
         (snapshot, version)
     };
     let mut attached_outputs = Vec::new();
@@ -400,7 +394,6 @@ pub(super) fn remove_service_worker_target_with_reason(
     reason: &'static str,
 ) -> TargetPreparedOutputs {
     let mut outputs = TargetPreparedOutputs::default();
-    let should_emit_destroyed = conn.has_any_target_discovery();
     let service_worker_domain_sessions =
         service_worker::enabled_sessions_for_browser_context(conn, browser_context_id);
     let target_id = {
@@ -421,9 +414,7 @@ pub(super) fn remove_service_worker_target_with_reason(
         }
         target_id
     };
-    let destroyed_delta = should_emit_destroyed
-        .then(|| conn.prepare_destroyed_target_host_delta(&target_id))
-        .flatten();
+    let destroyed_delta = conn.prepare_destroyed_target_host_delta(&target_id);
     let Some(context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return outputs;
     };

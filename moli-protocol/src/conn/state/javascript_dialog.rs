@@ -319,6 +319,10 @@ impl Drop for TargetJavaScriptDialogState {
 }
 
 impl TargetJavaScriptDialogState {
+    pub(crate) fn take_all(&mut self) -> Vec<TargetJavaScriptDialog> {
+        std::mem::take(&mut self.pending_dialogs)
+    }
+
     pub(crate) fn clear(&mut self) {
         for dialog in self.pending_dialogs.drain(..) {
             let _ = dialog.finish(false, String::new());

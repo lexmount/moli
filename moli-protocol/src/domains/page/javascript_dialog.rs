@@ -317,6 +317,34 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
     ))
 }
 
+/// Browser-side termination releases the one-shot completion before Native
+/// teardown and records the same close fact used by explicit handling.
+pub(crate) fn dismiss_javascript_dialogs_for_target_close(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> Vec<BackgroundProtocolEvent> {
+    let dialogs = conn
+        .with_target_javascript_dialog_state_for_owner_mut(owner, |state| state.take_all())
+        .unwrap_or_default();
+    let mut events = Vec::new();
+    for dialog in dialogs {
+        if dialog.finish(false, String::new()) {
+            events.extend(broadcast_javascript_dialog_closed(
+                conn,
+                owner,
+                UserPromptClosedEvent {
+                    target_id: dialog.page_owner().target_id().map(Into::into),
+                    frame_id: dialog.source_frame_id().into(),
+                    prompt_type: dialog.dialog_type().to_owned(),
+                    accepted: false,
+                    user_text: String::new(),
+                },
+            ));
+        }
+    }
+    events
+}
+
 fn broadcast_javascript_dialog_closed(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
@@ -640,7 +668,9 @@ fn emit_popup_dialogs_for_target(
         return;
     };
     let source_frame_id = conn
-        .target_session_owner_frame_tree_identity(destination.session_id())
+        .target_session_owner_frame_tree_identity_for_owner(
+            &CommandOwnerScope::for_page_attachment(&destination),
+        )
         .map(|(root_frame_id, _, _, _)| root_frame_id)
         .or_else(|| destination.page_owner().target_id().map(str::to_owned));
     let Some(source_frame_id) = source_frame_id else {

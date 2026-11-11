@@ -81,7 +81,9 @@ impl RendererOutputProjection {
     ) {
         loop {
             if let Some(current) = self.current.as_mut() {
-                if let Some(pending) = current.prepare_until_wait(conn, access.clone(), context) {
+                if let Some(pending) =
+                    current.prepare_until_wait(conn, access.clone(), context, Some(self.cursor))
+                {
                     return (self, Some(pending));
                 }
                 self.current = None;

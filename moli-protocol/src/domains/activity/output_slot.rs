@@ -190,6 +190,7 @@ impl ProtocolOutputSlot {
             Self::MainDocumentCommit => {
                 crate::domains::page::project_main_document_commit(conn, context, payloads)
             }
+            Self::Popup => crate::domains::page::project_popup_creation(conn, context, payloads),
             Self::DocumentLifecycle
             | Self::DocumentTitleChanged
             | Self::JavascriptDialog
@@ -221,8 +222,6 @@ impl ProtocolOutputSlot {
                 crate::domains::page::PreparedPageOutputClose::take(payloads)
                     .map(PreparedProtocolOutputWait::Close)
             }
-            Self::Popup => crate::domains::page::PreparedPopupOutputProjection::take(payloads)
-                .map(PreparedProtocolOutputWait::Popup),
             Self::PendingSubresourceContinueEvents => {
                 crate::domains::network::PreparedSubresourceProjection::take(
                     conn, owner, payloads, context,
@@ -254,7 +253,6 @@ impl ProtocolOutputSlot {
 
 pub(crate) enum PreparedProtocolOutputWait {
     Close(crate::domains::page::PreparedPageOutputClose),
-    Popup(crate::domains::page::PreparedPopupOutputProjection),
     Subresource(crate::domains::network::PreparedSubresourceProjection),
     Worker(crate::domains::target::WorkerTargetOutputProjection),
     Runtime(crate::domains::runtime::PreparedRuntimeInspectorProjection),
@@ -269,7 +267,6 @@ impl PreparedProtocolOutputWait {
     ) -> LocalBoxFuture<'a, Result<()>> {
         match self {
             Self::Close(projection) => projection.run(driver, context).boxed_local(),
-            Self::Popup(projection) => projection.run(driver, context).boxed_local(),
             Self::Subresource(projection) => projection.run(driver, context).boxed_local(),
             Self::Worker(projection) => projection.run(driver, context).boxed_local(),
             Self::Runtime(projection) => projection.run(driver, context).boxed_local(),

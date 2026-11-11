@@ -20,7 +20,13 @@ async fn automation_command_executes_target_create_and_get_targets() {
             },
         ))
         .await;
-    let (create_result, create_events) = create.into_parts();
+    let (create_result, create_events, native_events) = create.into_parts_with_protocol_events();
+    assert_eq!(native_events.len(), 1);
+    assert!(
+        native_events
+            .into_iter()
+            .all(|event| event.into_wire_message().is_none())
+    );
     assert!(create_events.is_empty());
     let AutomationResult::CreateTarget(create_result) =
         create_result.expect("create target should succeed")

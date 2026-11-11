@@ -136,9 +136,9 @@ pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter, run_body_storage_w
 #[cfg(test)]
 pub(crate) use browser_context::{ClosedPageTarget, PendingPageTargetClose};
 pub(crate) use browser_context::{
-    CompletedPageTargetClose, PageLifecycleEventsEnableResult, PreparedPopupTargetRollback,
-    SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
-    TargetEmulationStateUpdate, TargetNavigationLoadInputs,
+    CompletedPageTargetClose, PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
+    TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -690,9 +690,7 @@ pub(crate) use runtime_load::{
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
-pub use scheduler_state::{
-    CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTurnOutcome, RendererOutputProjectionPrefix,
-};
+pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTurnOutcome};
 #[cfg(test)]
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
@@ -2800,21 +2798,6 @@ impl CdpConnection {
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
     }
 
-    pub(crate) fn publish_popup_target_activation_action(
-        &mut self,
-        action: PopupTargetActivationAction,
-    ) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::popup_target_activation_action(
-            publish_sequence,
-            action,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
-    }
-
     pub(crate) fn publish_page_target_termination_owner_action(
         &mut self,
         action: crate::domains::page::PageTargetTerminationOwnerAction,
@@ -3513,19 +3496,6 @@ impl CdpConnection {
             .tab_session_cleanup_plan_for_page_target(page_target_id, reason)
     }
 
-    pub(crate) fn rollback_top_level_target_tab_sessions_without_event(
-        &mut self,
-        page_target_id: &str,
-    ) {
-        let Some(closure_plan) = self.remove_tab_for_page_target(page_target_id) else {
-            return;
-        };
-        for session_id in closure_plan.tab_target().session_ids() {
-            self.clear_auto_attach_owner(Some(&session_id));
-            self.rollback_attached_session_without_event(&session_id);
-        }
-    }
-
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
         self.target_control.tab_target_id_for_session_id(session_id)
     }
@@ -3650,8 +3620,16 @@ impl CdpConnection {
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
-            .target_created_events_for_all_discovery_owners(target_info)
+        let events = self
+            .target_control
+            .target_created_events_for_all_discovery_owners(target_info.clone());
+        if events.is_empty() && target_info.kind != crate::automation::DevToolsTargetKind::Tab {
+            vec![BackgroundProtocolEvent::automation_only(
+                crate::domains::target::target_created_automation_event(target_info),
+            )]
+        } else {
+            events
+        }
     }
 
     pub(crate) fn target_created_event_plan(&mut self, target_id: &str) -> TargetEventPlan {
@@ -3846,8 +3824,14 @@ impl CdpConnection {
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
-            .target_destroyed_events_for_all_discovery_owners(target_info)
+        let events = self
+            .target_control
+            .target_destroyed_events_for_all_discovery_owners(target_info.clone());
+        if events.is_empty() && target_info.kind != crate::automation::DevToolsTargetKind::Tab {
+            target_destroyed_automation_events(vec![target_info])
+        } else {
+            events
+        }
     }
 
     pub(crate) fn target_crashed_events_for_all_discovery_owners(
