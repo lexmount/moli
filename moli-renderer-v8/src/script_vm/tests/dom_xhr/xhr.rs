@@ -2492,6 +2492,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 )],
                                 network_extra_info_available: false,
                                 request_extra_info: None,
+                                dispatched_request: None,
                                 response_extra_info: None,
                                 redirect_has_extra_info: false,
                                 request_cookie_report: None,

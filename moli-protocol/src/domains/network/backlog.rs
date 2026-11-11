@@ -1,6 +1,7 @@
-use std::borrow::Cow;
-
-use moli_core::page::{SubresourceBodyFinishedResult, SubresourceResponseBody};
+use moli_core::page::{
+    NavigationRedirect, SubresourceBodyFinishedResult, SubresourceRequestInitiatorType,
+    SubresourceResponseBody,
+};
 
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::{
@@ -80,32 +81,63 @@ impl<'a> NetworkBacklogProjectionContext<'a> {
     }
 }
 
-// Match Fetch's per-hop method rewrite; later 307/308 hops retain an earlier GET.
-fn method_after_redirect(method: &str, status: u16) -> &str {
-    if matches!(status, 301 | 302) && method.eq_ignore_ascii_case("POST")
-        || status == 303
-            && !method.eq_ignore_ascii_case("GET")
-            && !method.eq_ignore_ascii_case("HEAD")
-    {
-        "GET"
-    } else {
-        method
+fn emit_subresource_redirect_events(
+    out: &mut Vec<BackgroundProtocolEvent>,
+    event_session_ids: &[Option<String>],
+    request_id: &str,
+    frame_id: &str,
+    loader_id: &str,
+    timestamp: f64,
+    document_url: &url::Url,
+    resource_type: DevToolsNetworkResourceType,
+    initiator: SubresourceRequestInitiatorType,
+    redirects: &[NavigationRedirect],
+) {
+    for redirect in redirects {
+        // An unissued hop has no dispatched request to report. ExtraInfo still
+        // belongs to the preceding response, independently of its destination.
+        let request = redirect.dispatched_request.as_deref();
+        let body = request
+            .and_then(|request| request.body.as_deref())
+            .map(String::from_utf8_lossy);
+        for event_session_id in event_session_ids {
+            if let Some(request) = request {
+                emit_request_will_be_sent(
+                    out,
+                    event_session_id.as_deref(),
+                    request_id,
+                    frame_id,
+                    loader_id,
+                    timestamp,
+                    document_url,
+                    &redirect.to_url,
+                    &request.method,
+                    body.as_deref(),
+                    &request.headers,
+                    resource_type,
+                    initiator,
+                    Some((
+                        &redirect.from_url,
+                        redirect.status,
+                        &redirect.headers,
+                        redirect.from_cache,
+                        redirect.negotiated_http_version,
+                    )),
+                    !redirect.cookie_set_reports.is_empty(),
+                    redirect.request_cookie_report.as_ref(),
+                    &[],
+                );
+            }
+            emit_redirect_response_received_extra_info(
+                out,
+                event_session_id.as_deref(),
+                request_id,
+                &redirect.headers,
+                redirect.status,
+                &redirect.cookie_set_reports,
+            );
+        }
     }
-}
-
-fn strip_redirect_body_headers(headers: &mut Cow<'_, [(String, String)]>) {
-    const BODY_HEADERS: [&str; 5] = [
-        "content-encoding",
-        "content-language",
-        "content-length",
-        "content-location",
-        "content-type",
-    ];
-    headers.to_mut().retain(|(name, _)| {
-        !BODY_HEADERS
-            .iter()
-            .any(|body_header| name.eq_ignore_ascii_case(body_header))
-    });
 }
 
 fn emit_subresource_network_delivery_record(
@@ -317,63 +349,18 @@ fn emit_complete_subresource_network_delivery_record(
             response_headers,
             response_body_len,
         } => {
-            let mut method = output.method();
-            let mut request_body = output.request_body().map(Cow::Borrowed);
-            let mut request_headers: Cow<'_, [(String, String)]> =
-                Cow::Borrowed(output.request_headers());
-            for redirect in redirect_chain {
-                let next_method = method_after_redirect(method, redirect.status);
-                if next_method != method {
-                    request_body = None;
-                    strip_redirect_body_headers(&mut request_headers);
-                }
-                method = next_method;
-                if let Some(extra_info) = redirect.request_extra_info.as_ref() {
-                    request_headers = Cow::Borrowed(&extra_info.headers);
-                    if let Some(dispatched_method) = extra_info.request_method.as_deref() {
-                        method = dispatched_method;
-                        request_body = extra_info
-                            .request_body
-                            .as_deref()
-                            .map(|body| String::from_utf8_lossy(body.as_ref()));
-                    }
-                }
-                for event_session_id in event_session_ids {
-                    emit_request_will_be_sent(
-                        out,
-                        event_session_id.as_deref(),
-                        request_id,
-                        record_frame_id,
-                        loader_id,
-                        timestamp,
-                        record_document_url,
-                        &redirect.to_url,
-                        method,
-                        request_body.as_deref(),
-                        request_headers.as_ref(),
-                        resource_type,
-                        output.request_initiator_type(),
-                        Some((
-                            &redirect.from_url,
-                            redirect.status,
-                            &redirect.headers,
-                            redirect.from_cache,
-                            redirect.negotiated_http_version,
-                        )),
-                        !redirect.cookie_set_reports.is_empty(),
-                        redirect.request_cookie_report.as_ref(),
-                        &[],
-                    );
-                    emit_redirect_response_received_extra_info(
-                        out,
-                        event_session_id.as_deref(),
-                        request_id,
-                        &redirect.headers,
-                        redirect.status,
-                        &redirect.cookie_set_reports,
-                    );
-                }
-            }
+            emit_subresource_redirect_events(
+                out,
+                event_session_ids,
+                request_id,
+                record_frame_id,
+                loader_id,
+                timestamp,
+                record_document_url,
+                resource_type,
+                output.request_initiator_type(),
+                redirect_chain,
+            );
             for event_session_id in event_session_ids {
                 let blocked_intercepts = matching_subresource_network_intercepts(
                     conn,
@@ -555,62 +542,18 @@ fn emit_staged_subresource_response_started(
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = request.resource_type().into();
-    let mut method = request.method();
-    let mut request_body = request.request_body().map(Cow::Borrowed);
-    let mut request_headers: Cow<'_, [(String, String)]> = Cow::Borrowed(request.request_headers());
-    for redirect in output.redirect_chain() {
-        let next_method = method_after_redirect(method, redirect.status);
-        if next_method != method {
-            request_body = None;
-            strip_redirect_body_headers(&mut request_headers);
-        }
-        method = next_method;
-        if let Some(extra_info) = redirect.request_extra_info.as_ref() {
-            request_headers = Cow::Borrowed(&extra_info.headers);
-            if let Some(dispatched_method) = extra_info.request_method.as_deref() {
-                method = dispatched_method;
-                request_body = extra_info
-                    .request_body
-                    .as_deref()
-                    .map(|body| String::from_utf8_lossy(body.as_ref()));
-            }
-        }
-        for event_session_id in event_session_ids {
-            emit_request_will_be_sent(
-                out,
-                event_session_id.as_deref(),
-                request_id,
-                record_frame_id,
-                loader_id,
-                timestamp,
-                request.document_url(),
-                &redirect.to_url,
-                method,
-                request_body.as_deref(),
-                request_headers.as_ref(),
-                resource_type,
-                request.request_initiator_type(),
-                Some((
-                    &redirect.from_url,
-                    redirect.status,
-                    &redirect.headers,
-                    redirect.from_cache,
-                    redirect.negotiated_http_version,
-                )),
-                !redirect.cookie_set_reports.is_empty(),
-                redirect.request_cookie_report.as_ref(),
-                &[],
-            );
-            emit_redirect_response_received_extra_info(
-                out,
-                event_session_id.as_deref(),
-                request_id,
-                &redirect.headers,
-                redirect.status,
-                &redirect.cookie_set_reports,
-            );
-        }
-    }
+    emit_subresource_redirect_events(
+        out,
+        event_session_ids,
+        request_id,
+        record_frame_id,
+        loader_id,
+        timestamp,
+        request.document_url(),
+        resource_type,
+        request.request_initiator_type(),
+        output.redirect_chain(),
+    );
     for event_session_id in event_session_ids {
         let blocked_intercepts = matching_subresource_network_intercepts(
             conn,
@@ -1229,25 +1172,38 @@ mod tests {
             .into_iter()
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
             .collect();
+            let mut dispatched = moli_fetch::Request::new(
+                method,
+                request_url.as_str(),
+                body.clone(),
+                headers.clone(),
+            )
+            .unwrap();
             let redirects = statuses
                 .iter()
                 .enumerate()
-                .map(|(index, &status)| NavigationRedirect {
-                    source: moli_fetch::RedirectSource::Network,
-                    from_url: document_url.join(&format!("api-{index}")).unwrap(),
-                    to_url: document_url.join(&format!("api-{}", index + 1)).unwrap(),
-                    status,
-                    headers: Vec::new(),
-                    network_extra_info_available: false,
-                    request_extra_info: None,
-                    response_extra_info: None,
-                    redirect_has_extra_info: false,
-                    request_cookie_report: None,
-                    cookie_set_reports: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
+                .map(|(index, &status)| {
+                    dispatched
+                        .follow_redirect(moli_fetch::RedirectInfo {
+                            source: moli_fetch::RedirectSource::Network,
+                            from_url: document_url.join(&format!("api-{index}")).unwrap(),
+                            to_url: document_url.join(&format!("api-{}", index + 1)).unwrap(),
+                            status,
+                            headers: Vec::new(),
+                            network_extra_info_available: false,
+                            request_extra_info: None,
+                            dispatched_request: None,
+                            response_extra_info: None,
+                            redirect_has_extra_info: false,
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        })
+                        .unwrap();
+                    dispatched.redirect_chain().last().unwrap().clone().into()
                 })
-                .collect::<Vec<_>>();
+                .collect::<Vec<NavigationRedirect>>();
             let complete = SubresourceNetworkRecord::success_with_body(
                 Some("FRAME-1".to_owned()),
                 document_url.clone(),
@@ -1540,12 +1496,14 @@ mod tests {
         let document_url = Url::parse("https://example.test/").unwrap();
         let start_url = Url::parse("https://example.test/start").unwrap();
         let mut from_url = start_url.clone();
+        let mut dispatched =
+            moli_fetch::Request::new(initial_method, start_url.as_str(), None, Vec::new()).unwrap();
         let redirects = redirect_statuses
             .iter()
             .enumerate()
             .map(|(index, status)| {
                 let to_url = Url::parse(&format!("https://example.test/redirect-{index}")).unwrap();
-                let redirect = moli_core::page::NavigationRedirect {
+                let redirect = moli_fetch::RedirectInfo {
                     source: moli_fetch::RedirectSource::Network,
                     from_url: from_url.clone(),
                     to_url: to_url.clone(),
@@ -1553,6 +1511,7 @@ mod tests {
                     headers: Vec::new(),
                     network_extra_info_available: true,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: None,
                     redirect_has_extra_info: true,
                     request_cookie_report: None,
@@ -1561,7 +1520,8 @@ mod tests {
                     negotiated_http_version: None,
                 };
                 from_url = to_url;
-                redirect
+                dispatched.follow_redirect(redirect).unwrap();
+                dispatched.redirect_chain().last().unwrap().clone().into()
             })
             .collect();
         let handle = SubresourceNetworkRequestHandle::new(1);

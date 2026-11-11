@@ -965,8 +965,6 @@ async fn non_document_background_completion_keeps_one_terminal_and_preserves_suc
                         progress_transfer: CompletedDownloadProgressTransfer::new(
                             vec![1, 2, 3],
                             CompletedMainDocumentNetworkEvents::new(
-                                "GET".into(),
-                                Vec::new(),
                                 None,
                                 200,
                                 vec![("Content-Type".into(), b"application/octet-stream".to_vec())],

@@ -1720,6 +1720,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
                 headers: vec![("location".to_owned(), b"/final.txt".to_vec())],
                 network_extra_info_available: true,
                 request_extra_info: None,
+                dispatched_request: None,
                 response_extra_info: None,
                 redirect_has_extra_info: true,
                 request_cookie_report: None,

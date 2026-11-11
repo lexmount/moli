@@ -64,8 +64,6 @@ impl PreparedCapturedNavigationResponse {
                 .context("failed to materialize captured download body")?;
             return Ok(NavigationLoadOutcome::download(
                 CdpConnection::build_download_from_raw_response(
-                    self.request_method,
-                    self.request_headers,
                     RawResponse::from_head_and_body(self.head, body),
                     self.network_observation_journal,
                     &self.body_progress_source,
@@ -75,8 +73,6 @@ impl PreparedCapturedNavigationResponse {
         if response_status_has_no_content(self.head.status) {
             return Ok(no_content_navigation_from_response(
                 self.head,
-                self.request_method,
-                self.request_headers,
                 self.network_observation_journal,
                 &self.body_progress_source,
             ));

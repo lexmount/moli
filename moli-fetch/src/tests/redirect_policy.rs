@@ -208,6 +208,7 @@ fn recorded_redirect(from_url: Url, to_url: Url) -> crate::RedirectInfo {
         headers: Vec::new(),
         network_extra_info_available: false,
         request_extra_info: None,
+        dispatched_request: None,
         response_extra_info: None,
         redirect_has_extra_info: false,
         request_cookie_report: None,
@@ -215,4 +216,95 @@ fn recorded_redirect(from_url: Url, to_url: Url) -> crate::RedirectInfo {
         from_cache: false,
         negotiated_http_version: None,
     }
+}
+
+#[test]
+fn redirect_dispatch_snapshots_preserve_the_source_and_share_uploads() -> Result<()> {
+    let mut request = Request::new(
+        "POST",
+        "https://example.test/start",
+        Some("upload".into()),
+        Vec::new(),
+    )?;
+    let mut redirect = recorded_redirect(request.url.clone(), request.url.join("/next")?);
+    redirect.status = 307;
+    request.follow_redirect(redirect)?;
+    let first = request.redirect_chain()[0]
+        .dispatched_request
+        .clone()
+        .unwrap();
+    assert_eq!(first.method, "POST");
+    assert_eq!(
+        first.body.as_ref().unwrap().as_ptr(),
+        request.body.as_ref().unwrap().as_ptr()
+    );
+    assert!(request.redirect_chain()[0].request_extra_info.is_none());
+
+    let mut observed = request.redirect_chain().to_vec();
+    observed[0].dispatched_request = Some(
+        request
+            .capture_dispatched_request(vec![("X-Transport".to_owned(), "finalized".to_owned())]),
+    );
+    request.observe_redirect_requests(&observed);
+    assert!(std::sync::Arc::ptr_eq(
+        request.redirect_chain()[0]
+            .dispatched_request
+            .as_ref()
+            .unwrap(),
+        observed[0].dispatched_request.as_ref().unwrap(),
+    ));
+    assert!(
+        first.headers.is_empty(),
+        "refinement must not mutate published snapshots"
+    );
+
+    // An incomplete/synthetic head cannot discard the followed source. A
+    // different chain cannot inject its request metadata into this source.
+    request.observe_redirect_requests(&[]);
+    let retained = request.redirect_chain().to_vec();
+    observed[0].to_url = request.url.join("/other")?;
+    observed[0].dispatched_request = None;
+    request.observe_redirect_requests(&observed);
+    assert_eq!(request.redirect_chain(), retained);
+    assert_eq!(request.method, "POST");
+    Ok(())
+}
+
+#[tokio::test]
+async fn redirect_dispatch_metadata_survives_failure_before_transport_setup() -> Result<()> {
+    let server = ScriptedHttpServer::spawn(vec![
+        ScriptedResponse::status(303, "See Other")
+            .with_header("Location", "http://127.0.0.1:25/blocked"),
+    ]);
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let error = client
+        .fetch_raw_with_network_metadata(Request::new(
+            "POST",
+            &server.url(),
+            Some("upload".into()),
+            vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        )?)
+        .await
+        .expect_err("bad port must fail before the next transport is configured");
+    let context = error
+        .downcast_ref::<NetworkFetchFailureContext>()
+        .and_then(NetworkFetchFailureContext::request_context)
+        .expect("failed navigation retains the attempted request");
+    let redirect = &context.redirect_chain()[0];
+    let request = redirect
+        .dispatched_request
+        .as_ref()
+        .expect("accepted next-hop metadata");
+    assert_eq!(request.method, "GET");
+    assert!(request.body.is_none());
+    assert!(
+        !request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("Content-Type"))
+    );
+    assert_eq!(server.hits(), 1);
+    assert!(client.shutdown().is_clean());
+    server.shutdown();
+    Ok(())
 }

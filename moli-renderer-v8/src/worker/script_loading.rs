@@ -72,6 +72,7 @@ mod tests {
             headers: Vec::new(),
             network_extra_info_available: true,
             request_extra_info: None,
+            dispatched_request: None,
             response_extra_info: None,
             redirect_has_extra_info: true,
             request_cookie_report: None,

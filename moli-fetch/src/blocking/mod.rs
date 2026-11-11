@@ -5,7 +5,6 @@ use std::{
     ffi::{c_char, c_long},
     net::IpAddr,
     str,
-    sync::Arc,
     time::Duration,
 };
 
@@ -323,12 +322,14 @@ pub(crate) fn network_request_extra_info_from_headers(
     cookie_report: Option<&StoredCookieQueryReport>,
 ) -> NetworkRequestExtraInfo {
     let mut headers = outgoing_headers.to_vec();
-    append_header_if_missing(&mut headers, "User-Agent", config.user_agent().to_owned());
+    append_header_if_missing(
+        &mut headers,
+        "User-Agent",
+        request.browser_identity(config).user_agent().to_owned(),
+    );
     NetworkRequestExtraInfo {
         headers,
         cookie_report: cookie_report.cloned().unwrap_or_default(),
-        request_method: Some(Arc::from(request.method.as_str())),
-        request_body: request.body.as_ref().map(|body| Arc::new(body.clone())),
     }
 }
 
@@ -979,6 +980,7 @@ mod tests {
             headers: Vec::new(),
             network_extra_info_available: true,
             request_extra_info: None,
+            dispatched_request: None,
             response_extra_info: None,
             redirect_has_extra_info: true,
             request_cookie_report: None,

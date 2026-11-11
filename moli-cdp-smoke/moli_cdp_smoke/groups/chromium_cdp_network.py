@@ -1912,7 +1912,97 @@ async def _verify_chromium_main_document_response_stage_extra_info_sample(
                 pass
 
 
+async def _verify_chromium_subresource_redirect_dispatch(state: SmokeState) -> None:
+    cases = ["network", "manual-cors", "intercepted", "service-worker"]
+    # Chromium retains its original logical upload in some redirect events
+    # after a Fetch body override. Moli additionally reports the actual upload.
+    if is_moli_browser():
+        cases.append("intercepted-body")
+    for case in cases:
+        intercepted = case.startswith("intercepted")
+        context = await state.browser.new_context()
+        try:
+            page = await context.new_page()
+            cdp = await new_cdp_session(context, page)
+            await page.goto(f"{state.fixture}/fetch-dispatch/page", wait_until="load")
+            if case == "service-worker":
+                await page.evaluate("""() => {
+                  globalThis.__workerReady = false;
+                  navigator.serviceWorker.register('/fetch-dispatch/sw.js', {scope:'/fetch-dispatch/'})
+                    .then(() => navigator.serviceWorker.ready)
+                    .then(() => { globalThis.__workerReady = true; });
+                }""")
+                await wait_until(lambda: page.evaluate("__workerReady && !!navigator.serviceWorker.controller"),
+                                 "redirect controlling service worker")
+            events = attach_cdp_event_collector(cdp, [
+                "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFinished",
+            ])
+            await cdp.send("Network.enable")
+            await cdp.send("Network.setExtraHTTPHeaders", {"headers": {"X-Baseline": case}})
+            query = f"case=subresource-{case}"
+            urls = [f"{state.fixture}/navigation-hop/{hop}?{query}"
+                    for hop in ("start", "middle", "final")]
+            if case == "service-worker":
+                urls[0] = f"{state.fixture}/fetch-dispatch/redirect-sw/start?{query}"
+            paused = asyncio.get_running_loop().create_future()
+            if intercepted:
+                cdp.once("Fetch.requestPaused", lambda params: paused.set_result(params))
+                await cdp.send("Fetch.enable", {"patterns": [{"urlPattern": urls[0], "requestStage": "Request"}]})
+            headers = {"Content-Type": "text/plain"}
+            if case == "manual-cors":
+                headers.update({"Content-Type": "application/json", "X-Probe": "unsafe-header"})
+            await page.evaluate("""({url, headers}) => {
+              globalThis.__redirectResult = null;
+              fetch(url, {method:'POST', headers, body:'payload'})
+                .then(async response => ({text:await response.text(),
+                  observed:JSON.parse(response.headers.get('X-Navigation-Requests'))}))
+                .then(result => { globalThis.__redirectResult = result; },
+                      error => { globalThis.__redirectResult = {error:String(error)}; });
+            }""", {"url": urls[0], "headers": headers})
+            if intercepted:
+                pause = await paused
+                await cdp.send("Fetch.continueRequest", {
+                    "requestId": pause["requestId"], "method": "PATCH",
+                    "postData": base64.b64encode(b"overridden" if case == "intercepted-body" else b"payload").decode(),
+                    "headers": [{"name": "Content-Type", "value": "application/json"},
+                                {"name": "X-Once", "value": "temporary"}],
+                })
+            await wait_until(lambda: page.evaluate("__redirectResult !== null"), "redirect fetch result")
+            result = await page.evaluate("__redirectResult")
+            assert_equal(result.get("error"), None, f"{case} fetch error")
+            assert_equal(result["text"], "<!doctype html><main>redirect final</main>", f"{case} fetch body")
+            requests = [event["params"] for event in events
+                        if event["method"] == "Network.requestWillBeSent"
+                        and event["params"]["request"]["url"] in urls]
+            assert_equal([request["request"]["url"] for request in requests], urls, f"{case} redirect URLs")
+            assert_equal(len({request["requestId"] for request in requests}), 1, f"{case} request identity count")
+            request_id = requests[0]["requestId"]
+            await wait_until(lambda: bool(_network_events_for_request(events, "Network.loadingFinished", request_id)),
+                             f"{case} redirect loadingFinished")
+            observed = result["observed"]
+            expected = ["PATCH", "PATCH", "GET"] if intercepted else ["POST", "POST", "GET"]
+            if case == "service-worker":
+                expected = expected[1:]
+            assert_equal([item["method"] for item in observed], expected, f"{case} server methods")
+            # The initial event precedes interception. Subsequent requests must
+            # describe the dispatch, including changes invisible to that event.
+            actual_hops = observed if case == "service-worker" else observed[1:]
+            for event, actual in zip(requests[1:], actual_hops, strict=True):
+                request = event["request"]
+                assert_equal(request["method"], actual["method"], f"{case} dispatched method")
+                assert_equal(request.get("postData", ""), actual["body"], f"{case} dispatched body")
+                # Chromium omits or retains Content-Type in logical redirect
+                # headers; the Rust transport/projection matrix checks it.
+                for name in ("X-Baseline", "X-Once"):
+                    assert_equal(_header_value(request["headers"], name),
+                                 _header_value(actual["headers"], name), f"{case} dispatched {name}")
+            state.record(f"chromium_subresource_redirect_dispatch_{case}", {"requests": observed})
+        finally:
+            await context.close()
+
+
 async def run_network_group(state: SmokeState) -> None:
+    await _verify_chromium_subresource_redirect_dispatch(state)
     await _verify_chromium_page_lifecycle_order(state)
     await _verify_chromium_main_document_network_extra_info_sample(state)
     await _verify_chromium_cookie_blocked_reason_sample(state)

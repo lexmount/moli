@@ -3749,8 +3749,6 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     assert!(navigation.pending_download.is_none());
 
     let network_events = navigation.completed_body_network_events();
-    assert_eq!(network_events.request_method, "GET");
-    assert_eq!(network_events.request_headers, request_headers);
     assert!(network_events.final_request_cookie_report.is_none());
     assert_eq!(network_events.response_status, 200);
     assert_eq!(

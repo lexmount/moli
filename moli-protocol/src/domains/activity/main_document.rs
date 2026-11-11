@@ -933,8 +933,6 @@ mod tests {
         CompletedDownloadProgressTransfer::new(
             Vec::new(),
             CompletedMainDocumentNetworkEvents::new(
-                "GET".to_owned(),
-                vec![("Accept".to_owned(), "text/html".to_owned())],
                 None,
                 200,
                 vec![(

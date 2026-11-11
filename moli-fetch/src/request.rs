@@ -1142,6 +1142,49 @@ impl Request {
         self
     }
 
+    /// Preserve refined dispatch snapshots without discarding the owner's
+    /// already-followed hops when a synthetic response has no transport chain.
+    pub fn observe_redirect_requests(&mut self, observed: &[RedirectInfo]) {
+        if observed.len() < self.redirect_chain.len()
+            || !self
+                .redirect_chain
+                .iter()
+                .zip(observed)
+                .all(|(recorded, observed)| {
+                    recorded.source == observed.source
+                        && recorded.from_url == observed.from_url
+                        && recorded.to_url == observed.to_url
+                        && recorded.status == observed.status
+                })
+        {
+            return;
+        }
+        for (recorded, observed) in self.redirect_chain.iter_mut().zip(observed) {
+            if observed.dispatched_request.is_some() {
+                recorded
+                    .dispatched_request
+                    .clone_from(&observed.dispatched_request);
+            }
+        }
+        // Internal transport redirects have already passed Fetch's admission.
+        self.redirect_chain
+            .extend_from_slice(&observed[self.redirect_chain.len()..]);
+    }
+
+    /// Capture the effective request at its destination's admission boundary.
+    /// HTTP transports pass their finalized headers; synthetic destinations use
+    /// the Fetch request's headers. Bytes clones share the upload allocation.
+    pub fn capture_dispatched_request(
+        &self,
+        headers: Vec<(String, String)>,
+    ) -> std::sync::Arc<crate::DispatchedRequest> {
+        std::sync::Arc::new(crate::DispatchedRequest {
+            method: self.method.clone(),
+            headers,
+            body: self.body.clone(),
+        })
+    }
+
     pub fn redirect_chain(&self) -> &[RedirectInfo] {
         &self.redirect_chain
     }
@@ -1154,7 +1197,13 @@ impl Request {
 
     /// Records a followed redirect. The caller controls method and current URL
     /// updates so this also supports transports that retain the original URL.
-    pub fn record_redirect(&mut self, redirect: RedirectInfo) {
+    pub fn record_redirect(&mut self, mut redirect: RedirectInfo) {
+        // Keep the accepted next request even if cache/transport admission
+        // subsequently fails. Its destination can refine the finalized headers.
+        if redirect.dispatched_request.is_none() {
+            redirect.dispatched_request =
+                Some(self.capture_dispatched_request(self.request_headers.to_byte_strings()));
+        }
         self.redirect_chain.push(redirect);
     }
 

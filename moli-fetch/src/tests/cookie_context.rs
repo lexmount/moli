@@ -21,6 +21,7 @@ fn follow_cookie_redirect(request: &mut Request, target: &Url) {
             headers: vec![("Location".to_owned(), target.as_str().as_bytes().to_vec())],
             network_extra_info_available: false,
             request_extra_info: None,
+            dispatched_request: None,
             response_extra_info: None,
             redirect_has_extra_info: false,
             request_cookie_report: None,

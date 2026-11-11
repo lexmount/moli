@@ -39,6 +39,7 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
                     headers: vec![("location".to_owned(), location.as_bytes().to_vec())],
                     network_extra_info_available: false,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: None,
                     redirect_has_extra_info: false,
                     request_cookie_report: None,

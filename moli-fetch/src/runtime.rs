@@ -47,8 +47,9 @@ use crate::{
         load_cached_streaming_response_lookup, log_request_completion,
         merge_cached_not_modified_streaming_response_lookup,
         network_request_extra_info_from_headers, next_followed_redirect_url_from_parts,
-        remove_cached_response, response_headers_forbid_cache_storage, store_response_cookies,
-        transfer_metrics_from_easy, validation_headers_for_cached_streaming_response_lookup,
+        outgoing_request_headers_for_url, remove_cached_response,
+        response_headers_forbid_cache_storage, store_response_cookies, transfer_metrics_from_easy,
+        validation_headers_for_cached_streaming_response_lookup,
     },
     cancellation::ResponseProgress,
     client_hints::{
@@ -917,6 +918,13 @@ impl RuntimeOwner {
                     return Ok(JobOutcome::Retry(Box::new(job)));
                 }
                 job.response_progress.mark_response_started();
+                attach_cached_redirect_request(
+                    &mut job.request.redirect_chain,
+                    &self.config,
+                    &prepared_request.request,
+                    &job.current_url,
+                    cookie_header.as_deref(),
+                );
                 let response = match materialize_cached_response(cached, request_cookie_report) {
                     Ok(response) => response,
                     Err(error) => return Err((job.response_tx, error)),
@@ -979,8 +987,9 @@ impl RuntimeOwner {
                 request_cookie_report.as_ref(),
             )
         });
-        attach_next_request_extra_info(
+        attach_next_redirect_request(
             &mut job.request.redirect_chain,
+            &prepared_request.request,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1101,6 +1110,13 @@ impl RuntimeOwner {
                     self.start_streaming_job_or_reply(state, job);
                     return Ok(StreamingJobOutcome::Complete);
                 }
+                attach_cached_redirect_request(
+                    &mut job.request.redirect_chain,
+                    &self.config,
+                    &prepared_request.request,
+                    &job.current_url,
+                    cookie_header.as_deref(),
+                );
                 self.complete_cached_streaming_html_redirect_or_response(
                     state,
                     job,
@@ -1181,8 +1197,9 @@ impl RuntimeOwner {
                 request_cookie_report.as_ref(),
             )
         });
-        attach_next_request_extra_info(
+        attach_next_redirect_request(
             &mut job.request.redirect_chain,
+            &prepared_request.request,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1328,6 +1345,13 @@ impl RuntimeOwner {
                     self.start_raw_streaming_job_or_reply(state, job);
                     return Ok(StreamingJobOutcome::Complete);
                 }
+                attach_cached_redirect_request(
+                    &mut job.request.redirect_chain,
+                    &self.config,
+                    &prepared_request.request,
+                    &job.current_url,
+                    cookie_header.as_deref(),
+                );
                 self.complete_cached_streaming_raw_redirect_or_response(
                     state,
                     job,
@@ -1412,8 +1436,9 @@ impl RuntimeOwner {
                 request_cookie_report.as_ref(),
             )
         });
-        attach_next_request_extra_info(
+        attach_next_redirect_request(
             &mut job.request.redirect_chain,
+            &prepared_request.request,
             request_cookie_report.clone(),
             request_extra_info.as_ref(),
         );
@@ -1585,7 +1610,7 @@ impl RuntimeOwner {
                     &upgraded_url,
                     &job.request.method,
                 );
-                job.request.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.record_redirect(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -1641,8 +1666,7 @@ impl RuntimeOwner {
                 "restarting navigation before response commit for missing Critical-CH headers"
             );
             job.request
-                .redirect_chain
-                .push(critical_client_hint_restart_redirect_info(
+                .record_redirect(critical_client_hint_restart_redirect_info(
                     response.final_url.clone(),
                     network_response_extra_info(
                         request_extra_info.expect(
@@ -1697,6 +1721,7 @@ impl RuntimeOwner {
                     headers: response.headers.clone(),
                     network_extra_info_available: redirect_has_extra_info,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: request_extra_info.map(|request_extra_info| {
                         network_response_extra_info(
                             request_extra_info,
@@ -1799,8 +1824,7 @@ impl RuntimeOwner {
                 )
             };
             job.request
-                .redirect_chain
-                .push(critical_client_hint_restart_redirect_info(
+                .record_redirect(critical_client_hint_restart_redirect_info(
                     job.current_url.clone(),
                     network_response_extra_info(
                         request_extra_info.expect(
@@ -1892,7 +1916,7 @@ impl RuntimeOwner {
                     &upgraded_url,
                     &job.request.method,
                 );
-                job.request.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.record_redirect(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -1998,6 +2022,7 @@ impl RuntimeOwner {
                     headers: headers.clone(),
                     network_extra_info_available: redirect_has_extra_info,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: request_extra_info.map(|request_extra_info| {
                         network_response_extra_info(
                             request_extra_info,
@@ -2121,8 +2146,7 @@ impl RuntimeOwner {
                 )
             };
             job.request
-                .redirect_chain
-                .push(critical_client_hint_restart_redirect_info(
+                .record_redirect(critical_client_hint_restart_redirect_info(
                     job.current_url.clone(),
                     network_response_extra_info(
                         request_extra_info.expect(
@@ -2214,7 +2238,7 @@ impl RuntimeOwner {
                     &upgraded_url,
                     &job.request.method,
                 );
-                job.request.redirect_chain.push(https_upgrade_redirect_info(
+                job.request.record_redirect(https_upgrade_redirect_info(
                     job.current_url.clone(),
                     upgraded_url.clone(),
                     request_cookie_report,
@@ -2391,6 +2415,7 @@ impl RuntimeOwner {
                         headers: headers.clone(),
                         network_extra_info_available: redirect_has_extra_info,
                         request_extra_info: None,
+                        dispatched_request: None,
                         response_extra_info: request_extra_info.map(|request_extra_info| {
                             network_response_extra_info(
                                 request_extra_info,
@@ -2530,6 +2555,7 @@ impl RuntimeOwner {
                     headers: cached.headers,
                     network_extra_info_available: false,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: None,
                     redirect_has_extra_info: false,
                     request_cookie_report,
@@ -2590,6 +2616,7 @@ impl RuntimeOwner {
                     headers: cached.headers,
                     network_extra_info_available: false,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: None,
                     redirect_has_extra_info: false,
                     request_cookie_report,
@@ -3614,6 +3641,7 @@ fn https_upgrade_redirect_info(
         status: 307,
         network_extra_info_available: false,
         request_extra_info: None,
+        dispatched_request: None,
         response_extra_info: None,
         redirect_has_extra_info: false,
         request_cookie_report,
@@ -3623,16 +3651,39 @@ fn https_upgrade_redirect_info(
     }
 }
 
-fn attach_next_request_extra_info(
+fn attach_cached_redirect_request(
     redirect_chain: &mut [RedirectInfo],
+    config: &FetchConfig,
+    request: &Request,
+    request_url: &Url,
+    cookie_header: Option<&str>,
+) {
+    if let Some(redirect) = redirect_chain.last_mut() {
+        redirect.dispatched_request = Some(request.capture_dispatched_request(
+            outgoing_request_headers_for_url(config, request, request_url, cookie_header),
+        ));
+    }
+}
+
+fn attach_next_redirect_request(
+    redirect_chain: &mut [RedirectInfo],
+    dispatched_request: &Request,
     request_cookie_report: Option<StoredCookieQueryReport>,
     request_extra_info: Option<&NetworkRequestExtraInfo>,
 ) {
-    if let Some(previous_redirect) = redirect_chain.last_mut()
-        && previous_redirect.source != crate::RedirectSource::ServiceWorker
-    {
-        previous_redirect.request_cookie_report = request_cookie_report;
-        previous_redirect.request_extra_info = request_extra_info.cloned();
+    if let Some(previous_redirect) = redirect_chain.last_mut() {
+        previous_redirect.dispatched_request = Some(
+            dispatched_request.capture_dispatched_request(
+                request_extra_info
+                    .expect("redirected network requests capture finalized headers")
+                    .headers
+                    .clone(),
+            ),
+        );
+        if previous_redirect.source != crate::RedirectSource::ServiceWorker {
+            previous_redirect.request_cookie_report = request_cookie_report;
+            previous_redirect.request_extra_info = request_extra_info.cloned();
+        }
     }
 }
 
@@ -3662,6 +3713,7 @@ fn critical_client_hint_restart_redirect_info(
         headers: vec![("Location".to_owned(), url.to_string().into_bytes())],
         network_extra_info_available: false,
         request_extra_info: None,
+        dispatched_request: None,
         response_extra_info: Some(response_extra_info),
         redirect_has_extra_info: false,
         request_cookie_report: None,

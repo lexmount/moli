@@ -507,7 +507,7 @@ class ProxyAuthFixtureServer:
 class FixtureServer:
     def __init__(self) -> None:
         self.profile_requests: dict[str, dict[str, Any]] = {}
-        self.navigation_redirect_requests: dict[str, list[dict[str, str]]] = {}
+        self.navigation_redirect_requests: dict[str, list[dict[str, Any]]] = {}
         self._counter_lock = threading.Lock()
         self._request_counts: dict[str, int] = {}
         self._resource_request_headers: dict[str, dict[str, str]] = {}
@@ -576,6 +576,9 @@ class FixtureServer:
                 self._dispatch()
 
             def do_POST(self) -> None:
+                self._dispatch()
+
+            def do_PATCH(self) -> None:
                 self._dispatch()
 
             def do_HEAD(self) -> None:
@@ -718,6 +721,11 @@ class FixtureServer:
                       self.addEventListener('activate', event => event.waitUntil(clients.claim()));
                       self.addEventListener('fetch', event => {
                         const url = new URL(event.request.url);
+                        if (url.pathname === '/fetch-dispatch/redirect-sw/start') {
+                          event.respondWith(Response.redirect(
+                            new URL('/navigation-hop/middle' + url.search, url.origin).href, 307));
+                          return;
+                        }
                         if (url.pathname.startsWith('/fetch-dispatch/sw-auth/')) {
                           const status = Number(url.searchParams.get('status') || 401);
                           const header = status === 407 ? 'Proxy-Authenticate' : 'WWW-Authenticate';
@@ -1570,6 +1578,7 @@ class FixtureServer:
                             "method": self.command,
                             "contentType": self.headers.get("Content-Type", ""),
                             "body": _body.decode("utf-8"),
+                            "headers": dict(self.headers),
                         })
                         observed = json.dumps(observations)
                     if route == "/navigation-hop/final":

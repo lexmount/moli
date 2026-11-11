@@ -2003,57 +2003,83 @@ async fn cache_mode_bypass_skips_fresh_cache_read_and_replaces_entry() -> Result
 }
 
 #[tokio::test]
-async fn fetch_raw_stream_uses_disk_cache_for_redirect_hops() -> Result<()> {
-    let cache_dir = unique_test_cache_dir();
-    let server = ScriptedHttpServer::spawn(vec![
-        ScriptedResponse::status(301, "Moved Permanently")
-            .with_header("Location", "/final")
-            .with_header("Cache-Control", "max-age=60"),
-        ScriptedResponse::ok("final-body")
-            .with_header("Content-Type", "application/octet-stream")
-            .with_header("Cache-Control", "max-age=60"),
-    ]);
-    let mut config = FetchConfig::default();
-    config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-
-    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-    let mut first = client
-        .fetch_raw_stream_with_cancel(
-            Request::get(&server.url_path("/redirect"))?,
-            FetchCancelHandle::new(),
-        )
-        .await?;
-    assert!(!first.from_cache);
-    assert_eq!(first.redirect_chain.len(), 1);
-    assert!(!first.redirect_chain[0].from_cache);
-    let mut first_body = Vec::new();
-    while let Some(chunk) = first.next_chunk().await {
-        first_body.extend_from_slice(&chunk);
+async fn cached_redirects_keep_dispatched_requests_without_transport_extra_info() -> Result<()> {
+    for transport in ["buffered", "html", "raw", "callback"] {
+        let cache_dir = unique_test_cache_dir();
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(301, "Moved Permanently")
+                .with_header("Location", "/final")
+                .with_header("Cache-Control", "max-age=60"),
+            ScriptedResponse::ok("final-body")
+                .with_header("Content-Type", "application/octet-stream")
+                .with_header("Cache-Control", "max-age=60"),
+        ]);
+        let mut config = FetchConfig::default();
+        config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+        for cached in [false, true] {
+            let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+            let request = Request::new(
+                "GET",
+                &server.url_path("/redirect"),
+                None,
+                vec![("Accept".to_owned(), "application/initial".to_owned())],
+            )?
+            .with_redirect_headers(Some(
+                vec![("Accept".to_owned(), "text/plain".to_owned())].into(),
+            ));
+            // The callback transport reads the cache but does not populate it.
+            let (head, body) = match if cached { transport } else { "raw" } {
+                "buffered" => client.fetch(request).await?.into_body(),
+                "html" => client.fetch_html_stream(request).await?.into_body(),
+                "raw" => client
+                    .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                    .await?
+                    .into_body(),
+                "callback" => {
+                    let (tx, rx) = oneshot::channel();
+                    client.fetch_with_cancel_callback(
+                        request,
+                        FetchCancelHandle::new(),
+                        move |result| {
+                            let _ = tx.send(result);
+                        },
+                    )?;
+                    rx.await??.into_body()
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(body.into_materialized_bytes().await?, b"final-body");
+            assert_eq!(head.from_cache, cached, "{transport}");
+            assert_eq!(head.redirect_chain.len(), 1);
+            let redirect = &head.redirect_chain[0];
+            assert_eq!(redirect.from_cache, cached, "{transport}");
+            if cached {
+                assert!(redirect.request_extra_info.is_none());
+                assert!(!redirect.network_extra_info_available);
+            }
+            let dispatched = redirect
+                .dispatched_request
+                .as_ref()
+                .expect("a cached destination still has a request");
+            assert_eq!(dispatched.method, "GET");
+            assert!(dispatched.body.is_none());
+            assert!(
+                dispatched
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.eq_ignore_ascii_case("Accept")
+                        && value == "text/plain")
+            );
+            assert!(client.shutdown().is_clean());
+        }
+        assert_eq!(
+            server.hits(),
+            2,
+            "{transport}: cache hits must stay off the network"
+        );
+        server.shutdown();
+        std::fs::remove_dir_all(cache_dir)?;
     }
-    first.finish().await?;
-
-    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
-    let mut second = client
-        .fetch_raw_stream_with_cancel(
-            Request::get(&server.url_path("/redirect"))?,
-            FetchCancelHandle::new(),
-        )
-        .await?;
-    assert!(second.from_cache);
-    assert_eq!(second.redirect_chain.len(), 1);
-    assert!(second.redirect_chain[0].from_cache);
-    let mut second_body = Vec::new();
-    while let Some(chunk) = second.next_chunk().await {
-        second_body.extend_from_slice(&chunk);
-    }
-    second.finish().await?;
-
-    assert_eq!(first_body, b"final-body");
-    assert_eq!(second_body, b"final-body");
-    assert_eq!(server.hits(), 2);
-
-    server.shutdown();
-    let _ = std::fs::remove_dir_all(cache_dir);
     Ok(())
 }
 

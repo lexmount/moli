@@ -774,11 +774,16 @@ impl RawResponse {
 pub struct NetworkRequestExtraInfo {
     pub headers: Vec<(String, String)>,
     pub cookie_report: StoredCookieQueryReport,
-    /// Actual dispatched method, when captured by the transport. A renderer's
-    /// request-start event can precede an interception override.
-    pub request_method: Option<Arc<str>>,
-    /// Upload for that dispatched method; shared without copying the payload.
-    pub request_body: Option<Arc<bytes::Bytes>>,
+}
+
+/// One effective request accepted by a fetch destination. Independent of HTTP
+/// ExtraInfo: cache and service-worker destinations also have request metadata.
+/// Redirect records share this snapshot and its immutable upload bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchedRequest {
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<bytes::Bytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -814,6 +819,9 @@ pub struct RedirectInfo {
     /// though they still participate in the public redirect chain.
     pub network_extra_info_available: bool,
     pub request_extra_info: Option<NetworkRequestExtraInfo>,
+    /// The request to `to_url`, captured after redirect/interception changes.
+    /// None until a destination accepts this hop; HTTP observations are separate.
+    pub dispatched_request: Option<Arc<DispatchedRequest>>,
     pub response_extra_info: Option<NetworkResponseExtraInfo>,
     pub redirect_has_extra_info: bool,
     pub request_cookie_report: Option<StoredCookieQueryReport>,

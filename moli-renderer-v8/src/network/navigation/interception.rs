@@ -141,6 +141,7 @@ impl NavigationInterception {
     /// Returns the next hop to its owner before any transport is started.
     /// Synthetic and network responses use exactly the same redirect rules.
     pub fn follow_redirect(&mut self, head: &ResponseHead) -> Result<Option<RedirectInfo>> {
+        self.request.observe_redirect_requests(&head.redirect_chain);
         if !self.manual_redirects {
             return Ok(None);
         }
@@ -165,6 +166,7 @@ impl NavigationInterception {
             headers: head.headers.clone(),
             network_extra_info_available: false,
             request_extra_info: None,
+            dispatched_request: None,
             response_extra_info: None,
             redirect_has_extra_info: false,
             request_cookie_report: head.request_cookie_report.clone(),
