@@ -484,7 +484,7 @@ async fn parser_blocking_external_script_waits_for_blocking_stylesheet() -> Resu
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStylesheetParserBlockedEnough"),
+        diagnostic_global(&page, "blockingStylesheetParserSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -511,7 +511,7 @@ async fn parser_blocking_external_document_write_keeps_insertion_point_after_blo
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStylesheetParserWriteBlockedEnough"),
+        diagnostic_global(&page, "blockingStylesheetParserWriteSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -539,7 +539,7 @@ async fn defer_script_waits_for_blocking_stylesheet_before_domcontentloaded() ->
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStylesheetDeferBlockedEnough"),
+        diagnostic_global(&page, "blockingStylesheetDeferSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -565,7 +565,7 @@ async fn module_script_waits_for_blocking_stylesheet_before_domcontentloaded() -
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStylesheetModuleBlockedEnough"),
+        diagnostic_global(&page, "blockingStylesheetModuleSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -657,7 +657,7 @@ async fn parser_blocking_external_script_waits_for_parser_created_style_import()
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStyleImportParserBlockedEnough"),
+        diagnostic_global(&page, "blockingStyleImportParserSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -684,7 +684,7 @@ async fn module_script_waits_for_parser_created_style_import_before_domcontentlo
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStyleImportModuleBlockedEnough"),
+        diagnostic_global(&page, "blockingStyleImportModuleSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -717,7 +717,7 @@ async fn domcontentloaded_is_indirectly_delayed_by_blocking_stylesheet_gated_def
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "blockingStylesheetDeferDclBlockedEnough"),
+        diagnostic_global(&page, "blockingStylesheetDeferDclSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -770,7 +770,7 @@ async fn runtime_inserted_stylesheet_load_waits_for_fetch_completion() -> Result
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "runtimeInsertedStylesheetLoadBlockedEnough"),
+        diagnostic_global(&page, "runtimeInsertedStylesheetLoadSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -1111,7 +1111,7 @@ async fn phase_two_shared_blocking_stylesheet_keeps_parser_owned_defer_phase_ord
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "sharedBlockingDeferBlockedEnough"),
+        diagnostic_global(&page, "sharedBlockingDeferSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
@@ -1136,7 +1136,7 @@ async fn phase_two_shared_blocking_stylesheet_keeps_parser_owned_module_phase_or
         .await?;
 
     assert_eq!(
-        diagnostic_global(&page, "sharedBlockingModuleBlockedEnough"),
+        diagnostic_global(&page, "sharedBlockingModuleSawStylesheet"),
         Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(

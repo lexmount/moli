@@ -2,7 +2,6 @@
 <html>
   <head>
     <script>
-      window.blockingStyleImportModuleStart = Date.now();
       window.blockingStyleImportModuleOrder = [];
       document.addEventListener("DOMContentLoaded", () => {
         window.blockingStyleImportModuleOrder.push("dcl");
@@ -14,10 +13,8 @@
       @import url("/assets/blocking_stylesheet_slow.css");
     </style>
     <script type="module">
-      window.blockingStyleImportModuleElapsed =
-        Date.now() - window.blockingStyleImportModuleStart;
-      window.blockingStyleImportModuleBlockedEnough =
-        window.blockingStyleImportModuleElapsed >= 50;
+      window.blockingStyleImportModuleSawStylesheet =
+        getComputedStyle(document.documentElement).color === "rgb(1, 2, 3)";
       window.blockingStyleImportModuleSawLate =
         !!document.getElementById("late");
       window.blockingStyleImportModuleSawDcl =

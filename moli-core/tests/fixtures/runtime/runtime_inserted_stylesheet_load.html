@@ -3,7 +3,6 @@
   <head>
     <meta charset="utf-8">
     <script>
-      window.runtimeInsertedStylesheetLoadStart = Date.now();
       window.runtimeInsertedStylesheetLoadOrder = [];
       document.addEventListener('DOMContentLoaded', () => {
         window.runtimeInsertedStylesheetLoadOrder.push('dcl');
@@ -15,10 +14,8 @@
       link.rel = 'stylesheet';
       link.href = '/assets/blocking_stylesheet_slow.css';
       link.addEventListener('load', () => {
-        window.runtimeInsertedStylesheetLoadElapsed =
-          Date.now() - window.runtimeInsertedStylesheetLoadStart;
-        window.runtimeInsertedStylesheetLoadBlockedEnough =
-          window.runtimeInsertedStylesheetLoadElapsed >= 50;
+        window.runtimeInsertedStylesheetLoadSawStylesheet =
+          getComputedStyle(document.documentElement).color === 'rgb(1, 2, 3)';
         window.runtimeInsertedStylesheetLoadOrder.push('style-load');
         window.runtimeInsertedStylesheetLoadFinalOrder =
           window.runtimeInsertedStylesheetLoadOrder.join(',');
