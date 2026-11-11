@@ -1385,6 +1385,130 @@ fn script_referrer_policy_uses_origin_when_full_referrer_is_too_long() {
 }
 
 #[test]
+fn fetch_referrer_source_is_independent_of_cookie_scope() -> anyhow::Result<()> {
+    let document = Url::parse("https://document.test/source?private=1#fragment")?;
+    let cookie_origin = Url::parse("https://cookie.test/")?;
+    let config = FetchConfig::default();
+    for (selection, expected) in [
+        (None, Some("https://document.test/source?private=1")),
+        (
+            Some("about:client"),
+            Some("https://document.test/source?private=1"),
+        ),
+        (Some(""), None),
+        (
+            Some("https://selected.test/explicit?value=1#fragment"),
+            Some("https://selected.test/explicit?value=1"),
+        ),
+    ] {
+        // Worker fetch selects the Fetch referrer before supplying the client
+        // URL, whereas Window fetch initializes the client URL first.
+        for client_first in [false, true] {
+            let mut request = Request::get("https://document.test/endpoint")?
+                .with_subresource_request_metadata(SubresourceRequestMetadata {
+                    referrer_policy: Some("unsafe-url".to_owned()),
+                    ..Default::default()
+                });
+            if client_first {
+                request = request.with_initiator_url(&document);
+            }
+            if let Some(selection) = selection {
+                request = request.with_fetch_referrer(selection)?;
+            }
+            if !client_first {
+                request = request.with_initiator_url(&document);
+            }
+            for replace_scope in [false, true] {
+                let context = if replace_scope {
+                    NetworkCookieRequestContext::subresource("GET")
+                        .with_initiator_url(&request.url, &cookie_origin)
+                } else {
+                    request
+                        .cookie_context
+                        .clone()
+                        .with_cookie_initiator_origin(&request.url, &cookie_origin)
+                };
+                let request = request.clone().with_cookie_context(context);
+                assert_eq!(
+                    request.cookie_context.initiator_url.as_ref(),
+                    Some(&cookie_origin)
+                );
+                assert_eq!(
+                    request.referrer_header_value(&request.url).as_deref(),
+                    expected
+                );
+                let headers = outgoing_request_headers(&config, &request, None);
+                assert_eq!(header_value(&headers, "referer"), expected);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn fetch_referrer_inheritance_retains_the_source_client() -> anyhow::Result<()> {
+    let document = Url::parse("https://document.test/source?private=1#fragment")?;
+    let other_document = Url::parse("https://other.test/page")?;
+    let source = Request::get("https://target.test/endpoint")?
+        .with_initiator_url(&document)
+        .with_subresource_request_metadata(SubresourceRequestMetadata {
+            referrer_policy: Some("unsafe-url".to_owned()),
+            ..Default::default()
+        });
+    let derived = Request::new("OPTIONS", source.url.as_str(), None, Vec::new())?
+        .with_initiator_url(&other_document)
+        .with_referrer_from(&source);
+    assert_eq!(
+        derived.cookie_context.initiator_url.as_ref(),
+        Some(&other_document)
+    );
+    assert_eq!(
+        header_value(
+            &outgoing_request_headers(&FetchConfig::default(), &derived, None),
+            "referer"
+        ),
+        Some("https://document.test/source?private=1")
+    );
+    Ok(())
+}
+
+#[test]
+fn fetch_referrer_selection_survives_navigation_default_initialization() -> anyhow::Result<()> {
+    let document = Url::parse("https://document.test/source")?;
+    for (selection, expected) in [
+        ("about:client", None),
+        ("", None),
+        (
+            "https://selected.test/explicit",
+            Some("https://selected.test/explicit"),
+        ),
+    ] {
+        let request = Request::get("https://target.test/endpoint")?
+            .with_initiator_url(&document)
+            .with_subresource_request_metadata(SubresourceRequestMetadata {
+                referrer_policy: Some("unsafe-url".to_owned()),
+                ..Default::default()
+            })
+            .with_fetch_referrer(selection)?
+            .with_top_level_navigation_cookie_context();
+        assert_eq!(
+            request.referrer_header_value(&request.url).as_deref(),
+            expected
+        );
+        let request = request.with_initiator_url(&document);
+        let expected = match selection {
+            "about:client" => Some("https://document.test/source"),
+            _ => expected,
+        };
+        assert_eq!(
+            request.referrer_header_value(&request.url).as_deref(),
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn fetch_referrer_selection_preserves_request_identity() -> anyhow::Result<()> {
     let initiator = Url::parse("https://origin.test/context/page?source=1#fragment")?;
     let target = Url::parse("https://target.test/echo")?;
