@@ -347,14 +347,18 @@ fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
             event_id,
             owner,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-                status: 200,
-                status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), b"text/css".to_vec())],
+                head: moli_fetch_types::FetchResponseHead {
+                    metadata: moli_fetch_types::FetchResponseMetadata {
+                        response_type: moli_fetch_types::FetchResponseType::Default,
+                        timing_allow_passed: true,
+                        url_list: (None).into_iter().collect(),
+                        redirected: false,
+                    },
+                    status: 200,
+                    status_text: "OK".to_owned(),
+                    headers: vec![("content-type".to_owned(), b"text/css".to_vec())],
+                },
                 body: b"body { color: green; }".to_vec(),
-                final_url: None,
-                response_type: "default".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
             }),
         });
         let completion = pop_async_subresource_completion(&mut queue);
@@ -1519,14 +1523,18 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Basic,
+                    timing_allow_passed: true,
+                    url_list: (None).into_iter().collect(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            },
             body: b"handled".to_vec(),
-            final_url: None,
-            response_type: "basic".to_owned(),
-            timing_allow_passed: true,
-            redirected: false,
         }),
     });
 
@@ -1817,14 +1825,18 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         event_id,
         owner: test_run_owner(version_id, &run),
         result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Basic,
+                    timing_allow_passed: true,
+                    url_list: (None).into_iter().collect(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+            },
             body: b"late".to_vec(),
-            final_url: None,
-            response_type: "basic".to_owned(),
-            timing_allow_passed: true,
-            redirected: false,
         }),
     });
     {

@@ -1,5 +1,9 @@
 async function serviceWorkerFetchTiming(base) {
   const cross = new URL(base); cross.hostname = 'localhost';
+  const destination = new URL('/raw?tao=1', base);
+  const redirected = new URL('/redirect', cross);
+  redirected.searchParams.set('to', destination);
+  const allowedRedirect = new URL(redirected); allowedRedirect.searchParams.set('tao', '1');
   const cases = [
     ['synthetic', new URL('/synthetic', base)],
     ['cross-synthetic', new URL('/synthetic', cross)],
@@ -13,7 +17,11 @@ async function serviceWorkerFetchTiming(base) {
     ['cache-tao', new URL('/cache?target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)],
     ['cache-again-cors', new URL('/cache?rounds=2&target=' + encodeURIComponent(new URL('/raw', cross)), base)],
     ['cache-again-tao', new URL('/cache?rounds=2&target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)],
-    ['cache-synthetic', new URL('/cache?synthetic=1', base)]
+    ['cache-synthetic', new URL('/cache?synthetic=1', base)],
+    ['forward-redirect-tao', new URL('/forward?target=' + encodeURIComponent(allowedRedirect), base)],
+    ['forward-redirect-denied', new URL('/forward?target=' + encodeURIComponent(redirected), base)],
+    ['cache-redirect-tao', new URL('/cache?target=' + encodeURIComponent(allowedRedirect), base)],
+    ['cache-redirect-denied', new URL('/cache?target=' + encodeURIComponent(redirected), base)]
   ];
   const rows = [];
   for (const [name, url] of cases) {
@@ -27,9 +35,10 @@ async function serviceWorkerFetchTiming(base) {
     const response = await fetch(url);
     const body = await response.text();
     const entry = await timing;
+    const target = new URL(url.searchParams.get('target') || url.href);
     rows.push({name, body, type:response.type, status:entry.responseStatus,
       encoded:entry.encodedBodySize, decoded:entry.decodedBodySize, transfer:entry.transferSize,
-      urlMatchesSource:response.url === (url.searchParams.get('target') || url.href)});
+      urlMatchesSource:response.url === (target.searchParams.get('to') || target.href)});
   }
   return rows;
 }

@@ -2882,14 +2882,22 @@ opening.onsuccess = () => { globalThis.db = opening.result; dbReady = true; };
                     "reservation",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
-                        response_type: "default".into(),
-                        timing_allow_passed: true,
-                        url: format!("{page_url}reserved"),
-                        redirected: false,
-                        status: 200,
-                        status_text: "OK".into(),
-                        headers: Vec::new(),
-                        body: vec![0],
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: moli_fetch_types::FetchResponseType::Default,
+                                timing_allow_passed: true,
+                                url_list: vec![
+                                    (format!("{page_url}reserved"))
+                                        .parse()
+                                        .expect("valid response URL")
+                                ],
+                                redirected: false
+                            },
+                            status: 200,
+                            status_text: "OK".into(),
+                            headers: Vec::new()
+                        },
+                        body: vec![0]
                     },
                     cache_usage,
                     0,
@@ -2988,14 +2996,22 @@ fn default_bucket_quota_is_shared_by_cache_indexed_db_and_opfs() {
                     "fixture",
                     "/reserved",
                     moli_storage_service::StorageBucketCachedResponse {
-                        response_type: "default".to_owned(),
-                        timing_allow_passed: true,
-                        url: format!("{page_url}reserved"),
-                        redirected: false,
-                        status: 200,
-                        status_text: "OK".to_owned(),
-                        headers: Vec::new(),
-                        body: b"small materialized fixture".to_vec(),
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: moli_fetch_types::FetchResponseType::Default,
+                                timing_allow_passed: true,
+                                url_list: vec![
+                                    (format!("{page_url}reserved"))
+                                        .parse()
+                                        .expect("valid response URL")
+                                ],
+                                redirected: false
+                            },
+                            status: 200,
+                            status_text: "OK".to_owned(),
+                            headers: Vec::new()
+                        },
+                        body: b"small materialized fixture".to_vec()
                     },
                     cache_usage,
                     0,

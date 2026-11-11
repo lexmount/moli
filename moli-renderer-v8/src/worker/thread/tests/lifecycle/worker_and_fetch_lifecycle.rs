@@ -737,7 +737,7 @@ async fn service_worker_fetch_event_preload_response_resolves_undefined_without_
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preloadResponse probe response, got {completion:?}");
     };
-    assert_eq!(response.status, 209);
+    assert_eq!(response.head.status, 209);
     assert_eq!(
         String::from_utf8(response.body).expect("preloadResponse body should be UTF-8"),
         r#"{"hasPromise":true,"samePromise":true,"valueType":"undefined","isUndefined":true}"#
@@ -795,14 +795,18 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
             request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
-            response_head: MaterializedServiceWorkerFetchResponseHead {
-                final_url: Some(
-                    url::Url::parse("https://example.test/app/navigation.html")
-                        .expect("navigation preload response URL"),
-                ),
-                response_type: "default".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
+            response_head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Basic,
+                    timing_allow_passed: true,
+                    url_list: (Some(
+                        url::Url::parse("https://example.test/app/navigation.html")
+                            .expect("navigation preload response URL"),
+                    ))
+                    .into_iter()
+                    .collect(),
+                    redirected: false,
+                },
                 status: 202,
                 status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
@@ -851,7 +855,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preloadResponse network probe response, got {completion:?}");
     };
-    assert_eq!(response.status, 210);
+    assert_eq!(response.head.status, 210);
     assert_eq!(
         String::from_utf8(response.body).expect("preloadResponse probe body should be UTF-8"),
         r#"{"hasResponse":true,"status":202,"type":"basic","url":"https://example.test/app/navigation.html","header":"yes","body":"preloaded-body"}"#
@@ -912,11 +916,13 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
             request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
-            response_head: MaterializedServiceWorkerFetchResponseHead {
-                final_url: Some(request_url),
-                response_type: "default".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
+            response_head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::OpaqueRedirect,
+                    timing_allow_passed: true,
+                    url_list: (Some(request_url)).into_iter().collect(),
+                    redirected: false,
+                },
                 status: 302,
                 status_text: "Found".to_owned(),
                 headers: vec![("location".to_owned(), b"/app/final.html".to_vec())],
@@ -951,7 +957,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preloadResponse opaqueredirect probe response, got {completion:?}");
     };
-    assert_eq!(response.status, 214);
+    assert_eq!(response.head.status, 214);
     assert_eq!(
         String::from_utf8(response.body).expect("preloadResponse probe body should be UTF-8"),
         r#"{"hasResponse":true,"status":0,"type":"opaqueredirect","url":"https://example.test/app/preload-redirect.html","ok":false,"statusText":"","redirected":false,"bodyIsNull":true,"headers":[]}"#
@@ -1020,7 +1026,7 @@ async fn service_worker_fetch_event_preload_response_rejects_before_response() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preloadResponse rejection probe response, got {completion:?}");
     };
-    assert_eq!(response.status, 211);
+    assert_eq!(response.head.status, 211);
     assert_eq!(
         String::from_utf8(response.body).expect("preloadResponse probe body should be UTF-8"),
         r#"{"name":"NetworkError","isDomException":true}"#
@@ -1085,14 +1091,18 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
             request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
-            response_head: MaterializedServiceWorkerFetchResponseHead {
-                final_url: Some(
-                    url::Url::parse("https://example.test/app/navigation.html")
-                        .expect("navigation preload response URL"),
-                ),
-                response_type: "default".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
+            response_head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Basic,
+                    timing_allow_passed: true,
+                    url_list: (Some(
+                        url::Url::parse("https://example.test/app/navigation.html")
+                            .expect("navigation preload response URL"),
+                    ))
+                    .into_iter()
+                    .collect(),
+                    redirected: false,
+                },
                 status: 202,
                 status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
@@ -1134,7 +1144,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preloadResponse body error probe response, got {completion:?}");
     };
-    assert_eq!(response.status, 212);
+    assert_eq!(response.head.status, 212);
     assert_eq!(
         String::from_utf8(response.body).expect("preloadResponse probe body should be UTF-8"),
         r#"{"hasResponse":true,"status":202,"bodyError":{"name":"TypeError","message":"navigation preload stream failed","isTypeError":true}}"#
@@ -1201,14 +1211,18 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
             request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
-            response_head: MaterializedServiceWorkerFetchResponseHead {
-                final_url: Some(
-                    url::Url::parse("https://example.test/app/navigation.html")
-                        .expect("navigation preload response URL"),
-                ),
-                response_type: "default".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
+            response_head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Basic,
+                    timing_allow_passed: true,
+                    url_list: (Some(
+                        url::Url::parse("https://example.test/app/navigation.html")
+                            .expect("navigation preload response URL"),
+                    ))
+                    .into_iter()
+                    .collect(),
+                    redirected: false,
+                },
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
@@ -1234,7 +1248,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected immediate fetch response, got {completion:?}");
     };
-    assert_eq!(response.status, 213);
+    assert_eq!(response.head.status, 213);
     assert_eq!(
         String::from_utf8(response.body).expect("immediate fetch body should be UTF-8"),
         "immediate"
@@ -1638,7 +1652,7 @@ async fn service_worker_fetch_respond_with_keeps_event_active_for_async_wait_unt
         let ServiceWorkerFetchResult::Response(response) = completion.result else {
             panic!("expected respondWith response for {step}");
         };
-        assert_eq!(response.status, 200);
+        assert_eq!(response.head.status, 200);
         assert_eq!(response.body, step.as_bytes().to_vec());
         assert_eq!(console, format!("log: {step}:{expected_wait_until}"));
     }
@@ -1800,7 +1814,7 @@ async fn service_worker_fetch_prevent_default_then_respond_with_uses_response() 
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected preventDefault with respondWith to use response");
     };
-    assert_eq!(response.status, 201);
+    assert_eq!(response.head.status, 201);
     assert_eq!(response.body, b"prevented-response".to_vec());
     handle.terminate_and_join();
 }

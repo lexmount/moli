@@ -756,49 +756,49 @@ impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceF
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FetchResponseType {
-    Basic,
-    Cors,
-    Opaque,
-    OpaqueRedirect,
-}
+pub(super) use moli_fetch_types::FetchResponseType;
 
-/// The response view established by Fetch. A worker-produced view retains its
-/// timing authorization; its URL and filtered headers cannot reconstruct it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct AsyncSubresourceFetchResponseFilter {
-    pub(super) response_type: FetchResponseType,
-    /// None for a network response; Some retains a Service Worker's established
-    /// timing-allow result, before CORS/opaque filtering removes its headers.
-    pub(super) service_worker_timing: Option<bool>,
+/// Fetch delivery is separate from the Response's intrinsic metadata. In
+/// particular, forwarding a network Response through a Service Worker changes
+/// transfer accounting, but must preserve its filtering and timing permission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum AsyncSubresourceFetchResponseFilter {
+    Network(FetchResponseType),
+    ServiceWorker(std::sync::Arc<moli_fetch_types::FetchResponseMetadata>),
 }
 
 impl From<FetchResponseType> for AsyncSubresourceFetchResponseFilter {
     fn from(response_type: FetchResponseType) -> Self {
-        Self {
-            response_type,
-            service_worker_timing: None,
-        }
+        Self::Network(response_type)
     }
 }
 
 impl AsyncSubresourceFetchResponseFilter {
-    pub(super) fn service_worker(
-        response_type: FetchResponseType,
-        timing_allow_passed: bool,
-    ) -> Self {
-        Self {
-            response_type,
-            service_worker_timing: Some(timing_allow_passed),
+    pub(super) fn service_worker(metadata: moli_fetch_types::FetchResponseMetadata) -> Self {
+        Self::ServiceWorker(std::sync::Arc::new(metadata))
+    }
+
+    pub(super) fn response_type(&self) -> FetchResponseType {
+        match self {
+            Self::Network(kind) => *kind,
+            Self::ServiceWorker(metadata) => match metadata.response_type {
+                FetchResponseType::Default => FetchResponseType::Basic,
+                kind => kind,
+            },
         }
     }
 
-    pub(super) fn is_readable(self) -> bool {
-        matches!(
-            self.response_type,
-            FetchResponseType::Basic | FetchResponseType::Cors
-        )
+    pub(super) fn service_worker_metadata(
+        &self,
+    ) -> Option<&moli_fetch_types::FetchResponseMetadata> {
+        match self {
+            Self::Network(_) => None,
+            Self::ServiceWorker(metadata) => Some(metadata),
+        }
+    }
+
+    pub(super) fn is_readable(&self) -> bool {
+        self.response_type().is_readable()
     }
 }
 

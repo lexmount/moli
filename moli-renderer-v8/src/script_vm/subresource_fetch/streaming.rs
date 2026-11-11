@@ -888,7 +888,7 @@ impl ScriptVm {
             if matches!(
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) && !started.response_filter.is_some_and(|filter| filter.is_readable()) {
+            ) && !started.response_filter.as_ref().is_some_and(|filter| filter.is_readable()) {
                 observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
                     &pending.request_origin,
                     &observable_head,
@@ -979,22 +979,16 @@ impl ScriptVm {
                         .resolver()
                         .expect("detached keepalive stream is handled before V8 entry");
                     let resolver = v8::Local::new(scope, resolver);
-                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_filter(
+                    let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_metadata(
                         scope,
-                        &pending.request_origin,
                         crate::network_host::FetchResponseRequest {
                             method: &started.request_method,
                             mode: pending.request_mode,
                         },
                         observable_head,
                         started.body_source_id,
-                        started.response_filter,
-                    );
-                    crate::network_host::set_response_slot_bool(
-                        scope, response_obj,
-                        crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
-                        crate::context_bootstrap::FetchResourceTiming::allows_timing(
-                            &pending.request_origin, &started.head, started.response_filter,
+                        crate::network_host::fetch_response_metadata(
+                            &pending.request_origin, &started.head, pending.request_mode, started.response_filter.as_ref(),
                         ),
                     );
                     resolver.resolve(scope, response_obj.into());
@@ -1819,7 +1813,7 @@ impl ScriptVm {
                                     streaming.pending.request_mode,
                                     &streaming.head,
                                     response_body_size,
-                                    streaming.response_filter,
+                                    streaming.response_filter.as_ref(),
                                 ),
                             );
                         }
@@ -1847,7 +1841,7 @@ impl ScriptVm {
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
                             if !streaming
-                                .response_filter
+                                .response_filter.as_ref()
                                 .is_some_and(|filter| filter.is_readable())
                             {
                                 observable_head.headers =

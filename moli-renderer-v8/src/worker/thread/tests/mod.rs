@@ -50,8 +50,8 @@ use crate::protocol_types::{
     SubresourceNetworkRequestHandle, SubresourceResourceType,
 };
 use crate::runtime::{
-    MaterializedServiceWorkerFetchResponseHead, ServiceWorkerEventId, ServiceWorkerFetchCompletion,
-    ServiceWorkerFetchEvent, ServiceWorkerFetchResult, ServiceWorkerGetNotificationsResult,
+    ServiceWorkerEventId, ServiceWorkerFetchCompletion, ServiceWorkerFetchEvent,
+    ServiceWorkerFetchResult, ServiceWorkerGetNotificationsResult,
     ServiceWorkerLifecycleCompletion, ServiceWorkerLifecycleEvent, ServiceWorkerLifecycleEventKind,
     ServiceWorkerMessageCompletion, ServiceWorkerMessageEvent,
     ServiceWorkerNavigationPreloadFailure, ServiceWorkerNavigationPreloadResponseStarted,

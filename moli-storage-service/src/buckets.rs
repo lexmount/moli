@@ -139,18 +139,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct StorageBucketCachedResponse {
-    pub response_type: String,
-    /// Fetch's established timing authorization, before response header filtering.
-    pub timing_allow_passed: bool,
-    pub url: String,
-    pub redirected: bool,
-    pub status: u16,
-    pub status_text: String,
-    pub headers: Vec<(String, Vec<u8>)>,
-    pub body: Vec<u8>,
-}
+pub use moli_fetch_types::FetchResponse as StorageBucketCachedResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageBucketCachedRequest {
@@ -407,13 +396,12 @@ struct StorageBucketCacheJsonEntry {
     request_headers: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "is_zero")]
     insertion_order: u64,
-    #[serde(
-        default = "default_cached_response_type",
-        skip_serializing_if = "is_default_cached_response_type"
-    )]
-    response_type: String,
+    #[serde(default, skip_serializing_if = "is_default_cached_response_type")]
+    response_type: moli_fetch_types::FetchResponseType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timing_allow_passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url_list: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     url: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -437,12 +425,8 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-fn default_cached_response_type() -> String {
-    "default".to_owned()
-}
-
-fn is_default_cached_response_type(value: &String) -> bool {
-    value == "default"
+fn is_default_cached_response_type(value: &moli_fetch_types::FetchResponseType) -> bool {
+    *value == moli_fetch_types::FetchResponseType::Default
 }
 
 pub fn new_shared_storage_bucket_store() -> SharedStorageBucketStore {
@@ -1841,7 +1825,7 @@ fn cache_entry_matches_query(
     }
     query.ignore_vary
         || cached_response_vary_matches_request(
-            &entry.response.headers,
+            &entry.response.head.headers,
             &entry.request.headers,
             &query.headers,
         )
@@ -2174,11 +2158,26 @@ fn load_storage_bucket_cache_file(
         .into_iter()
         .enumerate()
         .map(|(index, (request_key, entry))| {
-            // Older records have no timing flag. Preserve the same conservative
-            // response-type defaults used when materializing an unmarked Response.
-            let timing_allow_passed = entry
-                .timing_allow_passed
-                .unwrap_or(matches!(entry.response_type.as_str(), "default" | "basic"));
+            let response_type = entry.response_type;
+            let metadata = moli_fetch_types::FetchResponseMetadata {
+                response_type,
+                timing_allow_passed: entry
+                    .timing_allow_passed
+                    .unwrap_or_else(|| response_type.default_timing_allow_passed()),
+                url_list: entry
+                    .url_list
+                    .unwrap_or_else(|| {
+                        if entry.url.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![entry.url]
+                        }
+                    })
+                    .into_iter()
+                    .map(|url| url.parse())
+                    .collect::<std::result::Result<_, _>>()?,
+                redirected: entry.redirected,
+            };
             let body = BASE64_STANDARD
                 .decode(entry.body_base64.as_bytes())
                 .with_context(|| {
@@ -2195,16 +2194,13 @@ fn load_storage_bucket_cache_file(
                         method: entry.request_method,
                         headers: entry.request_headers,
                     },
-                    response: StorageBucketCachedResponse {
-                        response_type: entry.response_type,
-                        timing_allow_passed,
-                        url: entry.url,
-                        redirected: entry.redirected,
+                    response: moli_fetch_types::FetchResponseHead {
+                        metadata,
                         status: entry.status,
                         status_text: entry.status_text,
                         headers: entry.headers,
-                        body,
-                    },
+                    }
+                    .with_body(body),
                     insertion_order: if entry.insertion_order == 0 {
                         (index as u64).saturating_add(1)
                     } else {
@@ -2232,13 +2228,29 @@ fn save_storage_bucket_cache_file(
                         request_method: entry.request.method.clone(),
                         request_headers: entry.request.headers.clone(),
                         insertion_order: entry.insertion_order,
-                        response_type: entry.response.response_type.clone(),
-                        timing_allow_passed: Some(entry.response.timing_allow_passed),
-                        url: entry.response.url.clone(),
-                        redirected: entry.response.redirected,
-                        status: entry.response.status,
-                        status_text: entry.response.status_text.clone(),
-                        headers: entry.response.headers.clone(),
+                        response_type: entry.response.head.metadata.response_type,
+                        timing_allow_passed: Some(entry.response.head.metadata.timing_allow_passed),
+                        url_list: Some(
+                            entry
+                                .response
+                                .head
+                                .metadata
+                                .url_list
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect(),
+                        ),
+                        url: entry
+                            .response
+                            .head
+                            .metadata
+                            .final_url()
+                            .map(ToString::to_string)
+                            .unwrap_or_default(),
+                        redirected: entry.response.head.metadata.redirected,
+                        status: entry.response.head.status,
+                        status_text: entry.response.head.status_text.clone(),
+                        headers: entry.response.head.headers.clone(),
                         body_base64: BASE64_STANDARD.encode(&entry.response.body),
                     },
                 )
@@ -2942,14 +2954,22 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
-                    response_type: "default".to_owned(),
-                    timing_allow_passed: true,
-                    url: "https://quota.test/resource".to_owned(),
-                    redirected: false,
-                    status: 200,
-                    status_text: "OK".to_owned(),
-                    headers: Vec::new(),
-                    body: b"cache".to_vec(),
+                    head: moli_fetch_types::FetchResponseHead {
+                        metadata: moli_fetch_types::FetchResponseMetadata {
+                            response_type: moli_fetch_types::FetchResponseType::Default,
+                            timing_allow_passed: true,
+                            url_list: vec![
+                                ("https://quota.test/resource".to_owned())
+                                    .parse()
+                                    .expect("valid response URL")
+                            ],
+                            redirected: false
+                        },
+                        status: 200,
+                        status_text: "OK".to_owned(),
+                        headers: Vec::new()
+                    },
+                    body: b"cache".to_vec()
                 },
                 cache_usage,
                 0,
@@ -3020,14 +3040,22 @@ mod tests {
                 "cache",
                 "request",
                 StorageBucketCachedResponse {
-                    response_type: "default".to_owned(),
-                    timing_allow_passed: true,
-                    url: "https://default-quota.test/resource".to_owned(),
-                    redirected: false,
-                    status: 200,
-                    status_text: "OK".to_owned(),
-                    headers: Vec::new(),
-                    body: b"cache".to_vec(),
+                    head: moli_fetch_types::FetchResponseHead {
+                        metadata: moli_fetch_types::FetchResponseMetadata {
+                            response_type: moli_fetch_types::FetchResponseType::Default,
+                            timing_allow_passed: true,
+                            url_list: vec![
+                                ("https://default-quota.test/resource".to_owned())
+                                    .parse()
+                                    .expect("valid response URL")
+                            ],
+                            redirected: false
+                        },
+                        status: 200,
+                        status_text: "OK".to_owned(),
+                        headers: Vec::new()
+                    },
+                    body: b"cache".to_vec()
                 },
                 cache_usage,
                 0,
@@ -3256,13 +3284,17 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 201,
-            status_text: "Created".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"hit".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 201,
+                status_text: "Created".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"hit".to_vec())],
+            },
             body: b"cached body".to_vec(),
         };
 
@@ -3282,9 +3314,9 @@ mod tests {
             .match_cache_entry_for_identity(&identity, "cache", "/receipt")
             .flatten()
             .expect("cache entry should match");
-        assert_eq!(matched.status, response.status);
-        assert_eq!(matched.status_text, response.status_text);
-        assert_eq!(matched.headers, response.headers);
+        assert_eq!(matched.head.status, response.head.status);
+        assert_eq!(matched.head.status_text, response.head.status_text);
+        assert_eq!(matched.head.headers, response.head.headers);
         assert_eq!(matched.body, response.body);
         assert_eq!(store.cache_usage_for_identity(&identity), Some(42));
         assert_eq!(store.cache_usage_for_origin("https://a.test"), 42);
@@ -3302,13 +3334,17 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"first".to_vec(),
         };
 
@@ -3359,13 +3395,17 @@ mod tests {
         );
 
         let replacement_response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 201,
-            status_text: "Created".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 201,
+                status_text: "Created".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"replacement".to_vec(),
         };
         assert_eq!(
@@ -3414,13 +3454,17 @@ mod tests {
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers,
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers,
+            },
             body: body.as_bytes().to_vec(),
         };
         for (request_url, request, response) in [
@@ -3507,13 +3551,17 @@ mod tests {
             .open_cache_handle_for_identity(&identity, "cache")?
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"before-delete".to_vec(),
         };
         assert_eq!(
@@ -3572,23 +3620,31 @@ mod tests {
         )?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"small".to_vec(),
         };
         let oversized = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"oversized".to_vec(),
         };
 
@@ -3672,13 +3728,22 @@ mod tests {
                     usage_bytes: 4,
                     request: StorageBucketCachedRequest::default(),
                     response: StorageBucketCachedResponse {
-                        response_type: response_type.to_owned(),
-                        timing_allow_passed,
-                        url: format!("https://cross.test/{index}"),
-                        redirected: false,
-                        status: if response_type == "opaque" { 0 } else { 200 },
-                        status_text: String::new(),
-                        headers: Vec::new(),
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: (response_type.to_owned())
+                                    .parse()
+                                    .expect("valid response type"),
+                                timing_allow_passed,
+                                url_list: vec![
+                                    format!("https://first.test/{index}").parse().unwrap(),
+                                    format!("https://cross.test/{index}").parse().unwrap(),
+                                ],
+                                redirected: true,
+                            },
+                            status: if response_type == "opaque" { 0 } else { 200 },
+                            status_text: String::new(),
+                            headers: Vec::new(),
+                        },
                         body: b"body".to_vec(),
                     },
                     insertion_order: index as u64 + 1,
@@ -3723,7 +3788,12 @@ mod tests {
             ("opaque", false),
         ] {
             assert_eq!(
-                reopened[response_type].response.timing_allow_passed, allowed,
+                reopened[response_type]
+                    .response
+                    .head
+                    .metadata
+                    .timing_allow_passed,
+                allowed,
                 "{response_type}"
             );
         }
@@ -3769,14 +3839,22 @@ mod tests {
                     "global-cache",
                     "/entry",
                     StorageBucketCachedResponse {
-                        response_type: "default".to_owned(),
-                        timing_allow_passed: true,
-                        url: "https://a.test/entry".to_owned(),
-                        redirected: false,
-                        status: 200,
-                        status_text: "OK".to_owned(),
-                        headers: Vec::new(),
-                        body: b"legacy".to_vec(),
+                        head: moli_fetch_types::FetchResponseHead {
+                            metadata: moli_fetch_types::FetchResponseMetadata {
+                                response_type: moli_fetch_types::FetchResponseType::Default,
+                                timing_allow_passed: true,
+                                url_list: vec![
+                                    ("https://a.test/entry".to_owned())
+                                        .parse()
+                                        .expect("valid response URL")
+                                ],
+                                redirected: false
+                            },
+                            status: 200,
+                            status_text: "OK".to_owned(),
+                            headers: Vec::new()
+                        },
+                        body: b"legacy".to_vec()
                     },
                     6,
                     0,
@@ -4008,14 +4086,18 @@ mod tests {
                         "cache",
                         "/cached.txt",
                         StorageBucketCachedResponse {
-                            response_type: "default".to_owned(),
-                            timing_allow_passed: true,
-                            url: String::new(),
-                            redirected: false,
-                            status: 200,
-                            status_text: "OK".to_owned(),
-                            headers: Vec::new(),
-                            body: b"old cache".to_vec(),
+                            head: moli_fetch_types::FetchResponseHead {
+                                metadata: moli_fetch_types::FetchResponseMetadata {
+                                    response_type: moli_fetch_types::FetchResponseType::Default,
+                                    timing_allow_passed: true,
+                                    url_list: Vec::new(),
+                                    redirected: false
+                                },
+                                status: 200,
+                                status_text: "OK".to_owned(),
+                                headers: Vec::new()
+                            },
+                            body: b"old cache".to_vec()
                         },
                         32,
                         0,
@@ -4101,18 +4183,22 @@ mod tests {
         let temp = TempStorePath::new("cache-persist");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 202,
-            status_text: "Accepted".to_owned(),
-            headers: vec![
-                ("x-cache".to_owned(), b"persisted".to_vec()),
-                ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
-                ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
-                ("x-empty".to_owned(), Vec::new()),
-            ],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 202,
+                status_text: "Accepted".to_owned(),
+                headers: vec![
+                    ("x-cache".to_owned(), b"persisted".to_vec()),
+                    ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
+                    ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
+                    ("x-empty".to_owned(), Vec::new()),
+                ],
+            },
             body: b"profile cache body".to_vec(),
         };
         {
@@ -4179,23 +4265,31 @@ mod tests {
     #[test]
     fn json_storage_bucket_cache_crash_points_recover_one_committed_root() -> Result<()> {
         let old_response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"old".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"old".to_vec())],
+            },
             body: b"old committed cache body".to_vec(),
         };
         let new_response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 201,
-            status_text: "Created".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"new".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 201,
+                status_text: "Created".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"new".to_vec())],
+            },
             body: b"new committed cache body".to_vec(),
         };
 
@@ -4274,13 +4368,17 @@ mod tests {
         let temp = TempStorePath::new("cache-promote-next");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 206,
-            status_text: "Partial Content".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"next".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 206,
+                status_text: "Partial Content".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"next".to_vec())],
+            },
             body: b"replacement cache body".to_vec(),
         };
         {
@@ -4327,13 +4425,17 @@ mod tests {
         let temp = TempStorePath::new("cache-restore-previous");
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"previous".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"previous".to_vec())],
+            },
             body: b"previous cache body".to_vec(),
         };
         {
@@ -4383,13 +4485,17 @@ mod tests {
         let indexed_db_manager = new_indexed_db_manager(None).map_err(anyhow::Error::msg)?;
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: String::new(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: Vec::new(),
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: Vec::new(),
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: Vec::new(),
+            },
             body: b"expired cache body".to_vec(),
         };
         let (expired_indexed_db_key, live_indexed_db_key) = {
@@ -4743,13 +4849,21 @@ mod tests {
         let bucket_name = "bucket";
         let bucket_id = StorageBucketId::new(17).unwrap();
         let response = StorageBucketCachedResponse {
-            response_type: "default".to_owned(),
-            timing_allow_passed: true,
-            url: "https://a.test/cached".to_owned(),
-            redirected: false,
-            status: 200,
-            status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), b"legacy-path".to_vec())],
+            head: moli_fetch_types::FetchResponseHead {
+                metadata: moli_fetch_types::FetchResponseMetadata {
+                    response_type: moli_fetch_types::FetchResponseType::Default,
+                    timing_allow_passed: true,
+                    url_list: vec![
+                        ("https://a.test/cached".to_owned())
+                            .parse()
+                            .expect("valid response URL"),
+                    ],
+                    redirected: false,
+                },
+                status: 200,
+                status_text: "OK".to_owned(),
+                headers: vec![("x-cache".to_owned(), b"legacy-path".to_vec())],
+            },
             body: b"legacy cache path".to_vec(),
         };
         let entries = BTreeMap::from([(

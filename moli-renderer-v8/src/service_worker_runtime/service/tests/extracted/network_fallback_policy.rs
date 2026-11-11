@@ -168,14 +168,18 @@ async fn controlled_network_fallback_enforces_blocked_and_offline_policy() {
                 ServiceWorkerFetchResult::Fallback
             } else {
                 ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-                    status: 200,
-                    status_text: "OK".to_owned(),
-                    headers: Vec::new(),
+                    head: moli_fetch_types::FetchResponseHead {
+                        metadata: moli_fetch_types::FetchResponseMetadata {
+                            response_type: moli_fetch_types::FetchResponseType::Default,
+                            timing_allow_passed: true,
+                            url_list: (None).into_iter().collect(),
+                            redirected: false,
+                        },
+                        status: 200,
+                        status_text: "OK".to_owned(),
+                        headers: Vec::new(),
+                    },
                     body: b"cached-response".to_vec(),
-                    final_url: None,
-                    response_type: "default".to_owned(),
-                    timing_allow_passed: true,
-                    redirected: false,
                 })
             };
             service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
@@ -425,17 +429,21 @@ async fn direct_network_fallback_after_synthetic_redirect_enforces_page_policy()
             event_id: event.event_id,
             owner: event.owner,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-                status: 302,
-                status_text: "Found".to_owned(),
-                headers: vec![(
-                    "location".to_owned(),
-                    target_url.as_str().as_bytes().to_vec(),
-                )],
+                head: moli_fetch_types::FetchResponseHead {
+                    metadata: moli_fetch_types::FetchResponseMetadata {
+                        response_type: moli_fetch_types::FetchResponseType::Basic,
+                        timing_allow_passed: true,
+                        url_list: (None).into_iter().collect(),
+                        redirected: false,
+                    },
+                    status: 302,
+                    status_text: "Found".to_owned(),
+                    headers: vec![(
+                        "location".to_owned(),
+                        target_url.as_str().as_bytes().to_vec(),
+                    )],
+                },
                 body: Vec::new(),
-                final_url: None,
-                response_type: "basic".to_owned(),
-                timing_allow_passed: true,
-                redirected: false,
             }),
         });
         let result = tokio::time::timeout(std::time::Duration::from_secs(15), direct_rx)

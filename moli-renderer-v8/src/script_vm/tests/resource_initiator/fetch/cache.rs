@@ -4,6 +4,7 @@ use super::*;
 async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() {
     let document = Url::parse("https://cache-timing.test/page").unwrap();
     let url = Url::parse("https://cross.test/asset").unwrap();
+    let start = Url::parse("https://cache-timing.test/redirect").unwrap();
     for (mode, streaming) in [("cors", false), ("cors", true), ("no-cors", false)] {
         for timing_allowed in [false, true] {
             let loader = static_http_loader(std::iter::empty::<String>());
@@ -27,11 +28,28 @@ async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() 
             )
             .await;
             vm.exec(
+                r#"
+                Object.defineProperty(Array.prototype, '1', {
+                    configurable: true,
+                    set(value) {
+                        if (typeof value === 'string' && value.startsWith('https://cross.test/')) {
+                            globalThis.leakedResponseUrl = value;
+                        }
+                        Object.defineProperty(this, '1', {
+                            value, writable: true, configurable: true, enumerable: true
+                        });
+                    }
+                });
+            "#,
+                None,
+            )
+            .unwrap();
+            vm.exec(
                 &format!(
                     r#"
                 globalThis.putStarted=false; globalThis.putDone=false;
-                fetch('{url}',{{mode:'{mode}'}}).then(response=>{{
-                    cache.put('/entry',response).then(async()=>{{
+                fetch('{start}',{{mode:'{mode}'}}).then(response=>{{
+                    cache.put('/entry',response.clone()).then(async()=>{{
                         globalThis.cached=await cache.match('/entry');putDone=true;
                     }});
                     putStarted=true;
@@ -56,11 +74,30 @@ async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() 
             if timing_allowed {
                 headers.push(("Timing-Allow-Origin".to_owned(), b"*".to_vec()));
             }
-            let response = crate::protocol_types::NavigationResponse::from_text_body(
+            let mut response = crate::protocol_types::NavigationResponse::from_text_body(
                 url.clone(),
                 200,
                 headers,
                 "body".to_owned(),
+            );
+            response.redirected = true;
+            response.redirect_chain.push(
+                moli_fetch::RedirectInfo {
+                    source: moli_fetch::RedirectSource::Network,
+                    from_url: start.clone(),
+                    to_url: url.clone(),
+                    status: 302,
+                    headers: Vec::new(),
+                    network_extra_info_available: false,
+                    request_extra_info: None,
+                    response_extra_info: None,
+                    redirect_has_extra_info: false,
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                }
+                .into(),
             );
             if streaming {
                 let body_source_id = crate::network_host::new_network_body_source_id();
@@ -109,6 +146,14 @@ async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() 
                     .unwrap(),
                 "false"
             );
+            if mode == "no-cors" {
+                assert_eq!(
+                    vm.eval("String(globalThis.leakedResponseUrl)").unwrap(),
+                    "undefined",
+                    "private opaque URLs must not reach Array.prototype setters"
+                );
+                assert_eq!(vm.eval("cached.url").unwrap(), "");
+            }
             let context = vm.current_main_world().unwrap().context.clone();
             vm.renderer_document_isolate
                 .with_entered_renderer_document_isolate(|isolate| {
@@ -123,12 +168,14 @@ async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() 
                     )
                     .unwrap();
                     assert_eq!(
-                        head.response_type,
+                        head.metadata.response_type.as_str(),
                         if mode == "cors" { "cors" } else { "opaque" }
                     );
-                    assert_eq!(head.final_url.as_ref(), Some(&url));
+                    assert_eq!(head.metadata.url_list, [start.clone(), url.clone()]);
+                    assert!(head.metadata.redirected);
+                    assert_eq!(head.metadata.final_url(), Some(&url));
                     assert_eq!(
-                        head.timing_allow_passed, timing_allowed,
+                        head.metadata.timing_allow_passed, timing_allowed,
                         "mode={mode}, streaming={streaming}"
                     );
                     Ok(())

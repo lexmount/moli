@@ -304,7 +304,7 @@ fn stylesheet_readiness_request(
     request
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum StylesheetResponseProvenance {
     Network,
     ServiceWorker {
@@ -314,7 +314,7 @@ enum StylesheetResponseProvenance {
 
 impl StylesheetResponseProvenance {
     fn is_cors_same_origin(
-        self,
+        &self,
         request_origin: &moli_url::WebOrigin,
         head: &moli_fetch::ResponseHead,
     ) -> bool {
@@ -327,7 +327,9 @@ impl StylesheetResponseProvenance {
                 moli_fetch::RequestMode::NoCors,
             )
             .is_none(),
-            Self::ServiceWorker { filter } => filter.is_none_or(|filter| filter.is_readable()),
+            Self::ServiceWorker { filter } => {
+                filter.as_ref().is_none_or(|filter| filter.is_readable())
+            }
         }
     }
 }
@@ -351,7 +353,7 @@ fn stylesheet_terminal_from_response(
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
     let cors_usability =
-        (request_mode == moli_fetch::RequestMode::Cors).then(|| match response_provenance {
+        (request_mode == moli_fetch::RequestMode::Cors).then(|| match &response_provenance {
             StylesheetResponseProvenance::ServiceWorker {
                 filter: Some(filter),
             } if !filter.is_readable() => Err(format!(
@@ -635,7 +637,9 @@ mod tests {
                 &stylesheet_url,
                 &integrity_options(None, &integrity),
                 stylesheet_response(&response_url, Some("text/css"), body),
-                StylesheetResponseProvenance::ServiceWorker { filter },
+                StylesheetResponseProvenance::ServiceWorker {
+                    filter: filter.clone(),
+                },
             );
             assert_eq!(terminal.is_ready(), expected, "{filter:?}");
             assert_eq!(terminal.ready_response().is_some(), expected);

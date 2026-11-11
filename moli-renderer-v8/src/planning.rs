@@ -575,7 +575,8 @@ fn external_script_source_load_outcome_from_response_inner(
 ) -> PreparedScriptSourceLoadOutcome {
     let response_bytes = response.body_bytes().to_vec();
     let opaque_status_zero = response_filter
-        .is_some_and(|filter| filter.response_type == crate::types::FetchResponseType::Opaque)
+        .as_ref()
+        .is_some_and(|filter| filter.response_type() == crate::types::FetchResponseType::Opaque)
         && response.status == 0;
     let source_result = if let Some(error) = cors_error {
         Err(format!("script request `{}` failed: {error}", script.url))
@@ -592,7 +593,9 @@ fn external_script_source_load_outcome_from_response_inner(
     } else if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
         &response_bytes,
         script.fetch_metadata.integrity.as_deref(),
-        response_filter.is_none_or(|filter| filter.is_readable()),
+        response_filter
+            .as_ref()
+            .is_none_or(|filter| filter.is_readable()),
     ) {
         Err(format!(
             "script request `{}` failed its integrity check",

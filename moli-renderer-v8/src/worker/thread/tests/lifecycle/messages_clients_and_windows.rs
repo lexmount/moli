@@ -274,8 +274,8 @@ async fn service_worker_global_scope_handler_attributes_dispatch_functional_even
     let ServiceWorkerFetchResult::Response(response) = fetch_completion.result else {
         panic!("expected onfetch response");
     };
-    assert_eq!(response.status, 202);
-    assert_eq!(response.status_text, "Accepted");
+    assert_eq!(response.head.status, 202);
+    assert_eq!(response.head.status_text, "Accepted");
     assert_eq!(
         response.body,
         b"from-onfetch:https://example.test/app/data.txt".to_vec()

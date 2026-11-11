@@ -75,15 +75,16 @@ async fn service_worker_fetch_respond_with_materialized_response() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.response_type, "default");
-    assert_eq!(response.status, 201);
-    assert_eq!(response.status_text, "Created by worker");
+    assert_eq!(response.head.metadata.response_type.as_str(), "default");
+    assert_eq!(response.head.status, 201);
+    assert_eq!(response.head.status_text, "Created by worker");
     assert_eq!(
         response.body,
         b"worker-body:https://example.test/app/data.txt".to_vec()
     );
     assert!(
         response
+            .head
             .headers
             .iter()
             .any(|(name, value)| name == "x-worker" && value == b"yes")
@@ -119,12 +120,13 @@ async fn service_worker_fetch_respond_with_readable_stream_body_materializes() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.response_type, "default");
-    assert_eq!(response.status, 202);
-    assert_eq!(response.status_text, "Accepted Stream");
+    assert_eq!(response.head.metadata.response_type.as_str(), "default");
+    assert_eq!(response.head.status, 202);
+    assert_eq!(response.head.status_text, "Accepted Stream");
     assert_eq!(response.body, b"ABC".to_vec());
     assert!(
         response
+            .head
             .headers
             .iter()
             .any(|(name, value)| name == "x-stream" && value == b"yes")
@@ -180,7 +182,10 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
                     ServiceWorkerVersionId::from_u64_for_test(1)
                 );
                 assert_eq!(started.owner.run_identity(), &run);
-                assert_eq!(started.response_head.response_type, "default");
+                assert_eq!(
+                    started.response_head.metadata.response_type.as_str(),
+                    "default"
+                );
                 assert_eq!(started.response_head.status, 202);
                 assert!(
                     started
@@ -202,7 +207,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
                 let ServiceWorkerFetchResult::Response(response) = completion.result else {
                     panic!("expected final service worker response");
                 };
-                assert_eq!(response.status, 202);
+                assert_eq!(response.head.status, 202);
                 assert_eq!(response.body, b"ABC".to_vec());
                 break;
             }
@@ -657,7 +662,7 @@ async fn service_worker_fetch_event_request_exposes_destination_metadata() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
         r#"{"destination":"script","mode":"no-cors","credentials":"include","redirect":"error","cache":"reload","referrer":"https://example.test/app/referrer.html","referrerPolicy":"origin","integrity":"sha256-test","keepalive":true,"isReload":true,"requestIsReloadNavigation":true,"clientId":"client-0000000000000007","resultingClientId":"","accept":"application/javascript"}"#
@@ -809,20 +814,21 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
             }
         };
         assert_eq!(
-            response.response_type, "opaque",
+            response.head.metadata.response_type.as_str(),
+            "opaque",
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
-            response.status, 0,
+            response.head.status, 0,
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
-            response.final_url.as_ref().map(url::Url::as_str),
+            response.head.metadata.final_url().map(url::Url::as_str),
             Some(fetch_url.as_str()),
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert!(
-            response.headers.is_empty(),
+            response.head.headers.is_empty(),
             "clone/cache mode {clone_mode}/{cache_mode}"
         );
         assert_eq!(
@@ -877,7 +883,7 @@ async fn service_worker_fetch_event_exposes_resulting_client_metadata() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
         r#"{"clientId":"client-0000000000000007","resultingClientId":"client-0000000000000008","destination":"document"}"#
@@ -922,7 +928,7 @@ async fn service_worker_fetch_event_request_exposes_abort_signal_surface() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
         r#"{"tag":"[object AbortSignal]","isEventTarget":true,"aborted":false,"reasonType":"undefined","inheritedSignalDifferent":true,"cloneSignalDifferent":true,"inheritedAborted":false,"cloneAborted":false,"fromInitSignalDifferent":true,"fromInitAborted":true,"fromInitReason":"sw-abort","events":["fromInit"]}"#
@@ -1075,7 +1081,7 @@ async fn service_worker_fetch_event_request_body_used_guards_inherited_body() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(
         String::from_utf8(response.body).unwrap(),
         r#"{"bodyIsStream":true,"bodyUsedAfter":true,"lockedNew":"throw:TypeError","lockedClone":"throw:TypeError","requestText":"reject:TypeError","cloneText":"fetch-body","inheritedText":"fetch-body","secondRead":"reject:TypeError","afterReplacement":"false","afterNew":"throw:TypeError","afterClone":"throw:TypeError"}"#
@@ -1102,7 +1108,7 @@ async fn service_worker_fetch_respond_with_uses_native_promise_adoption() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(response.body, b"native-adoption".to_vec());
     handle.terminate_and_join();
 }
@@ -1127,7 +1133,7 @@ async fn service_worker_fetch_respond_with_uses_native_promise_reactions() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(response.body, b"native-reaction".to_vec());
     handle.terminate_and_join();
 }
@@ -1153,7 +1159,7 @@ async fn service_worker_fetch_respond_with_stops_fetch_event_propagation() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected service worker response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(response.body, b"first".to_vec());
     handle.terminate_and_join();
 }
@@ -1210,7 +1216,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
         panic!("expected service worker response");
     };
     assert_eq!(completion.event_id, event_id);
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(response.body, b"intercepted".to_vec());
     handle.terminate_and_join();
 }
@@ -1238,7 +1244,7 @@ async fn service_worker_fetch_respond_with_twice_rejects_second_call() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected first respondWith response");
     };
-    assert_eq!(response.status, 200);
+    assert_eq!(response.head.status, 200);
     assert_eq!(response.body, b"InvalidStateError".to_vec());
     handle.terminate_and_join();
 }
@@ -1261,7 +1267,7 @@ async fn service_worker_fetch_respond_with_in_microtask_uses_response() {
     let ServiceWorkerFetchResult::Response(response) = completion.result else {
         panic!("expected microtask respondWith response");
     };
-    assert_eq!(response.status, 217);
+    assert_eq!(response.head.status, 217);
     assert_eq!(response.body, b"microtask-response".to_vec());
     handle.terminate_and_join();
 }
@@ -1800,7 +1806,7 @@ async fn service_worker_soft_reload_exposes_native_cache_mode_on_request_copies(
             let ServiceWorkerFetchResult::Response(response) = completion.result else {
                 panic!("expected service worker response for {kind:?} {cache:?}");
             };
-            assert_eq!(response.status, 200);
+            assert_eq!(response.head.status, 200);
             let expected = if kind == Kind::Reload && cache == Cache::Default {
                 "no-cache"
             } else {
