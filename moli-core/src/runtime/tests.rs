@@ -73,6 +73,59 @@ fn browser_clone_keeps_shared_renderer_and_fetch_owners_live_after_source_drop()
 }
 
 #[tokio::test]
+async fn raw_document_body_materialization_uses_the_fetch_deadline() -> Result<()> {
+    let browser = Browser::new(AppConfig::default())?;
+    let url = Url::parse("https://deadline.test/stalled.bin")?;
+    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (completion_tx, completion_rx) = oneshot::channel();
+    let cancel_handle = FetchCancelHandle::new();
+    // Headers are already available. This isolates the body budget from
+    // transport startup while exercising the real materializer and deadline.
+    let response = StreamingRawResponse::new_with_head(
+        ResponseHead {
+            status_text: None,
+            final_url: url.clone(),
+            status: 200,
+            headers: vec![(
+                "content-type".to_owned(),
+                b"application/octet-stream".to_vec(),
+            )],
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            redirected: false,
+            redirect_chain: Vec::new(),
+            from_cache: false,
+            cache_state: Default::default(),
+            negotiated_http_version: None,
+        },
+        body_rx,
+        cancel_handle.clone(),
+        completion_rx,
+    );
+    let timeout = Duration::from_millis(100);
+    let error = browser
+        .fetch_document_wait_timeout(
+            url.as_str(),
+            RenderedDomWaitUntil::Load,
+            timeout,
+            super::PageVmInitStage::Load,
+            tokio::time::Instant::now() + timeout,
+            || super::FetchTimeoutPhase::StreamingMainBody,
+            browser.materialize_streaming_raw_response_raw_document(response),
+        )
+        .await
+        .expect_err("the stalled raw body must time out");
+    let timeout = error
+        .downcast_ref::<super::FetchReadinessTimeout>()
+        .expect("the raw body timeout must retain its typed phase");
+    assert_eq!(timeout.phase(), super::FetchTimeoutPhase::StreamingMainBody);
+    assert!(cancel_handle.is_cancelled());
+    assert!(body_tx.is_closed());
+    assert!(completion_tx.is_closed());
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completion() -> Result<()> {
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
     body_tx.send(b"complete body".to_vec())?;
