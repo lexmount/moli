@@ -21,6 +21,14 @@ pub(crate) struct RuntimeScriptPreparationContext {
 }
 
 impl RuntimeScriptPreparationContext {
+    pub(crate) fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
+    pub(crate) fn into_fetch_metadata(self) -> ScriptFetchMetadata {
+        self.fetch_metadata
+    }
+
     pub(crate) fn capture(
         dom_host: &DomHost,
         document: &HostDocumentState,
