@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
-use taffy::ResolveOrZero;
+use taffy::{MaybeResolve, ResolveOrZero};
 
 use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
@@ -619,6 +619,7 @@ where
             paint: PaintSpace::ROOT,
         });
         let mut state = vec![0_u8; self.world.boxes.len()];
+        let mut sticky_offsets = vec![LayoutPoint::ZERO; self.world.boxes.len()];
         for index in 0..self.world.boxes.len() {
             resolve_coordinate_space(
                 index,
@@ -627,9 +628,14 @@ where
                 &self.scroll_extents,
                 &self.resolved_transforms,
                 &mut self.viewport_anchored,
+                &mut sticky_offsets,
                 &mut spaces,
                 &mut state,
             )?;
+        }
+        for (geometry, offset) in self.boxes.iter_mut().zip(sticky_offsets) {
+            geometry.layout_origin_in_document.x += offset.x;
+            geometry.layout_origin_in_document.y += offset.y;
         }
         self.coordinate_spaces = spaces
             .into_iter()
@@ -1169,6 +1175,7 @@ fn resolve_coordinate_space<N>(
     scroll_extents: &[LayoutScrollExtent],
     resolved_transforms: &[ResolvedLayoutTransform],
     viewport_anchored: &mut [bool],
+    sticky_offsets: &mut [LayoutPoint],
     spaces: &mut [Option<ProjectedCoordinateSpace>],
     state: &mut [u8],
 ) -> Result<(), LayoutError>
@@ -1202,6 +1209,7 @@ where
             scroll_extents,
             resolved_transforms,
             viewport_anchored,
+            sticky_offsets,
             spaces,
             state,
         )?;
@@ -1235,7 +1243,29 @@ where
             .then_some(scroll_extents[parent.index()].applied_offset)
     });
     let applied_parent_scroll = parent_scroll.unwrap_or(LayoutPoint::ZERO);
-    let location = layout_box.final_layout.location;
+    let mut location = LayoutPoint::new(
+        layout_box.final_layout.location.x,
+        layout_box.final_layout.location.y,
+    );
+    let sticky_offset = resolve_sticky_offset(
+        index,
+        world,
+        viewport_scroll,
+        scroll_extents,
+        spaces,
+        parent_transform_ignoring_css_transforms,
+        applied_parent_scroll,
+        location,
+    )?;
+    let inherited_sticky_offset = parent_box
+        .map(|parent| sticky_offsets[parent.index()])
+        .unwrap_or(LayoutPoint::ZERO);
+    sticky_offsets[index] = LayoutPoint::new(
+        inherited_sticky_offset.x + sticky_offset.x,
+        inherited_sticky_offset.y + sticky_offset.y,
+    );
+    location.x += sticky_offset.x;
+    location.y += sticky_offset.y;
     let local_to_parent = LayoutTransform2D::translation(
         location.x - applied_parent_scroll.x,
         location.y - applied_parent_scroll.y,
@@ -1300,6 +1330,102 @@ where
     });
     state[index] = 2;
     Ok(())
+}
+
+/// Sticky positioning is a scroll-dependent translation, not numeric layout.
+/// Resolve it after scroll extents have clamped the requested offsets, before
+/// projecting both CSSOM geometry and paint. Its descendants inherit the same
+/// translation without changing normal-flow sizes or scrollable overflow.
+fn resolve_sticky_offset<N>(
+    index: usize,
+    world: &LayoutWorld<N>,
+    viewport_scroll: LayoutPoint,
+    scroll_extents: &[LayoutScrollExtent],
+    spaces: &[Option<ProjectedCoordinateSpace>],
+    parent_transform: LayoutTransform2D,
+    parent_scroll: LayoutPoint,
+    location: LayoutPoint,
+) -> Result<LayoutPoint, LayoutError>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let layout_box = &world.boxes[index];
+    if layout_box.style.position() != crate::LayoutPosition::Sticky {
+        return Ok(LayoutPoint::ZERO);
+    }
+    let mut ancestor = layout_box.parent;
+    let mut scroll_container = world.root;
+    while let Some(candidate) = ancestor {
+        if candidate == world.root || scroll_extents[candidate.index()].is_scroll_container {
+            scroll_container = candidate;
+            break;
+        }
+        ancestor = world.boxes[candidate.index()].parent;
+    }
+    let origin = if scroll_container == world.root {
+        viewport_scroll
+    } else {
+        spaces[scroll_container.index() + 1]
+            .as_ref()
+            .ok_or(LayoutError::InvalidBoxReference {
+                index: scroll_container.index(),
+            })?
+            .layout
+            .local_to_document_ignoring_css_transforms
+            .map_point(LayoutPoint::ZERO)
+    };
+    let scrollport = offset_rect(scroll_extents[scroll_container.index()].scrollport, origin);
+    let global = parent_transform.map_point(LayoutPoint::new(
+        location.x - parent_scroll.x,
+        location.y - parent_scroll.y,
+    ));
+    let layout = layout_box.final_layout;
+    let inset = layout_box.style.sticky_inset();
+    let resolve = crate::style::resolve_stylo_calc_value;
+    let left = inset.left.maybe_resolve(scrollport.width, resolve);
+    let right = inset.right.maybe_resolve(scrollport.width, resolve);
+    let top = inset.top.maybe_resolve(scrollport.height, resolve);
+    let bottom = inset.bottom.maybe_resolve(scrollport.height, resolve);
+    let mut target = global;
+    if let Some(left) = left {
+        target.x = target.x.max(scrollport.x + left);
+    }
+    if let Some(right) = right {
+        target.x = target.x.min(scrollport.right() - right - layout.size.width);
+    }
+    if let Some(top) = top {
+        target.y = target.y.max(scrollport.y + top);
+    }
+    if let Some(bottom) = bottom {
+        target.y = target
+            .y
+            .min(scrollport.bottom() - bottom - layout.size.height);
+    }
+    if let Some(parent) = layout_box.layout_parent {
+        let containing = world.boxes[parent.index()].final_layout;
+        let origin =
+            parent_transform.map_point(LayoutPoint::new(-parent_scroll.x, -parent_scroll.y));
+        let mut right_edge = containing.size.width - containing.border.right;
+        let mut bottom_edge = containing.size.height - containing.border.bottom;
+        if parent != world.root && scroll_extents[parent.index()].is_scroll_container {
+            // A scrolling containing block's content area includes the content
+            // outside its scrollport, rather than ending at its visible edge.
+            let extent = &scroll_extents[parent.index()];
+            right_edge = right_edge.max(extent.scrollport.x + extent.scroll_size.width);
+            bottom_edge = bottom_edge.max(extent.scrollport.y + extent.scroll_size.height);
+        }
+        let min_x = origin.x + containing.border.left + containing.padding.left;
+        let min_y = origin.y + containing.border.top + containing.padding.top;
+        let max_x = origin.x + right_edge - containing.padding.right - layout.size.width;
+        let max_y = origin.y + bottom_edge - containing.padding.bottom - layout.size.height;
+        if left.is_some() || right.is_some() {
+            target.x = target.x.clamp(min_x.min(global.x), max_x.max(global.x));
+        }
+        if top.is_some() || bottom.is_some() {
+            target.y = target.y.clamp(min_y.min(global.y), max_y.max(global.y));
+        }
+    }
+    Ok(LayoutPoint::new(target.x - global.x, target.y - global.y))
 }
 
 fn finite_point(point: LayoutPoint) -> LayoutPoint {
