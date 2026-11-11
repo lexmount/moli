@@ -6,7 +6,7 @@ use crate::native_bridge::element::activation::{
     form_navigation_target_document, named_iframe_target_handle_for_navigation,
 };
 use crate::native_bridge::element::{
-    NodePublicEventDispatchOutcome, TextEditInputType, activate_default_submit_button_via_keyboard,
+    NodePublicEventDispatchOutcome, TextEditInputType, activate_handle_via_keyboard,
     dispatch_beforeinput,
 };
 use crate::runtime::RendererInputDispatchOutcome;
@@ -101,12 +101,7 @@ fn perform_implicit_form_submission(
         .copied()
         .find(|candidate| is_valid_submit_button(runtime, *candidate))
     {
-        return activate_default_submit_button_via_keyboard(
-            scope,
-            runtime_ptr,
-            default_button,
-            modifiers,
-        );
+        return activate_handle_via_keyboard(scope, runtime_ptr, default_button, modifiers);
     }
     if controls
         .iter()

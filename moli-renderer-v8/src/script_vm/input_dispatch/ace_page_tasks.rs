@@ -1,6 +1,7 @@
 use super::*;
 use crate::native_bridge::element::{
-    form_associated_form_owner, is_valid_submit_button, submit_form_with_submit_event,
+    activate_handle_via_click_with_detail_and_modifiers, form_associated_form_owner,
+    is_valid_submit_button, submit_form_with_submit_event,
 };
 use std::collections::HashSet;
 

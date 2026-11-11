@@ -351,3 +351,70 @@ source.focus();
         }
     }
 }
+
+#[test]
+fn keyboard_activation_uses_trusted_non_pointer_clicks() {
+    let mut vm = new_storage_test_vm("https://keyboard-click-realms.test/");
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+if (!document.body) root.appendChild(document.createElement('body'));
+document.body.innerHTML = '<iframe id=child></iframe>';
+const realms = [window, document.getElementById('child').contentWindow];
+globalThis.keyboardClicks = [];
+for (let index = 0; index < realms.length; index++) {
+  const w = realms[index];
+  for (const [id, tag, type] of [
+    ['button', 'button', 'button'], ['checkbox', 'input', 'checkbox'],
+    ['radio', 'input', 'radio'], ['anchor', 'a', '']
+  ]) {
+    const element = w.document.createElement(tag);
+    element.id = id;
+    if (type) element.type = type;
+    if (tag === 'a') element.href = '#target';
+    w.document.body.appendChild(element);
+    element.addEventListener('click', event => {
+      keyboardClicks.push([
+        index, id, event.view === w, Object.getPrototypeOf(event) === w.PointerEvent.prototype,
+        event.pointerId, event.pointerType, event.isPrimary, event.isTrusted, event.detail,
+        event.altKey, event.ctrlKey, event.shiftKey, event.metaKey
+      ]);
+      if (tag === 'a') event.preventDefault();
+    });
+  }
+}
+"#,
+    )
+    .unwrap();
+    for owner in 0..2 {
+        for (id, key, code) in [
+            ("button", "Enter", "Enter"),
+            ("button", " ", "Space"),
+            ("checkbox", " ", "Space"),
+            ("radio", " ", "Space"),
+            ("anchor", "Enter", "Enter"),
+        ] {
+            for modifiers in [0, 8] {
+                vm.eval(&format!(
+                    "keyboardClicks=[];globalThis.activatedElement=realms[{owner}].document.getElementById('{id}');activatedElement.checked=false;activatedElement.focus()"
+                ))
+                .unwrap();
+                for event in ["keydown", "keyup"] {
+                    vm.dispatch_key_event(event, key, code, "", modifiers, false, false)
+                        .unwrap();
+                }
+                assert_eq!(
+                    vm.eval("JSON.stringify(keyboardClicks)").unwrap(),
+                    format!(
+                        "[[{owner},\"{id}\",true,true,-1,\"\",false,true,0,false,false,{},false]]",
+                        modifiers == 8
+                    ),
+                    "owner {owner}, element {id}, key {code}, modifiers {modifiers}"
+                );
+                if matches!(id, "checkbox" | "radio") {
+                    assert_eq!(vm.eval("activatedElement.checked").unwrap(), "true");
+                }
+            }
+        }
+    }
+}

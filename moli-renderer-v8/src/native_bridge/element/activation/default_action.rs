@@ -1168,17 +1168,16 @@ pub(crate) fn activate_handle_via_click(
     button: i32,
     buttons: i32,
 ) -> RendererInputDispatchOutcome {
-    click_handle_internal(
+    activate_handle_via_click_with_detail_and_modifiers(
         scope,
         runtime_ptr,
         handle,
-        InputEventCoordinates::from_root(x, y),
+        x,
+        y,
         button,
         buttons,
         0,
         0,
-        ClickEventSource::Pointer,
-        ClickFocusBehavior::Apply,
     )
 }
 
@@ -1207,14 +1206,14 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
     )
 }
 
-pub(crate) fn activate_default_submit_button_via_keyboard(
+pub(crate) fn activate_handle_via_keyboard(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     modifiers: u8,
 ) -> RendererInputDispatchOutcome {
-    // Implicit submission runs trusted synthetic click activation steps. The
-    // click has detail 0 and does not move focus away from the text control.
+    // Keyboard activation uses a trusted non-pointer click without moving focus.
+    // This also preserves focus on the text control during implicit submission.
     click_handle_internal(
         scope,
         runtime_ptr,
