@@ -813,18 +813,7 @@ impl CdpConnection {
         // A command's agent readiness is independent of the publication that
         // created its Target. Join the existing build; never create a second
         // installer or make modal handling / close wait for adoption.
-        let method = req.method();
-        let needs_page = (method.starts_with("Runtime.")
-            && !matches!(method, "Runtime.terminateExecution" | "Runtime.disable"))
-            || matches!(
-                method,
-                "Page.enable"
-                    | "Page.navigate"
-                    | "Page.getFrameTree"
-                    | "Page.getResourceTree"
-                    | "Page.createIsolatedWorld"
-            );
-        if needs_page {
+        if command.requires_initial_document_adoption() {
             let owner = CommandOwnerScope::capture(self, req.session_id());
             if let Some(waiter) = self
                 .runtime_session_owner_slot_for_owner(&owner)
