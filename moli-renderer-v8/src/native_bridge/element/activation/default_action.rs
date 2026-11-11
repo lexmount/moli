@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::super::super::JsContextHost;
+use super::super::details_dialog::run_dialog_command_steps;
 use super::super::forms::{
     FormAssociatedResetCallbackTiming, dispatch_form_reset_event, normalized_button_command,
     reset_form_default_action,
@@ -1696,16 +1697,18 @@ fn perform_button_command_default_action(
         return true;
     }
     let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_connected(target)
-        || !has_reflected_attribute(runtime, target, "popover")
-    {
+    if !runtime.dom_host().is_connected(target) {
         return true;
     }
-    match command.as_str() {
-        "show-popover" => dispatch_popover_show_events(scope, runtime_ptr, target, handle),
-        "hide-popover" => dispatch_popover_hide_events(scope, runtime_ptr, target, handle),
-        "toggle-popover" => dispatch_popover_toggle_events(scope, runtime_ptr, target, handle),
-        _ => {}
+    if matches!(command.as_str(), "show-modal" | "close" | "request-close") {
+        run_dialog_command_steps(scope, runtime_ptr, target, handle, &command);
+    } else if has_reflected_attribute(runtime, target, "popover") {
+        match command.as_str() {
+            "show-popover" => dispatch_popover_show_events(scope, runtime_ptr, target, handle),
+            "hide-popover" => dispatch_popover_hide_events(scope, runtime_ptr, target, handle),
+            "toggle-popover" => dispatch_popover_toggle_events(scope, runtime_ptr, target, handle),
+            _ => {}
+        }
     }
     true
 }

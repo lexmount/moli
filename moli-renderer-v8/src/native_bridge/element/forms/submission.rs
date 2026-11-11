@@ -706,7 +706,7 @@ fn submit_dialog_form(
         let result = dialog_submission_result(runtime, submitter);
         (dialog, result)
     };
-    close_dialog_element(scope, runtime_ptr, dialog, result.as_deref())
+    close_dialog_element(scope, runtime_ptr, dialog, result.as_deref(), None)
 }
 
 fn nearest_ancestor_dialog(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {

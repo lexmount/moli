@@ -18,11 +18,11 @@ use super::focus::{
     restore_dialog_focus_after_close, run_dialog_focusing_steps,
 };
 use super::popover::popover_is_open;
-use super::toggle_event::queue_element_toggle_event;
+use super::toggle_event::{construct_toggle_event_with_source, queue_element_toggle_event};
 use super::{
     construct_simple_event, dispatch_public_event, has_reflected_attribute,
     html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
-    set_reflected_boolean_attribute,
+    reflected_attribute, set_reflected_boolean_attribute,
 };
 
 pub(crate) fn queue_details_toggle_event_for_attribute_change(
@@ -287,6 +287,7 @@ fn dispatch_dialog_toggle_events(
     handle: DomHandle,
     opening: bool,
     as_modal: bool,
+    source: Option<DomHandle>,
 ) -> bool {
     let (old_state, new_state) = if opening {
         (
@@ -299,27 +300,25 @@ fn dispatch_dialog_toggle_events(
             RendererPageElementToggleEventState::Closed,
         )
     };
-    if let Some(event) = super::events::construct_toggle_event(
+    if let Some(event) = construct_toggle_event_with_source(
         scope,
         "beforetoggle",
         old_state.as_str(),
         new_state.as_str(),
         opening,
-        v8::null(scope).into(),
+        source,
     ) {
         let outcome = dispatch_public_event(scope, runtime_ptr, handle, event);
         if opening && !outcome.allows_default() {
             return false;
         }
     }
-    if opening {
-        let runtime = unsafe { &*runtime_ptr };
-        if has_reflected_attribute(runtime, handle, "open")
-            || (as_modal
-                && (!runtime.dom_host().is_connected(handle) || popover_is_open(runtime, handle)))
-        {
-            return false;
-        }
+    let runtime = unsafe { &*runtime_ptr };
+    if has_reflected_attribute(runtime, handle, "open") == opening
+        || (as_modal
+            && (!runtime.dom_host().is_connected(handle) || popover_is_open(runtime, handle)))
+    {
+        return false;
     }
     queue_element_toggle_event(
         scope,
@@ -328,7 +327,7 @@ fn dispatch_dialog_toggle_events(
         handle,
         old_state,
         new_state,
-        None,
+        source,
     );
     true
 }
@@ -484,7 +483,7 @@ pub(super) fn dialog_show_callback<'s>(
         }
         return;
     }
-    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, false) {
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, false, None) {
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
@@ -501,6 +500,23 @@ pub(super) fn dialog_show_modal_callback<'s>(
     else {
         return;
     };
+    show_modal_dialog(scope, runtime_ptr, handle, None);
+}
+
+fn dialog_is_in_active_document(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime.dom_host().is_connected(handle)
+        && runtime
+            .dom_host()
+            .owner_document_handle(handle)
+            .is_some_and(|document| runtime.document_is_fully_active(document))
+}
+
+fn show_modal_dialog(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    source: Option<DomHandle>,
+) {
     let runtime = unsafe { &*runtime_ptr };
     if has_reflected_attribute(runtime, handle, "open") {
         if !dialog_is_modal(runtime, handle) {
@@ -513,7 +529,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         }
         return;
     }
-    if !runtime.dom_host().is_connected(handle) {
+    if !dialog_is_in_active_document(runtime, handle) {
         throw_dom_exception(
             scope,
             "InvalidStateError",
@@ -531,7 +547,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         );
         return;
     }
-    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, true) {
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, true, true, source) {
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
@@ -552,7 +568,13 @@ pub(super) fn dialog_close_callback<'s>(
     let Ok((runtime_ptr, handle)) = dialog_runtime_and_handle_from_object(scope, object) else {
         return;
     };
-    close_dialog_element(scope, runtime_ptr, handle, parsed.return_value.as_deref());
+    close_dialog_element(
+        scope,
+        runtime_ptr,
+        handle,
+        parsed.return_value.as_deref(),
+        None,
+    );
 }
 
 pub(super) fn dialog_request_close_callback<'s>(
@@ -567,10 +589,26 @@ pub(super) fn dialog_request_close_callback<'s>(
     let Ok((runtime_ptr, handle)) = dialog_runtime_and_handle_from_object(scope, object) else {
         return;
     };
+    request_close_dialog(
+        scope,
+        runtime_ptr,
+        handle,
+        parsed.return_value.as_deref(),
+        None,
+    );
+}
+
+fn request_close_dialog(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    return_value: Option<&str>,
+    source: Option<DomHandle>,
+) {
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "dialog")
-        || !runtime.dom_host().is_connected(handle)
         || !has_reflected_attribute(runtime, handle, "open")
+        || !dialog_is_in_active_document(runtime, handle)
     {
         return;
     }
@@ -582,9 +620,35 @@ pub(super) fn dialog_request_close_callback<'s>(
     }
     let allows_close = dispatch_public_event(scope, runtime_ptr, handle, event).allows_default();
     if allows_close {
-        close_dialog_element(scope, runtime_ptr, handle, parsed.return_value.as_deref());
+        close_dialog_element(scope, runtime_ptr, handle, return_value, source);
     }
     unsafe { &mut *runtime_ptr }.end_dialog_request_close(handle);
+}
+
+pub(super) fn run_dialog_command_steps(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    source: DomHandle,
+    command: &str,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    if popover_is_open(runtime, handle) {
+        return;
+    }
+    let is_open = has_reflected_attribute(runtime, handle, "open");
+    match command {
+        "show-modal" if !is_open => show_modal_dialog(scope, runtime_ptr, handle, Some(source)),
+        "close" | "request-close" if is_open => {
+            let value = reflected_attribute(runtime, source, "value");
+            if command == "close" {
+                close_dialog_element(scope, runtime_ptr, handle, value.as_deref(), Some(source));
+            } else {
+                request_close_dialog(scope, runtime_ptr, handle, value.as_deref(), Some(source));
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(in crate::native_bridge::element) fn close_dialog_element(
@@ -592,6 +656,7 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     return_value: Option<&str>,
+    source: Option<DomHandle>,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "dialog")
@@ -600,7 +665,7 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
         return false;
     }
 
-    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, false, false) {
+    if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, false, false, source) {
         return false;
     }
     let was_modal = dialog_is_modal(unsafe { &*runtime_ptr }, handle);

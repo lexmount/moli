@@ -4,7 +4,7 @@ use crate::native_bridge::callback_value_dom_handle;
 use crate::page_task_queue::{
     RendererPageElementToggleEventKind, RendererPageElementToggleEventState,
 };
-use crate::util::{node_wrapper_from_handle, throw_type_error, v8_string, v8str};
+use crate::util::{throw_type_error, v8_string, v8str};
 use dom::ElementState as StyloElementState;
 
 use super::super::node::{
@@ -13,7 +13,9 @@ use super::super::node::{
 };
 use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
-use super::toggle_event::{cancel_element_toggle_event, queue_element_toggle_event};
+use super::toggle_event::{
+    cancel_element_toggle_event, construct_toggle_event_with_source, queue_element_toggle_event,
+};
 use super::{
     JsContextHost, dispatch_public_event, has_reflected_attribute, reflected_attribute,
     remove_reflected_attribute, set_reflected_attribute,
@@ -97,29 +99,13 @@ fn ensure_popover_connected_to_document(
     false
 }
 
-fn construct_popover_toggle_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    old_state: &str,
-    new_state: &str,
-    cancelable: bool,
-    source: Option<DomHandle>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let source = source
-        .and_then(|handle| node_wrapper_from_handle(scope, handle).map(Into::into))
-        .unwrap_or_else(|| v8::null(scope).into());
-    super::events::construct_toggle_event(
-        scope, event_type, old_state, new_state, cancelable, source,
-    )
-}
-
 pub(crate) fn dispatch_popover_removal_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
     if let Some(event) =
-        construct_popover_toggle_event(scope, "beforetoggle", "open", "closed", false, None)
+        construct_toggle_event_with_source(scope, "beforetoggle", "open", "closed", false, None)
     {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
@@ -187,7 +173,7 @@ fn set_popover_open_state(
             RendererPageElementToggleEventState::Closed,
         )
     };
-    if let Some(event) = construct_popover_toggle_event(
+    if let Some(event) = construct_toggle_event_with_source(
         scope,
         "beforetoggle",
         old_state.as_str(),

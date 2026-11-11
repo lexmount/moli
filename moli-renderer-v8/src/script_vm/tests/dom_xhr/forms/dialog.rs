@@ -320,6 +320,124 @@ async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
 }
 
 #[tokio::test]
+async fn dialog_commands_preserve_invoker_sources_through_close_requests() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://dialog-command-source.test/",
+        &loader,
+    );
+
+    let opened = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  const opener = document.createElement('button');
+  const closer = document.createElement('button');
+  host.append(opener, dialog);
+  dialog.appendChild(closer);
+  opener.id = 'opener';
+  opener.commandForElement = dialog;
+  opener.command = 'show-modal';
+  closer.id = 'closer';
+  closer.commandForElement = dialog;
+  closer.command = 'request-close';
+  closer.value = 'initial';
+  dialog.returnValue = 'seed';
+
+  const events = [];
+  for (const type of ['beforetoggle', 'toggle']) {
+    dialog.addEventListener(type, event => {
+      events.push([event.type, event.oldState, event.newState, event.source?.id]);
+    });
+  }
+  dialog.addEventListener('cancel', () => events.push(['cancel']));
+  dialog.addEventListener('close', () => events.push(['close', dialog.returnValue]));
+  globalThis.dialogCommandProbe = {dialog, closer, events};
+  opener.click();
+  return dialog.open && dialog.matches(':modal');
+})()
+"#,
+        )
+        .expect("opening command should evaluate");
+    assert_eq!(opened, "true");
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("opening toggle should run")
+    );
+
+    let requested = vm
+        .eval(
+            r#"
+(() => {
+  const {dialog, closer} = dialogCommandProbe;
+  dialog.addEventListener('cancel', event => event.preventDefault(), {once: true});
+  closer.click();
+  const canceled = [dialog.open, dialog.returnValue];
+  dialog.addEventListener('command', () => {
+    closer.command = 'close';
+    closer.value = 'from-command';
+  }, {once: true});
+  dialog.addEventListener('cancel', () => closer.value = 'from-cancel', {once: true});
+  closer.click();
+  return JSON.stringify([canceled, dialog.open, dialog.returnValue]);
+})()
+"#,
+        )
+        .expect("request-close command should evaluate");
+    assert_eq!(requested, r#"[[true,"seed"],false,"from-command"]"#);
+    assert!(
+        vm.run_one_dom_manipulation_task_executor_turn(
+            PageDomManipulationTestFamily::ElementToggle,
+            &loader,
+        )
+        .await
+        .expect("closing toggle should run")
+    );
+    assert!(
+        vm.run_one_user_interaction_executor_turn(&loader)
+            .await
+            .expect("close event should run")
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(dialogCommandProbe.events)")
+            .expect("dialog command events should evaluate"),
+        r#"[["beforetoggle","closed","open","opener"],["toggle","closed","open","opener"],["cancel"],["cancel"],["beforetoggle","open","closed","closer"],["toggle","open","closed","closer"],["close","from-command"]]"#
+    );
+}
+
+#[test]
+fn dialog_close_command_keeps_the_result_of_a_reentrant_close() {
+    let mut vm = new_storage_test_vm("https://dialog-close-command-reentry.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const dialog = document.createElement('dialog');
+  const button = document.createElement('button');
+  host.appendChild(dialog);
+  dialog.appendChild(button);
+  button.commandForElement = dialog;
+  button.command = 'close';
+  button.value = 'outer';
+  dialog.show();
+  dialog.addEventListener('beforetoggle', () => dialog.close('inner'), {once: true});
+  button.click();
+  return JSON.stringify([dialog.open, dialog.returnValue]);
+})()
+"#,
+        )
+        .expect("reentrant close should evaluate");
+    assert_eq!(result, r#"[false,"inner"]"#);
+}
+
+#[tokio::test]
 async fn dialog_request_close_ignores_recursive_cancel_and_queues_close() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
