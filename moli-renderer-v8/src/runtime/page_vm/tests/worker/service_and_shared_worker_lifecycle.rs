@@ -757,6 +757,188 @@ async fn service_worker_intercepts_asynchronous_worker_xhr_with_native_clients_a
 }
 
 #[tokio::test]
+async fn service_worker_intercepts_classic_worker_imports_with_native_clients_and_response_filters()
+{
+    run_page_vm_async_test(async move {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let origin = format!("http://{address}");
+        let server_origin = origin.clone();
+        let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let worker_source = r#"
+            async function run() {
+                const errors = {}, violations = [];
+                self.addEventListener("securitypolicyviolation", event => violations.push({
+                    directive: event.effectiveDirective, disposition: event.disposition,
+                    blocked: event.blockedURI
+                }));
+                for (const name of ["synthetic", "cors", "opaque", "bad-mime", "error", "fallback"]) {
+                    try { importScripts("/app/" + name + ".js"); }
+                    catch (error) { errors[name] = {name: error.name, message: error.message}; }
+                }
+                await new Promise(resolve => setTimeout(resolve, 50));
+                return {metadata: self.importMetadata, corsRan: self.corsRan,
+                    opaqueRan: self.opaqueRan, fallbackRan: self.fallbackRan, errors, violations,
+                    resources: performance.getEntriesByType("resource").map(entry => ({
+                        name: entry.name, status: entry.responseStatus, initiatorType: entry.initiatorType
+                    }))};
+            }
+            self.onmessage = () => run().then(value => self.postMessage(value))
+                .catch(error => self.postMessage({error: String(error)}));
+            self.onconnect = event => {
+                const port = event.ports[0];
+                port.onmessage = () => run().then(value => port.postMessage(value))
+                    .catch(error => port.postMessage({error: String(error)}));
+            };
+        "#;
+        let server = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async move {
+                let listener = TcpListener::from_std(listener).unwrap();
+                for index in 0..10 {
+                    let wait = if index < 7 { Duration::from_secs(5) } else { Duration::from_millis(500) };
+                    let Ok(accepted) = tokio::time::timeout(wait, listener.accept()).await else { break };
+                    let (mut stream, _) = accepted.unwrap();
+                    let request = read_http_request_head(&mut stream).await.unwrap();
+                    let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                    requests.send(path.to_owned()).unwrap();
+                    let body = match path {
+                        "/app/sw.js" => r#"
+                            self.oninstall = event => event.waitUntil(self.skipWaiting());
+                            self.onfetch = event => {
+                                const path = new URL(event.request.url).pathname;
+                                if (path === "/app/synthetic.js") {
+                                    event.respondWith((async () => {
+                                        const client = await self.clients.get(event.clientId);
+                                        const data = {method: event.request.method, mode: event.request.mode,
+                                            credentials: event.request.credentials, destination: event.request.destination,
+                                            clientId: event.clientId, resultingClientId: event.resultingClientId,
+                                            clientType: client.type, clientUrl: client.url, referrer: event.request.referrer};
+                                        const source = "self.importMetadata = " + JSON.stringify(data) +
+                                            "; throw new Error('basic-visible');";
+                                        return new Response(new ReadableStream({start(controller) {
+                                            const bytes = new TextEncoder().encode(source);
+                                            controller.enqueue(bytes.slice(0, 20));
+                                            setTimeout(() => { controller.enqueue(bytes.slice(20)); controller.close(); }, 0);
+                                        }}), {headers: {"Content-Type": "text/javascript"}});
+                                    })());
+                                } else if (path === "/app/cors.js" || path === "/app/opaque.js") {
+                                    const target = new URL(path === "/app/cors.js" ? "/cors-source.js" : "/opaque-source.js", event.request.url);
+                                    target.hostname = "localhost";
+                                    event.respondWith(fetch(target, {mode: path === "/app/cors.js" ? "cors" : "no-cors"}));
+                                } else if (path === "/app/bad-mime.js") {
+                                    event.respondWith(new Response("throw new Error('must not execute');", {headers: {"Content-Type": "text/plain"}}));
+                                } else if (path === "/app/error.js") {
+                                    event.respondWith(Response.error());
+                                }
+                            };
+                        "#,
+                        "/app/actor.js" => worker_source,
+                        "/cors-source.js" => "self.corsRan = true; throw new Error('cors-visible');",
+                        "/opaque-source.js" => "self.opaqueRan = true; throw new Error('opaque-private');",
+                        "/app/fallback.js" => "self.fallbackRan = true;",
+                        _ => "throw new Error('unexpected network request');",
+                    };
+                    let policy = if path == "/app/actor.js" { "Content-Security-Policy-Report-Only: script-src 'self'\r\n" } else { "" };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\n{policy}Access-Control-Allow-Origin: {server_origin}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+        });
+        let loader_owner = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        hooks.resource_task_runner = Some(loader_owner.browser_resource_runtime().resource_task_runner());
+        let mut page_vm = test_page_vm_with_loader_document_url_and_hooks(
+            &loader_owner, Vec::new(), Url::parse(&format!("{origin}/page.html")).unwrap(), hooks,
+        );
+        page_vm.retain_standalone_request_client_owner_for_test(loader_owner);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+                globalThis.importResults = null;
+                globalThis.importError = null;
+                (async () => {
+                    const registration = await navigator.serviceWorker.register("/app/sw.js", {scope: "/app/actor.js"});
+                    const active = registration.installing || registration.active;
+                    if (active.state !== "activated") await new Promise(resolve => active.addEventListener("statechange", () => {
+                        if (active.state === "activated") resolve();
+                    }));
+                    globalThis.importDedicated = new Worker("/app/actor.js");
+                    const dedicated = new Promise((resolve, reject) => {
+                        importDedicated.onmessage = event => resolve(event.data);
+                        importDedicated.onerror = event => reject(event.message);
+                    });
+                    importDedicated.postMessage("run");
+                    globalThis.importShared = new SharedWorker("/app/actor.js");
+                    const shared = new Promise((resolve, reject) => {
+                        importShared.port.onmessage = event => resolve(event.data);
+                        importShared.onerror = event => reject(event.message);
+                    });
+                    importShared.port.postMessage("run");
+                    importResults = {dedicated: await dedicated, shared: await shared};
+                })().catch(error => importError = String(error));
+            "#)?;
+            drive_service_worker_and_shared_worker_page_vm_until_done(
+                &mut page_vm, "String(importResults !== null || importError !== null)",
+                "classic imports should use native Worker clients while their realms are paused",
+            ).await?;
+            assert_eq!(page_vm.vm_mut().eval("String(importError)")?, "null");
+            assert_eq!(page_vm.vm_mut().eval("String(navigator.serviceWorker.controller)")?, "null");
+            let results: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval("JSON.stringify(importResults)")?)?;
+            assert_ne!(results["dedicated"]["metadata"]["clientId"], results["shared"]["metadata"]["clientId"]);
+            for (kind, expected_type) in [("dedicated", "worker"), ("shared", "sharedworker")] {
+                let result = &results[kind];
+                assert!(result.get("error").is_none(), "{result}");
+                let data = &result["metadata"];
+                assert!(!data["clientId"].as_str().unwrap().is_empty());
+                assert_eq!(data["clientType"], expected_type);
+                assert_eq!(data["clientUrl"], format!("{origin}/app/actor.js"));
+                assert_eq!(data["resultingClientId"], "");
+                assert_eq!(data["destination"], "script");
+                assert_eq!(data["method"], "GET");
+                assert_eq!(data["mode"], "no-cors");
+                assert_eq!(data["credentials"], "same-origin");
+                assert_eq!(data["referrer"], format!("{origin}/app/actor.js"));
+                assert_eq!(result["corsRan"], true);
+                assert_eq!(result["opaqueRan"], true);
+                assert_eq!(result["fallbackRan"], true);
+                assert_eq!(result["errors"]["synthetic"]["name"], "Error");
+                assert_eq!(result["errors"]["synthetic"]["message"], "basic-visible");
+                assert_eq!(result["errors"]["cors"]["name"], "Error");
+                assert_eq!(result["errors"]["cors"]["message"], "cors-visible");
+                for name in ["opaque", "bad-mime", "error"] {
+                    assert_eq!(result["errors"][name]["name"], "NetworkError", "{result}");
+                }
+                assert!(result["errors"].get("fallback").is_none());
+                let violations = result["violations"].as_array().unwrap();
+                assert_eq!(violations.len(), 2, "{kind}: {violations:?}");
+                assert!(violations.iter().all(|v| v["directive"] == "script-src-elem" && v["disposition"] == "report"));
+                let resources = result["resources"].as_array().unwrap();
+                assert_eq!(resources.len(), 6, "{resources:?}");
+                assert!(resources.iter().all(|entry| entry["initiatorType"] == "other" && entry["name"].as_str().unwrap().starts_with(&origin)));
+                assert_eq!(resources.iter().find(|entry| entry["name"] == format!("{origin}/app/cors.js")).unwrap()["status"], 200);
+                assert_eq!(resources.iter().find(|entry| entry["name"] == format!("{origin}/app/opaque.js")).unwrap()["status"], 0);
+                assert_eq!(violations.iter().filter(|v| v["blocked"] == format!("{origin}/app/cors.js")).count(), 1);
+                assert_eq!(violations.iter().filter(|v| v["blocked"] == format!("{origin}/app/opaque.js")).count(), 1);
+            }
+            anyhow::Ok(())
+        }).await.unwrap();
+        server.join().unwrap();
+        let mut paths = Vec::new();
+        while let Some(path) = received.recv().await { paths.push(path); }
+        // Concurrent script-cache consumers may share the fallback transport.
+        let fallbacks = paths.iter().filter(|path| *path == "/app/fallback.js").count();
+        assert!((1..=2).contains(&fallbacks));
+        paths.retain(|path| path != "/app/fallback.js");
+        paths.sort();
+        assert_eq!(paths, ["/app/actor.js", "/app/actor.js", "/app/sw.js", "/cors-source.js", "/cors-source.js", "/opaque-source.js", "/opaque-source.js"]);
+    }).await;
+}
+
+#[tokio::test]
 async fn service_worker_blob_shared_worker_inherits_parent_controller_for_fetch() {
     run_page_vm_async_test(async move {
         let (base_url, sample_request_rx, server) =

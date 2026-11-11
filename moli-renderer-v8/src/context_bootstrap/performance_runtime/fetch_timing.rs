@@ -242,6 +242,17 @@ impl FetchResourceTiming {
         head: &ResponseHead,
         body_size: usize,
     ) -> ResourcePerformanceEntry {
+        self.classic_script_response_with_filter(name, origin, head, None, body_size)
+    }
+
+    pub(crate) fn classic_script_response_with_filter(
+        &self,
+        name: &Url,
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        filter: Option<&FetchResponseFilter>,
+        body_size: usize,
+    ) -> ResourcePerformanceEntry {
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             name.as_str(),
             self.initiator_type,
@@ -256,7 +267,11 @@ impl FetchResourceTiming {
             entry.encoded_body_size = 0.0;
             entry.decoded_body_size = 0.0;
         }
-        if head.url_list().has_cross_origin_url(origin) {
+        let readable = filter.map_or_else(
+            || !head.url_list().has_cross_origin_url(origin),
+            FetchResponseFilter::is_readable,
+        );
+        if !readable {
             entry.response_status = 0.0;
             entry.content_type.clear();
             entry.content_encoding.clear();

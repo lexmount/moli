@@ -48,7 +48,7 @@ fn materialize_worker_import_source(
     script_url: &Url,
     blob_entry: Option<(String, String)>,
 ) -> Result<WorkerImportScriptSource, WorkerImportScriptError> {
-    let csp = WorkerImportScriptCsp::capture(scope, state, script_url);
+    let csp = WorkerImportScriptCsp::capture(scope, state, script_url).map(Arc::new);
     if let Some(csp) = &csp {
         csp.check_url(script_url, ContentSecurityPolicyRedirectStatus::NoRedirect)
             .map_err(WorkerImportScriptError::network)?;
@@ -149,7 +149,14 @@ fn materialize_worker_import_source(
             })
         }
         "http" | "https" => {
-            let (loader, initiator_url, referrer_policy, network_partition_key, policy_context) = {
+            let (
+                loader,
+                initiator_url,
+                referrer_policy,
+                network_partition_key,
+                policy_context,
+                controller,
+            ) = {
                 let state = state.borrow();
                 (
                     state.loader.clone(),
@@ -157,6 +164,9 @@ fn materialize_worker_import_source(
                     state.referrer_policy.clone(),
                     state.network_partition_key.clone(),
                     state.policy_context,
+                    (!service_worker)
+                        .then(|| super::fetch::worker_service_worker_controller(&state, script_url))
+                        .flatten(),
                 )
             };
             let fetched = fetch_worker_import_source_blocking(
@@ -168,6 +178,8 @@ fn materialize_worker_import_source(
                     referrer_policy,
                     network_partition_key,
                     policy_context,
+                    controller,
+                    response_csp: csp.clone(),
                     timing,
                     redirect_check: csp.map(|csp| {
                         moli_fetch::RequestRedirectCheck::new(move |checked_url| {
@@ -332,6 +344,11 @@ struct WorkerImportScriptRequest {
     referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     policy_context: crate::types::SubresourcePolicyContext,
+    controller: Option<(
+        crate::service_worker_runtime::ServiceWorkerRuntimeService,
+        crate::service_worker_runtime::ServiceWorkerClientId,
+    )>,
+    response_csp: Option<Arc<WorkerImportScriptCsp>>,
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
     timing: crate::context_bootstrap::FetchResourceTiming,
 }
@@ -352,6 +369,8 @@ fn fetch_worker_import_source_blocking(
         referrer_policy,
         network_partition_key,
         policy_context,
+        controller,
+        response_csp,
         redirect_check,
         timing,
     } = request;
@@ -376,24 +395,78 @@ fn fetch_worker_import_source_blocking(
         request = request.with_initiator_url(initiator_url);
     }
     let response_started_at = Instant::now();
+    let cancel = FetchCancelHandle::new();
     let load = loader
         .register_load(
             ResourceLoadKind::Script,
             ResourceLoadDisposition::Ordinary,
-            None,
+            Some(cancel.clone()),
         )
         .ok_or_else(|| "worker is shutting down".to_owned())?;
     let timing = Arc::new(parking_lot::Mutex::new(timing));
     let header_timing = timing.clone();
-    let response = loader
-        .request_client()
-        .fetch_cacheable_script_text_for_worker_blocking_boundary_with_load(
-            request,
-            load,
-            move || header_timing.lock().response_started(),
-        )
-        .map_err(|error| format!("failed to fetch worker import `{script_url}`: {error}"));
-    let response = match response {
+    let response = (|| {
+        if moli_fetch::should_request_be_blocked_due_to_bad_port(&request.url) {
+            return Err(format!(
+                "worker import blocked by bad port: {}",
+                request.url
+            ));
+        }
+        if load.blocks_url(&request.url) {
+            return Err(crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned());
+        }
+        if let Some((service, client_id)) = controller {
+            let client = load.request_client();
+            let document_url = initiator_url.clone().unwrap_or_else(|| script_url.clone());
+            let runner = load.task_runner();
+            let controlled_request = request.clone();
+            let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
+            runner.clone().spawn(async move {
+                let fetch = service.fetch_subresource_for_client(
+                    client_id,
+                    document_url,
+                    &controlled_request,
+                    &client,
+                    runner,
+                    crate::service_worker_runtime::ServiceWorkerRequestDestination::Script,
+                    SubresourceResourceType::Script,
+                    policy_context,
+                    Vec::new(),
+                    cancel.clone(),
+                );
+                // Only native Service Worker replies can advance this
+                // synchronous boundary; the importing realm stays paused.
+                let result = service.await_synchronous_fetch(fetch, cancel).await;
+                let _ = response_tx.send(result);
+            });
+            let response = {
+                let _native_wait =
+                    crate::v8_execution_watchdog::V8ExecutionWatchdog::pause_for_native_wait();
+                response_rx.recv().map_err(|_| {
+                    "worker import service worker response channel closed".to_owned()
+                })??
+            };
+            if let Some(response) = response {
+                timing.lock().response_started();
+                return Ok((
+                    Response::from(*response.response),
+                    response.response_filter,
+                    !response.from_network_fallback,
+                ));
+            }
+        }
+        loader
+            .request_client()
+            .fetch_cacheable_script_text_for_worker_blocking_boundary_with_load(
+                request,
+                load.clone(),
+                move || header_timing.lock().response_started(),
+            )
+            .map(|response| (response, None, false))
+            .map_err(|error| format!("failed to fetch worker import `{script_url}`: {error}"))
+    })();
+    load.finish();
+    let (response, response_filter, from_service_worker) = match response {
         Ok(response) => response,
         Err(error) => {
             return Ok(WorkerImportScriptFetch {
@@ -407,19 +480,36 @@ fn fetch_worker_import_source_blocking(
         .as_millis()
         .min(u64::MAX as u128) as u64;
     let head = response.head();
-    let muted_errors = head.url_list().has_cross_origin_url(&origin);
-    let security_result = validate_fetch_response_security_policy(
-        origin.clone(),
-        &head,
-        RequestMode::NoCors,
-        RequestCredentialsMode::SameOrigin,
-        policy_context,
+    let muted_errors = response_filter.as_ref().map_or_else(
+        || head.url_list().has_cross_origin_url(&origin),
+        |filter| !filter.is_readable(),
     );
+    let security_result = if from_service_worker {
+        response_csp.as_ref().map_or(Ok(()), |csp| {
+            csp.check_url(
+                &head.final_url,
+                if head.redirect_chain.is_empty() {
+                    ContentSecurityPolicyRedirectStatus::NoRedirect
+                } else {
+                    ContentSecurityPolicyRedirectStatus::FollowedRedirect
+                },
+            )
+        })
+    } else {
+        validate_fetch_response_security_policy(
+            origin.clone(),
+            &head,
+            RequestMode::NoCors,
+            RequestCredentialsMode::SameOrigin,
+            policy_context,
+        )
+    };
     let performance_entry = if security_result.is_ok() {
-        timing.lock().classic_script_response(
+        timing.lock().classic_script_response_with_filter(
             &request_url,
             &origin,
             &head,
+            response_filter.as_ref(),
             response.body_bytes().len(),
         )
     } else {
