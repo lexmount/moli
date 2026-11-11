@@ -86,6 +86,7 @@ MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+SERVICE_WORKER_REQUEST_HEADERS_PATH = "/service-workers/service-worker/resources/request-headers.py"
 EVENTSOURCE_MESSAGE_PATH = "/eventsource/resources/message.py"
 IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
@@ -2032,6 +2033,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
+            if self._serve_service_worker_request_headers_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2083,6 +2086,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
+                return
+            if self._serve_service_worker_request_headers_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2177,6 +2182,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_iframe_stash_resource():
                 return
+            if self._serve_service_worker_request_headers_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2239,6 +2246,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
+                return
+            if self._serve_service_worker_request_headers_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2438,6 +2447,27 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
+        def _serve_service_worker_request_headers_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != SERVICE_WORKER_REQUEST_HEADERS_PATH:
+                return False
+            # wptserve's RequestHeaders lowercases names, preserves ByteString
+            # values, and joins repeated fields after trimming each value.
+            fields: dict[str, list[str]] = {}
+            for name, value in self.headers.items():
+                fields.setdefault(name.lower(), []).append(value)
+            body = json.dumps({
+                name: values[0] if len(values) == 1 else ", ".join(value.strip() for value in values)
+                for name, values in fields.items()
+            }).encode("utf-8")
+            # The upstream handler only reads headers, including for uploads.
+            self.close_connection = True
+            self._send_python_handler_response(
+                SERVICE_WORKER_REQUEST_HEADERS_PATH, parsed.query, body,
+                headers=[("Content-Type", "application/json")],
+            )
+            return True
+
         def _serve_common_echo_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != COMMON_ECHO_PATH:
@@ -2475,6 +2505,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
+                return
+            if self._serve_service_worker_request_headers_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -3404,6 +3436,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         def __getattr__(self, name: str) -> Callable[[], None]:
             if name.startswith("do_"):
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
+                if path == SERVICE_WORKER_REQUEST_HEADERS_PATH:
+                    return self._serve_service_worker_request_headers_resource
                 if path == COMMON_ECHO_PATH:
                     return self._serve_common_echo_resource
                 if path == COMMON_REDIRECT_PATH:
