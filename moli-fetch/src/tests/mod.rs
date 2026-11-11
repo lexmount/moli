@@ -11,6 +11,7 @@ mod mixed_transport;
 mod redirect_auth;
 mod redirect_policy;
 mod request_security;
+mod response_credentials;
 mod response_progress;
 mod response_timing;
 mod support;
@@ -73,6 +74,7 @@ fn test_web_bot_auth_signer() -> WebBotAuthSigner {
 
 fn sample_response_head() -> ResponseHead {
     ResponseHead {
+        request_include_credentials: false,
         status_text: None,
         final_url: Url::parse("http://example.test/final").unwrap(),
         status: 203,

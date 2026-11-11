@@ -179,6 +179,7 @@ fn xhr_complete_callback<'s>(
         scope,
         xhr,
         moli_fetch::ResponseHead {
+            request_include_credentials: false,
             status_text: Some(status_text),
             final_url,
             status,
