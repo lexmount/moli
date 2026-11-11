@@ -1562,8 +1562,40 @@ impl DocumentRuntime {
     ) -> bool {
         self.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
         let handle = ready.owner();
-        let load_succeeded = self.consume_pending_style_load(host_ptr, &ready);
+        let link_load = match ready.operation() {
+            ReadyConnectedStyleLoadOperation::StylesheetLink(load) => Some(Arc::clone(load)),
+            _ => None,
+        };
+        let had_pending_blocker = !self.parser_blocking_stylesheet_release_is_ready();
+        let document_owner = ready
+            .load_event_binding()
+            .map(|binding| binding.owner())
+            .or_else(|| {
+                if host_ptr.is_null() {
+                    None
+                } else {
+                    unsafe { &*host_ptr }.current_main_document_task_owner()
+                }
+            });
+        let load_succeeded = if link_load.is_some() {
+            ready.successful()
+        } else {
+            self.consume_pending_style_load(host_ptr, &ready)
+        };
         self.dispatch_style_or_link_load_event(scope, host_ptr, handle, load_succeeded);
+        if let Some(load) = link_load
+            && self
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(&load)
+            && !host_ptr.is_null()
+            && document_owner.is_some_and(|owner| {
+                unsafe { &*host_ptr }.current_main_document_task_owner() == Some(owner)
+            })
+        {
+            // Callback replacement or a successor load must retain its own gate.
+            self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
+        }
         true
     }
 
@@ -1581,9 +1613,15 @@ impl DocumentRuntime {
                 None
             }
             ReadyConnectedStyleLoadOperation::StylesheetLink(load) => {
-                self.stylesheet_lifecycle
+                // The no-realm path still finishes the selected event body.
+                let had_pending_blocker = !self.parser_blocking_stylesheet_release_is_ready();
+                if self
+                    .stylesheet_lifecycle
                     .owner_states
-                    .consume_link_event(load);
+                    .consume_link_event(load)
+                {
+                    self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
+                }
                 None
             }
             ReadyConnectedStyleLoadOperation::NativeModulepreload(client) => {
@@ -4252,7 +4290,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_ownerless_failure_releases_parser_before_link_error_dispatch() {
+    async fn completed_ownerless_failure_waits_for_link_error_before_releasing_parser() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("stylesheet server");
@@ -4313,8 +4351,8 @@ mod tests {
             "the completed failure must settle the physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "a terminal stylesheet failure must release script execution before its error task"
+            runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
+            "a terminal stylesheet failure must keep scripts blocked through its error task"
         );
 
         let load = runtime
@@ -4325,17 +4363,19 @@ mod tests {
             .expect("late client admission should publish its exact error task");
         assert_eq!(ready.owner(), link);
         assert!(!ready.successful());
-        runtime
-            .stylesheet_lifecycle
-            .owner_states
-            .consume_link_event(&load);
+        assert!(
+            runtime
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(&load)
+        );
         assert!(
             !runtime.has_pending_document_owned_blocking_stylesheet_signatures(signatures.iter()),
             "dispatch must not recreate the settled physical stylesheet blocker"
         );
         assert!(
             !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "dispatching the exact link error task must not recreate the released script gate"
+            "finishing the exact link error task must release its script gate"
         );
         assert!(
             runtime.pop_ready_connected_style_load().is_none(),

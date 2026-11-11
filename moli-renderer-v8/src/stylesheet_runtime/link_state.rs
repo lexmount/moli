@@ -54,10 +54,8 @@ pub(in crate::document_runtime) struct LinkStyleState {
 
 /// Element-local consequence of settling one linked stylesheet phase.
 ///
-/// The caller snapshots global parser-blocker state before accepting a batch
-/// of these settlements. It can therefore publish a single parser
-/// continuation before enqueueing any independent load/error events from the
-/// batch.
+/// Resource completion can publish an element event while the client remains
+/// in the document's script-blocking set through that event's dispatch.
 #[derive(Debug)]
 pub(in crate::document_runtime) struct LinkStyleSettlement {
     ready_event: Option<(Arc<StylesheetLinkClient>, bool)>,
@@ -95,6 +93,12 @@ impl LinkStyleState {
 
     pub(super) fn is_pending(&self) -> bool {
         self.completion() == StylesheetCompletionState::Pending
+    }
+
+    /// HTML removes the script blocker after firing load/error, including its
+    /// synchronous event handlers. Resource readiness remains independent.
+    pub(super) fn blocks_parser_scripts(&self) -> bool {
+        self.event_phase != LinkLoadEventPhase::Dispatched
     }
 
     pub(super) fn cancelable_load_event_binding(
