@@ -753,7 +753,7 @@ fn schedule<'s>(
         .unwrap()
         .to_object(scope)
         .unwrap();
-    schedule_transaction_operation(scope, transaction, source, request, &"records".into(), kind);
+    schedule_transaction_operation(scope, transaction, source, request, kind);
 }
 
 fn result<'s>(

@@ -21,7 +21,13 @@ pub(super) fn prepare<'s>(
         IndexedDbTransactionOperation::OpenCursor(input) => {
             let source = match input.source {
                 IndexedDbCursorSource::ObjectStore => QuerySource::ObjectStore,
-                IndexedDbCursorSource::Index(index) => QuerySource::Index(index.name),
+                IndexedDbCursorSource::Index => {
+                    let index =
+                        indexed_db_index_info(scope, operation.source).ok_or_else(|| {
+                            IndexedDbError::InvalidState("SQL cursor lost its index".into())
+                        })?;
+                    QuerySource::Index(index.name)
+                }
             };
             let query = Query {
                 blob_references: true,

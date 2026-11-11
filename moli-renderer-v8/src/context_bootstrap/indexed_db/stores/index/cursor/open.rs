@@ -8,7 +8,7 @@ fn idb_index_open_cursor_impl<'s>(
     key_only: bool,
 ) {
     let index = args.this();
-    let Some((transaction, store_name, index_info)) = index_operation_state(scope, index) else {
+    let Some(transaction) = index_active_transaction(scope, index) else {
         return;
     };
     let operation_name = if key_only {
@@ -22,9 +22,8 @@ fn idb_index_open_cursor_impl<'s>(
     let Some(request) = create_operation_request(scope, index, transaction) else {
         return;
     };
-    let operation =
-        IndexedDbCursorOpenOperation::index(index_info, parsed.query, parsed.direction, key_only);
-    submit_cursor_open_operation(scope, transaction, index, request, &store_name, operation);
+    let operation = IndexedDbCursorOpenOperation::index(parsed.query, parsed.direction, key_only);
+    submit_cursor_open_operation(scope, transaction, index, request, operation);
     rv.set(request.into());
 }
 

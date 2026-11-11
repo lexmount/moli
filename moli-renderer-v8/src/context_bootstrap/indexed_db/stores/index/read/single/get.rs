@@ -16,7 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_get_callback<'s>(
         return;
     };
     let index = args.this();
-    let Some((transaction, store_name, _)) = index_operation_state(scope, index) else {
+    let Some(transaction) = index_active_transaction(scope, index) else {
         return;
     };
     let query = match parse_key_or_range(scope, parsed.query) {
@@ -43,7 +43,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_get_callback<'s>(
         transaction,
         index,
         request,
-        &store_name,
         IndexedDbTransactionOperation::IndexGet { query },
     );
     rv.set(request.into());

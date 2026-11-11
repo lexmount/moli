@@ -1,8 +1,8 @@
 use super::{
     CursorDirection, INDEXED_DB_TRANSACTION_ACTIVE_SLOT, INDEXED_DB_TRANSACTION_STARTED_SLOT,
-    IdbKeyRangeQuery, IndexInfo, IndexOptions, IndexedDbCursorOpenOperation,
-    IndexedDbTransactionOperation, KeyPath, ObjectStoreKey, TransactionHandle, compare_idb_keys,
-    create_index_object, create_key_range_object, create_request_object, dom_exception_value,
+    IdbKeyRangeQuery, IndexOptions, IndexedDbCursorOpenOperation, IndexedDbTransactionOperation,
+    KeyPath, ObjectStoreKey, TransactionHandle, compare_idb_keys, create_index_object,
+    create_key_range_object, create_request_object, dom_exception_value,
     index_info_from_store_metadata, indexed_db_index_info, indexed_db_index_object_store,
     indexed_db_object_store_database, indexed_db_object_store_name,
     indexed_db_object_store_transaction, key_in_range, object_bool_property,

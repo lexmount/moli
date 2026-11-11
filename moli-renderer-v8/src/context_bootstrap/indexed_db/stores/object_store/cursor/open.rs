@@ -8,7 +8,7 @@ fn idb_object_store_open_cursor_impl<'s>(
     key_only: bool,
 ) {
     let store = args.this();
-    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
+    let Some(transaction) = object_store_active_transaction(scope, store) else {
         return;
     };
     let operation_name = if key_only {
@@ -24,7 +24,7 @@ fn idb_object_store_open_cursor_impl<'s>(
     };
     let operation =
         IndexedDbCursorOpenOperation::object_store(parsed.query, parsed.direction, key_only);
-    submit_cursor_open_operation(scope, transaction, store, request, &store_name, operation);
+    submit_cursor_open_operation(scope, transaction, store, request, operation);
     rv.set(request.into());
 }
 

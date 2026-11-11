@@ -102,6 +102,132 @@ async function schemaRenameProbe(name, scenario) {
       equal(mode + ' index rename rejected', errorName(() => { index.name = 'i'; }), 'InvalidStateError');
     }
     db.close(); await remove(name);
+  } else if (scenario === 'conversion-store') {
+    for (const method of ['delete', 'get', 'getKey', 'count', 'getAll', 'getAllKeys', 'getAllRecords', 'put', 'add', 'openCursor', 'openKeyCursor']) {
+      for (const reuse of [true, false]) {
+        const databaseName = name + '-' + method + '-' + reuse;
+        const label = method + '/' + reuse;
+        const seed = await open(databaseName, 1, db => {
+          const store = db.createObjectStore('s');
+          store.put({marker:'original'}, [1]);
+          store.put({marker:'untouched'}, [2]);
+        });
+        seed.close();
+        const keyNumber = method === 'add' ? 3 : 1;
+        const replacementKey = method === 'count' ? [9] : [keyNumber];
+        const db = await open(databaseName, 2, async (db, tx) => {
+          const store = tx.objectStore('s');
+          let conversions = 0;
+          const key = [];
+          Object.defineProperty(key, 0, {get() {
+            conversions++;
+            store.name = 'kept';
+            if (reuse) db.createObjectStore('s').put({marker:'replacement'}, replacementKey);
+            return keyNumber;
+          }});
+          const r = method === 'put' || method === 'add'
+            ? store[method]({marker:'written'}, key)
+            : store[method](method === 'getAllRecords' ? {query:key} : key);
+          const result = await request(r);
+          equal(label + ' converts key once', conversions, 1);
+          check(label + ' request retains original source', r.source === store);
+          if (method === 'openCursor' || method === 'openKeyCursor') {
+            check(label + ' cursor retains original source', result?.source === store);
+            equal(label + ' cursor reads original key', result?.primaryKey, [1]);
+            if (method === 'openCursor') equal(label + ' cursor reads original value', result?.value.marker, 'original');
+            const end = request(r); result.continue();
+            equal(label + ' cursor finishes on original source', await end, null);
+          } else {
+            const actual = method === 'get' ? result?.marker
+              : method === 'getAll' ? result.map(value => value.marker)
+              : method === 'getAllRecords' ? result.map(record => [record.primaryKey, record.value.marker])
+              : result;
+            const expected = method === 'get' ? 'original'
+              : method === 'getAll' ? ['original']
+              : method === 'getAllRecords' ? [[[1], 'original']]
+              : method === 'getAllKeys' ? [[1]]
+              : method === 'getKey' ? [1]
+              : method === 'count' ? 1
+              : method === 'delete' ? undefined : [keyNumber];
+            equal(label + ' operation uses original store', actual, expected);
+          }
+        });
+        const original = await request(db.transaction('kept').objectStore('kept').get([keyNumber]));
+        equal(label + ' original data after commit', original?.marker,
+          method === 'delete' ? undefined : method === 'put' || method === 'add' ? 'written' : 'original');
+        equal(label + ' unrelated original data survives', (await request(db.transaction('kept').objectStore('kept').get([2]))).marker, 'untouched');
+        if (reuse) equal(label + ' replacement data survives', (await request(db.transaction('s').objectStore('s').get(replacementKey)))?.marker, 'replacement');
+        db.close(); await remove(databaseName);
+      }
+    }
+  } else if (scenario === 'conversion-index' || scenario === 'conversion-index-store') {
+    const renameStore = scenario === 'conversion-index-store';
+    for (const method of ['openCursor', 'openKeyCursor', 'get', 'getKey', 'count', 'getAll', 'getAllKeys', 'getAllRecords']) {
+      for (const reuse of [true, false]) {
+        const databaseName = name + '-' + method + '-' + reuse;
+        const label = method + '/' + reuse;
+        const seed = await open(databaseName, 1, db => {
+          const store = db.createObjectStore('s');
+          store.createIndex('i', 'tag');
+          store.put({tag:[1], other:[2], marker:'original-1'}, 1);
+          store.put({tag:[2], other:[1], marker:'original-2'}, 2);
+          store.put({tag:[1], other:[3], marker:'original-3'}, 3);
+        });
+        seed.close();
+        const storeName = renameStore ? 'kept' : 's';
+        const db = await open(databaseName, 2, async (db, tx) => {
+          const store = tx.objectStore('s'), index = store.index('i');
+          let conversions = 0;
+          const query = [];
+          Object.defineProperty(query, 0, {get() {
+            conversions++;
+            index.name = 'kept-index';
+            if (renameStore) store.name = storeName;
+            if (reuse) {
+              store.createIndex('i', 'other');
+              if (renameStore) {
+                const replacement = db.createObjectStore('s');
+                replacement.createIndex('kept-index', 'tag');
+                replacement.put({tag:[1], marker:'replacement'}, 9);
+              }
+            }
+            return 1;
+          }});
+          const r = index[method](method === 'getAllRecords' ? {query} : query);
+          const result = await request(r);
+          equal(label + ' converts query once', conversions, 1);
+          check(label + ' request retains original index', r.source === index);
+          if (method === 'openCursor' || method === 'openKeyCursor') {
+            check(label + ' cursor source is original index', result?.source === index);
+            equal(label + ' first row uses original key path', result?.primaryKey, 1);
+            if (method === 'openCursor') equal(label + ' first value uses original key path', result?.value.marker, 'original-1');
+            const next = request(r); result.continue();
+            const second = await next;
+            check(label + ' later iteration keeps cursor identity', second === result);
+            equal(label + ' later row uses original key path', second?.primaryKey, 3);
+            const end = request(r); second.continue();
+            equal(label + ' cursor finishes on original index', await end, null);
+          } else {
+            const actual = method === 'get' ? result?.marker
+              : method === 'getAll' ? result.map(value => value.marker)
+              : method === 'getAllRecords' ? result.map(record => [record.primaryKey, record.value.marker])
+              : result;
+            const expected = method === 'get' ? 'original-1'
+              : method === 'getAll' ? ['original-1', 'original-3']
+              : method === 'getAllRecords' ? [[1, 'original-1'], [3, 'original-3']]
+              : method === 'getAllKeys' ? [1, 3]
+              : method === 'getKey' ? 1 : 2;
+            equal(label + ' operation uses original index', actual, expected);
+          }
+        });
+        equal(label + ' original index after commit', await request(db.transaction(storeName).objectStore(storeName).index('kept-index').getKey([1])), 1);
+        if (reuse) {
+          equal(label + ' replacement index stays separate', await request(db.transaction(storeName).objectStore(storeName).index('i').getKey([1])), 2);
+          if (renameStore) equal(label + ' replacement store stays separate', (await request(db.transaction('s').objectStore('s').get(9))).marker, 'replacement');
+        }
+        db.close(); await remove(databaseName);
+      }
+    }
   } else if (scenario.startsWith('cursor-')) {
     const kind = scenario.slice('cursor-'.length);
     for (const direction of ['next', 'prev']) for (const keyOnly of [false, true]) {

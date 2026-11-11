@@ -17,7 +17,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
         return;
     };
     let store = args.this();
-    let Some((transaction, store_name)) = object_store_operation_state(scope, store) else {
+    let Some(transaction) = object_store_active_transaction(scope, store) else {
         return;
     };
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
@@ -36,7 +36,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
         transaction,
         store,
         request,
-        &store_name,
         IndexedDbTransactionOperation::ObjectStoreCount { query },
     );
     rv.set(request.into());

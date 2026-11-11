@@ -17,7 +17,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
         return;
     };
     let index = args.this();
-    let Some((transaction, store_name, _)) = index_operation_state(scope, index) else {
+    let Some(transaction) = index_active_transaction(scope, index) else {
         return;
     };
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
@@ -36,7 +36,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_count_callback<'s>(
         transaction,
         index,
         request,
-        &store_name,
         IndexedDbTransactionOperation::IndexCount { query },
     );
     rv.set(request.into());
