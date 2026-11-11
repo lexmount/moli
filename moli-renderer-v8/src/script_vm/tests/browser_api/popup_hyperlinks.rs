@@ -235,6 +235,11 @@ fn synthetic_clicks_match_pointer_identity_across_realms_and_adoption() {
 #[test]
 fn accesskey_clicks_use_the_focused_document_and_synthetic_pointer_identity() {
     let mut vm = new_storage_test_vm("https://accesskey-click-realms.test/");
+    vm.eval(&format!(
+        "globalThis.accesskeyUsesControl = {}",
+        cfg!(target_os = "macos")
+    ))
+    .unwrap();
     vm.eval(
         r#"
 const root = document.documentElement || document.appendChild(document.createElement('html'));
@@ -288,7 +293,10 @@ for (let index = 0; index < realms.length; index++) {
             r#"(() => {
   accesskeyClicks = [];
   for (const w of realms) w.document.querySelector('button').dispatchEvent(
-    new KeyboardEvent('keydown', {key: 'g', altKey: true, ctrlKey: true, shiftKey: true, bubbles: true})
+    new w.KeyboardEvent('keydown', {
+      key: 'g', altKey: true, ctrlKey: accesskeyUsesControl,
+      shiftKey: !accesskeyUsesControl, bubbles: true
+    })
   );
   return JSON.stringify(accesskeyClicks);
 })()"#
