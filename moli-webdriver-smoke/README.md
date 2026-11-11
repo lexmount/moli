@@ -60,6 +60,9 @@ non-yielding WebDriver timeout behavior.
   followed by live commands in the same session. Alert close events report
   acknowledgement for both automatic and manual dismissal. Popup dialogs work without
   a `contextCreated` subscription while their causing script is still pending.
+  With lifecycle events subscribed, popup creation precedes prompt opening under
+  manual handling and automatic acceptance/dismissal. Closing a popup while its
+  prompt is waiting also produces one creation before one destruction.
   A shared Classic/BiDi session
   checks that explicit empty, omitted, and replacement BiDi text override text
   previously stored by Classic. The group also covers
