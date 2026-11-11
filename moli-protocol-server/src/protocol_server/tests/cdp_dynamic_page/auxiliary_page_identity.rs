@@ -566,7 +566,12 @@ async fn auxiliary_initial_javascript_url_runs_after_the_opening_script() {
         "window.popup=p;window.openingFinished=true",
     )
     .await;
-    wait_for_value(&mut opener, "initialResult", json!([true, true, true])).await;
+    wait_for_value(
+        &mut opener,
+        "window.initialResult",
+        json!([true, true, true]),
+    )
+    .await;
     assert_eq!(
         evaluate_window_name_probe(&mut child, 2, "location.href").await,
         json!("about:blank"),

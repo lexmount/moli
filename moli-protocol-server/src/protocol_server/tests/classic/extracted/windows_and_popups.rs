@@ -651,6 +651,12 @@ async fn webdriver_classic_anchor_target_blank_click_opens_window_handle() {
     assert_eq!(switched, json!({ "value": null }));
     let current_url = classic_request_json(app.clone(), Method::GET, &url_path).await;
     assert_eq!(current_url["value"], json!(popup_url));
+    classic_wait_for_popup_main_text(
+        app.clone(),
+        &format!("/session/{session_id}/execute/sync"),
+        "popup",
+    )
+    .await;
     let title = classic_request_json(app.clone(), Method::GET, &title_path).await;
     assert_eq!(title, json!({ "value": "Popup Target" }));
 
@@ -795,16 +801,7 @@ async fn webdriver_classic_named_popup_reuse_navigates_existing_window() {
     assert_eq!(switched_first, json!({ "value": null }));
     let first_current_url = classic_request_json(app.clone(), Method::GET, &url_path).await;
     assert_eq!(first_current_url["value"], json!(first_url));
-    let first_text = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &execute_path,
-        json!({
-            "script": "return document.querySelector('main').textContent;",
-            "args": []
-        }),
-    )
-    .await;
+    let first_text = classic_wait_for_popup_main_text(app.clone(), &execute_path, "first").await;
     assert_eq!(first_text, json!({ "value": "first" }));
 
     let switched_opener = classic_request_json_with_body(
@@ -848,16 +845,7 @@ async fn webdriver_classic_named_popup_reuse_navigates_existing_window() {
     assert_eq!(switched_second, json!({ "value": null }));
     let second_current_url = classic_request_json(app.clone(), Method::GET, &url_path).await;
     assert_eq!(second_current_url["value"], json!(second_url));
-    let second_text = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &execute_path,
-        json!({
-            "script": "return document.querySelector('main').textContent;",
-            "args": []
-        }),
-    )
-    .await;
+    let second_text = classic_wait_for_popup_main_text(app.clone(), &execute_path, "second").await;
     assert_eq!(second_text, json!({ "value": "second" }));
 
     let _ = classic_request_json(
@@ -866,6 +854,35 @@ async fn webdriver_classic_named_popup_reuse_navigates_existing_window() {
         &format!("/session/{session_id}"),
     )
     .await;
+}
+
+async fn classic_wait_for_popup_main_text(
+    app: ProtocolApp,
+    execute_path: &str,
+    expected: &str,
+) -> Value {
+    // Opening or reusing another window does not wait for its document to
+    // finish parsing. URL adoption alone does not make its <main> available.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let text = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                execute_path,
+                json!({
+                    "script": "return document.querySelector('main')?.textContent;",
+                    "args": []
+                }),
+            )
+            .await;
+            if text["value"].as_str() == Some(expected) {
+                return text;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("popup main text did not become {expected}"))
 }
 #[tokio::test]
 async fn webdriver_classic_window_routes_execute_through_devtools_runtime() {
