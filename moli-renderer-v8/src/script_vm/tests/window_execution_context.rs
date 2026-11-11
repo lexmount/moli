@@ -37,8 +37,8 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
         .page_inspector
         .take_outbound_messages_for_session(None)
         .into_iter()
-        .filter(|message| message["method"] == serde_json::json!("Runtime.executionContextCreated"))
-        .filter_map(|message| message["params"]["context"]["id"].as_i64())
+        .filter(|message| message.method() == Some("Runtime.executionContextCreated"))
+        .filter_map(|message| message.value()["params"]["context"]["id"].as_i64())
         .collect::<Vec<_>>();
     assert_eq!(
         created_context_ids,
@@ -81,10 +81,8 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
         .page_inspector
         .take_outbound_messages_for_session(None)
         .into_iter()
-        .filter(|message| {
-            message["method"] == serde_json::json!("Runtime.executionContextDestroyed")
-        })
-        .filter_map(|message| message["params"]["executionContextId"].as_i64())
+        .filter(|message| message.method() == Some("Runtime.executionContextDestroyed"))
+        .filter_map(|message| message.value()["params"]["executionContextId"].as_i64())
         .collect::<Vec<_>>();
     assert_eq!(
         destroyed_context_ids,
@@ -1667,5 +1665,131 @@ async fn named_inspector_world_promotes_implicit_members_within_its_session() {
             "undefined"
         );
         assert!(vm.eval_in_isolated_context(parent, "marker").is_err());
+    }
+}
+
+#[test]
+fn renderer_output_settlement_records_contexts_without_materializing_ordinary_messages() {
+    use crate::runtime::{
+        PendingRendererOutputRecord, RendererOutputItem, RendererOutputStreamIdentity,
+        RendererProtocolObservation, RendererRuntimeInspectorMessage,
+        RendererRuntimeInspectorMessageBatch, RendererTurnOutputJournal,
+    };
+    let mut vm = new_storage_test_vm("https://inspector-output.test/");
+    vm.dispatch_inspector_protocol_message(r#"{"id":1,"method":"Runtime.enable"}"#)
+        .unwrap();
+    let default_id = vm.default_execution_context_id().unwrap();
+    let isolated_id = vm.create_isolated_world("output-probe", false).unwrap();
+    vm.take_runtime_inspector_messages(None);
+    let journal =
+        RendererTurnOutputJournal::new(RendererOutputStreamIdentity::new_page_for_protocol_test(
+            crate::PageId::new_for_testing(12345),
+        ));
+    // Bind a real journal to this standalone VM to exercise settlement,
+    // independently of Page-owner admission and scheduler residence.
+    vm.renderer_page_script_environment = Some(super::super::RendererPageScriptEnvironment::new(
+        12345,
+        vm.renderer_document_isolate.clone(),
+        vm.page_inspector.isolate_backend_handle(),
+        crate::page_task_queue::PageRuntimeTaskSource::new(None),
+        journal,
+    ));
+    let raw = format!(
+        r#"{{"method":"Debugger.scriptParsed","params":{{"sourceMapURL":"{}","text":"\ud800"}}}}"#,
+        "x".repeat(1024 * 1024)
+    );
+    let source = moli_inspector_json::InspectorJson::from_slice(raw.as_bytes()).unwrap();
+    let encoded = source.to_string();
+    let created = |id, name, default| {
+        serde_json::json!({
+        "method":"Runtime.executionContextCreated", "params":{"context":{
+            "id":id,"uniqueId":format!("realm-{id}"),"name":name,"origin":"https://inspector-output.test",
+            "auxData":{"isDefault":default,"type":if default {"default"} else {"isolated"}}
+        }}})
+    };
+    let destroyed = |id| {
+        serde_json::json!({"method":"Runtime.executionContextDestroyed",
+        "params":{"executionContextId":id,"executionContextUniqueId":format!("realm-{id}")}})
+    };
+    let cleared = serde_json::json!({"method":"Runtime.executionContextsCleared"});
+    for (step, events) in [
+        vec![
+            cleared.clone(),
+            created(default_id, "default", true),
+            created(isolated_id, "output-probe", false),
+        ],
+        vec![destroyed(default_id), destroyed(isolated_id)],
+        vec![
+            created(default_id, "default", true),
+            created(isolated_id, "output-probe", false),
+        ],
+        vec![cleared],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut messages = events
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| {
+                if (step + index) % 2 == 0 {
+                    RendererRuntimeInspectorMessage::from_v8_inspector_message(event)
+                } else {
+                    RendererRuntimeInspectorMessage::protocol(event)
+                }
+            })
+            .collect::<Vec<_>>();
+        messages.insert(1, RendererRuntimeInspectorMessage::protocol(source.clone()));
+        let count = messages.len();
+        let agent = vm.devtools_agent_token();
+        vm.append_renderer_output_records([PendingRendererOutputRecord::observation(
+            None,
+            RendererProtocolObservation::RuntimeInspector(
+                RendererRuntimeInspectorMessageBatch::new(
+                    agent,
+                    moli_page_types::DevToolsSessionKey::Primary,
+                    messages,
+                ),
+            ),
+        )]);
+        let output = vm
+            .settle_renderer_output_publication()
+            .expect("actual renderer output settlement");
+        assert!(
+            !source.is_materialized(),
+            "ordinary notification was decoded at step {step}"
+        );
+        let batch = output
+            .records()
+            .iter()
+            .find_map(|record| match record.item() {
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                    batch,
+                )) => Some(batch),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(batch.messages.len(), count);
+        let RendererRuntimeInspectorMessage::Protocol(notice) = &batch.messages[1] else {
+            panic!("ordinary protocol notification")
+        };
+        assert!(!notice.payload().is_materialized());
+        assert_eq!(notice.payload().to_string(), encoded);
+        let alive = step % 2 == 0;
+        assert_eq!(
+            vm.default_execution_context_id(),
+            alive.then_some(default_id)
+        );
+        assert_eq!(
+            vm.inspector_execution_context_id_for_isolated_context(isolated_id),
+            alive.then_some(isolated_id)
+        );
+        assert_eq!(
+            vm.page_isolated_world_contexts
+                .context(isolated_id)
+                .unwrap()
+                .inspector_execution_context_realm_id,
+            alive.then(|| format!("realm-{isolated_id}"))
+        );
     }
 }

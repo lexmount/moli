@@ -21,6 +21,7 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -1078,21 +1079,21 @@ impl RendererRuntimeCommandOutput {
 impl RendererRuntimeInspectorMessage {
     pub fn from_v8_inspector_message(message: impl Into<InspectorJson>) -> Self {
         let message = message.into();
-        if matches!(
-            message.method(),
-            Some(
-                "Runtime.executionContextCreated"
-                    | "Runtime.executionContextDestroyed"
-                    | "Runtime.executionContextsCleared"
-            )
-        ) && let Some(event) =
-            crate::protocol_types::RuntimeContextRestoreEvent::from_v8_inspector_message(
-                message.value().clone(),
-            )
-        {
+        if let Some(event) = runtime_context_restore_event_from_json(&message) {
             return Self::RuntimeContext(event);
         }
         Self::Protocol(RendererRuntimeInspectorProtocolMessage::new(message))
+    }
+
+    pub(crate) fn context_event(
+        &self,
+    ) -> Option<Cow<'_, crate::protocol_types::RuntimeContextRestoreEvent>> {
+        match self {
+            Self::RuntimeContext(event) => Some(Cow::Borrowed(event)),
+            Self::Protocol(message) => {
+                runtime_context_restore_event_from_json(message.payload()).map(Cow::Owned)
+            }
+        }
     }
 
     pub fn protocol(message: impl Into<InspectorJson>) -> Self {
@@ -1216,6 +1217,21 @@ impl std::ops::Deref for RendererRuntimeInspectorProtocolMessage {
 
     fn deref(&self) -> &Self::Target {
         self.value()
+    }
+}
+
+fn runtime_context_restore_event_from_json(
+    message: &InspectorJson,
+) -> Option<crate::protocol_types::RuntimeContextRestoreEvent> {
+    match message.method()? {
+        "Runtime.executionContextCreated"
+        | "Runtime.executionContextDestroyed"
+        | "Runtime.executionContextsCleared" => {
+            crate::protocol_types::RuntimeContextRestoreEvent::from_v8_inspector_message(
+                message.value().clone(),
+            )
+        }
+        _ => None,
     }
 }
 
