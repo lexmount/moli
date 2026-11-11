@@ -757,16 +757,48 @@ impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceF
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum AsyncSubresourceFetchResponseFilter {
+pub(super) enum FetchResponseType {
     Basic,
     Cors,
     Opaque,
     OpaqueRedirect,
 }
 
+/// The response view established by Fetch. A worker-produced view retains its
+/// timing authorization; its URL and filtered headers cannot reconstruct it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AsyncSubresourceFetchResponseFilter {
+    pub(super) response_type: FetchResponseType,
+    /// None for a network response; Some retains a Service Worker's established
+    /// timing-allow result, before CORS/opaque filtering removes its headers.
+    pub(super) service_worker_timing: Option<bool>,
+}
+
+impl From<FetchResponseType> for AsyncSubresourceFetchResponseFilter {
+    fn from(response_type: FetchResponseType) -> Self {
+        Self {
+            response_type,
+            service_worker_timing: None,
+        }
+    }
+}
+
 impl AsyncSubresourceFetchResponseFilter {
+    pub(super) fn service_worker(
+        response_type: FetchResponseType,
+        timing_allow_passed: bool,
+    ) -> Self {
+        Self {
+            response_type,
+            service_worker_timing: Some(timing_allow_passed),
+        }
+    }
+
     pub(super) fn is_readable(self) -> bool {
-        matches!(self, Self::Basic | Self::Cors)
+        matches!(
+            self.response_type,
+            FetchResponseType::Basic | FetchResponseType::Cors
+        )
     }
 }
 

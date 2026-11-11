@@ -637,6 +637,7 @@ pub(crate) struct ServiceWorkerFetchEvent {
 pub(crate) struct ServiceWorkerFetchResponse {
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
+    pub(crate) timing_allow_passed: bool,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
@@ -703,6 +704,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadFailure {
 pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
+    pub(crate) timing_allow_passed: bool,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,

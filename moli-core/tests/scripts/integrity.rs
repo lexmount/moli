@@ -1171,24 +1171,19 @@ async fn service_worker_redirect_preserves_worker_response_filter() -> Result<()
         }})()"#, cross = servers.cross_origin), true,
     ).await?;
     let results: serde_json::Value = serde_json::from_str(result["value"].as_str().unwrap())?;
-    for kind in ["basic", "basic-buffered", "cors", "default"] {
+    // A worker-created Default response becomes Basic even after a cross-origin
+    // redirect. Forwarding a fetched CORS response retains that response's filter.
+    for (kind, response_type, private_header) in [
+        ("basic", "basic", Some("yes")),
+        ("basic-buffered", "basic", Some("yes")),
+        ("cors", "cors", None),
+        ("default", "basic", Some("yes")),
+    ] {
         assert_eq!(results[kind]["body"], SCRIPT, "{kind}: {results}");
-        assert_eq!(
-            results[kind]["type"],
-            if kind.starts_with("basic") {
-                "basic"
-            } else {
-                "cors"
-            },
-            "{kind}: {results}"
-        );
+        assert_eq!(results[kind]["type"], response_type, "{kind}: {results}");
         assert_eq!(
             results[kind]["privateHeader"],
-            if kind.starts_with("basic") {
-                serde_json::json!("yes")
-            } else {
-                serde_json::Value::Null
-            },
+            serde_json::json!(private_header),
             "{kind}: {results}"
         );
     }

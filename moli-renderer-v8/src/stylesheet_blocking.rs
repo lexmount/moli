@@ -327,13 +327,7 @@ impl StylesheetResponseProvenance {
                 moli_fetch::RequestMode::NoCors,
             )
             .is_none(),
-            Self::ServiceWorker { filter } => !matches!(
-                filter,
-                Some(
-                    AsyncSubresourceFetchResponseFilter::Opaque
-                        | AsyncSubresourceFetchResponseFilter::OpaqueRedirect
-                )
-            ),
+            Self::ServiceWorker { filter } => filter.is_none_or(|filter| filter.is_readable()),
         }
     }
 }
@@ -359,12 +353,8 @@ fn stylesheet_terminal_from_response(
     let cors_usability =
         (request_mode == moli_fetch::RequestMode::Cors).then(|| match response_provenance {
             StylesheetResponseProvenance::ServiceWorker {
-                filter:
-                    Some(
-                        AsyncSubresourceFetchResponseFilter::Opaque
-                        | AsyncSubresourceFetchResponseFilter::OpaqueRedirect,
-                    ),
-            } => Err(format!(
+                filter: Some(filter),
+            } if !filter.is_readable() => Err(format!(
                 "failed to fetch stylesheet `{request_url}`: CORS response is opaque"
             )),
             StylesheetResponseProvenance::ServiceWorker { .. } => Ok(()),
@@ -632,11 +622,11 @@ mod tests {
 
         for (filter, expected) in [
             (None, true),
-            (Some(AsyncSubresourceFetchResponseFilter::Basic), true),
-            (Some(AsyncSubresourceFetchResponseFilter::Cors), true),
-            (Some(AsyncSubresourceFetchResponseFilter::Opaque), false),
+            (Some(crate::types::FetchResponseType::Basic.into()), true),
+            (Some(crate::types::FetchResponseType::Cors.into()), true),
+            (Some(crate::types::FetchResponseType::Opaque.into()), false),
             (
-                Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
+                Some(crate::types::FetchResponseType::OpaqueRedirect.into()),
                 false,
             ),
         ] {

@@ -353,6 +353,7 @@ fn controlled_fetch_prepares_page_headers_while_offline_or_blocked() {
                 body: b"body { color: green; }".to_vec(),
                 final_url: None,
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
             }),
         });
@@ -1524,6 +1525,7 @@ fn navigation_preload_completion_keeps_response_started_preload_alive() {
             body: b"handled".to_vec(),
             final_url: None,
             response_type: "basic".to_owned(),
+            timing_allow_passed: true,
             redirected: false,
         }),
     });
@@ -1821,6 +1823,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
             body: b"late".to_vec(),
             final_url: None,
             response_type: "basic".to_owned(),
+            timing_allow_passed: true,
             redirected: false,
         }),
     });

@@ -174,6 +174,7 @@ async fn controlled_network_fallback_enforces_blocked_and_offline_policy() {
                     body: b"cached-response".to_vec(),
                     final_url: None,
                     response_type: "default".to_owned(),
+                    timing_allow_passed: true,
                     redirected: false,
                 })
             };
@@ -433,6 +434,7 @@ async fn direct_network_fallback_after_synthetic_redirect_enforces_page_policy()
                 body: Vec::new(),
                 final_url: None,
                 response_type: "basic".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
             }),
         });

@@ -1018,7 +1018,7 @@ fn materialize_response_object_preserves_redirected_slot() {
 
 #[tokio::test]
 async fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
-    use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
+    use crate::types::FetchResponseType::{Opaque, OpaqueRedirect};
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for (response_type, filter) in [("opaque", Opaque), ("opaqueredirect", OpaqueRedirect)] {
         let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -1060,7 +1060,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    Some(filter),
+                    Some(filter.into()),
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -1546,7 +1546,7 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                 scope, &document_url, request, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
-                                opaque.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                                opaque.then_some(crate::types::FetchResponseType::Opaque.into()),
                             ),
                             "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
                                 scope, &document_url, request, head,

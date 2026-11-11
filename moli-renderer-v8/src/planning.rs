@@ -575,7 +575,7 @@ fn external_script_source_load_outcome_from_response_inner(
 ) -> PreparedScriptSourceLoadOutcome {
     let response_bytes = response.body_bytes().to_vec();
     let opaque_status_zero = response_filter
-        == Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque)
+        .is_some_and(|filter| filter.response_type == crate::types::FetchResponseType::Opaque)
         && response.status == 0;
     let source_result = if let Some(error) = cors_error {
         Err(format!("script request `{}` failed: {error}", script.url))
@@ -1374,7 +1374,7 @@ mod tests {
             &script,
             response,
             None,
-            Some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+            Some(crate::types::FetchResponseType::Opaque.into()),
             None,
         );
 
