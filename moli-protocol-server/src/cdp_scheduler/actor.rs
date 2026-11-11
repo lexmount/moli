@@ -506,8 +506,9 @@ async fn run_cdp_scheduler_actor(
                         let token = take_next_in_flight_command_token(&mut next_in_flight_command_token);
                         let control = frontend_control.clone();
                         let router = frontend_router.clone();
+                        let control_work = control.handle_request(request, router);
                         let wait = async move {
-                            control.handle_request(request, router).await;
+                            control_work.await;
                             CompletedActorWork::FrontendControl
                         };
                         let task = spawn_command_wait(CommandWaitIdentity { token, turn: 0 }, wait,
