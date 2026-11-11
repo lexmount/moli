@@ -627,8 +627,9 @@ pub(crate) fn child_browsing_context_handle_for_current_realm_scope(
 pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_popup: u64,
+    origin: &str,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    navigator_runtime::build_lightweight_popup_window_navigator_object(scope, owner_popup)
+    navigator_runtime::build_lightweight_popup_window_navigator_object(scope, owner_popup, origin)
 }
 
 fn find_constructor_spec(name: &str) -> Result<self::specs::ConstructorSpec> {

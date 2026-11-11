@@ -1212,3 +1212,114 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_getter_uses_native_window_origin_before_exposing_container() {
+    const PROBE: &str = r#"<!doctype html><script>
+        onmessage = event => {
+            try {
+            const inspect = () => {
+                try {
+                    const sw = navigator.serviceWorker;
+                    return sw instanceof ServiceWorkerContainer && sw === navigator.serviceWorker;
+                } catch (error) {
+                    return error.name + ':' + (error instanceof DOMException);
+                }
+            };
+            const checks = [inspect()];
+            self.origin = 'https://spoofed.test';
+            for (const key of ['URL', 'baseURI']) {
+                Object.defineProperty(document, key, {configurable: true, get() { throw new Error('author ' + key); }});
+            }
+            checks.push(inspect());
+            parent.postMessage({id: event.data, result: checks.join('|')}, '*');
+            } catch (error) {
+                parent.postMessage({id: event.data, result: 'probe-error:' + error.name + ':' + error.message}, '*');
+            }
+        };
+    </script>"#;
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        ("/opaque.html", "text/html", PROBE),
+        ("/allowed.html", "text/html", PROBE),
+        ("/normal.html", "text/html", PROBE),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(&format!(
+        "globalThis.__getterProbeSource = {};",
+        serde_json::to_string(PROBE).unwrap()
+    ))
+    .unwrap();
+    vm.eval(r#"
+        globalThis.__getterOriginDone = false;
+        globalThis.__getterOriginPhase = 'start';
+        (async () => {
+            const checks = [];
+            let probeId = 0;
+            const makeFrame = async (sandbox, src, srcdoc) => {
+                __getterOriginPhase = 'load:' + src + ':' + sandbox;
+                const frame = document.createElement('iframe');
+                if (sandbox !== null) frame.sandbox = sandbox;
+                if (src !== null) frame.src = src;
+                if (srcdoc !== null) frame.srcdoc = srcdoc;
+                const loaded = new Promise(resolve => { frame.onload = resolve; });
+                document.body.appendChild(frame);
+                await loaded;
+                __getterOriginPhase = 'loaded:' + src + ':' + sandbox;
+                return frame;
+            };
+            const probe = frame => new Promise(resolve => {
+                const id = ++probeId;
+                const handler = event => {
+                    if (!event.data || event.data.id !== id) return;
+                    removeEventListener('message', handler);
+                    resolve(event.data.result);
+                };
+                addEventListener('message', handler);
+                frame.contentWindow.postMessage(id, '*');
+            });
+            const opaque = await makeFrame('allow-scripts', '/opaque.html', null);
+            checks.push(await probe(opaque));
+            opaque.removeAttribute('sandbox');
+            checks.push(await probe(opaque));
+            checks.push(await probe(await makeFrame('allow-scripts allow-same-origin', '/allowed.html', null)));
+            checks.push(await probe(await makeFrame(null, '/normal.html', null)));
+            checks.push(await probe(await makeFrame('allow-scripts', null, __getterProbeSource)));
+            checks.push(await probe(await makeFrame('allow-scripts allow-same-origin', null, __getterProbeSource)));
+            const blank = await makeFrame(null, 'about:blank', null);
+            const getter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'serviceWorker').get;
+            const childGetter = Object.getOwnPropertyDescriptor(blank.contentWindow.Navigator.prototype, 'serviceWorker').get;
+            const childNavigator = blank.contentWindow.navigator;
+            checks.push(getter.call(childNavigator) === childNavigator.serviceWorker);
+            checks.push(childGetter.call(navigator) === navigator.serviceWorker);
+            try { getter.call({}); checks.push('accepted'); }
+            catch (error) { checks.push(error.name); }
+            const popup = open('about:blank', 'service-worker-getter-origin');
+            checks.push(popup.navigator.serviceWorker === popup.navigator.serviceWorker);
+            popup.close();
+            globalThis.__getterOrigin = checks.join(';');
+        })().catch(error => { __getterOrigin = 'error:' + error.name + ':' + error.message; })
+          .finally(() => { __getterOriginPhase = 'done'; __getterOriginDone = true; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__getterOriginDone) + ':' + __getterOriginPhase",
+        "true:done",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__getterOrigin)").unwrap(),
+        concat!(
+            "SecurityError:true|SecurityError:true;SecurityError:true|SecurityError:true;",
+            "true|true;true|true;SecurityError:true|SecurityError:true;true|true;",
+            "true;true;TypeError;true"
+        )
+    );
+    server.await.unwrap();
+}
