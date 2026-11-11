@@ -464,7 +464,11 @@ async fn rust_cdp_playwright_route_abort_underlying_navigation_contract() {
     .await;
     ctx.expect_result(84_007, json!({}), Some(&attached.session_id));
     let navigation = take_response_by_id(&mut ctx, 84_006);
-    assert_eq!(navigation["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
+    assert!(navigation["error"].is_null(), "{navigation:?}");
+    assert_eq!(
+        navigation["result"]["errorText"],
+        "net::ERR_BLOCKED_BY_CLIENT"
+    );
     assert!(ctx.sent.iter().any(|message| {
         message["sessionId"] == json!(attached.session_id)
             && message["method"] == json!("Network.loadingFailed")

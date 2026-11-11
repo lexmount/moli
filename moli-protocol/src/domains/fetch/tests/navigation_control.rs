@@ -300,133 +300,175 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     }))
     .await;
 
-    ctx.expect_result(305, json!({}), Some("SID-1"));
-    let failed = ctx.take_one();
+    wait_until_message(&mut ctx, "SID-1", "failed navigation reply", |message| {
+        message["id"] == json!(304)
+    })
+    .await;
+    let action = take_response_by_id(&mut ctx, 305);
+    assert_eq!(action["result"], json!({}));
+    let failed = ctx
+        .sent
+        .iter()
+        .find(|message| message["method"] == "Network.loadingFailed")
+        .unwrap();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["sessionId"], "SID-1");
     assert_eq!(failed["params"]["requestId"], LOADER_ID);
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
-    ctx.expect_error(304, -32000, "net::ERR_BLOCKED_BY_CLIENT");
+    let reply = take_response_by_id(&mut ctx, 304);
+    assert!(reply["error"].is_null(), "{reply:?}");
+    assert_eq!(reply["result"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fail_request_blocked_by_client_preserves_the_committed_document() {
-    let mut ctx = TestContext::new();
-    with_loaded_http_document(&mut ctx, "http://example.test/committed", "SID-1", "TID-1").await;
-    wait_until_message(
-        &mut ctx,
-        Some("SID-1"),
-        "fixture document load",
-        |message| message["method"] == json!("Page.loadEventFired"),
-    )
-    .await;
-    ctx.sent.clear();
-
-    ctx.process_async(json!({
-        "id": 306,
-        "method": "Fetch.enable",
-        "sessionId": "SID-1"
-    }))
-    .await;
-    ctx.expect_result(306, json!({}), Some("SID-1"));
-
-    ctx.process_async(json!({
-        "id": 307,
-        "method": "Page.navigate",
-        "sessionId": "SID-1",
-        "params": { "url": "http://example.test/document-blocked" }
-    }))
-    .await;
-
-    let paused = take_main_document_request_pause(&mut ctx).await;
-    let request_id = paused["params"]["requestId"]
-        .as_str()
-        .expect("fetch request id")
-        .to_owned();
-
-    let old_page = ctx.with_fixture(|conn| {
-        conn.browser_context
-            .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .expect("committed document before the failed navigation")
-            .page_id()
+async fn failed_paused_navigation_commits_error_document_and_recovers() {
+    async fn handler() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<html><body>next</body></html>",
+        )
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/failed", get(handler)))
+            .await
+            .unwrap();
     });
 
-    ctx.process_async(json!({
-        "id": 308,
-        "method": "Fetch.failRequest",
-        "sessionId": "SID-1",
-        "params": { "requestId": request_id, "errorReason": "BlockedByClient" }
-    }))
-    .await;
+    for stage in ["Request", "Response"] {
+        for (reason, error_text) in [
+            ("BlockedByClient", "net::ERR_BLOCKED_BY_CLIENT"),
+            ("TimedOut", "net::ERR_TIMED_OUT"),
+        ] {
+            let mut ctx = TestContext::new();
+            with_loaded_http_document(&mut ctx, "http://example.test/committed", "SID-1", "TID-1")
+                .await;
+            wait_until_message(&mut ctx, "SID-1", "initial document load", |message| {
+                message["method"] == json!("Page.loadEventFired")
+            })
+            .await;
+            ctx.process_async(json!({
+                "id": 300, "method": "Runtime.evaluate", "sessionId": "SID-1",
+                "params": {"expression": "globalThis.__oldDocument = true; document.body.innerHTML = '<input id=oldField value=retained>'"}
+            })).await;
+            let initial = take_response_by_id(&mut ctx, 300);
+            assert!(initial["error"].is_null(), "{initial:?}");
+            ctx.sent.clear();
 
-    ctx.expect_result(308, json!({}), Some("SID-1"));
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["requestId"], LOADER_ID);
-    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
-    ctx.expect_error(307, -32000, "net::ERR_BLOCKED_BY_CLIENT");
+            let failed_url = format!("http://{addr}/failed");
+            ctx.process_async(json!({
+                "id": 306, "method": "Fetch.enable", "sessionId": "SID-1",
+                "params": {"patterns": [{
+                    "urlPattern": failed_url, "resourceType": "Document", "requestStage": stage
+                }]}
+            }))
+            .await;
+            ctx.expect_result(306, json!({}), Some("SID-1"));
+            ctx.process_async(json!({
+                "id": 307, "method": "Page.navigate", "sessionId": "SID-1",
+                "params": {"url": failed_url}
+            }))
+            .await;
+            wait_until_scheduler_message(&mut ctx, "main-document Fetch pause", |message| {
+                message["method"] == json!("Fetch.requestPaused")
+            })
+            .await;
+            let pause = ctx
+                .sent
+                .iter()
+                .find(|message| message["method"] == "Fetch.requestPaused")
+                .unwrap()
+                .clone();
+            assert_eq!(
+                pause["params"]["responseStatusCode"].is_number(),
+                stage == "Response"
+            );
+            let network_id = pause["params"]["networkId"].clone();
+            ctx.process_async(json!({
+                "id": 308, "method": "Fetch.failRequest", "sessionId": "SID-1",
+                "params": {"requestId": pause["params"]["requestId"], "errorReason": reason}
+            }))
+            .await;
+            wait_until_message(&mut ctx, "SID-1", "failed navigation reply", |message| {
+                message["id"] == json!(307)
+            })
+            .await;
+            let action = take_response_by_id(&mut ctx, 308);
+            assert_eq!(action["result"], json!({}), "{stage} {reason}: {action:?}");
+            let reply = take_response_by_id(&mut ctx, 307);
+            assert!(reply["error"].is_null(), "{stage} {reason}: {reply:?}");
+            assert_eq!(reply["result"]["errorText"], error_text, "{stage} {reason}");
+            assert_eq!(reply["result"]["frameId"], "TID-1");
+            wait_until_message(&mut ctx, "SID-1", "error document load", |message| {
+                message["method"] == json!("Page.loadEventFired")
+            })
+            .await;
+            let failures: Vec<_> = ctx
+                .sent
+                .iter()
+                .filter(|message| {
+                    message["method"] == "Network.loadingFailed"
+                        && message["params"]["requestId"] == network_id
+                })
+                .collect();
+            assert_eq!(failures.len(), 1, "{stage} {reason}: {:?}", ctx.sent);
+            assert_eq!(failures[0]["params"]["errorText"], error_text);
+            assert_eq!(
+                ctx.sent
+                    .iter()
+                    .filter(|message| {
+                        message["method"] == "Network.loadingFinished"
+                            && message["params"]["requestId"] == network_id
+                    })
+                    .count(),
+                1,
+                "the error Document must finish loading"
+            );
 
-    ctx.with_fixture(|conn| {
-        assert_eq!(
-            conn.browser_context
-                .as_ref()
-                .and_then(|bc| bc.loaded_page())
-                .expect("a client-failed navigation must retain the committed page")
-                .page_id(),
-            old_page,
-            "Fetch.failRequest must not retire the committed document"
-        );
-    });
+            ctx.process_async(json!({
+                "id": 309, "method": "Runtime.evaluate", "sessionId": "SID-1",
+                "params": {
+                    "expression": "({value: 6 * 7, href: location.href, old: globalThis.__oldDocument === true, field: document.querySelector('#oldField')?.value ?? null})",
+                    "returnByValue": true
+                }
+            })).await;
+            let evaluation = take_response_by_id(&mut ctx, 309);
+            assert_eq!(
+                evaluation["result"]["result"]["value"],
+                json!({
+                    "value": 42, "href": NETWORK_ERROR_PAGE_URL, "old": false, "field": null
+                }),
+                "{stage} {reason}: {evaluation:?}"
+            );
 
-    // The committed document stays responsive after the canceled navigation.
-    ctx.process_async(json!({
-        "id": 309,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "6 * 7" }
-    }))
-    .await;
-    let reply = take_response_by_id(&mut ctx, 309);
-    assert_eq!(reply["result"]["result"]["value"], json!(42), "{reply:?}");
-
-    let published = ctx.take_all();
-    assert!(
-        !published.iter().any(|message| {
-            message["method"] == json!("Page.loadEventFired")
-                || message["method"] == json!("Page.frameNavigated")
-        }),
-        "a canceled navigation must not publish load events: {published:?}"
-    );
-
-    // The tab stays navigable: an ordinary navigation afterwards commits a
-    // fresh document with its load event.
-    ctx.process_async(json!({
-        "id": 310,
-        "method": "Fetch.disable",
-        "sessionId": "SID-1"
-    }))
-    .await;
-    ctx.expect_result(310, json!({}), Some("SID-1"));
-
-    ctx.process_async(json!({
-        "id": 311,
-        "method": "Page.navigate",
-        "sessionId": "SID-1",
-        "params": { "url": "data:text/html,<html><body>next</body></html>" }
-    }))
-    .await;
-    let next = take_response_by_id(&mut ctx, 311);
-    assert!(next["error"].is_null(), "{next:?}");
-    assert_eq!(next["result"]["frameId"], "TID-1", "{next:?}");
-    wait_until_message(
-        &mut ctx,
-        Some("SID-1"),
-        "next navigation load event",
-        |message| message["method"] == json!("Page.loadEventFired"),
-    )
-    .await;
+            ctx.process_async(json!({"id": 310, "method": "Fetch.disable", "sessionId": "SID-1"}))
+                .await;
+            let disabled = take_response_by_id(&mut ctx, 310);
+            assert_eq!(disabled["result"], json!({}));
+            ctx.sent.clear();
+            ctx.process_async(json!({
+                "id": 311, "method": "Page.navigate", "sessionId": "SID-1",
+                "params": {"url": "data:text/html,<html><body>next</body></html>"}
+            }))
+            .await;
+            wait_until_message(&mut ctx, "SID-1", "next navigation reply", |message| {
+                message["id"] == json!(311)
+            })
+            .await;
+            let next = take_response_by_id(&mut ctx, 311);
+            assert!(next["error"].is_null(), "{stage} {reason}: {next:?}");
+            assert!(
+                next["result"]["errorText"].is_null(),
+                "{stage} {reason}: {next:?}"
+            );
+            wait_until_message(&mut ctx, "SID-1", "next document load", |message| {
+                message["method"] == json!("Page.loadEventFired")
+            })
+            .await;
+        }
+    }
+    server.abort();
 }
 
 #[tokio::test]

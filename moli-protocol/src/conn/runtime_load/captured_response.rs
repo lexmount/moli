@@ -144,6 +144,18 @@ impl CdpConnection {
                     network_error.request_headers.clone(),
                     network_error.kind.error_text().to_owned(),
                 )
+            } else if let Some(crate::automation::DevToolsRequestFailure::Failed(error_text)) =
+                error.downcast_ref::<crate::automation::DevToolsRequestFailure>()
+            {
+                // Simulating a request failure commits the same browser-owned
+                // error Document as a transport failure. Aborted remains a
+                // cancellation and never reaches this preparation path.
+                (
+                    navigation.requested_url.clone(),
+                    navigation.request_method.clone(),
+                    navigation.request_headers.clone(),
+                    error_text.clone(),
+                )
             } else if !moli_fetch::is_fetch_cancelled(&error)
                 && let Some(failure) = error.downcast_ref::<NetworkFetchFailureContext>()
             {

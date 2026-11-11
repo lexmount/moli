@@ -35,8 +35,7 @@ class NavigationProbe:
 
 async def run_navigation_outcomes_group(state: SmokeState) -> None:
     source = (
-        "raw Page.navigate and Network observation calibrated against Debian "
-        "Chromium 145.0.7632.116"
+        "raw Page.navigate and Network observation calibrated against managed Chromium"
     )
     commands = [
         "Page.enable",
@@ -45,6 +44,8 @@ async def run_navigation_outcomes_group(state: SmokeState) -> None:
         "Network.enable",
         "Page.navigate",
         "Runtime.evaluate",
+        "Fetch.enable",
+        "Fetch.failRequest",
     ]
     for item in _contracts():
         try:
@@ -142,10 +143,21 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
             "A reset before response metadata reports a non-download navigation error and a matching Network.loadingFailed terminal.",
             _transport_failure,
         ),
-        NavigationOutcomeContract(
-            "navigate_fail_request_blocked_by_client_retains_document",
-            "Fetch.failRequest(BlockedByClient) on a paused main-document navigation answers Page.navigate with the error, emits exactly one Network.loadingFailed terminal, and leaves the committed Document responsive.",
-            _fail_request_blocked_by_client,
+        *(
+            NavigationOutcomeContract(
+                f"navigate_fail_request_{name}_{stage.lower()}",
+                f"Fetch.failRequest({reason}) at {stage} reports one request failure, "
+                + ("retains the committed Document for cancellation" if reason == "Aborted"
+                   else "commits a responsive error Document")
+                + ", and permits a subsequent successful navigation.",
+                partial(_fail_request, stage=stage, reason=reason, error_text=error_text),
+            )
+            for name, reason, error_text in (
+                ("blocked_by_client", "BlockedByClient", "net::ERR_BLOCKED_BY_CLIENT"),
+                ("timed_out", "TimedOut", "net::ERR_TIMED_OUT"),
+                ("aborted", "Aborted", "net::ERR_ABORTED"),
+            )
+            for stage in ("Request", "Response")
         ),
     )
 
@@ -162,6 +174,7 @@ async def _new_probe(state: SmokeState) -> AsyncIterator[NavigationProbe]:
             "Network.loadingFailed",
             "Network.loadingFinished",
             "Page.loadEventFired",
+            "Page.frameNavigated",
             "Page.lifecycleEvent",
             "Runtime.executionContextsCleared",
         ],
@@ -452,137 +465,150 @@ async def _transport_failure(state: SmokeState) -> dict[str, Any]:
         }
 
 
-async def _fail_request_blocked_by_client(state: SmokeState) -> dict[str, Any]:
+async def _fail_request(
+    state: SmokeState, *, stage: str, reason: str, error_text: str
+) -> dict[str, Any]:
     async with _new_probe(state) as probe:
-        url = f"{state.fixture}/navigation-blocked-by-client"
+        url = f"{state.fixture}/plain?failed-navigation={reason}-{stage}"
         await _evaluate_value(
-            probe.cdp,
-            "document.body.innerHTML='<input id=retainedField value=retained>';",
+            probe.cdp, "document.body.innerHTML='<input id=retainedField value=retained>'"
         )
         history = await probe.cdp.send("Page.getNavigationHistory")
         paused = asyncio.get_running_loop().create_future()
         probe.cdp.once("Fetch.requestPaused", lambda params: paused.set_result(params))
         await probe.cdp.send(
             "Fetch.enable",
-            {"patterns": [{"urlPattern": url, "requestStage": "Request"}]},
+            {"patterns": [{"urlPattern": url, "resourceType": "Document", "requestStage": stage}]},
         )
         navigation = asyncio.create_task(probe.cdp.send("Page.navigate", {"url": url}))
-        navigation_result: dict[str, Any] | None = None
-        navigation_error: str | None = None
+        result: dict[str, Any] | None = None
         try:
             request = await paused
+            assert_equal(
+                "responseStatusCode" in request, stage == "Response", "Fetch pause stage"
+            )
             await probe.cdp.send(
-                "Fetch.failRequest",
-                {"requestId": request["requestId"], "errorReason": "BlockedByClient"},
+                "Fetch.failRequest", {"requestId": request["requestId"], "errorReason": reason}
             )
             try:
-                navigation_result = await navigation
+                result = await navigation
             except Exception as error:
-                navigation_error = str(error)
+                # The existing Moli cancellation reply is a protocol error.
+                # Failed requests must use the ordinary error-Document result.
+                if not (reason == "Aborted" and is_moli_browser() and "Aborted" in str(error)):
+                    raise
+                error_text = "Aborted"
         finally:
             if not navigation.done():
                 navigation.cancel()
                 with suppress(asyncio.CancelledError):
                     await navigation
-        if is_moli_browser():
-            # Moli answers a client-failed navigation with the protocol error
-            # carrying the Chromium error text.
-            if navigation_error is None:
-                raise SmokeError(
-                    f"blocked navigation was not refused by Page.navigate: {navigation_result!r}"
-                )
-            if "net::ERR_BLOCKED_BY_CLIENT" not in navigation_error:
-                raise SmokeError(f"blocked navigation error mismatch: {navigation_error}")
-        else:
-            # Chromium keeps the command successful and reports the failure in
-            # the Page.navigate result payload.
-            if navigation_result is None:
-                raise SmokeError(
-                    f"Chromium blocked navigation rejected the command: {navigation_error}"
-                )
-            assert_equal(
-                navigation_result.get("errorText"),
-                "net::ERR_BLOCKED_BY_CLIENT",
-                "Chromium blocked navigation errorText",
-            )
-            assert_equal(
-                navigation_result.get("isDownload"),
-                False,
-                "Chromium blocked navigation isDownload",
-            )
-        requests = [
-            event
-            for event in _document_request_events(probe.events)
-            if _request_url(event) == url
-        ]
-        if not requests:
-            raise SmokeError(f"missing Document request for blocked navigation: {probe.events}")
+        if result is not None:
+            assert_equal(result.get("errorText"), error_text, "failed navigation errorText")
+            assert_equal(result.get("isDownload"), False, "failed navigation isDownload")
         await wait_until(
             lambda: _loading_failure_for_url(probe.events, url) is not None,
-            "blocked main-document Network.loadingFailed",
+            "failed main-document Network.loadingFailed",
         )
         failure = _loading_failure_for_url(probe.events, url)
         if failure is None:
-            raise SmokeError("missing blocked main-document Network.loadingFailed")
-        assert_equal(
-            failure["params"].get("errorText"),
-            "net::ERR_BLOCKED_BY_CLIENT",
-            "blocked Network errorText",
-        )
+            raise SmokeError("missing main-document Network.loadingFailed")
+        assert_equal(failure["params"].get("errorText"), error_text, "Network failure errorText")
+        requests = [event for event in _document_request_events(probe.events)
+                    if _request_url(event) == url]
+        assert_equal(len(requests), 1, "failed navigation Document request count")
         request_id = requests[0]["params"].get("requestId")
-        terminals = [
-            event
-            for event in probe.events
-            if event["method"] in {"Network.loadingFailed", "Network.loadingFinished"}
-            and event["params"].get("requestId") == request_id
-        ]
-        assert_equal(len(terminals), 1, "blocked navigation terminal count")
-        blocked_loader_id = requests[0]["params"].get("loaderId")
-        if any(
-            event.get("method") == "Page.lifecycleEvent"
-            and event.get("params", {}).get("loaderId") == blocked_loader_id
-            and event.get("params", {}).get("name") in {"DOMContentLoaded", "domContentLoaded"}
-            for event in probe.events
-        ):
-            raise SmokeError("blocked navigation emitted DOMContentLoaded")
-        snapshot = await _active_document_snapshot(probe.cdp)
-        _assert_retained_document(snapshot)
-        if any(
-            event["method"] == "Runtime.executionContextsCleared" for event in probe.events
-        ):
-            raise SmokeError("blocking the navigation cleared the retained Document's contexts")
+
+        if reason == "Aborted":
+            snapshot = await _active_document_snapshot(probe.cdp)
+            _assert_retained_document(snapshot)
+            assert_equal(
+                await _evaluate_value(probe.cdp, "document.querySelector('#retainedField')?.value"),
+                "retained", "cancelled navigation retained form value",
+            )
+            assert_equal(await probe.cdp.send("Page.getNavigationHistory"), history,
+                         "cancelled navigation history")
+            if any(event["method"] in {"Page.frameNavigated", "Page.loadEventFired",
+                                       "Runtime.executionContextsCleared"}
+                   for event in probe.events):
+                raise SmokeError("cancellation replaced or loaded the committed Document")
+            outcome = "retained-document"
+        else:
+            await wait_until(
+                lambda: any(event["method"] == "Page.loadEventFired" for event in probe.events),
+                "error Document load",
+            )
+            snapshot = await _active_document_snapshot(probe.cdp)
+            assert_equal(snapshot.get("href"), "chrome-error://chromewebdata/",
+                         "error Document location")
+            assert_equal(snapshot.get("marker"), None, "error Document replaces the old realm")
+            assert_equal(
+                await _evaluate_value(probe.cdp, "document.querySelector('#retainedField')?.value ?? null"),
+                None, "error Document replaces the old form",
+            )
+            frame = next(
+                event["params"]["frame"] for event in probe.events
+                if event["method"] == "Page.frameNavigated"
+                and event["params"]["frame"].get("loaderId") == result.get("loaderId")
+            )
+            assert_equal(frame.get("url"), "chrome-error://chromewebdata/", "error frame URL")
+            assert_equal(frame.get("unreachableUrl"), url, "error frame unreachable URL")
+            failed_history = await probe.cdp.send("Page.getNavigationHistory")
+            assert_equal(
+                failed_history["entries"][failed_history["currentIndex"]].get("url"),
+                url, "error Document history URL",
+            )
+            assert_equal(
+                sum(event["method"] == "Page.loadEventFired" for event in probe.events),
+                1, "error Document load count",
+            )
+            outcome = "error-document"
+
+        correlated = [event for event in probe.events
+                      if event["params"].get("requestId") == request_id]
         assert_equal(
-            await _evaluate_value(probe.cdp, "document.querySelector('#retainedField')?.value"),
-            "retained",
-            "blocked navigation retained form value",
+            sum(event["method"] == "Network.loadingFailed" for event in correlated),
+            1, "failed request loadingFailed count",
         )
+        # Chromium publishes loadingFinished for the browser-owned error
+        # Document after reporting the original request's loadingFailed.
         assert_equal(
-            await probe.cdp.send("Page.getNavigationHistory"), history, "blocked history"
+            sum(event["method"] == "Network.loadingFinished" for event in correlated),
+            int(reason != "Aborted"), "error Document loadingFinished count",
         )
-        if any(event["method"] == "Page.loadEventFired" for event in probe.events):
-            raise SmokeError("blocked navigation published a load event")
-        retained_url = snapshot.get("href")
-        retained_realm = snapshot.get("marker") == _OLD_DOCUMENT_MARKER
-        # The tab must stay navigable: commit an ordinary document afterwards.
-        next_url = f"{state.fixture}/plain"
+
+        start = len(probe.events)
+        next_url = f"{state.fixture}/plain?after-failure={reason}-{stage}"
         next_result = await probe.cdp.send("Page.navigate", {"url": next_url})
-        if next_result.get("errorText"):
-            raise SmokeError(f"navigation after a blocked one failed: {next_result}")
+        _assert_not_download_or_navigation_error(next_result)
         await wait_until(
-            lambda: any(event["method"] == "Page.loadEventFired" for event in probe.events),
-            "load event for the navigation after a blocked one",
+            lambda: any(event["method"] == "Page.frameNavigated"
+                        and event["params"]["frame"].get("loaderId") == next_result["loaderId"]
+                        for event in probe.events[start:]),
+            "next Document commit",
         )
-        load_events = [event for event in probe.events if event["method"] == "Page.loadEventFired"]
-        assert_equal(len(load_events), 1, "load event count across blocked and next navigation")
+        committed = next(
+            index for index, event in enumerate(probe.events[start:], start)
+            if event["method"] == "Page.frameNavigated"
+            and event["params"]["frame"].get("loaderId") == next_result["loaderId"]
+        )
+        await wait_until(
+            lambda: any(event["method"] == "Page.loadEventFired"
+                        for event in probe.events[committed:]),
+            "next Document load",
+        )
+        assert_equal(
+            sum(event["method"] == "Page.loadEventFired" for event in probe.events[start:]),
+            1, "next Document load count",
+        )
         next_snapshot = await _active_document_snapshot(probe.cdp)
-        assert_equal(next_snapshot.get("href"), next_url, "active Document after the next navigation")
+        assert_equal(next_snapshot.get("href"), next_url, "next active Document URL")
+        assert_equal(await _evaluate_value(probe.cdp, "6 * 7"), 42, "responsive next Document")
         return {
-            "requestId": request_id,
-            "networkErrorText": failure["params"].get("errorText"),
-            "retainedUrl": retained_url,
-            "oldRealmRetained": retained_realm,
-            "nextActiveUrl": next_snapshot.get("href"),
-            "outcome": "retained-document-then-next-navigation",
+            "reason": reason, "fetchStage": stage, "requestId": request_id,
+            "networkErrorText": error_text, "activeUrlAfterFailure": snapshot.get("href"),
+            "oldRealmRetained": snapshot.get("marker") == _OLD_DOCUMENT_MARKER,
+            "nextActiveUrl": next_snapshot.get("href"), "outcome": outcome,
         }
 
 

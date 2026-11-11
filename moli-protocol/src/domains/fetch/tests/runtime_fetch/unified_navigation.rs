@@ -142,6 +142,19 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
         },
     )
     .await;
+    let error_document = fail && !matches!(entry, NavigationEntry::Frame);
+    if error_document {
+        wait_until_message(
+            &mut ctx,
+            session.as_str(),
+            "error Document loadingFinished",
+            |event| {
+                event["method"] == "Network.loadingFinished"
+                    && event["params"]["requestId"] == network_id
+            },
+        )
+        .await;
+    }
     let terminals = ctx
         .sent
         .iter()
@@ -152,7 +165,11 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
             ) && event["params"]["requestId"] == network_id
         })
         .collect::<Vec<_>>();
-    assert_eq!(terminals.len(), 1, "{entry:?}: exactly one terminal");
+    assert_eq!(
+        terminals.len(),
+        if error_document { 2 } else { 1 },
+        "{entry:?}: one request terminal, plus the error Document load when committed"
+    );
     assert_eq!(
         terminals[0]["method"],
         if fail {
@@ -161,6 +178,9 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
             "Network.loadingFinished"
         }
     );
+    if error_document {
+        assert_eq!(terminals[1]["method"], "Network.loadingFinished");
+    }
     assert_eq!(hits.load(Ordering::SeqCst), usize::from(!fail));
     let redirects = ctx
         .sent
@@ -176,13 +196,13 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
         "{entry:?}: redirect must not be announced again at completion"
     );
     if fail && matches!(entry, NavigationEntry::Main) {
-        // A client-failed main navigation must answer the navigate command
-        // with the Chromium error text and keep the committed document.
+        // A failed main request commits an error Document and reports its
+        // network error in the navigation result, rather than cancelling.
         wait_until_message(
             &mut ctx,
             session.as_str(),
             "blocked main navigation error reply",
-            |event| event["id"] == json!(41_006) && event["error"].is_object(),
+            |event| event["id"] == json!(41_006) && event["result"]["errorText"].is_string(),
         )
         .await;
         let reply = ctx
@@ -190,15 +210,17 @@ async fn navigation_redirect_contract(entry: NavigationEntry, fail: bool) {
             .iter()
             .find(|event| event["id"] == json!(41_006))
             .expect("navigate reply");
-        assert_eq!(reply["error"]["code"], -32000, "{reply:?}");
-        assert_eq!(reply["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
+        assert!(reply["error"].is_null(), "{reply:?}");
+        assert_eq!(reply["result"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
+    }
+    if error_document {
         let evaluate = evaluate_until_value_async(
             &mut ctx,
             &session,
             41_008,
             "location.href",
-            &json!(format!("http://{addr}/page")),
-            "committed document stays current after a blocked navigation",
+            &json!(NETWORK_ERROR_PAGE_URL),
+            "error document replaces the blocked navigation",
         )
         .await;
         assert!(evaluate["error"].is_null(), "{evaluate:?}");

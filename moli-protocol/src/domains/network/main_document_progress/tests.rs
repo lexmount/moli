@@ -19,21 +19,14 @@ use super::gate::{
 use super::*;
 
 #[test]
-fn client_cancelled_navigation_preserves_the_document_without_hiding_other_failures() {
+fn only_cancelled_navigation_preserves_the_document() {
     use crate::automation::DevToolsRequestFailure;
 
     for error in [
         anyhow::Error::new(moli_fetch::FetchCancelled),
         anyhow::Error::new(DevToolsRequestFailure::Aborted),
-        anyhow::Error::new(DevToolsRequestFailure::Failed(
-            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
-        )),
-        anyhow::Error::new(DevToolsRequestFailure::Failed("TimedOut".to_owned())),
         anyhow::anyhow!("transport detail").context(moli_fetch::FetchCancelled),
         anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Aborted),
-        anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Failed(
-            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
-        )),
     ] {
         assert_eq!(
             FailedNavigationDocumentPolicy::for_navigation_error(&error),
@@ -47,14 +40,20 @@ fn client_cancelled_navigation_preserves_the_document_without_hiding_other_failu
             FailedNavigationDocumentPolicy::PreserveCommittedDocument,
         );
     }
-    for error_text in [
-        "Aborted",
-        "net::ERR_ABORTED",
-        "Failed",
-        "net::ERR_CONNECTION_RESET",
-        "net::ERR_BLOCKED_BY_CLIENT",
+    for error in [
+        anyhow::Error::new(DevToolsRequestFailure::Failed(
+            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
+        )),
+        anyhow::Error::new(DevToolsRequestFailure::Failed("TimedOut".to_owned())),
+        anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Failed(
+            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
+        )),
+        anyhow::anyhow!("Aborted"),
+        anyhow::anyhow!("net::ERR_ABORTED"),
+        anyhow::anyhow!("Failed"),
+        anyhow::anyhow!("net::ERR_CONNECTION_RESET"),
+        anyhow::anyhow!("net::ERR_BLOCKED_BY_CLIENT"),
     ] {
-        let error = anyhow::anyhow!(error_text);
         assert_eq!(
             FailedNavigationDocumentPolicy::for_navigation_error(&error),
             FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
