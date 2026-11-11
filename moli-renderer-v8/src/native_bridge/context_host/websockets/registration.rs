@@ -21,12 +21,19 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         wrapper: v8::Local<'_, v8::Object>,
         owner: super::super::WindowExecutionContextBinding,
-        frame_id: Option<String>,
-        document_url: Url,
+        environment: crate::network::context::SubresourceRequestEnvironment,
         url: Url,
         protocols: Vec<String>,
         csp_outcome: DocumentCspOutcome,
     ) -> u64 {
+        let crate::network::context::SubresourceRequestEnvironment {
+            document_url,
+            request_origin,
+            frame_id,
+            ..
+        } = environment;
+        let origin = request_origin.ascii_serialization().to_owned();
+        let origin_is_opaque = request_origin.is_opaque();
         let socket_id = self.next_websocket_id;
         self.next_websocket_id += 1;
         let resource_loader =
@@ -35,8 +42,23 @@ impl JsContextHost {
             .as_ref()
             .map(crate::network::context::DocumentResourceLoader::request_client);
         let cookie_url = websocket_cookie_url(&url);
-        let cookie_context = moli_cookie_jar::NetworkCookieRequestContext::subresource("GET")
-            .with_initiator_url(&cookie_url, &document_url);
+        let mut cookie_request = moli_fetch::Request::new_browser(
+            "GET",
+            cookie_url.clone(),
+            None,
+            Vec::new(),
+            request_origin,
+        )
+        .with_credentials_mode(moli_fetch::RequestCredentialsMode::Include);
+        // The cookie adapter takes its initiator from the native origin;
+        // about:blank and mutable <base> URLs cannot supply that identity.
+        if origin_is_opaque {
+            cookie_request = cookie_request.with_cross_site_cookie_context();
+        }
+        if let Some(browser_context) = loader.and_then(|loader| loader.browser_site_context()) {
+            cookie_request = cookie_request.with_browser_site_context(browser_context.clone());
+        }
+        let cookie_context = cookie_request.network_cookie_context();
         let cookie_header = if let Some(loader) = loader {
             moli_fetch::cookie_header_for_request(
                 &loader.cookie_store(),
@@ -52,7 +74,7 @@ impl JsContextHost {
             .and_then(|header| header.clone());
         let connector = loader.map(|loader| loader.websocket_connector());
         let context = WebSocketConnectOptions {
-            origin: moli_url::origin_ascii_serialization(&document_url),
+            origin,
             user_agent: loader
                 .map(|loader| loader.user_agent().to_owned())
                 .unwrap_or_else(|| moli_fetch::FetchConfig::DEFAULT_USER_AGENT.to_owned()),

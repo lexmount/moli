@@ -698,7 +698,17 @@ impl JsContextHost {
         ) else {
             return DocumentCspOutcome::Allowed;
         };
-        let (report_only_violation, enforced_violation) = check.into_violations();
+        let (mut report_only_violation, mut enforced_violation) = check.into_violations();
+        if document_url.scheme() == "about" {
+            // Matching 'self' uses the inherited origin below; reports still
+            // identify the actual about:blank/about:srcdoc Document.
+            for violation in report_only_violation
+                .iter_mut()
+                .chain(enforced_violation.iter_mut())
+            {
+                violation.document_uri = "about".to_owned();
+            }
+        }
         let host_ptr: *mut JsContextHost = self;
         if let Some(violation) = report_only_violation {
             self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
@@ -721,6 +731,14 @@ impl JsContextHost {
         request_url: &url::Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyCheck> {
+        // Initial empty Documents retain a native origin that their about:
+        // URL cannot express. Neither that identity nor CSP 'self' follows
+        // the mutable API base URL.
+        let inherited_origin_url = (document_url.scheme() == "about")
+            .then(|| self.window_document_origin(owner))
+            .flatten()
+            .and_then(|origin| url::Url::parse(&origin).ok());
+        let document_url = inherited_origin_url.as_ref().unwrap_or(document_url);
         match owner {
             OwnerDispatchScope::Top => {
                 // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
