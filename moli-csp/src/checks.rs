@@ -174,7 +174,12 @@ pub fn content_security_policy_allows_url_with_redirect_status(
         let Some((_, source_list)) = effective_source_list_with_directive(policy, kind) else {
             return true;
         };
-        source_list_allows(source_list, protected_url, request_url, redirect_status)
+        source_list_allows(
+            source_list,
+            policy.self_origin(protected_url),
+            request_url,
+            redirect_status,
+        )
     })
 }
 
@@ -248,7 +253,11 @@ pub fn content_security_policy_frame_ancestors_violation_with_disposition_and_re
         let source_list = normalized_source_list(directive_source_list(policy, FRAME_ANCESTORS)?);
         if ancestor_origins.iter().all(|ancestor_origin| {
             ancestor_origin.as_ref().is_some_and(|ancestor_origin| {
-                frame_ancestor_source_list_allows(&source_list, protected_url, ancestor_origin)
+                frame_ancestor_source_list_allows(
+                    &source_list,
+                    policy.self_origin(protected_url),
+                    ancestor_origin,
+                )
             })
         }) {
             return None;
@@ -373,7 +382,7 @@ pub fn content_security_policy_url_violation_for_checked_url_with_redirect_statu
             effective_source_list_with_directive(policy, kind)?;
         if source_list_allows_resource_request(
             source_list,
-            protected_url,
+            policy.self_origin(protected_url),
             checked_url,
             redirect_status,
             request,
