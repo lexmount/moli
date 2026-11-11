@@ -1029,7 +1029,7 @@ fn create_audio_worklet_module_worker<'s>(
     let worker_source = audio_worklet_worker_bootstrap_source(module_url);
     let blob = create_text_javascript_blob(scope, &worker_source)?;
     let object_url = create_object_url(scope, blob)?;
-    let worker = construct_module_worker(scope, object_url, credentials);
+    let worker = construct_module_worker(scope, object_url, credentials, module_url);
     revoke_object_url(scope, object_url);
     worker
 }
@@ -1079,14 +1079,24 @@ fn construct_module_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     script_url: v8::Local<'s, v8::Value>,
     credentials: &'static str,
+    module_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let worker_constructor = global
-        .get(scope, v8str(scope, "Worker").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let worker_constructor = ensure_intrinsic_interface_constructor(scope, "Worker").ok()?;
     let options = AudioWorkletWorkerOptionsDeclaration::new("module", credentials)
         .bind(scope)
         .expect("AudioWorklet Worker options declaration should bind");
+    // Keep the native Worklet settings private during dictionary conversion.
+    let null_prototype = v8::null(scope);
+    if options.set_prototype(scope, null_prototype.into()) != Some(true) {
+        return None;
+    }
+    let native_module_url = v8_string(scope, module_url)?;
+    set_private_value(
+        scope,
+        options,
+        super::worker_host::AUDIO_WORKLET_WORKER_OPTION_SLOT,
+        native_module_url.into(),
+    );
     worker_constructor.new_instance(scope, &[script_url, options.into()])
 }
 
@@ -1103,11 +1113,6 @@ const retainLiveProcessor = liveProcessors.push.bind(liveProcessors);
 const AudioWorkletTypeError = TypeError;
 const stringifyAudioWorkletError = String;
 let currentAudioWorkletPort = null;
-Object.defineProperty(globalThis, "__moliAudioWorkletBootstrapModuleUrl", {{
-  value: {module_url_literal},
-  configurable: false,
-  writable: false
-}});
 class AudioWorkletProcessor {{
   constructor() {{
     this.port = currentAudioWorkletPort;

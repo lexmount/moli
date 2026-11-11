@@ -145,6 +145,15 @@ pub(crate) enum WorkerScriptSource {
     Binary(Vec<u8>),
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct AudioWorkletFetchContext {
+    pub(crate) module_url: url::Url,
+    pub(crate) document_url: url::Url,
+    pub(crate) referrer_url: url::Url,
+    pub(crate) origin: moli_url::WebOrigin,
+    pub(crate) service_worker_client_id: ServiceWorkerClientId,
+}
+
 impl WorkerScriptSource {
     pub(crate) fn text(source: String) -> Self {
         Self::Text(source)
@@ -221,6 +230,7 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     pub(crate) service_worker_can_import_new_scripts: bool,
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+    pub(crate) audio_worklet_fetch_context: Option<AudioWorkletFetchContext>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) bootstrap_completion_tx: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>,
@@ -374,6 +384,7 @@ impl WorkerSpawnOptions {
             service_worker_updated_script_resources: Default::default(),
             service_worker_can_import_new_scripts: true,
             reserved_service_worker_client_id: None,
+            audio_worklet_fetch_context: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
             bootstrap_completion_tx: None,
@@ -581,6 +592,14 @@ impl WorkerSpawnOptions {
         self
     }
 
+    pub(crate) fn with_audio_worklet_fetch_context(
+        mut self,
+        context: AudioWorkletFetchContext,
+    ) -> Self {
+        self.audio_worklet_fetch_context = Some(context);
+        self
+    }
+
     pub(crate) fn with_indexed_db_manager(
         mut self,
         indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
@@ -711,22 +730,22 @@ fn queue_worker_module_csp_violations(
 
 fn start_worker_module_graph_fetch(
     request: WorkerModuleGraphFetchRequest,
-    loader: WorkerResourceLoader,
-    network_partition_key: Option<String>,
-    module_static_import_content_security_policies: Vec<ContentSecurityPolicy>,
-    worker_global_policy: crate::content_security_policy::InheritedContentSecurityPolicy,
+    state: &WorkerGlobalState,
     event_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
+    let loader = state.loader.clone();
     let fetch_id = request.fetch_id();
     let policy = match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => {
             crate::content_security_policy::InheritedContentSecurityPolicy {
                 self_url: Some(request.initiator_url().clone()),
-                header_policies: module_static_import_content_security_policies,
+                header_policies: state.module_static_import_content_security_policies.clone(),
                 ..Default::default()
             }
         }
-        WorkerModuleGraphFetchCspSource::DynamicImportGraph => worker_global_policy,
+        WorkerModuleGraphFetchCspSource::DynamicImportGraph => {
+            state.content_security_policy_snapshot_for_inheritance()
+        }
     };
     let policy =
         crate::document_runtime::DocumentRequestPolicySnapshot::from_inherited_policy(&policy)
@@ -778,12 +797,57 @@ fn start_worker_module_graph_fetch(
         let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(fetch_id, result));
         return;
     }
-    let browser_request_metadata = request.browser_request_metadata();
+    let browser_request_metadata = match request.browser_request_metadata() {
+        moli_fetch::BrowserRequestMetadata::Fetch => {
+            match (request.csp_source(), &state.global_kind) {
+                (
+                    WorkerModuleGraphFetchCspSource::StaticModuleGraph,
+                    WorkerGlobalKind::Dedicated { .. },
+                ) => moli_fetch::BrowserRequestMetadata::Worker,
+                (
+                    WorkerModuleGraphFetchCspSource::StaticModuleGraph,
+                    WorkerGlobalKind::Shared { .. },
+                ) => moli_fetch::BrowserRequestMetadata::SharedWorker,
+                (
+                    WorkerModuleGraphFetchCspSource::StaticModuleGraph,
+                    WorkerGlobalKind::Service { .. },
+                ) => moli_fetch::BrowserRequestMetadata::Fetch,
+                _ => moli_fetch::BrowserRequestMetadata::Script,
+            }
+        }
+        metadata => metadata,
+    };
+    let destination = match browser_request_metadata {
+        moli_fetch::BrowserRequestMetadata::AudioWorklet => {
+            crate::service_worker_runtime::ServiceWorkerRequestDestination::AudioWorklet
+        }
+        moli_fetch::BrowserRequestMetadata::Worker => {
+            crate::service_worker_runtime::ServiceWorkerRequestDestination::Worker
+        }
+        moli_fetch::BrowserRequestMetadata::SharedWorker => {
+            crate::service_worker_runtime::ServiceWorkerRequestDestination::SharedWorker
+        }
+        moli_fetch::BrowserRequestMetadata::JsonModule => {
+            crate::service_worker_runtime::ServiceWorkerRequestDestination::Json
+        }
+        moli_fetch::BrowserRequestMetadata::TextModule => {
+            crate::service_worker_runtime::ServiceWorkerRequestDestination::Text
+        }
+        _ => crate::service_worker_runtime::ServiceWorkerRequestDestination::Script,
+    };
+    let worklet_context = state.audio_worklet_fetch_context.as_ref();
+    let referrer_url = worklet_context
+        .filter(|_| state.current_script_url.as_ref() == Some(request.referrer_url()))
+        .map(|context| &context.referrer_url)
+        .unwrap_or_else(|| request.referrer_url());
+    let request_origin = worklet_context
+        .map(|context| context.origin.clone())
+        .unwrap_or_else(|| moli_url::WebOrigin::from_url(request.initiator_url()));
     let mut fetch_request =
         match moli_fetch::Request::new("GET", request.url().as_str(), None, vec![]) {
             Ok(request) => request
                 .with_page_network_policy()
-                .with_network_partition_key(network_partition_key.clone())
+                .with_network_partition_key(state.network_partition_key.clone())
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
                 let _ = event_tx.send(WorkerModuleGraphFetchEvent::completed(
@@ -801,8 +865,8 @@ fn start_worker_module_graph_fetch(
             });
     }
     fetch_request = fetch_request
-        .with_initiator_url(request.initiator_url())
-        .with_request_origin(moli_url::WebOrigin::from_url(request.initiator_url()))
+        .with_initiator_url(referrer_url)
+        .with_request_origin(request_origin)
         .with_credentials_mode(request.credentials_mode());
     let redirects = crate::network_host::FetchCspRedirectState::new(&policy);
     let redirect_events = event_tx.clone();
@@ -821,21 +885,23 @@ fn start_worker_module_graph_fetch(
     let response_policy = policy.clone();
     let event_tx_for_callback = event_tx.clone();
     let response_started_at = Instant::now();
-    let send_completion = move |result: Result<moli_fetch::Response, anyhow::Error>| {
+    let send_completion = move |result: anyhow::Result<(
+        crate::protocol_types::NavigationResponse,
+        Option<moli_fetch::FetchResponseFilter>,
+        bool,
+    )>| {
         let result = result
             .map_err(|error| {
                 format!("failed to fetch module worker dependency `{requested_url}`: {error}")
             })
-            .and_then(|response| {
+            .and_then(|(response, service_worker_filter, from_service_worker)| {
                 moli_fetch::ensure_http_status_success(
                     response.final_url.as_str(),
                     response.status,
                     false,
                 )
                 .map_err(|error| error.to_string())?;
-                if !response.redirect_chain.is_empty()
-                    && !redirects.was_checked(&response.final_url)
-                {
+                if response.redirected && !redirects.was_checked(&response.final_url) {
                     let (reports, enforced) = response_policy
                         .check_redirect(&request_initiator_url, &response.final_url)
                         .into_violations();
@@ -848,13 +914,24 @@ fn start_worker_module_graph_fetch(
                         return Err(error);
                     }
                 }
-                crate::network_host::validate_fetch_response_security_policy(
-                    &request_initiator_url,
-                    &response.head(),
-                    moli_fetch::RequestMode::Cors,
-                    request_credentials_mode,
-                    Default::default(),
-                )?;
+                if from_service_worker {
+                    if service_worker_filter
+                        .as_ref()
+                        .is_some_and(|filter| !filter.is_readable())
+                    {
+                        return Err(
+                            "Service Worker returned an unreadable module response".to_owned()
+                        );
+                    }
+                } else {
+                    crate::network_host::validate_fetch_response_security_policy(
+                        &request_initiator_url,
+                        &response.head(),
+                        moli_fetch::RequestMode::Cors,
+                        request_credentials_mode,
+                        Default::default(),
+                    )?;
+                }
                 let response_kind = requested_module_type.response_kind(
                     &response.final_url,
                     &response.headers,
@@ -894,19 +971,66 @@ fn start_worker_module_graph_fetch(
         ));
         return;
     };
-    if let Err(error) = loader
-        .request_client()
-        .fetch_cacheable_script_text_callback_with_load(fetch_request, load, send_completion)
-    {
-        let completion = WorkerModuleGraphFetchEvent::completed(
-            fetch_id,
-            Err(format!(
-                "failed to start module worker dependency fetch `{}`: {error}",
-                request.url()
-            )),
-        );
-        let _ = event_tx.send(completion);
+    if moli_fetch::should_request_be_blocked_due_to_bad_port(&fetch_request.url) {
+        load.finish();
+        send_completion(Err(anyhow::anyhow!(
+            "module request blocked by bad port: {}",
+            fetch_request.url
+        )));
+        return;
     }
+    if load.blocks_url(&fetch_request.url) {
+        load.finish();
+        send_completion(Err(anyhow::anyhow!(
+            crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT
+        )));
+        return;
+    }
+    let client_id = worklet_context
+        .map(|context| context.service_worker_client_id)
+        .or(state.service_worker_client_id);
+    let runtime = state.service_worker_runtime.clone().zip(client_id);
+    let document_url = worklet_context
+        .map(|context| context.document_url.clone())
+        .or_else(|| state.current_script_url.clone())
+        .unwrap_or_else(|| request.initiator_url().clone());
+    let policy_context = state.policy_context;
+    let runner = load.task_runner();
+    let request_client = load.request_client();
+    let cancel = moli_fetch::FetchCancelHandle::new();
+    load.attach_cancel_handle(cancel.clone());
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    load.attach_consumer_cancel(move || {
+        let _ = cancel_tx.send(());
+    });
+    runner.clone().spawn(async move {
+        let result = tokio::select! {
+            result = async {
+                if let Some((runtime, client_id)) = runtime
+                    && let Some(response) = runtime.fetch_subresource_for_client(
+                        client_id, document_url, &fetch_request, &request_client, runner,
+                        destination, crate::types::SubresourceResourceType::Script,
+                        policy_context, cancel.clone(),
+                    ).await.map_err(anyhow::Error::msg)?
+                {
+                    return Ok((*response.response, response.response_filter, !response.from_network_fallback));
+                }
+                load.release_consumer_cancel();
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                request_client.fetch_cacheable_script_text_callback_with_load(fetch_request, load.clone(), move |result| {
+                    let _ = response_tx.send(result);
+                })?;
+                let response = response_rx.await.map_err(|_| anyhow::anyhow!("worker module response channel closed"))??;
+                Ok((response.into(), None, false))
+            } => result,
+            Ok(()) = cancel_rx => {
+                cancel.cancel();
+                Err(anyhow::anyhow!("module fetch cancelled when its Worker retired"))
+            }
+        };
+        load.finish();
+        send_completion(result);
+    });
 }
 
 fn start_worker_module_graph_fetch_batch(
@@ -914,20 +1038,9 @@ fn start_worker_module_graph_fetch_batch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchEvent>,
 ) {
+    let state = state.borrow();
     for request in requests.iter().cloned() {
-        start_worker_module_graph_fetch(
-            request,
-            state.borrow().loader.clone(),
-            state.borrow().network_partition_key.clone(),
-            state
-                .borrow()
-                .module_static_import_content_security_policies
-                .clone(),
-            state
-                .borrow()
-                .content_security_policy_snapshot_for_inheritance(),
-            module_graph_fetch_tx.clone(),
-        );
+        start_worker_module_graph_fetch(request, &state, module_graph_fetch_tx.clone());
     }
 }
 
@@ -1455,6 +1568,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         service_worker_updated_script_resources,
         service_worker_can_import_new_scripts,
         reserved_service_worker_client_id,
+        audio_worklet_fetch_context,
         indexed_db_manager,
         storage_bucket_store,
         bootstrap_completion_tx,
@@ -1528,6 +1642,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 service_worker_updated_script_resources,
                 service_worker_can_import_new_scripts,
                 reserved_service_worker_client_id,
+                audio_worklet_fetch_context,
                 indexed_db_manager,
                 storage_bucket_store,
                 bootstrap_completion_tx,
@@ -1671,6 +1786,7 @@ async fn worker_main(
     service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
     service_worker_can_import_new_scripts: bool,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+    audio_worklet_fetch_context: Option<AudioWorkletFetchContext>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     bootstrap_completion_tx: Option<mpsc::UnboundedSender<WorkerBootstrapCompletion>>,
@@ -1823,15 +1939,19 @@ async fn worker_main(
         &storage_key,
         &global_kind,
     );
-    let service_worker_worker_client = register_service_worker_worker_client(
-        service_worker_runtime.clone(),
-        reserved_service_worker_client_id,
-        current_script_url.as_ref(),
-        &storage_key,
-        &global_kind,
-        secure_context,
-        worker_wake_tx.clone(),
-    );
+    let service_worker_worker_client = if audio_worklet_fetch_context.is_some() {
+        None
+    } else {
+        register_service_worker_worker_client(
+            service_worker_runtime.clone(),
+            reserved_service_worker_client_id,
+            current_script_url.as_ref(),
+            &storage_key,
+            &global_kind,
+            secure_context,
+            worker_wake_tx.clone(),
+        )
+    };
     let service_worker_client_id = service_worker_worker_client
         .as_ref()
         .map(|client| client.client_id);
@@ -1916,6 +2036,7 @@ async fn worker_main(
         service_worker_objects: std::collections::HashMap::new(),
         service_worker_registrations: std::collections::HashMap::new(),
         service_worker_client_id,
+        audio_worklet_fetch_context,
         message_port_registry,
         message_port_wrappers: std::collections::HashMap::new(),
         shared_worker_connection_ports: std::collections::HashSet::new(),

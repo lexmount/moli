@@ -84,6 +84,7 @@ pub(super) fn service_worker_network_fallback_request_for_job(
         )
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
+            job.destination,
         ))
         .with_subframe_context(job.network_context.frame_id.is_some());
     if service_worker_fetch_is_navigation_request(job) {
@@ -203,6 +204,83 @@ fn apply_service_worker_synthetic_redirect(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) async fn fetch_subresource_for_client(
+        &self,
+        client_id: ServiceWorkerClientId,
+        document_url: Url,
+        request: &moli_fetch::Request,
+        request_client: &ResourceRequestClient,
+        resource_task_runner: crate::network::RendererResourceTaskRunner,
+        destination: ServiceWorkerRequestDestination,
+        resource_type: crate::types::SubresourceResourceType,
+        policy_context: crate::types::SubresourcePolicyContext,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) -> Result<Option<ServiceWorkerDirectFetchResponse>, String> {
+        if !matches!(request.url.scheme(), "http" | "https")
+            || self
+                .matching_controller_for_client_fetch(client_id, &request.url)
+                .is_none()
+        {
+            return Ok(None);
+        }
+        let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
+        let redirect_request = request.clone();
+        let dispatch = ServiceWorkerFetchDispatch {
+            request_body_owner: None,
+            redirect_check: Some(moli_fetch::RequestRedirectCheck::new(move |next_url| {
+                redirect_request.check_redirect_target(next_url)
+            })),
+            internal_id: 0,
+            request: ServiceWorkerFetchRequest {
+                body_stream: None,
+                client_id,
+                resulting_client_id: None,
+                url: request.url.clone(),
+                method: request.method.clone(),
+                headers: request.request_headers.to_byte_strings(),
+                body: request.body.clone(),
+                destination,
+                request_mode: request.request_mode,
+                credentials_mode: request.credentials_mode,
+                redirect_mode: request.redirect_mode(),
+                priority: request.priority_hints.fetch_priority,
+                is_reload: false,
+                metadata: service_worker_fetch_request_metadata(request),
+            },
+            cors_preflight_request_headers: Vec::new(),
+            request_cookie_report: None,
+            network_context: crate::types::AsyncSubresourceNetworkContext {
+                frame_id: None,
+                request_origin: request
+                    .browser_origin()
+                    .map_err(|error| error.to_string())?
+                    .clone(),
+                document_url,
+                resource_type,
+                policy_context,
+            },
+            completion_tx:
+                crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only(),
+            request_client: request_client.clone(),
+            resource_task_runner,
+            cancel_handle,
+            direct_completion_tx: Some(direct_completion_tx),
+        };
+        if !self.dispatch_controlled_fetch(dispatch) {
+            return Ok(None);
+        }
+        match direct_completion_rx.await {
+            Ok(
+                ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::Stream(_),
+            ) => Err("native subresource requests cannot contain an author stream".to_owned()),
+            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
+            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(response)),
+            Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(message),
+            Err(_) => Err("service worker subresource fetch completion channel closed".to_owned()),
+        }
+    }
+
     pub(crate) async fn fetch_main_resource_for_worker_client(
         &self,
         client_id: ServiceWorkerClientId,
@@ -854,27 +932,27 @@ fn matches_service_worker_respond_with_fetch_failure(message: &str) -> bool {
 
 fn service_worker_fetch_browser_metadata(
     resource_type: crate::types::SubresourceResourceType,
+    destination: ServiceWorkerRequestDestination,
 ) -> moli_fetch::BrowserRequestMetadata {
-    match resource_type {
-        crate::types::SubresourceResourceType::Audio => moli_fetch::BrowserRequestMetadata::Audio,
-        crate::types::SubresourceResourceType::Image => moli_fetch::BrowserRequestMetadata::Image,
-        crate::types::SubresourceResourceType::Font => moli_fetch::BrowserRequestMetadata::Font,
-        crate::types::SubresourceResourceType::TextTrack => {
-            moli_fetch::BrowserRequestMetadata::TextTrack
-        }
-        crate::types::SubresourceResourceType::Video => moli_fetch::BrowserRequestMetadata::Video,
-        crate::types::SubresourceResourceType::EventSource => {
-            moli_fetch::BrowserRequestMetadata::EventSource
-        }
-        crate::types::SubresourceResourceType::Manifest => {
-            moli_fetch::BrowserRequestMetadata::Manifest
-        }
-        crate::types::SubresourceResourceType::Xhr => moli_fetch::BrowserRequestMetadata::Xhr,
-        crate::types::SubresourceResourceType::Script => moli_fetch::BrowserRequestMetadata::Script,
-        crate::types::SubresourceResourceType::Stylesheet => {
-            moli_fetch::BrowserRequestMetadata::Style
-        }
-        _ => moli_fetch::BrowserRequestMetadata::Fetch,
+    use crate::types::SubresourceResourceType as Resource;
+    use moli_fetch::BrowserRequestMetadata as Metadata;
+    match (destination, resource_type) {
+        (ServiceWorkerRequestDestination::AudioWorklet, _) => Metadata::AudioWorklet,
+        (ServiceWorkerRequestDestination::Worker, _) => Metadata::Worker,
+        (ServiceWorkerRequestDestination::SharedWorker, _) => Metadata::SharedWorker,
+        (ServiceWorkerRequestDestination::Json, _) => Metadata::JsonModule,
+        (ServiceWorkerRequestDestination::Text, _) => Metadata::TextModule,
+        (_, Resource::Audio) => Metadata::Audio,
+        (_, Resource::Image) => Metadata::Image,
+        (_, Resource::Font) => Metadata::Font,
+        (_, Resource::TextTrack) => Metadata::TextTrack,
+        (_, Resource::Video) => Metadata::Video,
+        (_, Resource::EventSource) => Metadata::EventSource,
+        (_, Resource::Manifest) => Metadata::Manifest,
+        (_, Resource::Xhr) => Metadata::Xhr,
+        (_, Resource::Script) => Metadata::Script,
+        (_, Resource::Stylesheet) => Metadata::Style,
+        _ => Metadata::Fetch,
     }
 }
 

@@ -1197,6 +1197,7 @@ fn advance_worker_dynamic_module_import(
                         fetch_id,
                         module_key,
                         job.fetch_initiator_url.clone(),
+                        job.base_url.clone(),
                         WorkerModuleGraphFetchCspSource::DynamicImportGraph,
                         None,
                         job.specifier.clone(),
@@ -1731,6 +1732,7 @@ pub(super) struct WorkerModuleGraphFetchRequest {
     fetch_id: WorkerModuleGraphFetchId,
     key: WorkerModuleKey,
     initiator_url: Url,
+    referrer_url: Url,
     csp_source: WorkerModuleGraphFetchCspSource,
     parent_entry: Option<usize>,
     specifier: String,
@@ -1807,6 +1809,7 @@ impl WorkerModuleGraphFetchRequest {
         fetch_id: WorkerModuleGraphFetchId,
         key: WorkerModuleKey,
         initiator_url: Url,
+        referrer_url: Url,
         csp_source: WorkerModuleGraphFetchCspSource,
         parent_entry: Option<usize>,
         specifier: String,
@@ -1819,6 +1822,7 @@ impl WorkerModuleGraphFetchRequest {
             fetch_id,
             key,
             initiator_url,
+            referrer_url,
             csp_source,
             parent_entry,
             specifier,
@@ -1852,6 +1856,10 @@ impl WorkerModuleGraphFetchRequest {
 
     pub(super) fn initiator_url(&self) -> &Url {
         &self.initiator_url
+    }
+
+    pub(super) fn referrer_url(&self) -> &Url {
+        &self.referrer_url
     }
 
     pub(super) fn csp_source(&self) -> WorkerModuleGraphFetchCspSource {
@@ -2442,6 +2450,7 @@ fn resolve_worker_module_dependency(
             fetch_id,
             dependency_key,
             fetch_initiator_url.clone(),
+            url.clone(),
             csp_source,
             Some(entry),
             request.specifier.clone(),
@@ -3409,14 +3418,11 @@ fn audio_worklet_dynamic_import(
 }
 
 fn audio_worklet_bootstrap_module_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {
-    let global = scope.get_current_context().global(scope);
-    global
-        .get(
-            scope,
-            v8str(scope, "__moliAudioWorkletBootstrapModuleUrl").into(),
-        )
-        .and_then(|value| value.to_string(scope))
-        .and_then(|value| Url::parse(&value.to_rust_string_lossy(scope)).ok())
+    super::global_scope::get_worker_state(scope)?
+        .borrow()
+        .audio_worklet_fetch_context
+        .as_ref()
+        .map(|context| context.module_url.clone())
 }
 
 fn reject_audio_worklet_dynamic_import<'s>(

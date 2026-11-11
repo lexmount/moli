@@ -21,6 +21,8 @@ const WORKER_ID_SLOT: &str = "__moliWorkerId";
 const WORKER_ONMESSAGE_SLOT: &str = "__moliWorkerOnMessage";
 const WORKER_ONMESSAGEERROR_SLOT: &str = "__moliWorkerOnMessageError";
 const WORKER_ONERROR_SLOT: &str = "__moliWorkerOnError";
+pub(in crate::context_bootstrap) const AUDIO_WORKLET_WORKER_OPTION_SLOT: &str =
+    "__moliAudioWorkletWorker";
 
 mod constructor;
 mod dispatch;

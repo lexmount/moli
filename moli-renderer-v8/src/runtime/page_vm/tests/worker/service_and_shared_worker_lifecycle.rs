@@ -224,6 +224,115 @@ async fn service_worker_blob_dedicated_worker_inherits_parent_controller_for_fet
 }
 
 #[tokio::test]
+async fn service_worker_intercepts_worker_module_imports_with_worker_client_metadata() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let origin = format!("http://{address}");
+        let cross_origin = format!("http://localhost:{}", address.port());
+        let expected_referrer = format!("{origin}/");
+        let module_source = format!(
+            r#"import "{cross_origin}/worker/static.js";
+               import("{cross_origin}/worker/dynamic.js");"#
+        );
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            for index in 0..4 {
+                let accepted = if index < 2 {
+                    Some(listener.accept().await)
+                } else {
+                    tokio::time::timeout(Duration::from_millis(500), listener.accept()).await.ok()
+                };
+                let Some(accepted) = accepted else { break };
+                let (mut stream, _) = accepted.unwrap();
+                let request = read_http_request_head(&mut stream).await.unwrap();
+                let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                request_tx.send(path.to_owned()).unwrap();
+                let body = match path {
+                    "/sw.js" => r#"
+                        self.oninstall = event => event.waitUntil(self.skipWaiting());
+                        self.onfetch = event => {
+                            const path = new URL(event.request.url).pathname;
+                            if (path !== "/worker/static.js" && path !== "/worker/dynamic.js") return;
+                            const data = {path, destination: event.request.destination,
+                                mode: event.request.mode, clientId: event.clientId,
+                                resultingClientId: event.resultingClientId,
+                                referrer: event.request.referrer};
+                            event.respondWith(new Response(
+                                "postMessage(" + JSON.stringify(data) + ")",
+                                {headers: {"Content-Type": "text/javascript"}}));
+                        };
+                    "#,
+                    "/worker/main.js" => &module_source,
+                    _ => r#"postMessage({source: "network"})"#,
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let mut page_vm = test_page_vm_with_document_url(
+            Url::parse(&format!("{origin}/index.html")).unwrap()
+        );
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+                globalThis.moduleResults = [];
+                globalThis.moduleError = null;
+                globalThis.pageController = null;
+                (async () => {
+                    const registration = await navigator.serviceWorker.register("/sw.js", {
+                        scope: "/worker/main.js"
+                    });
+                    const active = registration.installing || registration.active;
+                    if (active.state !== "activated") {
+                        await new Promise(resolve => active.addEventListener("statechange", () => {
+                            if (active.state === "activated") resolve();
+                        }));
+                    }
+                    pageController = navigator.serviceWorker.controller;
+                    globalThis.moduleWorker = new Worker("/worker/main.js", {type: "module"});
+                    moduleWorker.onmessage = event => moduleResults.push(event.data);
+                    moduleWorker.onerror = event => moduleError = event.message;
+                })().catch(error => moduleError = String(error));
+            "#)?;
+            drive_service_worker_page_vm_until_done(
+                &mut page_vm,
+                "String(moduleResults.length === 2 || moduleError !== null)",
+                "controlled worker should intercept static and dynamic module imports",
+            ).await?;
+            assert_eq!(page_vm.vm_mut().eval("String(moduleError)")?, "null");
+            assert_eq!(page_vm.vm_mut().eval("String(pageController)")?, "null");
+            let results: serde_json::Value = serde_json::from_str(
+                &page_vm.vm_mut().eval("JSON.stringify(moduleResults)")?
+            )?;
+            let results = results.as_array().unwrap();
+            assert_eq!(results.len(), 2);
+            let client_id = results[0]["clientId"].as_str().unwrap();
+            assert!(!client_id.is_empty());
+            for (result, kind, destination) in [
+                (&results[0], "static", "worker"),
+                (&results[1], "dynamic", "script"),
+            ] {
+                assert_eq!(result["path"], format!("/worker/{kind}.js"));
+                assert_eq!(result["destination"], destination);
+                assert_eq!(result["mode"], "cors");
+                assert_eq!(result["clientId"], client_id);
+                assert_eq!(result["resultingClientId"], "");
+                assert_eq!(result["referrer"], expected_referrer);
+            }
+            anyhow::Ok(())
+        }).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(request_rx.recv().await.as_deref(), Some("/sw.js"));
+        assert_eq!(request_rx.recv().await.as_deref(), Some("/worker/main.js"));
+        assert!(request_rx.recv().await.is_none());
+    }).await;
+}
+
+#[tokio::test]
 async fn service_worker_blob_shared_worker_inherits_parent_controller_for_fetch() {
     run_page_vm_async_test(async move {
         let (base_url, sample_request_rx, server) =

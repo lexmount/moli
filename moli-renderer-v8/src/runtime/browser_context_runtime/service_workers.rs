@@ -307,76 +307,23 @@ impl RendererBrowserContextRuntime {
                 from_network_fallback: !preload.from_service_worker,
             }));
         }
-        if !matches!(request.url.scheme(), "http" | "https") {
+        let Some(runtime) = self.service_worker_runtime_if_initialized() else {
             return Ok(None);
-        }
-        if self
-            .service_worker_controller_for_fetch(client_id, &request.url)
-            .is_none()
-        {
-            return Ok(None);
-        }
-
-        let completion_tx =
-            crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
-        let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
-        let redirect_request = request.clone();
-        let dispatch = ServiceWorkerFetchDispatch {
-            request_body_owner: None,
-            redirect_check: Some(moli_fetch::RequestRedirectCheck::new(move |next_url| {
-                redirect_request.check_redirect_target(next_url)
-            })),
-            internal_id: 0,
-            request: ServiceWorkerFetchRequest {
-                body_stream: None,
-                client_id,
-                resulting_client_id: None,
-                url: request.url.clone(),
-                method: request.method.clone(),
-                headers: request.request_headers.to_byte_strings(),
-                body: request.body.clone(),
-                destination,
-                request_mode: request.request_mode,
-                credentials_mode: request.credentials_mode,
-                redirect_mode: request.redirect_mode(),
-                priority: request.priority_hints.fetch_priority,
-                is_reload: false,
-                metadata: service_worker_fetch_request_metadata(request),
-            },
-            cors_preflight_request_headers: Vec::new(),
-            request_cookie_report: None,
-            network_context: AsyncSubresourceNetworkContext {
-                frame_id: None,
-                request_origin: request.browser_origin()?.clone(),
-                document_url,
-                resource_type,
-                policy_context: Default::default(),
-            },
-            completion_tx,
-            request_client: request_client.clone(),
-            resource_task_runner,
-            cancel_handle,
-            direct_completion_tx: Some(direct_completion_tx),
         };
-
-        if !self.dispatch_service_worker_fetch(dispatch) {
-            return Ok(None);
-        }
-
-        match direct_completion_rx.await {
-            Ok(
-                ServiceWorkerDirectFetchResult::FallbackStream(_)
-                | ServiceWorkerDirectFetchResult::Stream(_),
-            ) => Err(anyhow!(
-                "native subresource requests cannot contain an author stream"
-            )),
-            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
-            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(response)),
-            Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(anyhow!(message)),
-            Err(_) => Err(anyhow!(
-                "service worker subresource fetch completion channel closed"
-            )),
-        }
+        runtime
+            .fetch_subresource_for_client(
+                client_id,
+                document_url,
+                request,
+                request_client,
+                resource_task_runner,
+                destination,
+                resource_type,
+                Default::default(),
+                cancel_handle,
+            )
+            .await
+            .map_err(anyhow::Error::msg)
     }
 
     fn force_update_service_worker_registration_for_page_load(

@@ -143,6 +143,8 @@ pub(crate) struct WorkerGlobalState {
     /// Live Service Worker client id for DedicatedWorker/SharedWorker globals.
     pub(in crate::worker) service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
+    pub(in crate::worker) audio_worklet_fetch_context:
+        Option<crate::worker::AudioWorkletFetchContext>,
     /// Owner-scoped MessagePort state shared with page and nested worker contexts.
     pub(in crate::worker) message_port_registry: SharedMessagePortRegistry,
     /// Worker-owned MessagePort wrappers keyed by runtime port id.
