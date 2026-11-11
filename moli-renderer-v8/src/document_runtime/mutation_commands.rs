@@ -1989,9 +1989,18 @@ fn start_connected_child_document_script(
                 ),
             }
         }
-        RuntimeScriptStartDecision::RegisterImportMap { .. }
-        | RuntimeScriptStartDecision::RejectExternalImportMap
+        RuntimeScriptStartDecision::RejectExternalImportMap
         | RuntimeScriptStartDecision::QueueFailed { .. } => {}
+        RuntimeScriptStartDecision::RegisterImportMap { source } => {
+            JsContextHost::register_child_dynamic_document_import_map(
+                scope,
+                host_ptr,
+                owner_document_handle,
+                node,
+                preparation,
+                source,
+            );
+        }
     }
 }
 

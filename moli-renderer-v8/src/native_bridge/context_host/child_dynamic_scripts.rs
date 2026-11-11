@@ -6,6 +6,63 @@ use crate::{
 };
 
 impl JsContextHost {
+    pub(crate) fn register_child_dynamic_document_import_map(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
+        document: DomHandle,
+        script: DomHandle,
+        preparation: RuntimeScriptPreparationContext,
+        source: String,
+    ) {
+        let (child, owner) = {
+            let host = unsafe { &mut *host_ptr };
+            let Some(child) =
+                host.child_browsing_context_handle_by_document_handle(scope, document)
+            else {
+                return;
+            };
+            let Some(owner) = host.current_child_document_task_owner(child) else {
+                return;
+            };
+            if host.child_browsing_context_document_handle(child) != Some(document)
+                || host.dom_host().owner_document_handle(script) != Some(document)
+            {
+                return;
+            }
+            let _ = host.dom_host_mut().set_script_already_started(script, true);
+            (child, owner)
+        };
+        let base_url = preparation.base_url().clone();
+        let metadata = preparation.into_fetch_metadata();
+        let Some(source) = crate::native_bridge::element::inline_script_source_for_execution(
+            scope,
+            host_ptr,
+            script,
+            &source,
+            crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
+                nonce: metadata.nonce.as_deref(),
+                integrity: None,
+                parser_inserted: false,
+            },
+        ) else {
+            return;
+        };
+        // Trusted Types policy callbacks may replace the Document or move the
+        // element. Register only for the preparation Document that still owns it.
+        let host = unsafe { &mut *host_ptr };
+        if host.current_child_document_task_owner(child) != Some(owner)
+            || host.child_browsing_context_document_handle(child) != Some(document)
+            || host.dom_host().owner_document_handle(script) != Some(document)
+        {
+            return;
+        }
+        if let Err(error) =
+            host.register_current_child_document_import_map(child, document, &source, &base_url)
+        {
+            tracing::warn!(?child, ?document, ?script, %error, "child dynamic import map registration failed");
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn queue_child_dynamic_external_classic_script_for_current_document(
         &mut self,
