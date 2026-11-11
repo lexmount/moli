@@ -54,8 +54,8 @@ impl CdpFrontendRouter {
         }
     }
 
-    /// Route a response through the ordinary command table, returning its
-    /// writer when the caller needs a flush confirmation before a side effect.
+    /// Route a response through the ordinary command table and return its
+    /// writer if the response was queued.
     pub(crate) fn enqueue_response(&self, message: Value) -> Option<CdpSocketSink> {
         let (frontend, message) = self.routing.lock().route_message(message, None, None)?;
         let sink = frontend.into_sink();
