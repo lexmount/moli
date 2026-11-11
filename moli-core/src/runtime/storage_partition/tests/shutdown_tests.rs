@@ -58,6 +58,7 @@ fn upgrade(client: &DatabaseClient, version: u64, store: &str) {
     execute(
         client,
         Command::CreateStore {
+            store: client.allocate_store_id().unwrap(),
             transaction: TX,
             name: store.into(),
             options: ObjectStoreOptions::default(),
@@ -97,7 +98,9 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
         .submit(
             Command::Count {
                 transaction: TX,
-                store: "kept".into(),
+                store: client.committed().unwrap().stores
+                    [&moli_indexeddb::IndexedDbName::from("kept")]
+                    .id,
                 source: Default::default(),
                 range: Default::default(),
             },

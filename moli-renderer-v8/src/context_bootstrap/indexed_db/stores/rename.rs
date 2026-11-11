@@ -34,9 +34,10 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_name_setter<'s>
         return;
     };
     let result = (|| {
-        let (transaction, database, handle, name) =
+        let (transaction, database, handle, metadata) =
             object_store_versionchange_common(scope, args.this())?;
-        if name == new_name {
+        let store_id = metadata.id();
+        if metadata.info().name == new_name {
             return Ok(());
         }
         if object_store_info_from_database_metadata(scope, database, &new_name).is_some() {
@@ -52,13 +53,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_name_setter<'s>
             client,
             Command::RenameStore {
                 transaction: handle,
-                name: name.clone(),
+                store: store_id,
                 new_name: new_name.clone(),
             },
             None,
         )?;
         if let Err(error) =
-            rename_indexed_db_object_store(scope, database, transaction, &name, &new_name)
+            rename_indexed_db_object_store(scope, database, transaction, store_id, &new_name)
         {
             schedule_schema_failure(scope, transaction, error);
         }
@@ -107,8 +108,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_name_setter<'s>(
                 "The index already exists".into(),
             ));
         }
+        let store_id =
+            crate::context_bootstrap::indexed_db::indexed_db_object_store_id(scope, store)
+                .ok_or_else(invalid)?;
+        let index_id = crate::context_bootstrap::indexed_db::indexed_db_index_id(scope, index)
+            .ok_or_else(invalid)?;
         let database = indexed_db_object_store_database(scope, store).ok_or_else(invalid)?;
-        let store_name = indexed_db_object_store_name(scope, store).ok_or_else(invalid)?;
         let handle =
             transaction_handle_from_value(scope, transaction.into()).ok_or_else(invalid)?;
         let client = indexed_db_request_sql_client(scope, transaction).ok_or_else(invalid)?;
@@ -118,20 +123,15 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_name_setter<'s>(
             client,
             Command::RenameIndex {
                 transaction: handle,
-                store: store_name.clone(),
-                name: info.name.clone(),
+                store: store_id,
+                index: index_id,
                 new_name: new_name.clone(),
             },
             None,
         )?;
-        if let Err(error) = rename_indexed_db_index(
-            scope,
-            database,
-            transaction,
-            &store_name,
-            &info.name,
-            &new_name,
-        ) {
+        if let Err(error) =
+            rename_indexed_db_index(scope, database, transaction, store_id, index_id, &new_name)
+        {
             schedule_schema_failure(scope, transaction, error);
         }
         Ok(())

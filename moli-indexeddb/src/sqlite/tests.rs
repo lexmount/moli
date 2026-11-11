@@ -81,7 +81,7 @@ fn database_versions_preserve_the_webidl_range_and_rollback() {
         begin(&mut database, TransactionMode::ReadOnly);
         assert_eq!(
             database
-                .get(TX, "a", &1.into())
+                .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),
@@ -114,7 +114,12 @@ fn commit_quota_failure_rolls_back_records_generator_and_usage() {
         assert_eq!(database.committed(), &original);
         assert!(!database.is_transaction_active());
         begin(&mut database, TransactionMode::ReadOnly);
-        assert_eq!(database.count(TX, "a").unwrap(), 0);
+        assert_eq!(
+            database
+                .count(TX, database.lookup_store_id("a").unwrap())
+                .unwrap(),
+            0
+        );
         database.commit(TX).unwrap();
     }
     begin(&mut database, TransactionMode::ReadWrite);
@@ -144,6 +149,7 @@ pub(super) fn database() -> Database {
         database
             .create_object_store(
                 TX,
+                database.allocate_store_id().unwrap(),
                 name,
                 ObjectStoreOptions {
                     auto_increment: true,
@@ -182,7 +188,15 @@ fn commit_metadata_failure_rolls_back_and_allows_the_next_transaction() {
 
 pub(super) fn begin(database: &mut Database, mode: TransactionMode) {
     database
-        .begin(TX, mode, BTreeSet::from(["a".into()]), None)
+        .begin(
+            TX,
+            mode,
+            (BTreeSet::from(["a".into()]))
+                .into_iter()
+                .map(|name: crate::IndexedDbName| database.lookup_store_id(name).unwrap())
+                .collect(),
+            None,
+        )
         .unwrap();
 }
 
@@ -195,7 +209,7 @@ pub(super) fn put(
 ) -> Result<Key, IndexedDbError> {
     database.write(
         TX,
-        "a",
+        database.lookup_store_id("a").unwrap(),
         RecordWrite {
             key,
             value: bytes.to_vec().into(),
@@ -206,21 +220,22 @@ pub(super) fn put(
     )
 }
 
-fn index_keys(key: &str) -> Vec<IndexKeys> {
+fn index_keys(index: IndexId, key: &str) -> Vec<IndexKeys> {
     vec![IndexKeys {
-        name: "unique".into(),
+        index,
         keys: vec![key.into()],
     }]
 }
 
-fn add_unique_index(database: &mut Database) {
+fn add_unique_index(database: &mut Database) -> IndexId {
     database
         .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(2))
         .unwrap();
     database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "unique",
             IndexOptions {
                 key_path: KeyPath::from("value"),
@@ -230,6 +245,9 @@ fn add_unique_index(database: &mut Database) {
         )
         .unwrap();
     database.commit(TX).unwrap();
+    database
+        .lookup_index_id(database.lookup_store_id("a").unwrap(), "unique")
+        .unwrap()
 }
 
 #[test]
@@ -241,7 +259,12 @@ fn committed_schema_and_usage_publish_only_after_commit_while_readers_overlap() 
         .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(1))
         .unwrap();
     database
-        .create_object_store(TX, "a", ObjectStoreOptions::default())
+        .create_object_store(
+            TX,
+            database.allocate_store_id().unwrap(),
+            "a",
+            ObjectStoreOptions::default(),
+        )
         .unwrap();
     assert_eq!(database.committed().version, 0);
     assert!(database.committed().stores.is_empty());
@@ -258,7 +281,10 @@ fn committed_schema_and_usage_publish_only_after_commit_while_readers_overlap() 
         .begin(
             second,
             TransactionMode::ReadOnly,
-            BTreeSet::from(["a".into()]),
+            (BTreeSet::from(["a".into()]))
+                .into_iter()
+                .map(|name: crate::IndexedDbName| database.lookup_store_id(name).unwrap())
+                .collect(),
             None,
         )
         .unwrap();
@@ -267,14 +293,22 @@ fn committed_schema_and_usage_publish_only_after_commit_while_readers_overlap() 
             .begin(
                 TransactionHandle::from_raw(3),
                 TransactionMode::ReadWrite,
-                BTreeSet::from(["a".into()]),
+                (BTreeSet::from(["a".into()]))
+                    .into_iter()
+                    .map(|name: crate::IndexedDbName| database.lookup_store_id(name).unwrap())
+                    .collect(),
                 None
             )
             .is_err()
     );
     database.commit(second).unwrap();
     assert!(matches!(
-        database.prepare_write(TX, "a", Some(1.into()), false),
+        database.prepare_write(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            Some(1.into()),
+            false
+        ),
         Err(IndexedDbError::ReadOnly(_))
     ));
     database.commit(TX).unwrap();
@@ -286,15 +320,18 @@ fn readonly_scope_and_transaction_identity_are_enforced_before_sql() {
     let mut database = database();
     begin(&mut database, TransactionMode::ReadOnly);
     assert!(matches!(
-        database.count(TX, "b"),
+        database.count(TX, database.lookup_store_id("b").unwrap()),
         Err(IndexedDbError::InvalidState(_))
     ));
     assert!(matches!(
-        database.count(TransactionHandle::from_raw(99), "a"),
+        database.count(
+            TransactionHandle::from_raw(99),
+            database.lookup_store_id("a").unwrap()
+        ),
         Err(IndexedDbError::TransactionInactive(_))
     ));
     assert!(matches!(
-        database.clear(TX, "a"),
+        database.clear(TX, database.lookup_store_id("a").unwrap()),
         Err(IndexedDbError::ReadOnly(_))
     ));
     database.abort(TX).unwrap();
@@ -310,7 +347,12 @@ fn quota_failure_rolls_back_generated_key_value_and_usage_but_allows_next_reques
         Err(IndexedDbError::QuotaExceeded { .. })
     ));
     assert!(database.is_transaction_active());
-    assert_eq!(database.count(TX, "a").unwrap(), 0);
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        0
+    );
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, initial);
     assert_eq!(
         put(&mut database, None, b"saved", vec![], None).unwrap(),
@@ -324,9 +366,11 @@ fn quota_failure_rolls_back_generated_key_value_and_usage_but_allows_next_reques
 #[test]
 fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
     let mut database = database();
-    add_unique_index(&mut database);
+    let unique_index = add_unique_index(&mut database);
     begin(&mut database, TransactionMode::ReadWrite);
-    let first = database.prepare_write(TX, "a", None, false).unwrap();
+    let first = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     let value = IndexedDbValue::new(
         vec![11],
         vec![External::Blob {
@@ -335,9 +379,22 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
         }],
     );
     database
-        .finish_write(TX, first.id, value.clone(), index_keys("first"), None)
+        .finish_write(
+            TX,
+            first.id,
+            value.clone(),
+            index_keys(unique_index, "first"),
+            None,
+        )
         .unwrap();
-    put(&mut database, None, b"second", index_keys("second"), None).unwrap();
+    put(
+        &mut database,
+        None,
+        b"second",
+        index_keys(unique_index, "second"),
+        None,
+    )
+    .unwrap();
     let usage = database.candidate_metadata(TX).unwrap().usage;
     let next_object: i64 = database
         .connection
@@ -346,7 +403,12 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
         })
         .unwrap();
     let replacement = database
-        .prepare_write(TX, "a", Some(1.into()), false)
+        .prepare_write(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            Some(1.into()),
+            false,
+        )
         .unwrap();
     let other = IndexedDbValue::new(
         vec![9],
@@ -358,10 +420,21 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
         }],
     );
     assert!(matches!(
-        database.finish_write(TX, replacement.id, other, index_keys("second"), None),
+        database.finish_write(
+            TX,
+            replacement.id,
+            other,
+            index_keys(unique_index, "second"),
+            None
+        ),
         Err(IndexedDbError::Constraint(_))
     ));
-    assert_eq!(database.get(TX, "a", &1.into()).unwrap(), Some(value));
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
+            .unwrap(),
+        Some(value)
+    );
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
     assert_eq!(
         database
@@ -381,7 +454,14 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
         2
     );
     assert_eq!(
-        put(&mut database, None, b"third", index_keys("third"), None).unwrap(),
+        put(
+            &mut database,
+            None,
+            b"third",
+            index_keys(unique_index, "third"),
+            None
+        )
+        .unwrap(),
         Key::from(3)
     );
     database.commit(TX).unwrap();
@@ -390,26 +470,59 @@ fn unique_conflict_restores_old_external_objects_indexes_and_id_counters() {
 #[test]
 fn failed_generated_unique_write_and_owner_cancellation_reuse_the_key() {
     let mut database = database();
-    add_unique_index(&mut database);
+    let unique_index = add_unique_index(&mut database);
     begin(&mut database, TransactionMode::ReadWrite);
-    put(&mut database, None, b"one", index_keys("same"), None).unwrap();
+    put(
+        &mut database,
+        None,
+        b"one",
+        index_keys(unique_index, "same"),
+        None,
+    )
+    .unwrap();
     assert!(matches!(
-        put(&mut database, None, b"bad", index_keys("same"), None),
+        put(
+            &mut database,
+            None,
+            b"bad",
+            index_keys(unique_index, "same"),
+            None
+        ),
         Err(IndexedDbError::Constraint(_))
     ));
-    let canceled = database.prepare_write(TX, "a", None, false).unwrap();
+    let canceled = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     assert_eq!(canceled.key, Key::from(2));
     assert!(database.commit(TX).is_err());
-    assert!(database.count(TX, "a").is_err());
+    assert!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .is_err()
+    );
     database.cancel_write(TX, canceled.id).unwrap();
-    let current = database.prepare_write(TX, "a", None, false).unwrap();
+    let current = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     assert_eq!(current.key, Key::from(2));
     assert!(matches!(
-        database.finish_write(TX, canceled.id, vec![0].into(), index_keys("new"), None),
+        database.finish_write(
+            TX,
+            canceled.id,
+            vec![0].into(),
+            index_keys(unique_index, "new"),
+            None
+        ),
         Err(IndexedDbError::InvalidState(_))
     ));
     database
-        .finish_write(TX, current.id, vec![2].into(), index_keys("new"), None)
+        .finish_write(
+            TX,
+            current.id,
+            vec![2].into(),
+            index_keys(unique_index, "new"),
+            None,
+        )
         .unwrap();
     database.commit(TX).unwrap();
 }
@@ -446,7 +559,9 @@ fn explicit_key_advancement_and_generator_boundary_rollback_are_atomic() {
             .unwrap(),
         1
     );
-    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    let request = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     assert_eq!(request.key, Key::from(MAX_AUTO_INCREMENT_KEY as i64));
     database.cancel_write(TX, request.id).unwrap();
     assert_eq!(
@@ -454,7 +569,7 @@ fn explicit_key_advancement_and_generator_boundary_rollback_are_atomic() {
         Key::from(MAX_AUTO_INCREMENT_KEY as i64)
     );
     assert!(matches!(
-        database.prepare_write(TX, "a", None, false),
+        database.prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false),
         Err(IndexedDbError::Constraint(_))
     ));
     assert!(database.is_transaction_active());
@@ -486,11 +601,17 @@ fn equal_zero_keys_preserve_record_representation_until_delete() {
         panic!()
     };
     assert_eq!(returned.value().to_bits(), 0.0_f64.to_bits());
-    let Key::Number(stored) = database.get_key(TX, "a", &positive).unwrap().unwrap() else {
+    let Key::Number(stored) = database
+        .get_key(TX, database.lookup_store_id("a").unwrap(), &positive)
+        .unwrap()
+        .unwrap()
+    else {
         panic!()
     };
     assert_eq!(stored.value().to_bits(), (-0.0_f64).to_bits());
-    database.delete(TX, "a", &positive).unwrap();
+    database
+        .delete(TX, database.lookup_store_id("a").unwrap(), &positive)
+        .unwrap();
     put(
         &mut database,
         Some(positive.clone()),
@@ -499,7 +620,11 @@ fn equal_zero_keys_preserve_record_representation_until_delete() {
         None,
     )
     .unwrap();
-    let Key::Number(stored) = database.get_key(TX, "a", &positive).unwrap().unwrap() else {
+    let Key::Number(stored) = database
+        .get_key(TX, database.lookup_store_id("a").unwrap(), &positive)
+        .unwrap()
+        .unwrap()
+    else {
         panic!()
     };
     assert_eq!(stored.value().to_bits(), 0.0_f64.to_bits());
@@ -516,10 +641,13 @@ fn upgrade_abort_restores_schema_data_generator_and_committed_usage() {
     database
         .begin(TX, TransactionMode::VersionChange, BTreeSet::new(), Some(2))
         .unwrap();
-    database.delete_object_store(TX, "a").unwrap();
+    database
+        .delete_object_store(TX, database.lookup_store_id("a").unwrap())
+        .unwrap();
     database
         .create_object_store(
             TX,
+            database.allocate_store_id().unwrap(),
             "a",
             ObjectStoreOptions {
                 auto_increment: true,
@@ -533,7 +661,7 @@ fn upgrade_abort_restores_schema_data_generator_and_committed_usage() {
     begin(&mut database, TransactionMode::ReadWrite);
     assert_eq!(
         database
-            .get(TX, "a", &1.into())
+            .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -561,7 +689,7 @@ fn sqlite_automatic_rollback_is_fatal_instead_of_a_recoverable_request_error() {
     ));
     assert!(!database.is_transaction_active());
     assert!(matches!(
-        database.count(TX, "a"),
+        database.count(TX, database.lookup_store_id("a").unwrap()),
         Err(IndexedDbError::TransactionInactive(_))
     ));
     database
@@ -569,7 +697,12 @@ fn sqlite_automatic_rollback_is_fatal_instead_of_a_recoverable_request_error() {
         .execute_batch("DROP TRIGGER fail_write")
         .unwrap();
     begin(&mut database, TransactionMode::ReadWrite);
-    assert_eq!(database.count(TX, "a").unwrap(), 0);
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        0
+    );
     assert_eq!(
         put(&mut database, None, b"fresh", vec![], None).unwrap(),
         Key::from(1)
@@ -580,7 +713,7 @@ fn sqlite_automatic_rollback_is_fatal_instead_of_a_recoverable_request_error() {
 #[test]
 fn failed_single_command_restores_deleted_values_indexes_and_usage() {
     let mut database = database();
-    add_unique_index(&mut database);
+    let unique_index = add_unique_index(&mut database);
     begin(&mut database, TransactionMode::ReadWrite);
     let value = IndexedDbValue::new(
         b"wire".to_vec(),
@@ -589,15 +722,30 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
             mime_type: "text/plain".into(),
         }],
     );
-    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    let request = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     database
-        .finish_write(TX, request.id, value.clone(), index_keys("first"), None)
+        .finish_write(
+            TX,
+            request.id,
+            value.clone(),
+            index_keys(unique_index, "first"),
+            None,
+        )
         .unwrap();
     database.commit(TX).unwrap();
     database.connection.execute_batch("CREATE TEMP TRIGGER fail_delete BEFORE DELETE ON main.records BEGIN SELECT RAISE(ABORT, 'injected request failure'); END").unwrap();
 
     begin(&mut database, TransactionMode::ReadWrite);
-    put(&mut database, None, b"second", index_keys("second"), None).unwrap();
+    put(
+        &mut database,
+        None,
+        b"second",
+        index_keys(unique_index, "second"),
+        None,
+    )
+    .unwrap();
     let usage = database.candidate_metadata(TX).unwrap().usage;
     let range = crate::KeyRange {
         lower: Some(1.into()),
@@ -605,19 +753,33 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
         ..Default::default()
     };
     assert!(matches!(
-        database.delete_range(TX, "a", &range),
+        database.delete_range(TX, database.lookup_store_id("a").unwrap(), &range),
         Err(IndexedDbError::Constraint(_))
     ));
     assert!(database.is_transaction_active());
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
-    assert_eq!(database.get(TX, "a", &1.into()).unwrap(), Some(value));
-    assert_eq!(database.count(TX, "a").unwrap(), 2);
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
+            .unwrap(),
+        Some(value)
+    );
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        2
+    );
     assert_eq!(
         database
             .query_count(
                 TX,
-                "a",
-                &QuerySource::Index("unique".into()),
+                database.lookup_store_id("a").unwrap(),
+                &QuerySource::Index(
+                    database
+                        .lookup_index_id(database.lookup_store_id("a").unwrap(), "unique")
+                        .unwrap()
+                ),
                 &Default::default()
             )
             .unwrap(),
@@ -628,12 +790,21 @@ fn failed_single_command_restores_deleted_values_indexes_and_usage() {
         .connection
         .execute_batch("DROP TRIGGER fail_delete")
         .unwrap();
-    database.delete_range(TX, "a", &range).unwrap();
+    database
+        .delete_range(TX, database.lookup_store_id("a").unwrap(), &range)
+        .unwrap();
     database.commit(TX).unwrap();
     begin(&mut database, TransactionMode::ReadOnly);
-    assert_eq!(database.count(TX, "a").unwrap(), 1);
     assert_eq!(
-        database.get(TX, "a", &2.into()).unwrap(),
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("a").unwrap(), &2.into())
+            .unwrap(),
         Some(b"second".to_vec().into())
     );
     database.commit(TX).unwrap();
@@ -646,7 +817,7 @@ fn single_command_automatic_rollback_aborts_prior_requests() {
     begin(&mut database, TransactionMode::ReadWrite);
     put(&mut database, None, b"first", vec![], None).unwrap();
     assert!(matches!(
-        database.clear(TX, "a"),
+        database.clear(TX, database.lookup_store_id("a").unwrap()),
         Err(IndexedDbError::TransactionInactive(_))
     ));
     assert!(!database.is_transaction_active());
@@ -655,7 +826,12 @@ fn single_command_automatic_rollback_aborts_prior_requests() {
         Err(IndexedDbError::TransactionInactive(_))
     ));
     begin(&mut database, TransactionMode::ReadWrite);
-    assert_eq!(database.count(TX, "a").unwrap(), 0);
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        0
+    );
     assert_eq!(
         put(&mut database, None, b"fresh", vec![], None).unwrap(),
         1.into()
@@ -669,7 +845,9 @@ fn lost_cross_command_savepoint_aborts_on_release_or_rollback_failure() {
         let mut database = database();
         begin(&mut database, TransactionMode::ReadWrite);
         put(&mut database, None, b"first", vec![], None).unwrap();
-        let request = database.prepare_write(TX, "a", None, false).unwrap();
+        let request = database
+            .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+            .unwrap();
         // Inject loss of the retained savepoint without ending the transaction.
         database
             .connection
@@ -688,7 +866,12 @@ fn lost_cross_command_savepoint_aborts_on_release_or_rollback_failure() {
         ));
         assert!(!database.is_transaction_active());
         begin(&mut database, TransactionMode::ReadWrite);
-        assert_eq!(database.count(TX, "a").unwrap(), 0);
+        assert_eq!(
+            database
+                .count(TX, database.lookup_store_id("a").unwrap())
+                .unwrap(),
+            0
+        );
         assert_eq!(
             put(&mut database, None, b"fresh", vec![], None).unwrap(),
             1.into()
@@ -721,11 +904,16 @@ fn chunked_values_roundtrip_and_delivered_bytes_survive_abort_and_close() {
             },
         ],
     );
-    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    let request = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     database
         .finish_write(TX, request.id, value.clone(), vec![], None)
         .unwrap();
-    let delivered = database.get(TX, "a", &1.into()).unwrap().unwrap();
+    let delivered = database
+        .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
+        .unwrap()
+        .unwrap();
     assert_eq!(delivered.wire_bytes(), value.wire_bytes());
     assert_eq!(
         &delivered.external_objects()[0],
@@ -762,12 +950,19 @@ fn key_only_queries_do_not_decode_corrupt_wire_chunks() {
         .execute("DELETE FROM record_chunks", [])
         .unwrap();
     assert_eq!(
-        database.get_key(TX, "a", &1.into()).unwrap(),
+        database
+            .get_key(TX, database.lookup_store_id("a").unwrap(), &1.into())
+            .unwrap(),
         Some(1.into())
     );
-    assert_eq!(database.count(TX, "a").unwrap(), 1);
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        1
+    );
     assert!(matches!(
-        database.get(TX, "a", &1.into()),
+        database.get(TX, database.lookup_store_id("a").unwrap(), &1.into()),
         Err(IndexedDbError::Corruption(_))
     ));
     database.abort(TX).unwrap();
@@ -776,10 +971,12 @@ fn key_only_queries_do_not_decode_corrupt_wire_chunks() {
 #[test]
 fn clearing_records_reclaims_chunks_slots_and_indexes_without_resetting_generator() {
     let mut database = database();
-    add_unique_index(&mut database);
+    let unique_index = add_unique_index(&mut database);
     let base_usage = database.committed().usage;
     begin(&mut database, TransactionMode::ReadWrite);
-    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    let request = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     database
         .finish_write(
             TX,
@@ -791,11 +988,13 @@ fn clearing_records_reclaims_chunks_slots_and_indexes_without_resetting_generato
                     mime_type: "x".into(),
                 }],
             ),
-            index_keys("saved"),
+            index_keys(unique_index, "saved"),
             None,
         )
         .unwrap();
-    database.clear(TX, "a").unwrap();
+    database
+        .clear(TX, database.lookup_store_id("a").unwrap())
+        .unwrap();
     for table in [
         "records",
         "record_chunks",
@@ -817,7 +1016,14 @@ fn clearing_records_reclaims_chunks_slots_and_indexes_without_resetting_generato
     }
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, base_usage);
     assert_eq!(
-        put(&mut database, None, b"two", index_keys("new"), None).unwrap(),
+        put(
+            &mut database,
+            None,
+            b"two",
+            index_keys(unique_index, "new"),
+            None
+        )
+        .unwrap(),
         Key::from(2)
     );
     database.commit(TX).unwrap();
@@ -837,7 +1043,8 @@ fn index_backfill_checks_uniqueness_and_upgrade_abort_removes_partial_index() {
     database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "unique",
             IndexOptions {
                 key_path: "value".into(),
@@ -847,10 +1054,26 @@ fn index_backfill_checks_uniqueness_and_upgrade_abort_removes_partial_index() {
         )
         .unwrap();
     database
-        .backfill_index_record(TX, "a", "unique", &1.into(), vec!["same".into()])
+        .backfill_index_record(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "unique")
+                .unwrap(),
+            &1.into(),
+            vec!["same".into()],
+        )
         .unwrap();
     assert!(matches!(
-        database.backfill_index_record(TX, "a", "unique", &2.into(), vec!["same".into()]),
+        database.backfill_index_record(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "unique")
+                .unwrap(),
+            &2.into(),
+            vec!["same".into()]
+        ),
         Err(IndexedDbError::Constraint(_))
     ));
     database.abort(TX).unwrap();
@@ -904,7 +1127,8 @@ fn multi_entry_deduplication_uses_key_equality_and_caller_cannot_disable_uniquen
     database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "multi",
             IndexOptions {
                 key_path: "values".into(),
@@ -915,9 +1139,12 @@ fn multi_entry_deduplication_uses_key_equality_and_caller_cannot_disable_uniquen
         .unwrap();
     database.commit(TX).unwrap();
     begin(&mut database, TransactionMode::ReadWrite);
+    let index_id = database
+        .lookup_index_id(database.lookup_store_id("a").unwrap(), "multi")
+        .unwrap();
     let keys = || {
         vec![IndexKeys {
-            name: "multi".into(),
+            index: index_id,
             keys: vec![
                 Key::number(-0.0).unwrap(),
                 Key::number(0.0).unwrap(),
@@ -939,7 +1166,12 @@ fn multi_entry_deduplication_uses_key_equality_and_caller_cannot_disable_uniquen
         put(&mut database, None, b"two", keys(), None),
         Err(IndexedDbError::Constraint(_))
     ));
-    assert_eq!(database.count(TX, "a").unwrap(), 1);
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        1
+    );
     database.commit(TX).unwrap();
 }
 
@@ -947,7 +1179,9 @@ fn multi_entry_deduplication_uses_key_equality_and_caller_cannot_disable_uniquen
 fn missing_external_slots_and_noncontiguous_chunks_are_reported_as_corruption() {
     let mut database = database();
     begin(&mut database, TransactionMode::ReadWrite);
-    let request = database.prepare_write(TX, "a", None, false).unwrap();
+    let request = database
+        .prepare_write(TX, database.lookup_store_id("a").unwrap(), None, false)
+        .unwrap();
     database
         .finish_write(
             TX,
@@ -974,7 +1208,7 @@ fn missing_external_slots_and_noncontiguous_chunks_are_reported_as_corruption() 
         database.connection.execute_batch(damage).unwrap();
         assert!(
             matches!(
-                database.get(TX, "a", &1.into()),
+                database.get(TX, database.lookup_store_id("a").unwrap(), &1.into()),
                 Err(IndexedDbError::Corruption(_))
             ),
             "{damage}"
@@ -1007,6 +1241,7 @@ fn disk_owner_recovers_committed_schema_values_and_high_water_mark() {
     database
         .create_object_store(
             TX,
+            database.allocate_store_id().unwrap(),
             "a",
             ObjectStoreOptions {
                 auto_increment: true,
@@ -1025,10 +1260,15 @@ fn disk_owner_recovers_committed_schema_values_and_high_water_mark() {
     let mut database = Database::open(connection, identity()).unwrap();
     assert_eq!(database.committed(), &original);
     begin(&mut database, TransactionMode::ReadWrite);
-    assert_eq!(database.count(TX, "a").unwrap(), 1);
     assert_eq!(
         database
-            .get(TX, "a", &1.into())
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),

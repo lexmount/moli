@@ -194,9 +194,11 @@ fn seed_indexed_db_usage(
         },
     )
     .unwrap();
+    let store = client.allocate_store_id().unwrap();
     execute_indexed_db_command(
         &client,
         Command::CreateStore {
+            store,
             transaction,
             name: "items".into(),
             options: Default::default(),
@@ -207,7 +209,7 @@ fn seed_indexed_db_usage(
         &client,
         Command::Write {
             transaction,
-            store: "items".into(),
+            store,
             key: Some("key".into()),
             value: b"value".to_vec().into(),
             indexes: vec![],

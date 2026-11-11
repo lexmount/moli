@@ -26,7 +26,7 @@ use super::{
     take_indexed_db_transaction_operations, transaction_handle_from_value,
     unregister_regular_transaction, v8str,
 };
-use super::{indexed_db_index_info, indexed_db_typed_execution_owner, serialize_js_value};
+use super::{indexed_db_typed_execution_owner, serialize_js_value};
 use crate::util::enqueue_host_microtask;
 
 use super::{

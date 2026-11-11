@@ -16,6 +16,7 @@ mod rename_tests;
 mod sharing_tests;
 
 struct SqlBackend {
+    store_id: moli_indexeddb::sqlite::StoreId,
     client: DatabaseClient,
     _service: ServiceClient,
     manager: crate::SharedIndexedDbManager,
@@ -30,6 +31,21 @@ impl Drop for SqlBackend {
 }
 
 impl SqlBackend {
+    fn index_id(
+        &self,
+        name: impl Into<moli_indexeddb::IndexedDbName>,
+    ) -> moli_indexeddb::sqlite::IndexId {
+        self.client
+            .committed()
+            .unwrap()
+            .stores
+            .values()
+            .find(|store| store.id == self.store_id)
+            .unwrap()
+            .indexes[&name.into()]
+            .id
+    }
+
     fn upgrade(&self, vm: &mut ScriptVm) {
         let handle = self.client.allocate_transaction_handle().unwrap();
         let version = self.client.committed().unwrap().version + 1;
@@ -97,7 +113,9 @@ impl SqlBackend {
             moli_indexeddb::IndexedDbManager::with_sqlite_service(service),
         ));
         let buckets = crate::new_shared_storage_bucket_store_with_indexed_db_manager(&manager);
+        let store_id = client.allocate_store_id().unwrap();
         let backend = Self {
+            store_id,
             client,
             _service: service_client,
             manager,
@@ -113,6 +131,7 @@ impl SqlBackend {
             admission: None,
         });
         backend.execute(Command::CreateStore {
+            store: backend.store_id,
             transaction,
             name: "records".into(),
             options: ObjectStoreOptions {
@@ -121,8 +140,9 @@ impl SqlBackend {
             },
         });
         backend.execute(Command::CreateIndex {
+            index: backend.client.allocate_index_id().unwrap(),
             transaction,
-            store: "records".into(),
+            store: backend.store_id,
             name: "unique".into(),
             options: IndexOptions {
                 key_path: KeyPath::String("group".into()),
@@ -160,7 +180,7 @@ impl SqlBackend {
             .submit(
                 Command::Count {
                     transaction: moli_indexeddb::TransactionHandle::from_raw(0),
-                    store: "records".into(),
+                    store: self.store_id,
                     source: Default::default(),
                     range: Default::default(),
                 },
@@ -695,7 +715,7 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
     let admission = backend
         .connection()
         .queue_transaction_start(
-            &["records".into()],
+            &[backend.store_id],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),
         )
@@ -703,17 +723,17 @@ async fn idb_sqlite_schema_corrupt_wire_aborts_backfill_instead_of_skipping_a_ro
     backend.execute(Command::Begin {
         transaction: handle,
         mode: TransactionMode::ReadWrite,
-        stores: BTreeSet::from(["records".into()]),
+        stores: BTreeSet::from([backend.store_id]),
         version: None,
         admission: Some(admission.handle().clone()),
     });
     backend.execute(Command::Write {
         transaction: handle,
-        store: "records".into(),
+        store: backend.store_id,
         key: Some(1.into()),
         value: vec![0xff].into(),
         indexes: vec![moli_indexeddb::sqlite::IndexKeys {
-            name: "unique".into(),
+            index: backend.index_id("unique"),
             keys: vec!["g".into()],
         }],
         add_only: false,

@@ -268,7 +268,7 @@ async fn idb_sqlite_key_cursor_never_decodes_wire_and_value_cursor_propagates_de
     let admission = backend
         .connection()
         .queue_transaction_start(
-            &["records".into()],
+            &[backend.store_id],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),
         )
@@ -276,17 +276,17 @@ async fn idb_sqlite_key_cursor_never_decodes_wire_and_value_cursor_propagates_de
     backend.execute(Command::Begin {
         transaction: handle,
         mode: TransactionMode::ReadWrite,
-        stores: BTreeSet::from(["records".into()]),
+        stores: BTreeSet::from([backend.store_id]),
         version: None,
         admission: Some(admission.handle().clone()),
     });
     backend.execute(Command::Write {
         transaction: handle,
-        store: "records".into(),
+        store: backend.store_id,
         key: Some(1.into()),
         value: vec![0xff].into(),
         indexes: vec![moli_indexeddb::sqlite::IndexKeys {
-            name: "unique".into(),
+            index: backend.index_id("unique"),
             keys: vec!["g".into()],
         }],
         add_only: false,
@@ -372,7 +372,7 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
         let admission = backend
             .connection()
             .queue_transaction_start(
-                &["records".into()],
+                &[backend.store_id],
                 TransactionMode::ReadOnly,
                 std::sync::Arc::new(move || notify.notify_one()),
             )
@@ -415,13 +415,13 @@ async fn idb_sqlite_cursor_listener_termination_rolls_back_only_automatic_commit
         backend.execute(Command::Begin {
             transaction: handle,
             mode: TransactionMode::ReadOnly,
-            stores: BTreeSet::from(["records".into()]),
+            stores: BTreeSet::from([backend.store_id]),
             version: None,
             admission: Some(admission.handle().clone()),
         });
         let CommandResult::Count(count) = backend.execute(Command::Count {
             transaction: handle,
-            store: "records".into(),
+            store: backend.store_id,
             source: Default::default(),
             range: Default::default(),
         }) else {

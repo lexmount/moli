@@ -59,7 +59,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         let command = Command::Begin {
             transaction: handle,
             mode,
-            stores: request.store_names().into_iter().collect(),
+            stores: request.stores().into_iter().collect(),
             version: None,
             admission: Some(request),
         };

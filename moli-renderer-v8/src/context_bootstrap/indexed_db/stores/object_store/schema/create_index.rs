@@ -40,7 +40,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
     let unique = parsed.options.unique;
     let multi_entry = parsed.options.multi_entry;
     let store = args.this();
-    let (transaction, database, handle, store_name) =
+    let (transaction, database, handle, metadata) =
         match object_store_versionchange_common(scope, store) {
             Ok(values) => values,
             Err(error) => {
@@ -49,6 +49,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
                 return;
             }
         };
+    let store_id = metadata.id();
+    let store_name = metadata.info().name.clone();
     let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
         return;
     };
@@ -71,27 +73,32 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_create_index_ca
             unique,
             multi_entry,
         };
-        schedule_schema_operation(
-            scope,
-            transaction,
-            client,
-            Command::CreateIndex {
-                transaction: handle,
-                store: store_name.clone(),
-                name: index_name,
-                options: IndexOptions {
-                    key_path,
-                    unique,
-                    multi_entry,
+        client.allocate_index_id().and_then(|index_id| {
+            schedule_schema_operation(
+                scope,
+                transaction,
+                client,
+                Command::CreateIndex {
+                    transaction: handle,
+                    store: store_id,
+                    index: index_id,
+                    name: index_name,
+                    options: IndexOptions {
+                        key_path,
+                        unique,
+                        multi_entry,
+                    },
                 },
-            },
-            Some((store_name.clone(), info.clone())),
-        )
-        .map(|()| info)
+                Some((store_id, index_id, info.clone())),
+            )
+            .map(|()| (info, index_id))
+        })
     };
     match result {
-        Ok(info) => {
-            if let Err(error) = set_database_index_metadata(scope, database, &store_name, &info) {
+        Ok((info, index_id)) => {
+            if let Err(error) =
+                set_database_index_metadata(scope, database, &store_name, &info, index_id)
+            {
                 schedule_schema_failure(scope, transaction, error);
                 if let Some(index) = create_failed_index_object(scope, store, &info) {
                     rv.set(index.into());

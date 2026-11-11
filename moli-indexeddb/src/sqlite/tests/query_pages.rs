@@ -4,7 +4,9 @@ use crate::CursorDirection;
 fn paged(database: &Database, mut query: Query) -> Vec<crate::RecordSnapshot> {
     let mut result = Vec::new();
     loop {
-        let page = database.query_page(TX, "a", &query).unwrap();
+        let page = database
+            .query_page(TX, database.lookup_store_id("a").unwrap(), &query)
+            .unwrap();
         assert!(page.records.len() <= 1000);
         assert!(!page.has_more || !page.records.is_empty());
         query.limit -= page.records.len() as u32;
@@ -32,7 +34,8 @@ fn query_pages_preserve_index_tuples_direction_uniqueness_range_and_count() {
     database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "group",
             IndexOptions {
                 key_path: KeyPath::String("group".into()),
@@ -43,13 +46,16 @@ fn query_pages_preserve_index_tuples_direction_uniqueness_range_and_count() {
         .unwrap();
     database.commit(TX).unwrap();
     begin(&mut database, TransactionMode::ReadWrite);
+    let index_id = database
+        .lookup_index_id(database.lookup_store_id("a").unwrap(), "group")
+        .unwrap();
     for id in 1_i64..=2505 {
         put(
             &mut database,
             Some(id.into()),
             &[1, 2, 3],
             vec![IndexKeys {
-                name: "group".into(),
+                index: index_id,
                 keys: vec![if id <= 2001 { "duplicate" } else { "tail" }.into()],
             }],
             None,
@@ -58,7 +64,7 @@ fn query_pages_preserve_index_tuples_direction_uniqueness_range_and_count() {
     }
     database.commit(TX).unwrap();
     begin(&mut database, TransactionMode::ReadOnly);
-    for source in [QuerySource::ObjectStore, QuerySource::Index("group".into())] {
+    for source in [QuerySource::ObjectStore, QuerySource::Index(index_id)] {
         for direction in [
             CursorDirection::Next,
             CursorDirection::Prev,
@@ -74,7 +80,9 @@ fn query_pages_preserve_index_tuples_direction_uniqueness_range_and_count() {
                         keys_only,
                         ..Default::default()
                     };
-                    let expected = database.query(TX, "a", &query).unwrap();
+                    let expected = database
+                        .query(TX, database.lookup_store_id("a").unwrap(), &query)
+                        .unwrap();
                     assert_eq!(paged(&database, query), expected);
                 }
             }
@@ -116,7 +124,9 @@ fn query_page_soft_targets_deliver_large_rows_and_key_pages_skip_corrupt_bodies(
         limit: u32::MAX,
         ..Default::default()
     };
-    let first = database.query_page(TX, "a", &query).unwrap();
+    let first = database
+        .query_page(TX, database.lookup_store_id("a").unwrap(), &query)
+        .unwrap();
     assert_eq!(first.records.len(), 1);
     assert!(first.has_more);
     assert_eq!(
@@ -134,9 +144,15 @@ fn query_page_soft_targets_deliver_large_rows_and_key_pages_skip_corrupt_bodies(
         keys_only: true,
         ..query.clone()
     };
-    let page = database.query_page(TX, "a", &keys).unwrap();
+    let page = database
+        .query_page(TX, database.lookup_store_id("a").unwrap(), &keys)
+        .unwrap();
     assert_eq!(page.records.len(), 2);
     assert!(!page.has_more);
     assert!(page.records.iter().all(|record| record.value.is_none()));
-    assert!(database.query_page(TX, "a", &query).is_err());
+    assert!(
+        database
+            .query_page(TX, database.lookup_store_id("a").unwrap(), &query)
+            .is_err()
+    );
 }

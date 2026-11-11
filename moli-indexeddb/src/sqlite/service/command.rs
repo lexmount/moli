@@ -1,57 +1,60 @@
 use std::collections::BTreeSet;
 
 use super::super::*;
-use crate::{IndexedDbValue, TransactionRequestHandle};
+use super::TransactionRequestHandle;
+use crate::IndexedDbValue;
 
 /// Only native, owned payloads cross the database worker boundary.
 pub enum Command {
     Begin {
         transaction: TransactionHandle,
         mode: TransactionMode,
-        stores: BTreeSet<crate::IndexedDbName>,
+        stores: BTreeSet<StoreId>,
         version: Option<u64>,
         admission: Option<TransactionRequestHandle>,
     },
     CreateStore {
         transaction: TransactionHandle,
+        store: StoreId,
         name: crate::IndexedDbName,
         options: ObjectStoreOptions,
     },
     DeleteStore {
         transaction: TransactionHandle,
-        name: crate::IndexedDbName,
+        store: StoreId,
     },
     RenameStore {
         transaction: TransactionHandle,
-        name: crate::IndexedDbName,
+        store: StoreId,
         new_name: crate::IndexedDbName,
     },
     CreateIndex {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
+        index: IndexId,
         name: crate::IndexedDbName,
         options: IndexOptions,
     },
     DeleteIndex {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
-        name: crate::IndexedDbName,
+        store: StoreId,
+        index: IndexId,
     },
     RenameIndex {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
-        name: crate::IndexedDbName,
+        store: StoreId,
+        index: IndexId,
         new_name: crate::IndexedDbName,
     },
     /// Only an auto-generated numeric inline key needs a renderer round trip.
     PrepareWrite {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         add_only: bool,
     },
     Write {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         key: Option<Key>,
         value: IndexedDbValue,
         indexes: Vec<IndexKeys>,
@@ -71,30 +74,30 @@ pub enum Command {
     },
     BackfillIndex {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
-        name: crate::IndexedDbName,
+        store: StoreId,
+        index: IndexId,
         primary_key: Key,
         keys: Vec<Key>,
     },
     Query {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         query: Query,
     },
     QueryPage {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         query: Query,
     },
     Count {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         source: QuerySource,
         range: crate::KeyRange,
     },
     Delete {
         transaction: TransactionHandle,
-        store: crate::IndexedDbName,
+        store: StoreId,
         range: crate::KeyRange,
     },
     Commit {

@@ -1,5 +1,6 @@
 use super::*;
 use crate::util::RealmValueHandle;
+use moli_indexeddb::sqlite::{IndexId, StoreId};
 use moli_storage_service::StorageBucketIdentity;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -323,7 +324,7 @@ struct IndexedDbTransactionLifecycleState {
     handle: Option<TransactionHandle>,
     sql_client: Option<moli_indexeddb::sqlite::service::DatabaseClient>,
     sql_rollback: Option<sql::SqlTransactionRollback>,
-    start_request: Option<moli_indexeddb::TransactionRequestLease>,
+    start_request: Option<moli_indexeddb::TransactionRequestLease<StoreId>>,
     active: bool,
     committing: bool,
     finished: bool,
@@ -482,7 +483,7 @@ impl IndexedDbObjectStoreLifecycleState {
 }
 
 struct IndexedDbIndexLifecycleState {
-    identity: Rc<()>,
+    schema_id: IndexId,
     object_store: v8::Weak<v8::Object>,
     info: Rc<IndexInfo>,
     marker: bool,
@@ -496,12 +497,12 @@ impl IndexedDbIndexLifecycleState {
         index: v8::Local<'_, v8::Object>,
         object_store: v8::Local<'_, v8::Object>,
         info: Rc<IndexInfo>,
-        identity: Rc<()>,
+        schema_id: IndexId,
         created_in_upgrade: bool,
     ) -> Self {
         set_private_value(scope, index, INDEX_OBJECT_STORE, object_store.into());
         Self {
-            identity,
+            schema_id,
             object_store: v8::Weak::new(scope, object_store),
             info,
             marker: true,
@@ -1401,7 +1402,7 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
     let id = indexed_db_typed_state_id(scope, index)?;
     let metadata = indexed_db_object_store_metadata(scope, object_store)?;
     let created_in_upgrade = metadata.index_created_in_upgrade(&info.name);
-    let identity = Rc::clone(&metadata.indexes.get(&info.name)?.identity);
+    let schema_id = metadata.indexes.get(&info.name)?.id;
     let info = metadata.shared_index(&info.name)?;
     let database = indexed_db_object_store_database(scope, object_store);
     let table = indexed_db_runtime_state_table_for_object(scope, index);
@@ -1410,7 +1411,7 @@ pub(super) fn register_indexed_db_index_lifecycle<'s>(
         index,
         object_store,
         info,
-        identity,
+        schema_id,
         created_in_upgrade,
     );
     let state = Rc::new(RefCell::new(state));
@@ -1926,6 +1927,7 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     store_name: &moli_indexeddb::IndexedDbName,
     info: &IndexInfo,
+    index_id: IndexId,
 ) -> Result<(), IndexedDbError> {
     indexed_db_database_sql_client(scope, database).ok_or_else(missing_mirror)?;
     let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
@@ -1934,7 +1936,7 @@ pub(super) fn set_indexed_db_database_index_metadata<'s>(
     let store = current
         .get(store_name)
         .ok_or_else(missing_mirror)?
-        .with_index(info);
+        .with_index(index_id, info);
     let candidate = edit_shared(current, |map| {
         *map.get_mut(store_name).expect("store in current candidate") = store;
     });
@@ -1992,6 +1994,25 @@ pub(super) fn indexed_db_object_store_database<'s>(
         .database
         .to_local(scope)
 }
+pub(super) fn indexed_db_object_store_id(
+    scope: &mut v8::PinScope<'_, '_>,
+    store: v8::Local<'_, v8::Object>,
+) -> Option<StoreId> {
+    Some(
+        object_store_native_state(scope, store)?
+            .borrow()
+            .metadata
+            .id,
+    )
+}
+
+pub(super) fn indexed_db_index_id(
+    scope: &mut v8::PinScope<'_, '_>,
+    index: v8::Local<'_, v8::Object>,
+) -> Option<IndexId> {
+    Some(index_native_state(scope, index)?.borrow().schema_id)
+}
+
 pub(super) fn indexed_db_object_store_name(
     scope: &mut v8::PinScope<'_, '_>,
     store: v8::Local<'_, v8::Object>,
@@ -2523,7 +2544,7 @@ fn set_indexed_db_typed_task_id<'s>(
 pub(super) fn set_indexed_db_transaction_start_request(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
-    request: moli_indexeddb::TransactionRequestLease,
+    request: moli_indexeddb::TransactionRequestLease<StoreId>,
 ) {
     let id = indexed_db_typed_state_id(scope, transaction).expect("transaction id");
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
@@ -2536,7 +2557,7 @@ pub(super) fn set_indexed_db_transaction_start_request(
 pub(super) fn indexed_db_transaction_start_request(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
-) -> Option<moli_indexeddb::TransactionRequestHandle> {
+) -> Option<moli_indexeddb::TransactionRequestHandle<StoreId>> {
     let id = indexed_db_typed_state_id(scope, transaction)?;
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     Some(
@@ -2831,12 +2852,15 @@ mod tests {
 
     #[test]
     fn object_store_metadata_tracks_index_lifecycle() {
-        let mut metadata = IndexedDbObjectStoreMetadata::from_info(&ObjectStoreInfo {
-            name: "posts".into(),
-            key_path: None,
-            auto_increment: false,
-            index_names: Vec::new(),
-        });
+        let mut metadata = IndexedDbObjectStoreMetadata::from_info(
+            StoreId::from_raw(1),
+            &ObjectStoreInfo {
+                name: "posts".into(),
+                key_path: None,
+                auto_increment: false,
+                index_names: Vec::new(),
+            },
+        );
         let index = IndexInfo {
             name: "by-tag".into(),
             key_path: KeyPath::String("tag".to_owned()),
@@ -2844,7 +2868,7 @@ mod tests {
             multi_entry: false,
         };
 
-        metadata = metadata.with_index(&index);
+        metadata = metadata.with_index(IndexId::from_raw(1), &index);
 
         assert_eq!(metadata.info().index_names, ["by-tag"]);
         assert_eq!(metadata.index(&"by-tag".into()), Some(&index));

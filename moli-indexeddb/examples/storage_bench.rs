@@ -1,12 +1,11 @@
 //! Native SQLite command latency, including worker dispatch and transaction
 //! admission. Each sample uses a fresh logical database and one real connection.
 use moli_indexeddb::sqlite::{
-    Query,
+    Query, StoreId,
     service::{Command, CommandResult, Completion, DatabaseClient, Service},
 };
 use moli_indexeddb::{Key, KeyRange, ObjectStoreOptions, TransactionHandle, TransactionMode};
 use std::{
-    collections::BTreeSet,
     error::Error,
     fs,
     hint::black_box,
@@ -42,14 +41,17 @@ fn begin(
     client: &DatabaseClient,
     transaction: TransactionHandle,
     mode: TransactionMode,
-    admission: Option<moli_indexeddb::TransactionRequestHandle>,
+    admission: Option<moli_indexeddb::TransactionRequestHandle<StoreId>>,
 ) -> Result<(), Box<dyn Error>> {
     execute(
         client,
         Command::Begin {
             transaction,
             mode,
-            stores: BTreeSet::from(["store".into()]),
+            stores: admission
+                .as_ref()
+                .map(|request| request.stores().into_iter().collect())
+                .unwrap_or_default(),
             version: None,
             admission,
         },
@@ -57,10 +59,10 @@ fn begin(
     Ok(())
 }
 
-fn write(transaction: TransactionHandle, key: Key, byte: u8) -> Command {
+fn write(store: StoreId, transaction: TransactionHandle, key: Key, byte: u8) -> Command {
     Command::Write {
         transaction,
-        store: "store".into(),
+        store,
         key: Some(key),
         value: vec![byte; 128].into(),
         indexes: vec![],
@@ -128,10 +130,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let _ = sender.send(reply);
             })?;
             receive(receiver)?;
+            let store = client.allocate_store_id()?;
             execute(
                 &client,
                 Command::CreateStore {
                     transaction,
+                    store,
                     name: "store".into(),
                     options: ObjectStoreOptions::default(),
                 },
@@ -143,7 +147,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     quota: None,
                 },
             )?;
-            let stores = [moli_indexeddb::IndexedDbName::from("store")];
+            let stores = [store];
             let transaction = client.allocate_transaction_handle()?;
             let lease = connection.queue_transaction_start(
                 &stores,
@@ -157,7 +161,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Some(lease.handle().clone()),
             )?;
             for key in 0..count_i64 {
-                execute(&client, write(transaction, key.into(), 0x61))?;
+                execute(&client, write(store, transaction, key.into(), 0x61))?;
             }
             execute(
                 &client,
@@ -191,7 +195,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             &client,
                             Command::Query {
                                 transaction,
-                                store: "store".into(),
+                                store,
                                 query: Query {
                                     range,
                                     ..Default::default()
@@ -212,14 +216,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                         black_box(reply);
                     }
                     "update" => {
-                        execute(&client, write(transaction, key, 0x62))?;
+                        execute(&client, write(store, transaction, key, 0x62))?;
                     }
                     _ => {
                         execute(
                             &client,
                             Command::Delete {
                                 transaction,
-                                store: "store".into(),
+                                store,
                                 range,
                             },
                         )?;

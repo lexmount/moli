@@ -161,14 +161,16 @@ mod tests {
                 version: Some(1),
                 admission: None,
             });
+            let sql_store_id = client.allocate_store_id().unwrap();
             execute(Command::CreateStore {
+                store: sql_store_id,
                 transaction,
                 name: "items".into(),
                 options: ObjectStoreOptions::default(),
             });
             execute(Command::Write {
                 transaction,
-                store: "items".into(),
+                store: sql_store_id,
                 key: Some(Key::from("alpha")),
                 value: b"first".to_vec().into(),
                 indexes: vec![],

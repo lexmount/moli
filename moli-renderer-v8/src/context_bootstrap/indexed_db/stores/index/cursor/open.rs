@@ -22,7 +22,7 @@ fn idb_index_open_cursor_impl<'s>(
     let Some(request) = create_operation_request(scope, index, transaction) else {
         return;
     };
-    let operation = IndexedDbCursorOpenOperation::index(parsed.query, parsed.direction, key_only);
+    let operation = IndexedDbCursorOpenOperation::new(parsed.query, parsed.direction, key_only);
     submit_cursor_open_operation(scope, transaction, index, request, operation);
     rv.set(request.into());
 }

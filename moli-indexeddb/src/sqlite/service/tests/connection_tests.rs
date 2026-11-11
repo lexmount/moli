@@ -102,7 +102,7 @@ fn start(
         Command::Begin {
             transaction,
             mode: request.handle().mode(),
-            stores: request.handle().store_names().into_iter().collect(),
+            stores: request.handle().stores().into_iter().collect(),
             version: None,
             admission: Some(request.handle().clone()),
         },
@@ -115,7 +115,7 @@ fn put(client: &DatabaseClient, transaction: TransactionHandle) {
         client,
         Command::Write {
             transaction,
-            store: "a".into(),
+            store: store_by_name(client, "a"),
             key: None,
             value: crate::IndexedDbValue::from(vec![5, 6, 7]),
             indexes: vec![],
@@ -135,14 +135,22 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
     let second = client.open_connection_for_test(noop()).unwrap();
     assert_ne!(first.handle(), second.handle());
     let accepted = first
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(first.client(), "a")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     first.mark_close_pending();
     assert!(first.is_closed());
     assert!(!first.is_forced_closed());
     assert!(
         first
-            .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
+            .queue_transaction_start(
+                &[store_by_name(first.client(), "a")],
+                TransactionMode::ReadOnly,
+                noop()
+            )
             .is_err()
     );
     let batch = client.begin_version_change(1, Some(2), noop());
@@ -171,7 +179,11 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
     assert!(!first.is_forced_closed());
     assert!(client.has_open_connections());
     let next = second
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
+        .queue_transaction_start(
+            &[store_by_name(second.client(), "a")],
+            TransactionMode::ReadOnly,
+            noop(),
+        )
         .unwrap();
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&second, &next, transaction);
@@ -180,9 +192,9 @@ fn logical_close_retains_accepted_transactions_and_other_connections() {
             &client,
             Command::Count {
                 transaction,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: QuerySource::ObjectStore,
-                range: crate::KeyRange::default()
+                range: crate::KeyRange::default(),
             }
         )
         .unwrap(),
@@ -211,22 +223,34 @@ fn dropping_an_owner_rolls_back_before_canceling_admission_and_notifying_blocker
     let signal = first.close_signal();
     let second = client.open_connection_for_test(noop()).unwrap();
     let request = first
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(first.client(), "a")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&first, &request, transaction);
     put(&client, transaction);
     let canceled = first
-        .queue_transaction_start(&["b".into()], TransactionMode::ReadOnly, noop())
+        .queue_transaction_start(
+            &[store_by_name(first.client(), "b")],
+            TransactionMode::ReadOnly,
+            noop(),
+        )
         .unwrap();
     let (sender, receiver) = mpsc::channel();
     let next = second
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, {
-            let signal = signal.clone();
-            Arc::new(move || {
-                let _ = sender.send(signal.is_forced_closed());
-            })
-        })
+        .queue_transaction_start(
+            &[store_by_name(second.client(), "a")],
+            TransactionMode::ReadOnly,
+            {
+                let signal = signal.clone();
+                Arc::new(move || {
+                    let _ = sender.send(signal.is_forced_closed());
+                })
+            },
+        )
         .unwrap();
     let batch = client.begin_version_change(1, Some(2), noop());
     let notification = first.take_notification().unwrap();
@@ -258,9 +282,9 @@ fn dropping_an_owner_rolls_back_before_canceling_admission_and_notifying_blocker
             &client,
             Command::Count {
                 transaction,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: QuerySource::ObjectStore,
-                range: crate::KeyRange::default()
+                range: crate::KeyRange::default(),
             }
         )
         .unwrap(),
@@ -286,7 +310,11 @@ fn retiring_an_idle_connection_preserves_another_connections_active_savepoint() 
     let signal = first.close_signal();
     let second = client.open_connection_for_test(noop()).unwrap();
     let request = second
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(second.client(), "a")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&second, &request, transaction);
@@ -294,7 +322,7 @@ fn retiring_an_idle_connection_preserves_another_connections_active_savepoint() 
         &client,
         Command::PrepareWrite {
             transaction,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             add_only: false,
         },
     )
@@ -346,6 +374,7 @@ fn upgrade_ownership_is_rolled_back_when_its_connection_is_lost() {
         &client,
         Command::CreateStore {
             transaction,
+            store: client.allocate_store_id().unwrap(),
             name: "a".into(),
             options: ObjectStoreOptions::default(),
         },
@@ -389,7 +418,11 @@ fn connection_drop_rolls_back_before_forcing_close() {
         .unwrap();
     let signal = connection.close_signal();
     let request = connection
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(connection.client(), "a")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&connection, &request, transaction);
@@ -415,13 +448,21 @@ fn shutdown_forces_every_connection_after_rolling_back_and_cancels_queued_work()
     initialize(&client);
     let connection = client.open_connection_for_test(noop()).unwrap();
     let request = connection
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(connection.client(), "a")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     let transaction = client.allocate_transaction_handle().unwrap();
     start(&connection, &request, transaction);
     put(&client, transaction);
     let pending = connection
-        .queue_transaction_start(&["b".into()], TransactionMode::ReadWrite, noop())
+        .queue_transaction_start(
+            &[store_by_name(connection.client(), "b")],
+            TransactionMode::ReadWrite,
+            noop(),
+        )
         .unwrap();
     let batch = client.begin_version_change(1, None, noop());
     service.shutdown().unwrap();
@@ -438,7 +479,11 @@ fn shutdown_forces_every_connection_after_rolling_back_and_cancels_queued_work()
     );
     assert!(
         connection
-            .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
+            .queue_transaction_start(
+                &[store_by_name(connection.client(), "a")],
+                TransactionMode::ReadOnly,
+                noop()
+            )
             .is_err()
     );
 }
@@ -457,13 +502,21 @@ fn panicked_database_shutdown_rolls_back_and_retires_live_connections() {
         initialize(&client);
         let connection = client.open_connection_for_test(noop()).unwrap();
         let request = connection
-            .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, noop())
+            .queue_transaction_start(
+                &[store_by_name(connection.client(), "a")],
+                TransactionMode::ReadWrite,
+                noop(),
+            )
             .unwrap();
         let transaction = client.allocate_transaction_handle().unwrap();
         start(&connection, &request, transaction);
         put(&client, transaction);
         let pending = connection
-            .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, noop())
+            .queue_transaction_start(
+                &[store_by_name(connection.client(), "a")],
+                TransactionMode::ReadOnly,
+                noop(),
+            )
             .unwrap();
         client
             .owner

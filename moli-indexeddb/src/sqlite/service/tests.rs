@@ -1,5 +1,6 @@
 use super::*;
-use crate::{DatabaseHandle, TransactionRequestLease, TransactionRequestStatus};
+use crate::{DatabaseHandle, TransactionRequestStatus};
+type TransactionRequestLease = crate::TransactionRequestLease<StoreId>;
 use std::{sync::mpsc, time::Duration};
 
 mod catalog_tests;
@@ -9,6 +10,7 @@ mod metadata_tests;
 mod quota_tests;
 mod registration_tests;
 mod runtime_tests;
+mod schema_id_tests;
 mod schema_rename_tests;
 
 const TX: TransactionHandle = TransactionHandle::from_raw(11);
@@ -28,6 +30,26 @@ fn identity(name: impl Into<crate::IndexedDbName>) -> DatabaseIdentity {
         name: name.into(),
         generation: [42; 16],
     }
+}
+
+fn store_by_name(client: &DatabaseClient, name: impl Into<crate::IndexedDbName>) -> StoreId {
+    client.committed().unwrap().stores[&name.into()].id
+}
+
+fn index_by_name(
+    client: &DatabaseClient,
+    store: StoreId,
+    name: impl Into<crate::IndexedDbName>,
+) -> IndexId {
+    client
+        .committed()
+        .unwrap()
+        .stores
+        .values()
+        .find(|candidate| candidate.id == store)
+        .unwrap()
+        .indexes[&name.into()]
+        .id
 }
 
 fn receive(receiver: &mpsc::Receiver<Completion>) -> Completion {
@@ -138,6 +160,7 @@ fn initialize(client: &DatabaseClient) {
             client,
             Command::CreateStore {
                 transaction: TX,
+                store: client.allocate_store_id().unwrap(),
                 name: name.into(),
                 options: ObjectStoreOptions {
                     auto_increment: true,
@@ -162,7 +185,7 @@ fn queue(client: &DatabaseClient, store: &str, mode: TransactionMode) -> Transac
     client
         .queue_transaction_start(
             DatabaseHandle::from_raw(7),
-            &[store.into()],
+            &[store_by_name(client, store)],
             mode,
             Arc::new(|| {}),
         )
@@ -180,7 +203,7 @@ fn start(
         Command::Begin {
             transaction: TX,
             mode,
-            stores: BTreeSet::from([store.into()]),
+            stores: BTreeSet::from([store_by_name(client, store)]),
             version: None,
             admission: Some(lease.handle().clone()),
         },
@@ -201,8 +224,8 @@ fn rejected_commit_rolls_back_an_open_request_before_releasing_admission() {
             &client,
             Command::PrepareWrite {
                 transaction: TX,
-                store: "a".into(),
-                add_only: false
+                store: store_by_name(&client, "a"),
+                add_only: false,
             }
         )
         .unwrap(),
@@ -225,7 +248,7 @@ fn rejected_commit_rolls_back_an_open_request_before_releasing_admission() {
         &client,
         Command::PrepareWrite {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             add_only: false,
         },
     )
@@ -242,12 +265,12 @@ fn write(client: &DatabaseClient, bytes: &[u8]) {
             client,
             Command::Write {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(client, "a"),
                 key: None,
                 value: bytes.to_vec().into(),
                 indexes: vec![],
                 add_only: false,
-                quota: None
+                quota: None,
             }
         )
         .unwrap(),
@@ -260,7 +283,7 @@ fn query(client: &DatabaseClient) -> Vec<RecordSnapshot> {
         client,
         Command::Query {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(client, "a"),
             query: Query::default(),
         },
     )
@@ -292,7 +315,7 @@ fn delivered_query_value_survives_commit_and_shutdown() {
         &client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             key: None,
             value: large_value(),
             indexes: vec![],
@@ -313,7 +336,7 @@ fn delivered_query_value_survives_commit_and_shutdown() {
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     let command = Command::Query {
         transaction: TX,
-        store: "a".into(),
+        store: store_by_name(&client, "a"),
         query: Query::default(),
     };
     let (sender, receiver) = mpsc::channel();
@@ -405,7 +428,7 @@ fn readers_overlap_without_committing_or_aborting_a_disjoint_writer() {
             &client,
             Command::PrepareWrite {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 add_only: false,
             }
         ),
@@ -432,7 +455,10 @@ fn readers_overlap_without_committing_or_aborting_a_disjoint_writer() {
             Command::Begin {
                 transaction,
                 mode: TransactionMode::ReadOnly,
-                stores: BTreeSet::from(["b".into()]),
+                stores: (BTreeSet::from(["b".into()]))
+                    .into_iter()
+                    .map(|name: crate::IndexedDbName| store_by_name(&client, name))
+                    .collect(),
                 version: None,
                 admission: Some(lease.handle().clone()),
             },
@@ -444,7 +470,7 @@ fn readers_overlap_without_committing_or_aborting_a_disjoint_writer() {
                 &client,
                 Command::Count {
                     transaction,
-                    store: "b".into(),
+                    store: store_by_name(&client, "b"),
                     source: Default::default(),
                     range: Default::default(),
                 }
@@ -503,7 +529,7 @@ fn commit_publishes_usage_before_waking_successor_even_without_a_result_receiver
     let second = client
         .queue_transaction_start(
             DatabaseHandle::from_raw(8),
-            &["a".into()],
+            &[store_by_name(&client, "a")],
             TransactionMode::ReadOnly,
             Arc::new(move || {
                 let _ = sender.send(observer.committed().unwrap().usage);
@@ -750,7 +776,7 @@ fn inline_key_round_trip_publishes_usage_only_after_commit() {
         .submit(
             Command::PrepareWrite {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 add_only: false,
             },
             move |reply| {
@@ -835,7 +861,7 @@ fn closing_and_registering_admission_cannot_leave_a_live_lease() {
             barrier.wait();
             client.queue_transaction_start(
                 DatabaseHandle::from_raw(7),
-                &["a".into()],
+                &[store_by_name(&client, "a")],
                 TransactionMode::ReadOnly,
                 Arc::new(|| {}),
             )
@@ -857,7 +883,7 @@ fn closing_and_registering_admission_cannot_leave_a_live_lease() {
         client
             .queue_transaction_start(
                 DatabaseHandle::from_raw(7),
-                &["a".into()],
+                &[store_by_name(&client, "a")],
                 TransactionMode::ReadOnly,
                 Arc::new(|| {})
             )
@@ -876,7 +902,10 @@ fn stale_or_foreign_admission_cannot_start_another_database() {
     let wrong = || Command::Begin {
         transaction: TX,
         mode: TransactionMode::ReadWrite,
-        stores: BTreeSet::from(["a".into()]),
+        stores: (BTreeSet::from(["a".into()]))
+            .into_iter()
+            .map(|name: crate::IndexedDbName| store_by_name(&first, name))
+            .collect(),
         version: None,
         admission: Some(first_lease.handle().clone()),
     };
@@ -969,7 +998,7 @@ fn recoverable_write_failure_and_inline_cancellation_keep_transaction_admission(
         &client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             key: None,
             value: b"fails quota".to_vec().into(),
             indexes: vec![],
@@ -988,7 +1017,7 @@ fn recoverable_write_failure_and_inline_cancellation_keep_transaction_admission(
         &client,
         Command::PrepareWrite {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             add_only: false,
         },
     )
@@ -1069,7 +1098,7 @@ fn completion_reports_a_recoverable_request_error_with_its_live_sql_owner() {
         &client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             key: Some(1.into()),
             value: b"duplicate".to_vec().into(),
             indexes: vec![],
@@ -1115,7 +1144,7 @@ fn lost_read_transaction_clears_the_rust_owner_before_releasing_admission() {
         &client,
         Command::Count {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             source: Default::default(),
             range: Default::default(),
         },
@@ -1132,7 +1161,7 @@ fn lost_read_transaction_clears_the_rust_owner_before_releasing_admission() {
         &client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             key: None,
             value: b"new".to_vec().into(),
             indexes: vec![],
@@ -1161,7 +1190,7 @@ fn automatic_whole_transaction_rollback_has_a_terminal_receipt() {
         &client,
         Command::Delete {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             range: Default::default(),
         },
     );
@@ -1177,9 +1206,9 @@ fn automatic_whole_transaction_rollback_has_a_terminal_receipt() {
             &client,
             Command::Count {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: Default::default(),
-                range: Default::default()
+                range: Default::default(),
             }
         )
         .unwrap(),
@@ -1210,7 +1239,7 @@ fn orphan_sql_begin_is_rolled_back_before_a_new_owner_can_start() {
         &client,
         Command::Count {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             source: Default::default(),
             range: Default::default(),
         },
@@ -1275,7 +1304,7 @@ fn unowned_connection_that_cannot_roll_back_is_closed_before_its_receipt() {
         &client,
         Command::Count {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             source: Default::default(),
             range: Default::default(),
         },
@@ -1304,7 +1333,10 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
         Command::Begin {
             transaction: current,
             mode: TransactionMode::ReadWrite,
-            stores: BTreeSet::from(["a".into()]),
+            stores: (BTreeSet::from(["a".into()]))
+                .into_iter()
+                .map(|name: crate::IndexedDbName| store_by_name(&client, name))
+                .collect(),
             version: None,
             admission: Some(second.handle().clone()),
         },
@@ -1314,7 +1346,7 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
         &client,
         Command::Write {
             transaction: current,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             key: None,
             value: b"successor".to_vec().into(),
             indexes: vec![],
@@ -1328,7 +1360,7 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
         &client,
         Command::Count {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             source: Default::default(),
             range: Default::default(),
         },
@@ -1345,9 +1377,9 @@ fn stale_request_receipt_identifies_but_does_not_end_the_successor_sql_owner() {
             &client,
             Command::Count {
                 transaction: current,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: Default::default(),
-                range: Default::default()
+                range: Default::default(),
             }
         )
         .unwrap(),

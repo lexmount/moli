@@ -9,7 +9,8 @@ fn indexed() -> Database {
     owner
         .create_index(
             TX,
-            "a",
+            owner.lookup_store_id("a").unwrap(),
+            owner.allocate_index_id().unwrap(),
             "index",
             IndexOptions {
                 key_path: "key".into(),
@@ -18,13 +19,16 @@ fn indexed() -> Database {
             },
         )
         .unwrap();
+    let index_id = owner
+        .lookup_index_id(owner.lookup_store_id("a").unwrap(), "index")
+        .unwrap();
     for (primary, key) in [(1, "a"), (2, "a"), (3, "b"), (4, "b"), (5, "c")] {
         put(
             &mut owner,
             Some(primary.into()),
             &[primary as u8],
             vec![IndexKeys {
-                name: "index".into(),
+                index: index_id,
                 keys: vec![key.into()],
             }],
             None,
@@ -36,9 +40,13 @@ fn indexed() -> Database {
     owner
 }
 
-fn query(direction: CursorDirection) -> Query {
+fn query(owner: &Database, direction: CursorDirection) -> Query {
     Query {
-        source: QuerySource::Index("index".into()),
+        source: QuerySource::Index(
+            owner
+                .lookup_index_id(owner.lookup_store_id("a").unwrap(), "index")
+                .unwrap(),
+        ),
         direction,
         limit: 100,
         keys_only: true,
@@ -48,7 +56,7 @@ fn query(direction: CursorDirection) -> Query {
 
 fn primary_keys(owner: &Database, query: &Query) -> Vec<Key> {
     owner
-        .query(TX, "a", query)
+        .query(TX, owner.lookup_store_id("a").unwrap(), query)
         .unwrap()
         .into_iter()
         .map(|entry| entry.primary_key)
@@ -65,7 +73,7 @@ fn index_directions_and_reverse_unique_select_smallest_primary_key() {
         (CursorDirection::PrevUnique, vec![5, 3, 1]),
     ] {
         assert_eq!(
-            primary_keys(&owner, &query(direction)),
+            primary_keys(&owner, &query(&owner, direction)),
             expected.into_iter().map(Key::from).collect::<Vec<_>>()
         );
     }
@@ -75,7 +83,7 @@ fn index_directions_and_reverse_unique_select_smallest_primary_key() {
 #[test]
 fn tuple_seek_inclusive_targets_and_advance_stay_inside_range() {
     let mut owner = indexed();
-    let mut options = query(CursorDirection::Next);
+    let mut options = query(&owner, CursorDirection::Next);
     options.seek = Some(Seek {
         key: "a".into(),
         primary_key: Some(1.into()),
@@ -100,7 +108,7 @@ fn tuple_seek_inclusive_targets_and_advance_stay_inside_range() {
     options.skip = 1;
     options.limit = 1;
     assert_eq!(primary_keys(&owner, &options), [3].map(Key::from));
-    options = query(CursorDirection::Next);
+    options = query(&owner, CursorDirection::Next);
     options.seek = Some(Seek {
         key: "b".into(),
         primary_key: None,
@@ -111,7 +119,12 @@ fn tuple_seek_inclusive_targets_and_advance_stay_inside_range() {
     assert_eq!(primary_keys(&owner, &options), [3, 4].map(Key::from));
     assert_eq!(
         owner
-            .query_count(TX, "a", &options.source, &options.range)
+            .query_count(
+                TX,
+                owner.lookup_store_id("a").unwrap(),
+                &options.source,
+                &options.range
+            )
             .unwrap(),
         4
     );
@@ -153,13 +166,18 @@ fn primary_range_and_count_preserve_all_key_types_and_open_boundaries() {
     assert_eq!(primary_keys(&owner, &options), keys[4..=6]);
     assert_eq!(
         owner
-            .query_count(TX, "a", &QuerySource::ObjectStore, &options.range)
+            .query_count(
+                TX,
+                owner.lookup_store_id("a").unwrap(),
+                &QuerySource::ObjectStore,
+                &options.range
+            )
             .unwrap(),
         3
     );
     options.range.upper = Some(1.into());
     assert!(matches!(
-        owner.query(TX, "a", &options),
+        owner.query(TX, owner.lookup_store_id("a").unwrap(), &options),
         Err(IndexedDbError::Data(_))
     ));
     owner.abort(TX).unwrap();
@@ -173,7 +191,11 @@ fn cursor_seek_observes_same_transaction_insert_delete_and_value_update() {
         put(&mut owner, Some(key.into()), b"old", vec![], None).unwrap();
     }
     let mut options = Query::default();
-    let first = owner.query(TX, "a", &options).unwrap().pop().unwrap();
+    let first = owner
+        .query(TX, owner.lookup_store_id("a").unwrap(), &options)
+        .unwrap()
+        .pop()
+        .unwrap();
     assert_eq!(first.primary_key, Key::from(1));
     let between = Key::number(1.5).unwrap();
     put(&mut owner, Some(between.clone()), b"inserted", vec![], None).unwrap();
@@ -186,15 +208,23 @@ fn cursor_seek_observes_same_transaction_insert_delete_and_value_update() {
         primary_keys(&owner, &options),
         std::slice::from_ref(&between)
     );
-    owner.delete(TX, "a", &between).unwrap();
-    owner.delete(TX, "a", &2.into()).unwrap();
+    owner
+        .delete(TX, owner.lookup_store_id("a").unwrap(), &between)
+        .unwrap();
+    owner
+        .delete(TX, owner.lookup_store_id("a").unwrap(), &2.into())
+        .unwrap();
     put(&mut owner, Some(3.into()), b"updated", vec![], None).unwrap();
     options.seek = Some(Seek {
         key: between,
         primary_key: None,
         inclusive: false,
     });
-    let next = owner.query(TX, "a", &options).unwrap().pop().unwrap();
+    let next = owner
+        .query(TX, owner.lookup_store_id("a").unwrap(), &options)
+        .unwrap()
+        .pop()
+        .unwrap();
     assert_eq!(next.primary_key, Key::from(3));
     assert_eq!(next.value.unwrap().wire_bytes(), b"updated");
     owner.abort(TX).unwrap();
@@ -207,24 +237,42 @@ fn key_projections_and_count_never_read_record_bodies() {
         .connection
         .execute("DELETE FROM record_chunks", [])
         .unwrap();
-    for source in [QuerySource::ObjectStore, QuerySource::Index("index".into())] {
+    for source in [
+        QuerySource::ObjectStore,
+        QuerySource::Index(
+            owner
+                .lookup_index_id(owner.lookup_store_id("a").unwrap(), "index")
+                .unwrap(),
+        ),
+    ] {
         let options = Query {
             source,
             limit: 100,
             keys_only: true,
             ..Default::default()
         };
-        assert_eq!(owner.query(TX, "a", &options).unwrap().len(), 5);
         assert_eq!(
             owner
-                .query_count(TX, "a", &options.source, &options.range)
+                .query(TX, owner.lookup_store_id("a").unwrap(), &options)
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            owner
+                .query_count(
+                    TX,
+                    owner.lookup_store_id("a").unwrap(),
+                    &options.source,
+                    &options.range
+                )
                 .unwrap(),
             5
         );
         assert!(matches!(
             owner.query(
                 TX,
-                "a",
+                owner.lookup_store_id("a").unwrap(),
                 &Query {
                     keys_only: false,
                     ..options
@@ -249,7 +297,11 @@ fn query_reports_dangling_index_record_and_inconsistent_unique_flag() {
         owner.connection.execute_batch(damage).unwrap();
         assert!(
             matches!(
-                owner.query(TX, "a", &query(CursorDirection::Next)),
+                owner.query(
+                    TX,
+                    owner.lookup_store_id("a").unwrap(),
+                    &query(&owner, CursorDirection::Next)
+                ),
                 Err(IndexedDbError::Corruption(_))
             ),
             "{damage}"
@@ -273,9 +325,11 @@ fn seek_queries_use_btree_search_without_a_temp_sort() {
                 primary_key: Some(1.into()),
                 inclusive: false,
             }),
-            ..query(direction)
+            ..query(&owner, direction)
         };
-        let compiled = owner.compile_query(TX, &"a".into(), &options).unwrap();
+        let compiled = owner
+            .compile_query(TX, owner.lookup_store_id("a").unwrap(), &options)
+            .unwrap();
         let mut statement = owner
             .connection
             .prepare(&format!("EXPLAIN QUERY PLAN {}", compiled.sql))
@@ -310,7 +364,7 @@ fn range_delete_removes_only_selected_records_and_their_index_entries() {
     owner
         .delete_range(
             TX,
-            "a",
+            owner.lookup_store_id("a").unwrap(),
             &KeyRange {
                 lower: Some(1.into()),
                 upper: Some(4.into()),
@@ -326,7 +380,7 @@ fn range_delete_removes_only_selected_records_and_their_index_entries() {
     };
     assert_eq!(primary_keys(&owner, &options), [1, 5].map(Key::from));
     assert_eq!(
-        primary_keys(&owner, &query(CursorDirection::Next)),
+        primary_keys(&owner, &query(&owner, CursorDirection::Next)),
         [1, 5].map(Key::from)
     );
     assert_eq!(
@@ -343,9 +397,18 @@ fn range_delete_removes_only_selected_records_and_their_index_entries() {
     );
     owner.abort(TX).unwrap();
     begin(&mut owner, TransactionMode::ReadOnly);
-    assert_eq!(owner.count(TX, "a").unwrap(), 5);
+    assert_eq!(
+        owner
+            .count(TX, owner.lookup_store_id("a").unwrap())
+            .unwrap(),
+        5
+    );
     assert!(matches!(
-        owner.delete_range(TX, "a", &KeyRange::default()),
+        owner.delete_range(
+            TX,
+            owner.lookup_store_id("a").unwrap(),
+            &KeyRange::default()
+        ),
         Err(IndexedDbError::ReadOnly(_))
     ));
     owner.abort(TX).unwrap();

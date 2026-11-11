@@ -67,7 +67,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
     let admission = backend
         .connection()
         .queue_transaction_start(
-            &["records".into()],
+            &[backend.store_id],
             TransactionMode::ReadWrite,
             std::sync::Arc::new(|| {}),
         )
@@ -75,7 +75,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
     backend.execute(Command::Begin {
         transaction,
         mode: TransactionMode::ReadWrite,
-        stores: BTreeSet::from(["records".into()]),
+        stores: BTreeSet::from([backend.store_id]),
         version: None,
         admission: Some(admission.handle().clone()),
     });
@@ -88,7 +88,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
         );
         backend.execute(Command::Write {
             transaction,
-            store: "records".into(),
+            store: backend.store_id,
             key: Some(moli_indexeddb::Key::number(id as f64).unwrap()),
             value: if id == 1 {
                 stored
@@ -96,7 +96,7 @@ fn seed_partial_blob_collection(vm: &mut ScriptVm, backend: &SqlBackend, blob_si
                 vec![1, 2, 3].into()
             },
             indexes: vec![IndexKeys {
-                name: "unique".into(),
+                index: backend.index_id("unique"),
                 keys: vec![moli_indexeddb::Key::from(format!("g{id}"))],
             }],
             add_only: false,

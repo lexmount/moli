@@ -23,7 +23,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
     };
     let index_name = moli_indexeddb::IndexedDbName::from_utf16(parsed.index_name.0);
     let store = args.this();
-    let (transaction, database, handle, store_name) =
+    let (transaction, database, handle, metadata) =
         match object_store_versionchange_common(scope, store) {
             Ok(values) => values,
             Err(error) => {
@@ -32,6 +32,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
                 return;
             }
         };
+    let store_id = metadata.id();
+    let store_name = metadata.info().name.clone();
     let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
         return;
     };
@@ -46,8 +48,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_index_ca
             client,
             Command::DeleteIndex {
                 transaction: handle,
-                store: store_name.clone(),
-                name: index_name.clone(),
+                store: store_id,
+                index: metadata.index_id(&index_name).expect("validated index"),
             },
             None,
         )

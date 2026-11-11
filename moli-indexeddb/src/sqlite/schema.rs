@@ -46,7 +46,7 @@ pub(super) fn read_metadata(
         stores.insert(
             names::read_name(row, 1, SCHEMA_VERSION)?,
             StoreMetadata {
-                id,
+                id: StoreId::from_raw(id),
                 options,
                 indexes: BTreeMap::new(),
             },
@@ -79,7 +79,10 @@ pub(super) fn read_metadata(
             .map_err(|_| corruption("invalid index options"))?;
         store.indexes.insert(
             names::read_name(row, 2, SCHEMA_VERSION)?,
-            IndexMetadata { id, options },
+            IndexMetadata {
+                id: IndexId::from_raw(id),
+                options,
+            },
         );
     }
     if version == 0 && !stores.is_empty() {
@@ -135,6 +138,7 @@ impl Database {
     pub fn create_object_store(
         &mut self,
         transaction: TransactionHandle,
+        id: StoreId,
         name: impl Into<crate::IndexedDbName>,
         options: ObjectStoreOptions,
     ) -> Result<(), IndexedDbError> {
@@ -166,7 +170,7 @@ impl Database {
             },
         )?;
         self.request(transaction, |owner| {
-            let id = owner.next_id("next_store_id")?;
+            owner.persist_schema_id("next_store_id", id.into_raw())?;
             let key_path = options
                 .key_path
                 .as_ref()
@@ -183,16 +187,15 @@ impl Database {
     pub fn delete_object_store(
         &mut self,
         transaction: TransactionHandle,
-        name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
     ) -> Result<(), IndexedDbError> {
-        let name = name.into();
-
         self.versionchange(transaction)?;
-        let store = self.store_id(transaction, &name)?;
+        self.validate_store(transaction, store)?;
         self.request(transaction, |owner| {
             let metadata = read_metadata(&owner.connection)?;
-            let metadata = metadata.stores.get(&name).ok_or_else(|| corruption("missing store metadata"))?;
-            let definitions = store_usage(&name, &metadata.options) + metadata.indexes.iter().map(|(name, index)| index_usage(name, &index.options)).sum::<u64>();
+            let (name, metadata) = metadata.stores.iter().find(|(_, candidate)| candidate.id == store)
+                .ok_or_else(|| corruption("missing store metadata"))?;
+            let definitions = store_usage(name, &metadata.options) + metadata.indexes.iter().map(|(name, index)| index_usage(name, &index.options)).sum::<u64>();
             owner.remove_store_records(store)?;
             owner.connection.execute("DELETE FROM index_entries WHERE index_id IN (SELECT index_id FROM indexes WHERE store_id=?1)", [store])?;
             owner.connection.execute("DELETE FROM indexes WHERE store_id=?1", [store])?;
@@ -206,15 +209,15 @@ impl Database {
     pub fn create_index(
         &mut self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
+        id: IndexId,
         name: impl Into<crate::IndexedDbName>,
         options: IndexOptions,
     ) -> Result<IndexMetadata, IndexedDbError> {
-        let store_name = store_name.into();
         let name = name.into();
 
         self.versionchange(transaction)?;
-        let store = self.store_id(transaction, &store_name)?;
+        self.validate_store(transaction, store)?;
         let exists: bool = self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM indexes WHERE store_id=?1 AND name=?2)",
             rusqlite::params![store, names::encode(&name)?],
@@ -234,7 +237,7 @@ impl Database {
             )
         })?;
         self.request(transaction, |owner| {
-            let id = owner.next_id("next_index_id")?;
+            owner.persist_schema_id("next_index_id", id.into_raw())?;
             owner.connection.execute(
                 "INSERT INTO indexes VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
@@ -254,29 +257,32 @@ impl Database {
     pub fn delete_index(
         &mut self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
-        name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
+        index: IndexId,
     ) -> Result<(), IndexedDbError> {
-        let store_name = store_name.into();
-        let name = name.into();
-
         self.versionchange(transaction)?;
-        let store = self.store_id(transaction, &store_name)?;
+        self.validate_store(transaction, store)?;
         self.request(transaction, |owner| {
             let metadata = read_metadata(&owner.connection)?;
-            let index = metadata
+            let (name, metadata) = metadata
                 .stores
-                .get(&store_name)
-                .and_then(|store| store.indexes.get(&name))
-                .ok_or_else(|| IndexedDbError::NotFound(format!("index `{name}` was not found")))?;
+                .values()
+                .find(|candidate| candidate.id == store)
+                .and_then(|store| {
+                    store
+                        .indexes
+                        .iter()
+                        .find(|(_, candidate)| candidate.id == index)
+                })
+                .ok_or_else(|| IndexedDbError::NotFound(format!("index {index} was not found")))?;
             owner
                 .connection
-                .execute("DELETE FROM index_entries WHERE index_id=?1", [index.id])?;
+                .execute("DELETE FROM index_entries WHERE index_id=?1", [index])?;
             owner.connection.execute(
                 "DELETE FROM indexes WHERE store_id=?1 AND index_id=?2",
-                [store, index.id],
+                rusqlite::params![store, index],
             )?;
-            owner.adjust_usage(-i128::from(index_usage(&name, &index.options)))
+            owner.adjust_usage(-i128::from(index_usage(name, &metadata.options)))
         })
     }
 }

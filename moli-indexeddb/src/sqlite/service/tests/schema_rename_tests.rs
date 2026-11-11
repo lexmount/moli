@@ -15,15 +15,17 @@ fn begin_upgrade(client: &DatabaseClient, version: u64) {
 }
 
 fn renamed_records(client: &DatabaseClient) -> Vec<crate::RecordSnapshot> {
+    let store_id = store_by_name(client, "renamed\0😀");
+    let index_id = index_by_name(client, store_id, "renamed\0索引");
     let lease = queue(client, "renamed\0😀", TransactionMode::ReadOnly);
     start(client, "renamed\0😀", TransactionMode::ReadOnly, &lease);
     let CommandResult::Records(records) = execute(
         client,
         Command::Query {
             transaction: TX,
-            store: "renamed\0😀".into(),
+            store: store_id,
             query: Query {
-                source: QuerySource::Index("renamed\0索引".into()),
+                source: QuerySource::Index(index_id),
                 limit: u32::MAX,
                 ..Default::default()
             },
@@ -44,18 +46,21 @@ fn renamed_records(client: &DatabaseClient) -> Vec<crate::RecordSnapshot> {
 }
 
 #[test]
-fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
+fn queued_schema_operations_keep_reserved_ids_without_owner_roundtrips() {
     let service = Service::new(config()).unwrap();
     let client = open(&service, "queued-rename", Location::Memory);
     initialize(&client);
     let committed = client.committed().unwrap();
     begin_upgrade(&client, 2);
-    // The owner is held until all operations are queued. The caller cannot
-    // observe a Create receipt (or its SQL id) before submitting the renames.
+    // IDs are reserved synchronously. No CREATE receipt or name lookup is
+    // needed to queue subsequent work while the SQL owner is held.
     let held = hold_database(&client);
+    let store_id = client.allocate_store_id().unwrap();
+    let index_id = client.allocate_index_id().unwrap();
     let commands = [
         Command::CreateStore {
             transaction: TX,
+            store: store_id,
             name: "new".into(),
             options: ObjectStoreOptions {
                 auto_increment: true,
@@ -64,7 +69,8 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
         },
         Command::CreateIndex {
             transaction: TX,
-            store: "new".into(),
+            store: store_id,
+            index: index_id,
             name: "tag".into(),
             options: IndexOptions {
                 key_path: crate::KeyPath::String("tag".into()),
@@ -74,11 +80,11 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
         },
         Command::Write {
             transaction: TX,
-            store: "new".into(),
+            store: store_id,
             key: None,
             value: b"kept".to_vec().into(),
             indexes: vec![IndexKeys {
-                name: "tag".into(),
+                index: index_id,
                 keys: vec!["alpha".into()],
             }],
             add_only: true,
@@ -86,22 +92,22 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
         },
         Command::RenameStore {
             transaction: TX,
-            name: "new".into(),
+            store: store_id,
             new_name: "renamed\0😀".into(),
         },
         Command::RenameIndex {
             transaction: TX,
-            store: "renamed\0😀".into(),
-            name: "tag".into(),
+            store: store_id,
+            index: index_id,
             new_name: "renamed\0索引".into(),
         },
         Command::Write {
             transaction: TX,
-            store: "renamed\0😀".into(),
+            store: store_id,
             key: None,
             value: b"next".to_vec().into(),
             indexes: vec![IndexKeys {
-                name: "renamed\0索引".into(),
+                index: index_id,
                 keys: vec!["beta".into()],
             }],
             add_only: true,
@@ -109,9 +115,9 @@ fn queued_schema_renames_follow_create_without_waiting_for_sql_ids() {
         },
         Command::Query {
             transaction: TX,
-            store: "renamed\0😀".into(),
+            store: store_id,
             query: Query {
-                source: QuerySource::Index("renamed\0索引".into()),
+                source: QuerySource::Index(index_id),
                 limit: u32::MAX,
                 ..Default::default()
             },
@@ -175,12 +181,15 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         .unwrap();
     receive(&receiver).result.unwrap();
     initialize(&client);
+    let store_id = store_by_name(&client, "a");
+    let index_id = client.allocate_index_id().unwrap();
     begin_upgrade(&client, 2);
     execute(
         &client,
         Command::CreateIndex {
             transaction: TX,
-            store: "a".into(),
+            store: store_id,
+            index: index_id,
             name: "tag".into(),
             options: IndexOptions {
                 key_path: crate::KeyPath::String("tag".into()),
@@ -194,11 +203,11 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_id,
             key: None,
             value: b"kept".to_vec().into(),
             indexes: vec![IndexKeys {
-                name: "tag".into(),
+                index: index_id,
                 keys: vec!["alpha".into()],
             }],
             add_only: true,
@@ -224,7 +233,7 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::RenameStore {
             transaction: TX,
-            name: "a".into(),
+            store: store_id,
             new_name: "renamed\0😀".into(),
         },
     )
@@ -233,8 +242,8 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::RenameIndex {
             transaction: TX,
-            store: "renamed\0😀".into(),
-            name: "tag".into(),
+            store: store_id,
+            index: index_id,
             new_name: "renamed\0索引".into(),
         },
     )
@@ -275,7 +284,7 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::RenameStore {
             transaction: TX,
-            name: "renamed\0😀".into(),
+            store: store_id,
             new_name: "discard".into(),
         },
     )
@@ -284,8 +293,8 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::RenameIndex {
             transaction: TX,
-            store: "discard".into(),
-            name: "renamed\0索引".into(),
+            store: store_id,
+            index: index_id,
             new_name: "discard".into(),
         },
     )
@@ -303,11 +312,11 @@ fn renamed_schema_and_data_survive_disk_restart_and_a_later_aborted_rename() {
         &client,
         Command::Write {
             transaction: TX,
-            store: "renamed\0😀".into(),
+            store: store_id,
             key: None,
             value: b"next".to_vec().into(),
             indexes: vec![IndexKeys {
-                name: "renamed\0索引".into(),
+                index: index_id,
                 keys: vec![],
             }],
             add_only: true,

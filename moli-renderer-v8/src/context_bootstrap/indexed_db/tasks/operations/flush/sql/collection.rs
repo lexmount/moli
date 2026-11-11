@@ -7,7 +7,7 @@ use moli_indexeddb::sqlite::{Seek, service::Completion};
 pub(super) fn prepare(
     client: &DatabaseClient,
     transaction: TransactionHandle,
-    store: moli_indexeddb::IndexedDbName,
+    store: moli_indexeddb::sqlite::StoreId,
     query: Query,
     kind: CollectionKind,
 ) -> IndexedDbTransactionOperation {
@@ -34,7 +34,7 @@ pub(super) fn prepare(
 struct CollectionRead {
     client: DatabaseClient,
     transaction: TransactionHandle,
-    store: moli_indexeddb::IndexedDbName,
+    store: moli_indexeddb::sqlite::StoreId,
     query: Query,
     kind: CollectionKind,
     array: Option<v8::Global<v8::Array>>,
@@ -51,7 +51,7 @@ impl CollectionRead {
         let client = self.client.clone();
         let command = Command::QueryPage {
             transaction: self.transaction,
-            store: self.store.clone(),
+            store: self.store,
             query: self.query.clone(),
         };
         let submitted = submit_indexed_db_sql_task(

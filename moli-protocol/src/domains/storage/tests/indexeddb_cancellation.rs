@@ -37,9 +37,11 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
         else {
             panic!("expected a logical connection receipt");
         };
+        let store =
+            client.committed().unwrap().stores[&moli_indexeddb::IndexedDbName::from("items")].id;
         let blocker = connection
             .queue_transaction_start(
-                &["items".into()],
+                &[store],
                 moli_indexeddb::TransactionMode::ReadWrite,
                 Arc::new(|| {}),
             )
@@ -50,7 +52,7 @@ async fn storage_clear_finishes_window_and_worker_admissions_and_closes_idle_con
             moli_indexeddb::sqlite::service::Command::Begin {
                 transaction: backend,
                 mode: moli_indexeddb::TransactionMode::ReadWrite,
-                stores: std::collections::BTreeSet::from(["items".into()]),
+                stores: std::collections::BTreeSet::from([store]),
                 version: None,
                 admission: Some(blocker.handle().clone()),
             },

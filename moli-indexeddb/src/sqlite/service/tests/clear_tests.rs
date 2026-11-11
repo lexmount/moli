@@ -144,7 +144,11 @@ fn owner_clear_fences_old_clients_and_fifo_until_all_database_owners_confirm_cle
         seed(&client);
         let connection = client.open_connection_for_test(Arc::new(|| {})).unwrap();
         let lease = connection
-            .queue_transaction_start(&["a".into()], TransactionMode::ReadWrite, Arc::new(|| {}))
+            .queue_transaction_start(
+                &[store_by_name(connection.client(), "a")],
+                TransactionMode::ReadWrite,
+                Arc::new(|| {}),
+            )
             .unwrap();
         connections.push(connection);
         start(&client, "a", TransactionMode::ReadWrite, &lease);

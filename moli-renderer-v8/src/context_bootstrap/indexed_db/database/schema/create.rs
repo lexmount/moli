@@ -68,24 +68,28 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_create_object_store
             create_object_store_options_error_message(error).into(),
         ))
     } else {
-        schedule_schema_operation(
-            scope,
-            transaction,
-            client,
-            Command::CreateStore {
-                transaction: handle,
-                name,
-                options: ObjectStoreOptions {
-                    key_path,
-                    auto_increment,
+        client.allocate_store_id().and_then(|store_id| {
+            schedule_schema_operation(
+                scope,
+                transaction,
+                client,
+                Command::CreateStore {
+                    transaction: handle,
+                    store: store_id,
+                    name,
+                    options: ObjectStoreOptions {
+                        key_path,
+                        auto_increment,
+                    },
                 },
-            },
-            None,
-        )
+                None,
+            )
+            .map(|()| store_id)
+        })
     };
     match result {
-        Ok(()) => {
-            if let Err(error) = set_database_store_metadata(scope, database, &info) {
+        Ok(store_id) => {
+            if let Err(error) = set_database_store_metadata(scope, database, &info, store_id) {
                 schedule_schema_failure(scope, transaction, error);
                 if let Some(store) =
                     create_failed_object_store_object(scope, database, transaction, &info)

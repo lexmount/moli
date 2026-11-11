@@ -101,6 +101,7 @@ impl Fixture {
             })
             .unwrap();
         receive(&receiver).result.unwrap();
+        let sql_store_id = client.allocate_store_id().unwrap();
         for command in [
             Command::Begin {
                 transaction: TX,
@@ -110,6 +111,7 @@ impl Fixture {
                 admission: None,
             },
             Command::CreateStore {
+                store: sql_store_id,
                 transaction: TX,
                 name: "kept".into(),
                 options: ObjectStoreOptions::default(),
