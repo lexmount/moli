@@ -801,7 +801,7 @@ fn pending_unregistration_deletion_clears_owner_state() {
                     internal_id: event_id.as_u64(),
                     owner: Some(ServiceWorkerRunOwner::new(version_id, run)),
                     cors_preflight_request_headers: Vec::new(),
-                    client_id: ServiceWorkerClientId::from_u64_for_test(0),
+                    client_id: Some(ServiceWorkerClientId::from_u64_for_test(0)),
                     resulting_client_id: None,
                     destination: ServiceWorkerRequestDestination::Empty,
                     is_reload: false,

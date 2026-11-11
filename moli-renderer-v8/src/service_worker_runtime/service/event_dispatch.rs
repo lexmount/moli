@@ -335,9 +335,20 @@ impl ServiceWorkerRuntimeService {
                 .request_headers
                 .push(("Accept".to_owned(), accept.as_bytes().to_vec()));
         }
+        let controller_client_id = if matches!(
+            request.destination,
+            ServiceWorkerRequestDestination::Worker | ServiceWorkerRequestDestination::SharedWorker
+        ) {
+            request.resulting_client_id.or(request.client_id)
+        } else {
+            request.client_id
+        };
+        let Some(controller_client_id) = controller_client_id else {
+            return Err(Box::new(fetch_job));
+        };
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
-            let (document_url, storage_key) = match state.live_clients.get(&request.client_id) {
+            let (document_url, storage_key) = match state.live_clients.get(&controller_client_id) {
                 Some(client) => (client.document_url.clone(), client.storage_key.clone()),
                 None => return Err(Box::new(fetch_job)),
             };
@@ -354,7 +365,7 @@ impl ServiceWorkerRuntimeService {
                 .filter(|registration| {
                     registration
                         .controlled_client_ids
-                        .contains(&request.client_id)
+                        .contains(&controller_client_id)
                 })
                 .filter(|registration| {
                     service_worker_registration_matches_url(

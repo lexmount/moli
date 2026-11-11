@@ -63,7 +63,7 @@ pub(super) async fn load_response(
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 body_stream: None,
-                client_id: controller.client_id,
+                client_id: Some(controller.client_id),
                 resulting_client_id: None,
                 url: request.url.clone(),
                 method: request.method.clone(),

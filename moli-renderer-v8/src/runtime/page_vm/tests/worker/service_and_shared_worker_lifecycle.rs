@@ -939,6 +939,165 @@ async fn service_worker_intercepts_classic_worker_imports_with_native_clients_an
 }
 
 #[tokio::test]
+async fn worker_main_script_fetch_separates_creator_identity_from_the_workers_own_controller() {
+    run_page_vm_async_test(async move {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let worker_source = r#"
+            async function run() {
+                const subresource = await (await fetch('/app/identity')).json();
+                return {main: mainMetadata, subresource};
+            }
+            self.onmessage = () => run().then(result => self.postMessage(result))
+                .catch(error => self.postMessage({error: String(error)}));
+            self.onconnect = event => {
+                const port = event.ports[0];
+                port.onmessage = () => run().then(result => port.postMessage(result))
+                    .catch(error => port.postMessage({error: String(error)}));
+            };
+        "#;
+        let service_source = r#"
+            self.oninstall = event => event.waitUntil(self.skipWaiting());
+            self.onmessage = event => event.ports[0].postMessage({id: event.source.id, type: event.source.type});
+            self.onfetch = event => {
+                const destination = event.request.destination;
+                if (destination === 'worker' || destination === 'sharedworker') {
+                    event.respondWith((async () => {
+                        const client = await self.clients.get(event.clientId);
+                        const metadata = {clientId: event.clientId, resultingClientId: event.resultingClientId,
+                            destination, sourceType: client.type, sourceUrl: client.url, serviceWorker: self.location.pathname};
+                        return new Response('const mainMetadata = ' + JSON.stringify(metadata) + ';\n' + __WORKER_SOURCE__,
+                            {headers: {'Content-Type': 'text/javascript'}});
+                    })());
+                } else if (new URL(event.request.url).pathname === '/app/identity') {
+                    event.respondWith((async () => {
+                        const client = await self.clients.get(event.clientId);
+                        return new Response(JSON.stringify({clientId: event.clientId, resultingClientId: event.resultingClientId,
+                            destination, sourceType: client.type, sourceUrl: client.url, serviceWorker: self.location.pathname}),
+                            {headers: {'Content-Type': 'application/json'}});
+                    })());
+                }
+            };
+        "#.replace("__WORKER_SOURCE__", &serde_json::to_string(worker_source).unwrap());
+        let server = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async move {
+                let listener = TcpListener::from_std(listener).unwrap();
+                for index in 0..3 {
+                    let wait = if index < 2 { Duration::from_secs(30) } else { Duration::from_millis(500) };
+                    let Ok(accepted) = tokio::time::timeout(wait, listener.accept()).await else { break };
+                    let (mut stream, _) = accepted.unwrap();
+                    let request = read_http_request_head(&mut stream).await.unwrap();
+                    let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                    requests.send(path.to_owned()).unwrap();
+                    let body = match path {
+                        "/app/sw.js" => service_source.as_str(),
+                        "/sw.js" => r#"
+                            self.oninstall = event => event.waitUntil(self.skipWaiting());
+                            self.onactivate = event => event.waitUntil(self.clients.claim());
+                            self.onfetch = event => event.respondWith(new Response('wrong controller', {headers: {'Content-Type': 'text/javascript'}}));
+                        "#,
+                        _ => "throw new Error('unexpected network request');",
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+        });
+        let loader_owner = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        hooks.resource_task_runner = Some(loader_owner.browser_resource_runtime().resource_task_runner());
+        let mut page_vm = test_page_vm_with_loader_document_url_and_hooks(
+            &loader_owner, Vec::new(), Url::parse(&format!("{origin}/page.html")).unwrap(), hooks,
+        );
+        page_vm.retain_standalone_request_client_owner_for_test(loader_owner);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+                globalThis.mainScriptResults = null;
+                globalThis.mainScriptError = null;
+                globalThis.mainScriptWorkers = [];
+                async function activated(registration) {
+                    const active = registration.installing || registration.active;
+                    if (active.state !== 'activated') await new Promise(resolve => active.addEventListener('statechange', () => {
+                        if (active.state === 'activated') resolve();
+                    }));
+                    return active;
+                }
+                async function pair(phase) {
+                    const dedicated = new Worker('/app/dedicated.js');
+                    const shared = new SharedWorker('/app/shared.js', {name: phase});
+                    mainScriptWorkers.push(dedicated, shared);
+                    const one = new Promise((resolve, reject) => {
+                        dedicated.onmessage = event => resolve(event.data);
+                        dedicated.onerror = event => reject(event.message);
+                    });
+                    const two = new Promise((resolve, reject) => {
+                        shared.port.onmessage = event => resolve(event.data);
+                        shared.onerror = event => reject(event.message);
+                    });
+                    dedicated.postMessage('run'); shared.port.postMessage('run');
+                    return {dedicated: await one, shared: await two};
+                }
+                (async () => {
+                    const active = await activated(await navigator.serviceWorker.register('/app/sw.js', {scope: '/app/'}));
+                    const channel = new MessageChannel();
+                    const identity = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+                    active.postMessage('identity', [channel.port2]);
+                    const windowIdentity = await identity;
+                    const uncontrolled = !navigator.serviceWorker.controller;
+                    const first = await pair('uncontrolled');
+                    const claimed = new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once: true}));
+                    await activated(await navigator.serviceWorker.register('/sw.js', {scope: '/'}));
+                    await claimed;
+                    const second = await pair('controlled');
+                    mainScriptResults = {windowIdentity, uncontrolled, first, second, controller: navigator.serviceWorker.controller.scriptURL};
+                })().catch(error => mainScriptError = String(error));
+            "#)?;
+            drive_service_worker_and_shared_worker_page_vm_until_done(
+                &mut page_vm, "String(mainScriptResults !== null || mainScriptError !== null)",
+                "Worker script fetches should expose their creator but select their own controller",
+            ).await?;
+            assert_eq!(page_vm.vm_mut().eval("String(mainScriptError)")?, "null");
+            let results: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval("JSON.stringify(mainScriptResults)")?)?;
+            assert_eq!(results["uncontrolled"], true);
+            assert_eq!(results["windowIdentity"]["type"], "window");
+            assert_eq!(results["controller"], format!("{origin}/sw.js"));
+            let mut clients = std::collections::HashSet::new();
+            for phase in ["first", "second"] {
+                for (kind, destination, client_type) in [("dedicated", "worker", "worker"), ("shared", "sharedworker", "sharedworker")] {
+                    let result = &results[phase][kind];
+                    assert!(result.get("error").is_none(), "{result}");
+                    let main = &result["main"];let subresource = &result["subresource"];
+                    assert_eq!(main["clientId"], results["windowIdentity"]["id"]);
+                    assert_eq!(main["sourceType"], "window");
+                    assert_eq!(main["sourceUrl"], format!("{origin}/page.html"));
+                    assert_eq!(main["destination"], destination);
+                    assert_eq!(main["serviceWorker"], "/app/sw.js");
+                    assert_ne!(main["clientId"], main["resultingClientId"]);
+                    assert_eq!(main["resultingClientId"], subresource["clientId"]);
+                    assert_eq!(subresource["resultingClientId"], "");
+                    assert_eq!(subresource["destination"], "");
+                    assert_eq!(subresource["sourceType"], client_type);
+                    assert_eq!(subresource["sourceUrl"], format!("{origin}/app/{kind}.js"));
+                    assert_eq!(subresource["serviceWorker"], "/app/sw.js");
+                    assert!(clients.insert(subresource["clientId"].as_str().unwrap().to_owned()));
+                }
+            }
+            anyhow::Ok(())
+        }).await.unwrap();
+        server.join().unwrap();
+        let mut paths = Vec::new();
+        while let Some(path) = received.recv().await { paths.push(path); }
+        assert_eq!(paths, ["/app/sw.js", "/sw.js"]);
+    }).await;
+}
+
+#[tokio::test]
 async fn service_worker_blob_shared_worker_inherits_parent_controller_for_fetch() {
     run_page_vm_async_test(async move {
         let (base_url, sample_request_rx, server) =

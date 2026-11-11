@@ -790,7 +790,7 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) internal_id: u64,
     pub(super) owner: Option<ServiceWorkerRunOwner>,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
-    pub(super) client_id: ServiceWorkerClientId,
+    pub(super) client_id: Option<ServiceWorkerClientId>,
     pub(super) resulting_client_id: Option<ServiceWorkerClientId>,
     pub(super) destination: ServiceWorkerRequestDestination,
     pub(super) is_reload: bool,

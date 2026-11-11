@@ -987,7 +987,7 @@ mod tests {
     ) -> ServiceWorkerFetchRequest {
         ServiceWorkerFetchRequest {
             body_stream: None,
-            client_id,
+            client_id: Some(client_id),
             resulting_client_id: None,
             url: request_url,
             method: "GET".to_owned(),
@@ -1031,7 +1031,7 @@ mod tests {
             internal_id,
             owner: Some(test_run_owner(version_id, run)),
             cors_preflight_request_headers: Vec::new(),
-            client_id,
+            client_id: Some(client_id),
             resulting_client_id: None,
             destination: ServiceWorkerRequestDestination::Empty,
             is_reload: false,

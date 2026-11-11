@@ -324,11 +324,10 @@ fn shared_worker_constructor_callback_inner<'s>(
         options.name.clone(),
         same_site_cookies,
     );
-    let parent_service_worker_client_id = shared_worker_parent_service_worker_client_id_for_script(
+    let creator_service_worker_client_id = shared_worker_creator_service_worker_client_id(
         scope,
         unsafe { &mut *host_ptr },
         context.worker_owner_child_handle,
-        &resolved_url,
     );
     let mut network_policy = context.network_policy;
     network_policy.secure_context =
@@ -365,7 +364,7 @@ fn shared_worker_constructor_callback_inner<'s>(
         client_port_id,
         worker_port_id,
         context.client_identity.owner_id(),
-        parent_service_worker_client_id,
+        creator_service_worker_client_id,
         context.client_event_realm,
         context.worker_host_bridge_sender,
     );
@@ -508,15 +507,11 @@ fn shared_worker_constructor_context(
     None
 }
 
-fn shared_worker_parent_service_worker_client_id_for_script(
+fn shared_worker_creator_service_worker_client_id(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut crate::native_bridge::JsContextHost,
     child_handle: Option<DomHandle>,
-    script_url: &Url,
 ) -> Option<crate::service_worker_runtime::ServiceWorkerClientId> {
-    if script_url.scheme() != "blob" {
-        return None;
-    }
     let worker_owner_scope = child_handle
         .map(WorkerOwnerScope::Child)
         .or_else(|| {

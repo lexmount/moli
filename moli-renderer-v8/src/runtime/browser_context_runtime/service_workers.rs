@@ -200,7 +200,7 @@ impl RendererBrowserContextRuntime {
             internal_id: 0,
             request: ServiceWorkerFetchRequest {
                 body_stream: None,
-                client_id,
+                client_id: Some(client_id),
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
                 method: request.method.clone(),
@@ -345,6 +345,7 @@ impl RendererBrowserContextRuntime {
     pub(crate) async fn fetch_service_worker_main_resource_for_worker(
         &self,
         client_id: ServiceWorkerClientId,
+        creator_client_id: Option<ServiceWorkerClientId>,
         request: &Request,
         request_client: &ResourceRequestClient,
         resource_task_runner: RendererResourceTaskRunner,
@@ -353,6 +354,7 @@ impl RendererBrowserContextRuntime {
         self.service_worker_runtime()
             .fetch_main_resource_for_worker_client(
                 client_id,
+                creator_client_id,
                 request,
                 request_client,
                 resource_task_runner,

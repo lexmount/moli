@@ -3513,7 +3513,7 @@ async fn controlled_fetch_from_worker_client_dispatches_to_active_worker() {
             internal_id: 90,
             request: ServiceWorkerFetchRequest {
                 body_stream: None,
-                client_id,
+                client_id: Some(client_id),
                 resulting_client_id: None,
                 url: request_url.clone(),
                 method: "GET".to_owned(),

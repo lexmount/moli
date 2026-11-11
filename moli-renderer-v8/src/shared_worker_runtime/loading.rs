@@ -74,7 +74,7 @@ pub(crate) struct SharedWorkerLaunchParams {
     pub(super) client_owner_id: SharedWorkerClientOwnerId,
     pub(super) client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
     pub(super) worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
-    pub(super) parent_service_worker_client_id: Option<ServiceWorkerClientId>,
+    pub(super) creator_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(super) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
 }
 
@@ -119,7 +119,7 @@ impl SharedWorkerLaunchParams {
         client_port_id: MessagePortId,
         worker_port_id: MessagePortId,
         client_owner_id: SharedWorkerClientOwnerId,
-        parent_service_worker_client_id: Option<ServiceWorkerClientId>,
+        creator_service_worker_client_id: Option<ServiceWorkerClientId>,
         client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
         worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
     ) -> Self {
@@ -132,7 +132,7 @@ impl SharedWorkerLaunchParams {
             client_owner_id,
             client_event_realm,
             worker_host_bridge_sender,
-            parent_service_worker_client_id,
+            creator_service_worker_client_id,
             reserved_service_worker_client_id: None,
         }
     }
@@ -170,7 +170,7 @@ impl SharedWorkerLaunchParams {
                 ),
             )
         } else if script_url.scheme() == "blob" {
-            let Some(parent_client_id) = self.parent_service_worker_client_id else {
+            let Some(parent_client_id) = self.creator_service_worker_client_id else {
                 return;
             };
             service_worker_runtime
@@ -439,6 +439,7 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     request_policy: SharedWorkerScriptRequestPolicy,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+    creator_service_worker_client_id: Option<ServiceWorkerClientId>,
     cancel_handle: FetchCancelHandle,
 ) -> Result<SharedWorkerLoadedScript, String> {
     if cancel_handle.is_cancelled() {
@@ -453,6 +454,7 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     ) && let Some(response) = service_worker_runtime
         .fetch_main_resource_for_worker_client(
             client_id,
+            creator_service_worker_client_id,
             &request,
             request_client,
             resource_task_runner,

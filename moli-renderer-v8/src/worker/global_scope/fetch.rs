@@ -569,7 +569,7 @@ pub(super) fn spawn_worker_fetch_service_worker(
         internal_id: u64::from(fetch_id),
         request: ServiceWorkerFetchRequest {
             body_stream,
-            client_id,
+            client_id: Some(client_id),
             resulting_client_id: None,
             url: resolved_url.clone(),
             method: method.clone(),
