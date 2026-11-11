@@ -288,7 +288,7 @@ impl SchedulerQueues {
         );
         self.undelivered_renderer_outputs
             .insert(renderer_output_cursor);
-        let delivery_predecessor = self.same_stream_insertion_predecessor(renderer_output_cursor);
+        let delivery_predecessor = self.insertion_predecessor(renderer_output_cursor);
         self.protocol_residences
             .push_back(ProtocolSchedulerResidence::RendererOutputPublication(
                 RendererOutputPublicationWork {
@@ -314,7 +314,7 @@ impl SchedulerQueues {
             return;
         }
         self.undelivered_renderer_outputs.insert(cursor);
-        let delivery_predecessor = self.same_stream_insertion_predecessor(cursor);
+        let delivery_predecessor = self.insertion_predecessor(cursor);
         let position = self.protocol_residences.iter().position(|residence| matches!(residence,
             ProtocolSchedulerResidence::RendererOutputPublication(work)
                 if work.renderer_output_cursor.stream() == cursor.stream() && work.renderer_output_cursor.sequence() > cursor.sequence()
@@ -441,7 +441,8 @@ impl SchedulerQueues {
         cursor: RendererOutputCursor,
         predecessor: Option<RendererOutputCursor>,
     ) {
-        let insertion_predecessor = self.same_stream_insertion_predecessor(cursor);
+        let insertion_predecessor = self.insertion_predecessor(cursor);
+        let undelivered = &self.undelivered_renderer_outputs;
         if let Some(work) =
             self.protocol_residences
                 .iter_mut()
@@ -454,10 +455,13 @@ impl SchedulerQueues {
                     _ => None,
                 })
         {
-            work.delivery_predecessor = insertion_predecessor
-                .or(work.delivery_predecessor.filter(|earlier| {
-                    earlier.stream() == cursor.stream() && earlier.sequence() < cursor.sequence()
-                }))
+            // Registration already strengthens queued insertion edges. A
+            // projection handoff must retain that edge while a snapshot owns
+            // its source, including predecessors from another stream.
+            work.delivery_predecessor = work
+                .delivery_predecessor
+                .filter(|earlier| undelivered.contains(earlier))
+                .or(insertion_predecessor)
                 .or(predecessor);
         }
     }
@@ -473,40 +477,32 @@ impl SchedulerQueues {
         predecessor.is_some_and(|cursor| self.undelivered_renderer_outputs.contains(&cursor))
     }
 
-    fn same_stream_insertion_predecessor(
-        &self,
-        cursor: RendererOutputCursor,
-    ) -> Option<RendererOutputCursor> {
-        self.protocol_residences
-            .iter()
-            .filter_map(ProtocolSchedulerResidence::renderer_insertion_boundary)
-            .filter(|(source, boundary)| {
-                source.stream() == cursor.stream()
-                    && source.sequence() < cursor.sequence()
-                    && !inserted_cursor(cursor, *source, *boundary)
-            })
-            .map(|(source, _)| source)
-            .max_by_key(|source| source.sequence())
+    fn insertion_predecessor(&self, cursor: RendererOutputCursor) -> Option<RendererOutputCursor> {
+        insertion_predecessor_for(
+            cursor,
+            self.protocol_residences
+                .iter()
+                .filter_map(ProtocolSchedulerResidence::renderer_insertion_boundary),
+        )
     }
 
-    fn bind_same_stream_insertion_successors(
-        &mut self,
-        source: RendererOutputCursor,
-        boundary: RendererOutputCursor,
-    ) {
+    fn bind_insertion_successors(&mut self) {
+        let insertions = self
+            .protocol_residences
+            .iter()
+            .filter_map(ProtocolSchedulerResidence::renderer_insertion_boundary)
+            .collect::<Vec<_>>();
         for residence in &mut self.protocol_residences {
             if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence
-                && work.renderer_output_cursor.stream() == source.stream()
-                && work.renderer_output_cursor.sequence() > source.sequence()
-                && !inserted_cursor(work.renderer_output_cursor, source, boundary)
-                && work.delivery_predecessor.is_none_or(|earlier| {
-                    earlier.stream() != source.stream() || earlier.sequence() < source.sequence()
-                })
+                && let Some(predecessor) = insertion_predecessor_for(
+                    work.renderer_output_cursor,
+                    insertions.iter().copied(),
+                )
             {
-                // Same-stream successors share their source's creation
-                // dependency. This chain retains it transitively while also
-                // keeping their output after the complete insertion.
-                work.delivery_predecessor = Some(source);
+                // Both streams keep their original order: successors of the
+                // source and of the inserted Native boundary await the complete
+                // source delivery. Its inserted members never acquire this edge.
+                work.delivery_predecessor = Some(predecessor);
             }
         }
     }
@@ -724,8 +720,8 @@ impl SchedulerQueues {
                         .extend(predecessors.into_iter().filter(|fence| {
                             fence.cursor() != source && Some(fence.cursor()) != insertion_cursor
                         }));
-                    if let Some(boundary) = insertion_cursor {
-                        self.bind_same_stream_insertion_successors(source, boundary);
+                    if insertion_cursor.is_some() {
+                        self.bind_insertion_successors();
                     }
                     return;
                 }
@@ -1037,6 +1033,31 @@ impl SchedulerQueues {
 pub(super) struct PendingMainDocumentLoadObservation {
     pub(super) observation_id: DeferredMainDocumentLoadObservationId,
     pub(super) output_interest: moli_protocol::DeferredMainDocumentLoadCompletionOutputInterest,
+}
+
+/// Return the latest insertion in the successor's own stream. Source
+/// sequence numbers from different streams cannot rank Native boundaries.
+fn insertion_predecessor_for(
+    cursor: RendererOutputCursor,
+    insertions: impl IntoIterator<Item = (RendererOutputCursor, RendererOutputCursor)>,
+) -> Option<RendererOutputCursor> {
+    insertions
+        .into_iter()
+        .filter_map(|(source, boundary)| {
+            if inserted_cursor(cursor, source, boundary) {
+                return None;
+            }
+            [source, boundary]
+                .into_iter()
+                .filter(|position| {
+                    position.stream() == cursor.stream() && position.sequence() < cursor.sequence()
+                })
+                .map(|position| position.sequence())
+                .max()
+                .map(|position| (position, source))
+        })
+        .max_by_key(|(position, _)| *position)
+        .map(|(_, source)| source)
 }
 
 fn inserted_cursor(
