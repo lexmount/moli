@@ -168,7 +168,7 @@ fn spawn_socket_sink_with_limits(
 
 impl CdpSocketSink {
     /// Confirms that every preceding output was flushed by the sole writer.
-    /// Callers must bound their wait; a stalled peer must not trigger shutdown.
+    /// Callers must bound their wait.
     pub(crate) async fn flush(&self) -> bool {
         let (completed, receiver) = oneshot::channel();
         if self
