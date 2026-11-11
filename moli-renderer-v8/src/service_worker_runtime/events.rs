@@ -709,6 +709,7 @@ pub(crate) struct ServiceWorkerDirectFetchCompletion {
     sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
     pub(super) stream_response: bool,
     pub(super) defer_network_fallback: bool,
+    pub(super) defer_redirects: bool,
 }
 
 impl ServiceWorkerDirectFetchCompletion {
@@ -719,6 +720,7 @@ impl ServiceWorkerDirectFetchCompletion {
             sender,
             stream_response: false,
             defer_network_fallback: false,
+            defer_redirects: false,
         }
     }
 
@@ -727,6 +729,18 @@ impl ServiceWorkerDirectFetchCompletion {
     ) -> Self {
         Self {
             stream_response: true,
+            ..Self::buffered(sender)
+        }
+    }
+
+    /// Main worker requests re-enter SW selection after every redirect. The
+    /// caller owns both redirect following and any transport fallback.
+    pub(crate) fn buffered_with_caller_redirects(
+        sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    ) -> Self {
+        Self {
+            defer_redirects: true,
+            defer_network_fallback: true,
             ..Self::buffered(sender)
         }
     }

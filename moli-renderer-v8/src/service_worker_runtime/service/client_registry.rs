@@ -334,6 +334,78 @@ impl ServiceWorkerRuntimeService {
         Some(client_id)
     }
 
+    /// Match a main worker request's current URL without promoting its reserved
+    /// environment or allocating a second client when a redirect changes scope.
+    pub(super) fn retarget_reserved_worker_client(
+        &self,
+        client_id: ServiceWorkerClientId,
+        script_url: Url,
+    ) -> bool {
+        let current_url = service_worker_current_url_for_creation_url(&script_url);
+        let progress = {
+            let mut state = self.inner.state.lock();
+            let Some(client) = state.live_clients.get(&client_id) else {
+                return false;
+            };
+            if !matches!(client.endpoint, ServiceWorkerClientEndpoint::PendingWorker) {
+                return false;
+            }
+            let storage_key = client.storage_key.clone();
+            let secure_context = client.secure_context;
+            let mut removed = Vec::new();
+            for registration in state.registrations.values_mut() {
+                if registration.controlled_client_ids.remove(&client_id) {
+                    removed.push(registration.id);
+                }
+            }
+            record_target_version_updates_for_registration_ids_locked(
+                &mut state,
+                removed.iter().copied(),
+            );
+            let client = state
+                .live_clients
+                .get_mut(&client_id)
+                .expect("reserved worker remains live under the state lock");
+            client.creation_url = script_url;
+            client.document_url = current_url.clone();
+            self.restore_stored_registrations_for_document_url_locked(
+                &mut state,
+                &current_url,
+                &storage_key,
+            );
+            if secure_context
+                && let Some(version_id) = select_controller_for_new_client_locked(
+                    &mut state,
+                    client_id,
+                    &current_url,
+                    &storage_key,
+                )
+            {
+                state.record_target_version_updated(version_id);
+            }
+            removed
+                .into_iter()
+                .flat_map(|id| {
+                    if state
+                        .registrations
+                        .get(&id)
+                        .is_some_and(|registration| registration.pending_unregistration)
+                    {
+                        self.unregistration_progress_for_registration_if_ready_locked(
+                            &mut state, id,
+                        )
+                    } else {
+                        self.activation_progress_for_registration_if_ready_locked(&mut state, id)
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        for progress in progress {
+            self.run_lifecycle_progress(progress);
+        }
+        true
+    }
+
     /// The response URL becomes the worker's creation URL. Its controller is
     /// still the one selected for the main request, including a SW response
     /// whose URL lies outside that registration's scope.
