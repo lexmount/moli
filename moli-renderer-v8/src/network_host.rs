@@ -32,6 +32,7 @@ mod request_scope;
 mod request_upload;
 mod response;
 mod response_hop;
+pub(crate) use response_hop::SubresourceResponseTransition;
 mod stylesheet_subresource;
 mod subresource;
 pub(crate) use subresource::SubresourceRequestDispatch;
@@ -57,7 +58,7 @@ pub(crate) use self::blob_url_entry::{
 };
 
 pub(crate) use self::async_fetch::{
-    collect_image_response_into_parkable, fetch_browser_subresource_with_preflight_headers,
+    ManualCorsRedirectState, collect_image_response_into_parkable, fetch_browser_subresource_with_preflight_headers,
     fetch_cors_script_text, observe_async_xhr_upload, spawn_async_subresource_fetch,
 };
 #[cfg(any(test, feature = "devtools"))]

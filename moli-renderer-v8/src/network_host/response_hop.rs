@@ -18,7 +18,7 @@ pub(crate) enum SubresourceResponseTransition {
 
 /// Keep the wire response separate from headers changed by interception or
 /// cache validation. Synthetic responses and local cache hits have no exchange.
-pub(super) fn network_response_extra_info(
+pub(crate) fn network_response_extra_info(
     head: &ResponseHead,
     observations: &NetworkObservationJournal,
 ) -> Option<NetworkResponseExtraInfo> {
@@ -53,15 +53,14 @@ pub(super) fn advance_subresource_response(
             .as_ref()
             .map(|extra| extra.request_extra_info.clone());
     }
-    // The single-hop transport refines request snapshots, including cache
-    // hits and internal redirects. Keep them when carrying the chain on.
+    // Preserve native physical request snapshots only for transport hops.
     if source == moli_fetch::RedirectSource::Network {
         request.observe_redirect_requests(&head.redirect_chain);
     }
-    if source == moli_fetch::RedirectSource::Network && !web_security_disabled {
-        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
-    }
     if source == moli_fetch::RedirectSource::Network {
+        if !web_security_disabled {
+        request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+        }
         request
             .validate_authentication_response(&head)
             .map_err(super::async_fetch::format_network_error)?;
@@ -142,7 +141,6 @@ pub(super) fn advance_validated_subresource_response(
     request
         .follow_redirect_with_web_security(redirect, web_security_disabled)
         .map_err(|error| error.to_string())?;
-
     Ok(SubresourceResponseTransition::FollowedRedirect)
 }
 

@@ -149,6 +149,10 @@ async fn stream_navigation_preload_response(
     });
 }
 
+pub(crate) struct ServiceWorkerFetchDispatchReceipt {
+    pub(super) event_id: Option<ServiceWorkerEventId>,
+}
+
 impl ServiceWorkerRuntimeService {
     #[cfg(feature = "devtools")]
     pub(super) fn start_queued_launch(&self, launch: ServiceWorkerQueuedLaunch) {
@@ -240,6 +244,14 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn dispatch_controlled_fetch(&self, dispatch: ServiceWorkerFetchDispatch) -> bool {
+        self.dispatch_controlled_fetch_with_event_id(dispatch)
+            .is_some()
+    }
+
+    pub(crate) fn dispatch_controlled_fetch_with_event_id(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+    ) -> Option<ServiceWorkerFetchDispatchReceipt> {
         let request = &dispatch.request;
         let native_request = {
             let origin = dispatch.network_context.request_origin.clone();
@@ -266,7 +278,7 @@ impl ServiceWorkerRuntimeService {
             .with_fetch_referrer(&request.metadata.referrer)
             .expect("service worker requests retain a validated Fetch referrer")
         };
-        self.dispatch_controlled_fetch_request(dispatch, native_request)
+        self.dispatch_controlled_fetch_request_with_event_id(dispatch, native_request)
     }
 
     /// Resource interception already owns the complete browser request. Keep
@@ -281,6 +293,7 @@ impl ServiceWorkerRuntimeService {
             native_request,
             super::super::state::ServiceWorkerFetchResponseDelivery::Client,
         )
+        .is_some()
     }
 
     pub(crate) fn dispatch_controlled_fetch_hop(
@@ -293,6 +306,19 @@ impl ServiceWorkerRuntimeService {
             native_request,
             super::super::state::ServiceWorkerFetchResponseDelivery::LoaderHop,
         )
+        .is_some()
+    }
+
+    fn dispatch_controlled_fetch_request_with_event_id(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+        native_request: moli_fetch::Request,
+    ) -> Option<ServiceWorkerFetchDispatchReceipt> {
+        self.dispatch_fetch_with_delivery(
+            dispatch,
+            native_request,
+            super::super::state::ServiceWorkerFetchResponseDelivery::Client,
+        )
     }
 
     fn dispatch_fetch_with_delivery(
@@ -300,7 +326,7 @@ impl ServiceWorkerRuntimeService {
         dispatch: ServiceWorkerFetchDispatch,
         native_request: moli_fetch::Request,
         response_delivery: super::super::state::ServiceWorkerFetchResponseDelivery,
-    ) -> bool {
+    ) -> Option<ServiceWorkerFetchDispatchReceipt> {
         let request = dispatch.request.clone();
         // Synthetic redirects advance this retained request before a network
         // fallback can bind the owner's cookie scope on its transport copy.
@@ -326,7 +352,6 @@ impl ServiceWorkerRuntimeService {
                     Some(check) => native_request.with_redirect_check(check),
                     None => native_request,
                 }
-
             },
             initial_redirect_count,
             internal_id: dispatch.internal_id,
@@ -348,14 +373,16 @@ impl ServiceWorkerRuntimeService {
             direct_completion_tx: dispatch.direct_completion_tx,
         };
         self.dispatch_controlled_fetch_job(fetch_job, request)
-            .is_ok()
+            .ok()
+            .map(|event_id| ServiceWorkerFetchDispatchReceipt { event_id })
     }
 
     pub(super) fn dispatch_controlled_fetch_job(
         &self,
         mut fetch_job: ServiceWorkerFetchJob,
         mut request: ServiceWorkerFetchRequest,
-    ) -> Result<(), Box<ServiceWorkerFetchJob>> {
+    ) -> Result<Option<ServiceWorkerEventId>, Box<ServiceWorkerFetchJob>> {
+        let mut dispatched_event_id = None;
         if let Err(error) = fetch_job.request.browser_origin().and_then(|_| {
             fetch_job.request.admit_request_url_with_web_security(
                 &fetch_job.request.url,
@@ -363,7 +390,7 @@ impl ServiceWorkerRuntimeService {
             )
         }) {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
-            return Ok(());
+            return Ok(dispatched_event_id);
         }
         fetch_job.request.browser_request_metadata = Some(
             super::fetch_settlement::service_worker_fetch_browser_metadata(
@@ -435,6 +462,7 @@ impl ServiceWorkerRuntimeService {
                 fetch_job.cancel_handle.mark_service_worker_start();
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
+                dispatched_event_id = Some(event_id);
                 let event = ServiceWorkerFetchEvent {
                     event_id,
                     owner: version.run_owner(),
@@ -453,6 +481,7 @@ impl ServiceWorkerRuntimeService {
             } else {
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
+                dispatched_event_id = Some(event_id);
                 fetch_job.cancel_handle.mark_service_worker_start();
                 Self::begin_version_event_locked(version);
                 let action = match &version.running_state {
@@ -519,16 +548,16 @@ impl ServiceWorkerRuntimeService {
 
         if let Some(job) = fallback_job {
             self.dispatch_fetch_fallback(job);
-            return Ok(());
+            return Ok(dispatched_event_id);
         }
         if let Some(launch) = start_launch {
             self.start_queued_launch(launch);
         }
         let Some((host, event)) = dispatch_event else {
-            return Ok(());
+            return Ok(dispatched_event_id);
         };
         self.dispatch_fetch_event(host, event);
-        Ok(())
+        Ok(dispatched_event_id)
     }
 
     pub(super) fn dispatch_pending_activation_fetch_events(
