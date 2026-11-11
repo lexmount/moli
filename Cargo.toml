@@ -84,6 +84,7 @@ members = [
     "moli-cookie-jar",
     "moli-websocket",
     "moli-fetch",
+    "moli-fetch-types",
     "moli-file-api",
     "moli-geometry",
     "moli-header-field",

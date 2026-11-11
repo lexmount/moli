@@ -1,0 +1,13 @@
+[package]
+license.workspace = true
+name = "moli-fetch-types"
+version = "0.1.0"
+edition = "2024"
+description = "Transport-independent Fetch response metadata"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+url = { version = "2.5.7", features = ["serde"] }
+
+[lints]
+workspace = true

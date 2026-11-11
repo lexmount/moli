@@ -9,6 +9,7 @@ default = []
 test-support = ["moli-cookie-jar/test-support"]
 
 [dependencies]
+moli-fetch-types = { path = "../moli-fetch-types" }
 moli-header-field = { path = "../moli-header-field" }
 anyhow = "1.0.100"
 bytes = "1"
