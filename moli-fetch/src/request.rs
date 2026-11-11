@@ -44,7 +44,11 @@ pub struct Request {
     pub url: Url,
     pub method: String,
     /// Immutable upload bytes, shared when a request is cloned or redirected.
+    /// Use `set_body` when replacing an upload that has a separate text view.
     pub body: Option<bytes::Bytes>,
+    /// Optional protocol view supplied by the body serializer (e.g. multipart
+    /// with file contents omitted). Never used as the transport upload.
+    body_text: Option<std::sync::Arc<str>>,
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
     redirect_headers: Option<crate::RequestHeaders>,
@@ -591,6 +595,7 @@ impl Request {
             url,
             method: "GET".to_owned(),
             body: None,
+            body_text: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
             additional_cookies: None,
@@ -627,6 +632,7 @@ impl Request {
             url,
             method: "GET".to_owned(),
             body: None,
+            body_text: None,
             request_headers: crate::RequestHeaders::default(),
             redirect_headers: None,
             additional_cookies: None,
@@ -696,6 +702,7 @@ impl Request {
             url,
             method: method.to_owned(),
             body,
+            body_text: None,
             request_headers: request_headers.into(),
             redirect_headers: None,
             additional_cookies: None,
@@ -1100,6 +1107,7 @@ impl Request {
         if redirect_status_rewrites_to_get(status, &self.method) {
             self.method = "GET".to_owned();
             self.body = None;
+            self.body_text = None;
             self.request_headers
                 .retain(|(name, _)| !is_request_body_header_name(name));
         }
@@ -1182,6 +1190,28 @@ impl Request {
             method: self.method.clone(),
             headers,
             body: self.body.clone(),
+            body_text: self.body_text.clone(),
+        })
+    }
+
+    /// Attach the serializer's text view without decoding the upload bytes.
+    pub fn with_body_text(mut self, text: Option<std::sync::Arc<str>>) -> Self {
+        self.body_text = text;
+        self
+    }
+
+    /// Replace an upload and its protocol view together during interception.
+    /// `None` uses the replacement bytes' ordinary UTF-8 lossy text view.
+    pub fn set_body(&mut self, body: Option<bytes::Bytes>, text: Option<std::sync::Arc<str>>) {
+        self.body = body;
+        self.body_text = text;
+    }
+
+    pub fn body_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.body.as_deref().map(|body| {
+            self.body_text
+                .as_deref()
+                .map_or_else(|| String::from_utf8_lossy(body), std::borrow::Cow::Borrowed)
         })
     }
 

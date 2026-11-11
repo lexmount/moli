@@ -784,6 +784,18 @@ pub struct DispatchedRequest {
     pub method: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<bytes::Bytes>,
+    /// Serializer-provided protocol view, shared independently of upload bytes.
+    pub body_text: Option<Arc<str>>,
+}
+
+impl DispatchedRequest {
+    pub fn body_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.body.as_deref().map(|body| {
+            self.body_text
+                .as_deref()
+                .map_or_else(|| String::from_utf8_lossy(body), std::borrow::Cow::Borrowed)
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

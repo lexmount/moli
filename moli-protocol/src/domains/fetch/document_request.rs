@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::sync::Arc;
 
 use crate::conn::{
     CdpConnection, NavigationLoadOutcome, PendingFetchNavigation,
@@ -90,6 +91,7 @@ impl PreparedInterceptedNavigationRequest {
                     pending.navigation.request_method.clone(),
                     pending.navigation.request_headers.clone(),
                     pending.navigation.clone_request_body_bytes(),
+                    pending.navigation.request_body.as_deref().map(Arc::from),
                     pending.navigation.redirect_headers.clone(),
                 );
                 if let Some(auth) = auth {
@@ -237,10 +239,7 @@ impl PreparedInterceptedNavigationRequest {
             self.pending.navigation.request_method = hop.method.clone();
             self.pending.navigation.request_headers = hop.request_headers.clone();
             self.pending.navigation.request_body_bytes = hop.body.clone();
-            self.pending.navigation.request_body = hop
-                .body
-                .as_ref()
-                .map(|body| String::from_utf8_lossy(body).into_owned());
+            self.pending.navigation.request_body = hop.body_text().map(|text| text.into_owned());
             self.pending.navigation.redirect_chain = hop.redirect_chain().to_vec();
             self.pending.navigation.redirect_headers = None;
             let pending = self.pending;
