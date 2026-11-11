@@ -996,6 +996,8 @@ pub(crate) struct JsContextHost {
     pending_service_worker_unregisters:
         HashMap<u64, service_workers::PendingServiceWorkerUnregister>,
     pending_service_worker_ready: HashMap<u64, service_workers::PendingServiceWorkerReady>,
+    service_worker_client_message_queues:
+        HashMap<WindowDocumentOwner, service_workers::ServiceWorkerClientMessageQueue>,
     service_worker_registration_watchers: Vec<service_workers::ServiceWorkerRegistrationWatcher>,
     service_worker_lifecycle_watched_scopes: HashSet<(Url, String, WindowDocumentOwner)>,
     service_worker_popup_clients: HashMap<u64, ServiceWorkerClientId>,

@@ -323,6 +323,8 @@ async fn navigator_service_worker_post_message_routes_to_waiting_and_active_vers
           globalThis.__serviceWorkerWaitingPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            // This API fixture does not run a parser-driven DOMContentLoaded.
+            sw.startMessages();
             const registration = await sw.register("worker.js", { scope: "./" });
             await __moliTestActivatedServiceWorker(sw);
             const updated = await sw.register("worker.js", { scope: "./" });
@@ -435,6 +437,7 @@ async fn navigator_service_worker_post_message_routes_to_installing_version() {
           globalThis.__serviceWorkerInstallingPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            sw.startMessages();
             const registration = await sw.register("worker.js", { scope: "./" });
             await __moliTestActivatedServiceWorker(sw);
             let installingWorker = null;
@@ -1330,6 +1333,7 @@ async fn navigator_service_worker_post_message_to_redundant_worker_is_dropped() 
           globalThis.__serviceWorkerRedundantPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            sw.startMessages();
             const registration = await sw.register("worker-v1.js", { scope: "./" });
             await __moliTestActivatedServiceWorker(sw);
             const firstWorker = registration.active;

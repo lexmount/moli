@@ -5400,6 +5400,10 @@ impl JsContextHost {
             return;
         }
         document.dom_content_loaded = PopupDomContentLoadedState::Dispatched;
+        self.enable_service_worker_client_message_queue_for_document(
+            OwnerDispatchScope::LightweightPopup(popup_id),
+            crate::native_bridge::WindowDocumentOwner::LightweightPopup(window.document_owner),
+        );
         self.queue_lightweight_popup_post_parse_autofocus(popup_id);
         self.publish_lightweight_popup_load_event_if_ready(popup_id);
     }

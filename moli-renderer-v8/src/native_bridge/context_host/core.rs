@@ -458,6 +458,7 @@ impl JsContextHost {
             pending_service_worker_registers: HashMap::new(),
             pending_service_worker_unregisters: HashMap::new(),
             pending_service_worker_ready: HashMap::new(),
+            service_worker_client_message_queues: HashMap::new(),
             service_worker_registration_watchers: Vec::new(),
             service_worker_lifecycle_watched_scopes: HashSet::new(),
             service_worker_popup_clients: HashMap::new(),

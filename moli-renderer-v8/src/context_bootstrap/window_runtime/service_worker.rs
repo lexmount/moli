@@ -22,6 +22,7 @@ use crate::worker::WorkerScriptKind;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiObjectDeclaration};
 
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
+const SERVICE_WORKER_WINDOW_ID_SLOT: &str = "__moliServiceWorkerWindowIdentity";
 const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
 const SERVICE_WORKER_REGISTRATION_WORKER_SLOT: &str = "__moliServiceWorkerRegistrationWorker";
 const SERVICE_WORKER_REGISTRATION_WORKERS_SLOT: &str = "__moliServiceWorkerRegistrationWorkers";
@@ -993,6 +994,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_message_handler_set
         SERVICE_WORKER_CONTAINER_ONMESSAGE_SLOT,
         args.get(0),
     );
+    enable_service_worker_client_message_queue(scope, args.this());
 }
 
 pub(in crate::context_bootstrap) fn navigator_service_worker_messageerror_handler_getter_callback<
@@ -2765,13 +2767,35 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_ready_getter_callba
     }
 }
 
-pub(in crate::context_bootstrap) fn navigator_service_worker_start_messages_callback(
-    _scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
+pub(in crate::context_bootstrap) fn navigator_service_worker_start_messages_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    // The current native client-message queue is enabled when the container is
-    // created. Calling startMessages again leaves that enabled state unchanged.
+    enable_service_worker_client_message_queue(scope, args.this());
+}
+
+fn enable_service_worker_client_message_queue<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    container: v8::Local<'s, v8::Object>,
+) {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        // Worker client messages become runnable after worker bootstrap.
+        return;
+    };
+    let owner = service_worker_container_owner_scope(scope, container);
+    let Some(identity) = get_private_value(scope, container, SERVICE_WORKER_WINDOW_ID_SLOT)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+    else {
+        return;
+    };
+    let (identity, lossless) = identity.u64_value();
+    let host = unsafe { &mut *host_ptr };
+    // A container retained from a replaced Window must not enable the new
+    // Window's queue. document.open() can retain the same Window and container.
+    if lossless && host.service_worker_window_id_for_dispatch_scope(owner) == Some(identity) {
+        host.enable_service_worker_client_message_queue(owner);
+    }
 }
 
 fn mark_service_worker_registration_event_target<'s>(
@@ -2850,6 +2874,22 @@ pub(in crate::context_bootstrap) fn service_worker_object_set_owner_scope<'s>(
 ) {
     let owner_token = service_worker_owner_token_value(scope, owner);
     set_private_value(scope, object, SERVICE_WORKER_OWNER_TOKEN_SLOT, owner_token);
+    if let Some(identity) = context_host_ptr_from_global_bridge(scope).and_then(|host| {
+        let host = unsafe { &*host };
+        // A retained Navigator can materialize this object after navigation.
+        // Its creation realm must still belong to this current Window; a
+        // dispatch address alone may already refer to a replacement Window.
+        host.current_runtime_window_execution_context_identity_for_dispatch_scope(scope, owner)?;
+        host.service_worker_window_id_for_dispatch_scope(owner)
+    }) {
+        let identity = v8::BigInt::new_from_u64(scope, identity);
+        set_private_value(
+            scope,
+            object,
+            SERVICE_WORKER_WINDOW_ID_SLOT,
+            identity.into(),
+        );
+    }
 }
 
 fn service_worker_worker_set_owner_scope<'s>(
