@@ -485,6 +485,60 @@ async fn same_origin_mode_rejects_before_service_worker_dispatch_and_redispatch(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn blank_popup_service_worker_redirect_preserves_cookie_scope() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let expression = format!(
+        "({})()",
+        include_str!("fixtures/blank-popup-sw-redirect.js")
+    );
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(&expression, true)
+            .await?,
+    )?;
+    assert_eq!(
+        observed,
+        json!({
+            "documentURL": "about:blank", "controlled": "worker",
+            "direct": "ok", "redirect": "ok",
+            "seen": ["/sw-probe", "/sw-redirect"]
+        })
+    );
+    let requests = server.requests.lock();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.starts_with("/sw-probe")
+                || request.path.starts_with("/sw-redirect")),
+        "the probe and redirect must be served by the worker: {requests:?}"
+    );
+    for path in ["/network-final?direct", "/network-final?redirect"] {
+        let matching: Vec<_> = requests
+            .iter()
+            .filter(|request| request.path == path)
+            .collect();
+        assert_eq!(matching.len(), 1, "{requests:?}");
+        let request = matching[0];
+        let mut cookies: Vec<_> = request
+            .cookie
+            .as_deref()
+            .unwrap_or_default()
+            .split(';')
+            .map(str::trim)
+            .collect();
+        cookies.sort_unstable();
+        assert_eq!(
+            cookies,
+            ["default=1", "lax=1", "originSession=present", "strict=1"],
+            "{request:?}"
+        );
+        assert_eq!(request.referrer, None, "{request:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn text_track_without_crossorigin_blocks_cross_origin_before_network() -> Result<()> {
     let server = SecurityServers::spawn().await?;
     let mut config = BrowserConfig::default();
