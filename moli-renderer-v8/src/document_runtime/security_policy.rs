@@ -1393,22 +1393,19 @@ impl DocumentRuntime {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn document_connect_csp_check_for_document_with_redirect_status(
         &self,
         document_handle: Option<DomHandle>,
         document_url: &Url,
         document_origin: Option<&Url>,
-        response_policies: &[ContentSecurityPolicy],
-        response_report_only_policies: &[ContentSecurityPolicy],
-        response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+        policy_container: &DocumentPolicyContainer,
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
         let mut policies = self.document_content_security_policies_for_optional_document(
             document_handle,
-            response_policies,
-            response_reporting_endpoints,
+            &policy_container.response_content_security_policies,
+            &policy_container.content_security_reporting_endpoints,
         );
         if let Some(origin) = document_origin {
             for policy in &mut policies {
@@ -1423,8 +1420,8 @@ impl DocumentRuntime {
             ContentSecurityPolicyDisposition::Enforce,
         );
         let report_only_violation = document_connect_policy_violation(
-            response_report_only_policies,
-            response_reporting_endpoints,
+            &policy_container.response_content_security_report_only_policies,
+            &policy_container.content_security_reporting_endpoints,
             document_url,
             request_url,
             redirect_status,

@@ -745,13 +745,7 @@ impl JsContextHost {
                             snapshot.document_handle,
                             document_url,
                             document_origin.as_ref(),
-                            &snapshot.policy_container.response_content_security_policies,
-                            &snapshot
-                                .policy_container
-                                .response_content_security_report_only_policies,
-                            &snapshot
-                                .policy_container
-                                .content_security_reporting_endpoints,
+                            &snapshot.policy_container,
                             request_url,
                             redirect_status,
                         ),
@@ -867,17 +861,18 @@ impl JsContextHost {
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
-        match self.parent_csp_owner(child_handle) {
-            OwnerDispatchScope::Child(parent) => {
+        match self.owner_dispatch_scope_for_node(child_handle) {
+            Some(OwnerDispatchScope::Child(parent)) => {
                 self.child_effective_response_content_security_policies(parent)
             }
-            OwnerDispatchScope::LightweightPopup(popup) => self
+            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
                 .lightweight_popup_policy_container(popup)
                 .map(|policy| policy.response_content_security_policies.clone())
                 .unwrap_or_default(),
-            OwnerDispatchScope::Top => unsafe { &*self.runtime }
+            Some(OwnerDispatchScope::Top) => unsafe { &*self.runtime }
                 .response_content_security_policies()
                 .to_vec(),
+            None => Vec::new(),
         }
     }
 
@@ -885,11 +880,11 @@ impl JsContextHost {
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
-        match self.parent_csp_owner(child_handle) {
-            OwnerDispatchScope::Child(parent) => {
+        match self.owner_dispatch_scope_for_node(child_handle) {
+            Some(OwnerDispatchScope::Child(parent)) => {
                 self.child_effective_response_content_security_report_only_policies(parent)
             }
-            OwnerDispatchScope::LightweightPopup(popup) => self
+            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
                 .lightweight_popup_policy_container(popup)
                 .map(|policy| {
                     policy
@@ -897,9 +892,10 @@ impl JsContextHost {
                         .clone()
                 })
                 .unwrap_or_default(),
-            OwnerDispatchScope::Top => unsafe { &*self.runtime }
+            Some(OwnerDispatchScope::Top) => unsafe { &*self.runtime }
                 .response_content_security_report_only_policies()
                 .to_vec(),
+            None => Vec::new(),
         }
     }
 
@@ -928,28 +924,19 @@ impl JsContextHost {
         &self,
         child_handle: DomHandle,
     ) -> ContentSecurityPolicyReportingEndpoints {
-        match self.parent_csp_owner(child_handle) {
-            OwnerDispatchScope::Child(parent) => {
+        match self.owner_dispatch_scope_for_node(child_handle) {
+            Some(OwnerDispatchScope::Child(parent)) => {
                 self.child_effective_content_security_reporting_endpoints(parent)
             }
-            OwnerDispatchScope::LightweightPopup(popup) => self
+            Some(OwnerDispatchScope::LightweightPopup(popup)) => self
                 .lightweight_popup_policy_container(popup)
                 .map(|policy| policy.content_security_reporting_endpoints.clone())
                 .unwrap_or_default(),
-            OwnerDispatchScope::Top => unsafe { &*self.runtime }
+            Some(OwnerDispatchScope::Top) => unsafe { &*self.runtime }
                 .content_security_reporting_endpoints()
                 .clone(),
+            None => ContentSecurityPolicyReportingEndpoints::default(),
         }
-    }
-
-    fn parent_csp_owner(&self, child_handle: DomHandle) -> OwnerDispatchScope {
-        self.child_browsing_context_parent_handle(child_handle)
-            .map(OwnerDispatchScope::Child)
-            .or_else(|| {
-                self.child_browsing_context_popup_owner_id(child_handle)
-                    .map(OwnerDispatchScope::LightweightPopup)
-            })
-            .unwrap_or(OwnerDispatchScope::Top)
     }
 
     pub(crate) fn allows_eval_code_generation_by_csp<'s>(
