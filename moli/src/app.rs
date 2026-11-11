@@ -262,10 +262,15 @@ pub async fn run_cli_with_config<W: Write>(
             storage_partition.import_cookies(load_cookie_state_cookies(&config)?)?;
             let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
                 config.server.clone(),
-                storage_partition,
+                Arc::clone(&storage_partition),
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            server.serve().await.context("protocol server failed")?;
+            let result = server.serve().await;
+            // Export before the partition drops so a graceful shutdown keeps
+            // every accepted cookie, including CDP-injected and document.cookie
+            // writes that never pass through the network stack.
+            finalize_serve_cookies(&storage_partition, &config);
+            result.context("protocol server failed")?;
         }
         Commands::Import(args) => {
             let summary =
@@ -520,6 +525,42 @@ fn finalize_fetch_browser<W: Write>(
     // export failure does not replace the transfer's result.
     drop(browser);
     result
+}
+
+/// Writes the cookie files loaded on startup back with the session's final
+/// cookies, mirroring fetch mode's exit-time export. Literal `--cookie` data
+/// and stdin stay input-only. As in fetch, an export failure is logged and
+/// does not replace the serve result.
+fn finalize_serve_cookies(storage_partition: &StoragePartitionState, config: &AppConfig) {
+    let cookies = match storage_partition.cookies() {
+        Ok(cookies) => cookies,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to snapshot cookies for cookie file");
+            return;
+        }
+    };
+    for path in serve_cookie_file_output_paths(config) {
+        match cookie_cache::save_cookie_file(path, cookies.clone()) {
+            Ok(report) if report.skipped_partitioned > 0 => tracing::warn!(
+                skipped = report.skipped_partitioned,
+                "omitted partitioned cookies from Netscape cookie file"
+            ),
+            Err(error) => tracing::warn!(error = %error, "failed to save cookie file"),
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Cookie-file arguments that were loaded from a path may be written back;
+/// literal header data and stdin reads cannot.
+fn serve_cookie_file_output_paths(config: &AppConfig) -> Vec<&str> {
+    config
+        .fetch
+        .cookie_files
+        .iter()
+        .filter(|source| !source.is_empty() && !source.contains('=') && source.as_str() != "-")
+        .map(String::as_str)
+        .collect()
 }
 
 #[cfg(test)]
