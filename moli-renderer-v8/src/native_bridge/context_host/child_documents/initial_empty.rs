@@ -2,6 +2,7 @@ use super::super::JsContextHost;
 use crate::{
     document_runtime::{DocumentPolicyContainer, DomHandle},
     frame_owner_model::{FrameDocumentLoadDeliveryTask, FrameLocalWindowOwnerTransition},
+    native_bridge::OwnerDispatchScope,
 };
 use url::Url;
 
@@ -28,18 +29,20 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> DocumentPolicyContainer {
-        let mut policy_container = self
-            .child_browsing_context_parent_handle(handle)
-            .and_then(|parent| {
-                self.child_browsing_contexts
-                    .get(&parent)
-                    .map(|entry| entry.document_policy_container_snapshot())
-            })
-            .or_else(|| {
-                self.child_browsing_context_popup_owner_id(handle)
-                    .and_then(|popup_id| self.lightweight_popup_policy_container(popup_id).cloned())
-            })
-            .unwrap_or_else(|| self.document_policy_container().clone());
+        let inherited_policy = match self.owner_dispatch_scope_for_node(handle) {
+            Some(OwnerDispatchScope::Child(parent)) => {
+                self.child_browsing_context_policy_container_snapshot(parent)
+            }
+            Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
+                self.lightweight_popup_policy_container(popup_id).cloned()
+            }
+            Some(OwnerDispatchScope::Top) | None => None,
+        };
+        // Auxiliary-page handoff and popup retirement can refresh iframe
+        // records while their creator Document has no dispatch mapping.
+        // Preserve the initial-policy fallback only at this setup boundary.
+        let mut policy_container =
+            inherited_policy.unwrap_or_else(|| self.document_policy_container().clone());
         if let Some(parent_document) = self
             .dom_host()
             .node(handle)

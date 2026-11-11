@@ -490,13 +490,7 @@ impl JsContextHost {
                     }
                     // Empty Documents inherit within their actual frame tree.
                     // A popup is its root; the opener is not an ancestor.
-                    owner = match self.child_browsing_context_parent_handle(handle) {
-                        Some(parent) => OwnerDispatchScope::Child(parent),
-                        None => self.child_browsing_context_popup_owner_id(handle).map_or(
-                            OwnerDispatchScope::Top,
-                            OwnerDispatchScope::LightweightPopup,
-                        ),
-                    };
+                    owner = self.owner_dispatch_scope_for_node(handle)?;
                 }
                 OwnerDispatchScope::LightweightPopup(popup_id) => {
                     return self.lightweight_popup_secure_context(popup_id);
