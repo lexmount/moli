@@ -166,8 +166,6 @@ pub(super) fn pause_streaming_response_stage_navigation_into_buffer(
     let mut response_extra_info_events = Vec::new();
     body_progress_source.emit_response_extra_info_before_pause(
         &mut response_extra_info_events,
-        &pending.navigation.request_method,
-        &pending.navigation.request_headers.to_byte_strings(),
         request_cookie_report.as_ref(),
         &response_head.redirect_chain,
         response_status,

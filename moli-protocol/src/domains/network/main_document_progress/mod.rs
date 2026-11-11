@@ -601,7 +601,10 @@ struct MainDocumentLiveNetworkProgressSource {
     loader_id: String,
     frame_id: String,
     timestamp: f64,
-    initial_request_headers: Vec<(String, String)>,
+    initial_request_method: String,
+    initial_request_body: Option<bytes::Bytes>,
+    initial_request_headers: RequestHeaders,
+    initial_redirect_headers: Option<RequestHeaders>,
     initial_request_cookie_report: Option<StoredCookieQueryReport>,
     announced_redirects: usize,
 }
@@ -640,8 +643,6 @@ impl MainDocumentBodyProgressSource {
         let network_extra_info_available = !network_observation_journal.is_empty();
         let request_headers = request_headers.to_byte_strings();
         self.emit_response_metadata(
-            request_method,
-            &request_headers,
             head.request_cookie_report.as_ref(),
             &head.redirect_chain,
             &head.final_url,
@@ -676,8 +677,6 @@ impl MainDocumentBodyProgressSource {
 
     pub(crate) fn emit_response_metadata(
         &self,
-        final_request_method: &str,
-        final_request_headers: &[(String, String)],
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         final_url: &Url,
@@ -695,9 +694,6 @@ impl MainDocumentBodyProgressSource {
         match self.response_visibility {
             MainDocumentResponseVisibility::Immediate => {
                 live_source.emit_redirect_requests(
-                    final_request_method,
-                    None,
-                    final_request_headers,
                     final_request_cookie_report,
                     redirect_chain,
                     network_observation_journal,
@@ -791,9 +787,6 @@ impl MainDocumentBodyProgressSource {
 
     pub(crate) fn emit_failed_request_progress(
         &self,
-        final_request_method: &str,
-        request_body: Option<&str>,
-        final_request_headers: &[(String, String)],
         redirect_chain: &[RedirectInfo],
         network_observation_journal: &NetworkObservationJournal,
     ) {
@@ -812,9 +805,6 @@ impl MainDocumentBodyProgressSource {
             .and_then(|exchange| exchange.request().cookie_report())
             .cloned();
         let events = live_source.redirect_request_events(
-            final_request_method,
-            request_body,
-            final_request_headers,
             final_request_cookie_report.as_ref(),
             redirect_chain,
             network_observation_journal,
@@ -826,8 +816,6 @@ impl MainDocumentBodyProgressSource {
     pub(crate) fn emit_response_extra_info_before_pause(
         &self,
         out: &mut Vec<BackgroundProtocolEvent>,
-        final_request_method: &str,
-        final_request_headers: &[(String, String)],
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         response_status: u16,
@@ -846,9 +834,6 @@ impl MainDocumentBodyProgressSource {
         let mut output = MainDocumentProgressOutputTarget::background_events(out);
         live_source.emit_redirect_requests_into_output(
             &mut output,
-            final_request_method,
-            None,
-            final_request_headers,
             final_request_cookie_report,
             redirect_chain,
             network_observation_journal,
@@ -1005,7 +990,10 @@ impl MainDocumentLiveNetworkProgressSource {
             frame_id: state.frame_id.clone(),
             timestamp: state.timestamp,
             announced_redirects: state.announced_redirects,
-            initial_request_headers: state.request_headers.to_byte_strings(),
+            initial_request_method: state.request_method.clone(),
+            initial_request_body: state.clone_request_body_bytes(),
+            initial_request_headers: state.request_headers.clone(),
+            initial_redirect_headers: state.redirect_headers.clone(),
             initial_request_cookie_report: initial_request_cookie_report.cloned(),
         })
     }
@@ -1034,18 +1022,12 @@ impl MainDocumentLiveNetworkProgressSource {
 
     pub(crate) fn emit_redirect_requests(
         &self,
-        final_request_method: &str,
-        request_body: Option<&str>,
-        final_request_headers: &[(String, String)],
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         network_observation_journal: &NetworkObservationJournal,
         final_network_extra_info_available: bool,
     ) {
         let events = self.redirect_request_events(
-            final_request_method,
-            request_body,
-            final_request_headers,
             final_request_cookie_report,
             redirect_chain,
             network_observation_journal,
@@ -1057,18 +1039,12 @@ impl MainDocumentLiveNetworkProgressSource {
     fn emit_redirect_requests_into_output(
         &self,
         output: &mut MainDocumentProgressOutputTarget<'_>,
-        final_request_method: &str,
-        request_body: Option<&str>,
-        final_request_headers: &[(String, String)],
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         network_observation_journal: &NetworkObservationJournal,
         final_network_extra_info_available: bool,
     ) {
         let events = self.redirect_request_events(
-            final_request_method,
-            request_body,
-            final_request_headers,
             final_request_cookie_report,
             redirect_chain,
             network_observation_journal,
@@ -1083,9 +1059,6 @@ impl MainDocumentLiveNetworkProgressSource {
 
     fn redirect_request_events(
         &self,
-        final_request_method: &str,
-        request_body: Option<&str>,
-        final_request_headers: &[(String, String)],
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         network_observation_journal: &NetworkObservationJournal,
@@ -1111,11 +1084,19 @@ impl MainDocumentLiveNetworkProgressSource {
                     network_observation_journal,
                     redirect_chain.len(),
                     0,
-                    &self.initial_request_headers,
+                    &self.initial_request_headers.to_byte_strings(),
                 ),
                 initial_request_cookie_report,
             ));
         }
+        let Some(first_redirect) = redirect_chain.first() else {
+            return events;
+        };
+        let mut request = moli_fetch::Request::get_with_url(first_redirect.from_url.clone())
+            .with_redirect_headers(self.initial_redirect_headers.clone());
+        request.method = self.initial_request_method.clone();
+        request.body = self.initial_request_body.clone();
+        request.request_headers = self.initial_request_headers.clone();
         for (index, redirect) in redirect_chain.iter().enumerate() {
             let target = self.progress_target();
             let observed_response_available =
@@ -1141,12 +1122,18 @@ impl MainDocumentLiveNetworkProgressSource {
                 );
             }
             if index >= self.announced_redirects {
+                // The source starts at the last request-stage pause; earlier
+                // hops already updated its state and must not be applied twice.
+                request.apply_redirect_status(redirect.status);
                 events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
                     target: target.clone(),
                     url: redirect.to_url.clone(),
-                    method: final_request_method.to_owned(),
-                    request_body: request_body.map(str::to_owned),
-                    request_headers: final_request_headers.to_vec(),
+                    method: request.method.clone(),
+                    request_body: request
+                        .body
+                        .as_ref()
+                        .map(|body| String::from_utf8_lossy(body).into_owned()),
+                    request_headers: request.request_headers.to_byte_strings(),
                     request_initiator_type: SubresourceRequestInitiatorType::Other,
                     redirect_response: Box::new(Some(MainDocumentRedirectResponse {
                         url: redirect.from_url.clone(),
@@ -1203,7 +1190,7 @@ impl MainDocumentLiveNetworkProgressSource {
                         network_observation_journal,
                         redirect_chain.len(),
                         index + 1,
-                        final_request_headers,
+                        &request.request_headers.to_byte_strings(),
                     ),
                     cookie_report,
                 ));

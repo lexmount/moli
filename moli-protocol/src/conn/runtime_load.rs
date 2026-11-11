@@ -1149,11 +1149,6 @@ impl BackgroundNavigationLoadJob {
                             .unwrap_or_else(|| requested_url.clone());
                         if let Some(request_context) = failure.request_context() {
                             self.body_progress_source.emit_failed_request_progress(
-                                request_context.request_method(),
-                                request_context
-                                    .request_body()
-                                    .and_then(|body| std::str::from_utf8(body).ok()),
-                                &request_context.request_headers().to_byte_strings(),
                                 request_context.redirect_chain(),
                                 failure.observation_journal(),
                             );
@@ -1565,8 +1560,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
         load_inputs.fetch_subresource_interception;
     body_progress_source.emit_response_metadata(
-        &request_method,
-        &request_headers.to_byte_strings(),
         initial_request_cookie_report.as_ref(),
         &response.redirect_chain,
         &final_url,
@@ -3514,8 +3507,6 @@ async fn prepare_navigation_from_captured_raw_response_with_engine_async(
         && body.len() == 0
     {
         body_progress_source.emit_response_metadata(
-            &request_method,
-            &request_headers.to_byte_strings(),
             head.request_cookie_report.as_ref(),
             &head.redirect_chain,
             &head.final_url,

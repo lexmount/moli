@@ -132,11 +132,94 @@ fn live_progress_source() -> (
             loader_id: "LOADER-1".to_owned(),
             frame_id: "FRAME-1".to_owned(),
             timestamp: 12.5,
-            initial_request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+            initial_request_method: "GET".to_owned(),
+            initial_request_body: None,
+            initial_request_headers: vec![("Accept".to_owned(), "text/html".to_owned())].into(),
+            initial_redirect_headers: None,
             initial_request_cookie_report: None,
         },
         receiver,
     )
+}
+
+#[test]
+fn redirect_progress_tracks_each_hop_without_reapplying_announced_redirects() {
+    for (announced, statuses, expected) in [
+        (0, [307, 303], vec!["POST", "GET"]),
+        (1, [303, 307], vec!["POST"]),
+    ] {
+        let (mut source, _receiver) = live_progress_source();
+        source.announced_redirects = announced;
+        source.initial_request_method = "POST".to_owned();
+        source.initial_request_body = Some(bytes::Bytes::from_static(b"body"));
+        source.initial_request_headers = vec![
+            ("Content-Type".to_owned(), "text/plain".to_owned()),
+            ("X-Temporary".to_owned(), "override".to_owned()),
+        ]
+        .into();
+        // A client may override the method after an already announced 303.
+        // Its headers still revert to the baseline on the next redirect.
+        source.initial_redirect_headers = Some(
+            vec![
+                ("Content-Type".to_owned(), "text/plain".to_owned()),
+                ("X-Baseline".to_owned(), "retained".to_owned()),
+            ]
+            .into(),
+        );
+        let redirects = statuses
+            .into_iter()
+            .enumerate()
+            .map(|(index, status)| RedirectInfo {
+                source: moli_fetch::RedirectSource::Network,
+                from_url: Url::parse(&format!("http://example.test/{index}")).unwrap(),
+                to_url: Url::parse(&format!("http://example.test/{}", index + 1)).unwrap(),
+                status,
+                headers: Vec::new(),
+                network_extra_info_available: false,
+                request_extra_info: None,
+                response_extra_info: None,
+                redirect_has_extra_info: false,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            })
+            .collect::<Vec<_>>();
+        let events = source.redirect_request_events(None, &redirects, &Default::default(), false);
+        assert_eq!(events.len(), expected.len());
+        for (event, method) in events.into_iter().zip(expected) {
+            let MainDocumentNavigationProgressEvent::RequestWillBeSent {
+                method: actual_method,
+                request_body,
+                request_headers,
+                ..
+            } = event
+            else {
+                panic!("expected a redirect request event")
+            };
+            assert_eq!(actual_method, method);
+            assert_eq!(
+                request_body.as_deref(),
+                (method == "POST").then_some("body")
+            );
+            assert_eq!(
+                request_headers
+                    .iter()
+                    .any(|(name, _)| name == "Content-Type"),
+                method == "POST"
+            );
+            assert!(
+                request_headers
+                    .iter()
+                    .any(|(name, value)| name == "X-Baseline" && value == "retained")
+            );
+            assert!(
+                !request_headers
+                    .iter()
+                    .any(|(name, _)| name == "X-Temporary")
+            );
+        }
+    }
 }
 
 #[test]
@@ -209,13 +292,7 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
         ),
     ]);
 
-    source.emit_failed_request_progress(
-        "GET",
-        None,
-        &[("Accept".to_owned(), "text/html".to_owned())],
-        &[redirect],
-        &journal,
-    );
+    source.emit_failed_request_progress(&[redirect], &journal);
 
     let messages = std::iter::from_fn(|| receiver.try_recv().ok())
         .filter_map(crate::conn::BackgroundProtocolEvent::into_wire_message)
@@ -491,15 +568,7 @@ fn live_progress_source_serializes_through_progress_emissions() {
         ),
     ]);
 
-    source.emit_redirect_requests(
-        "GET",
-        None,
-        &[("Accept".to_owned(), "text/html".to_owned())],
-        None,
-        &[redirect],
-        &journal,
-        true,
-    );
+    source.emit_redirect_requests(None, &[redirect], &journal, true);
     source.emit_response_received(
         &final_url,
         200,

@@ -507,6 +507,7 @@ class ProxyAuthFixtureServer:
 class FixtureServer:
     def __init__(self) -> None:
         self.profile_requests: dict[str, dict[str, Any]] = {}
+        self.navigation_redirect_requests: dict[str, list[dict[str, str]]] = {}
         self._counter_lock = threading.Lock()
         self._request_counts: dict[str, int] = {}
         self._resource_request_headers: dict[str, dict[str, str]] = {}
@@ -1560,6 +1561,26 @@ class FixtureServer:
                 elif route == "/profile-result":
                     token = query.get("token", [""])[0]
                     self._send_json(outer.profile_requests.get(token))
+                elif route in {"/navigation-hop/start", "/navigation-hop/middle", "/navigation-hop/final"}:
+                    token = query.get("case", [""])[0]
+                    with outer._counter_lock:
+                        observations = outer.navigation_redirect_requests.setdefault(token, [])
+                        observations.append({
+                            "url": self.path,
+                            "method": self.command,
+                            "contentType": self.headers.get("Content-Type", ""),
+                            "body": _body.decode("utf-8"),
+                        })
+                        observed = json.dumps(observations)
+                    if route == "/navigation-hop/final":
+                        self._send_html("<!doctype html><main>redirect final</main>",
+                                        headers={"X-Navigation-Requests": observed})
+                    else:
+                        next_route = "middle" if route.endswith("/start") else "final"
+                        self._send_common(
+                            HTTPStatus.TEMPORARY_REDIRECT if next_route == "middle" else HTTPStatus.SEE_OTHER,
+                            "text/plain", b"", {"Location": f"/navigation-hop/{next_route}?{parsed.query}"},
+                        )
                 elif route == "/redirect-start":
                     self.send_response(HTTPStatus.FOUND)
                     self.send_header("Location", "/redirect-final")
