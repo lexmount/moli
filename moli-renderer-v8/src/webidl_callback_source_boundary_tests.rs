@@ -35,6 +35,11 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // WebMCP retains native registration/invocation abort algorithms here.
     // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
     ("context_bootstrap/web_mcp/state.rs", 1),
+    // The connection retains its browser-created handshake abort algorithm
+    // until the handshake settles. Its callback data is a socket id, with no
+    // author callback or wrapper capture. Registration uses native AbortSignal
+    // algorithms instead of calling an author-visible addEventListener method.
+    ("context_bootstrap/websocket/abort.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
@@ -130,11 +135,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         // Pending promise settlement and cancellation continuations use the
         // native Promise API; the remaining calls run stream algorithms.
         4,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
-        "context_bootstrap/websocket/constructor.rs",
-        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

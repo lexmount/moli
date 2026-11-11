@@ -1352,7 +1352,7 @@ pub(crate) fn register_worker_websocket<'s>(
         extra_http_headers,
         network_offline,
         blocked_url_patterns,
-        websocket_event_tx,
+        websocket_events,
     ) = {
         let mut state = state.borrow_mut();
         let socket_id = next_websocket_id(&mut state);
@@ -1362,7 +1362,7 @@ pub(crate) fn register_worker_websocket<'s>(
             state.extra_http_headers.clone(),
             state.network_offline,
             state.blocked_url_patterns.clone(),
-            state.websocket_event_tx.clone(),
+            state.websocket_events.clone(),
         )
     };
 
@@ -1415,6 +1415,7 @@ pub(crate) fn register_worker_websocket<'s>(
     };
     let network_recorded = failure_message.is_some();
     let (connection, load) = if let Some(error_text) = failure_message {
+        let websocket_event_tx = websocket_events.register(socket_id)?;
         record_worker_websocket_subresource_failure(
             &state.borrow(),
             socket_id,
@@ -1433,6 +1434,7 @@ pub(crate) fn register_worker_websocket<'s>(
             ResourceLoadDisposition::Ordinary,
             None,
         )?;
+        let websocket_event_tx = websocket_events.register(socket_id)?;
         let connection = spawn_connection(
             loader.request_client().websocket_connector(),
             socket_id,
@@ -1452,6 +1454,7 @@ pub(crate) fn register_worker_websocket<'s>(
         socket_id,
         WorkerWebSocketState {
             wrapper: v8::Global::new(scope, wrapper),
+            stream_abort: None,
             connection,
             document_url,
             url,
@@ -1462,6 +1465,50 @@ pub(crate) fn register_worker_websocket<'s>(
         },
     );
     Some(socket_id)
+}
+
+pub(crate) fn set_worker_websocket_stream_abort_registration(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+    registration: crate::context_bootstrap::WebSocketStreamAbortRegistration,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(connection) = state.websockets.get_mut(&socket_id) else {
+        return false;
+    };
+    connection.stream_abort = Some(registration);
+    true
+}
+
+pub(crate) fn take_worker_websocket_stream_abort_registration(
+    scope: &mut v8::PinScope<'_, '_>,
+    socket_id: u64,
+) -> Option<crate::context_bootstrap::WebSocketStreamAbortRegistration> {
+    let state = get_worker_state(scope)?;
+    state
+        .borrow_mut()
+        .websockets
+        .get_mut(&socket_id)?
+        .stream_abort
+        .take()
+}
+
+pub(crate) fn worker_websocket_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    socket_id: u64,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
+    if state.closed {
+        return None;
+    }
+    state
+        .websockets
+        .get(&socket_id)
+        .map(|entry| v8::Local::new(scope, &entry.wrapper))
 }
 
 pub(crate) fn send_worker_websocket_text(
@@ -1528,25 +1575,16 @@ pub(crate) fn close_worker_websocket(
 pub(in crate::worker) fn dispatch_worker_websocket_event(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    event: WebSocketEvent,
-) -> bool {
-    let socket_id = match &event {
-        WebSocketEvent::HandshakeResponse { socket_id, .. }
-        | WebSocketEvent::Open { socket_id, .. }
-        | WebSocketEvent::TextMessage { socket_id, .. }
-        | WebSocketEvent::BinaryMessage { socket_id, .. }
-        | WebSocketEvent::SendCompleted { socket_id, .. }
-        | WebSocketEvent::Error { socket_id, .. }
-        | WebSocketEvent::Closing { socket_id }
-        | WebSocketEvent::Close { socket_id, .. } => *socket_id,
-    };
+    event: &WebSocketEvent,
+) -> crate::context_bootstrap::WebSocketDispatchResult {
+    let socket_id = event.socket_id();
     let socket_context = {
         let mut state = state.borrow_mut();
         let parent_tx = state.parent_tx.clone();
         let socket_context = state.websockets.get_mut(&socket_id).map(|entry| {
             let was_opened = entry.opened;
             let mut should_record_error_failure = false;
-            match &event {
+            match event {
                 WebSocketEvent::Open { .. } => {
                     entry.opened = true;
                     entry.network_recorded = true;
@@ -1582,11 +1620,11 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         parent_tx,
     )) = socket_context
     else {
-        return false;
+        return crate::context_bootstrap::WebSocketDispatchResult::Noop;
     };
 
     let mut parent_messages = Vec::new();
-    match &event {
+    match event {
         WebSocketEvent::Open {
             request_headers,
             response_status,
@@ -1701,12 +1739,12 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
         let _ = parent_tx.send(message);
     }
 
-    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, &event);
+    let dispatch_result = crate::context_bootstrap::dispatch_websocket_event(scope, socket, event);
     if !matches!(
         dispatch_result,
         crate::context_bootstrap::WebSocketDispatchResult::Backpressured
     ) {
-        let frame_event = match &event {
+        let frame_event = match event {
             WebSocketEvent::TextMessage { data, .. } => Some(WorkerWebSocketFrameEvent {
                 socket_id,
                 document_url: document_url.clone(),
@@ -1735,7 +1773,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
     {
         load.finish();
     }
-    dispatch_result.dispatched()
+    dispatch_result
 }
 
 pub(in crate::worker) fn worker_websocket_frame_opcode(

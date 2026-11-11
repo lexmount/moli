@@ -12,6 +12,7 @@ mod module_csp;
 mod notification_init;
 mod request_init;
 mod text_codecs;
+mod websocket_stream;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;

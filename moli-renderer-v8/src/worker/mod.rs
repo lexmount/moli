@@ -23,11 +23,15 @@ mod script_loading;
 mod script_mime;
 mod thread;
 mod timer_callback;
+mod websocket_events;
 pub(crate) use file_reading_tasks::{
     queue_worker_file_reading_task, take_worker_file_reading_task,
 };
 pub(crate) use networking_tasks::queue_worker_networking_task;
 pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+pub(crate) use websocket_events::{
+    signal_worker_websocket_stream_close, signal_worker_websocket_stream_pull,
+};
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
@@ -41,7 +45,8 @@ pub(crate) use global_scope::{
     register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
     register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
     send_worker_websocket_binary, send_worker_websocket_blob, send_worker_websocket_text,
-    service_worker_runtime_identity, try_worker_xhr_abort_callback,
+    service_worker_runtime_identity, set_worker_websocket_stream_abort_registration,
+    take_worker_websocket_stream_abort_registration, try_worker_xhr_abort_callback,
     try_worker_xhr_reschedule_timeout_after_timeout_change, try_worker_xhr_send_callback,
     worker_allows_eval_code_generation_by_csp, worker_allows_trusted_type_policy_name,
     worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
@@ -52,7 +57,7 @@ pub(crate) use global_scope::{
     worker_opfs_directory_iterator_registry, worker_opfs_handle_registry,
     worker_realm_secure_context_available, worker_service_worker_control_state, worker_storage_key,
     worker_storage_partition_identity, worker_termination_requested,
-    worker_trusted_types_for_script_requirements,
+    worker_trusted_types_for_script_requirements, worker_websocket_wrapper,
 };
 pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{

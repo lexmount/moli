@@ -1496,3 +1496,41 @@ async fn borrowed_worklet_add_module_uses_receiver_document_base() {
         server.await.expect("server should finish");
     }).await;
 }
+
+#[tokio::test]
+async fn websocket_stream_is_reachable_from_a_page_created_worker() {
+    run_page_vm_async_test(async move {
+        let fixture = moli_websocket::test_support::StreamWebSocketFixture::start().await;
+        let socket_url = format!("{}/echo", fixture.base_url);
+        let worker_source = format!(r#"
+(async () => {{
+  const socket = new WebSocketStream({socket_url:?});
+  const {{readable,writable}} = await socket.opened;
+  const reader = readable.getReader();
+  const writer = writable.getWriter();
+  await writer.write('page-worker');
+  const received = await reader.read();
+  await writer.close();
+  const closed = await socket.closed;
+  postMessage({{secure:isSecureContext,api:typeof WebSocketStream,value:received.value,done:received.done,closeCode:closed.closeCode}});
+}})().catch(error => postMessage({{error:String(error.stack || error)}}));
+"#);
+        let literal = serde_json::to_string(&worker_source).unwrap();
+        let mut page_vm = test_page_vm_with_document_url(
+            Url::parse("http://127.0.0.1/worker-stream-page").unwrap(),
+        );
+        let executor = page_vm.local_executor.clone();
+        executor.run(async move {
+            page_vm.vm_mut().eval(&format!(r#"
+globalThis.workerStreamDone = false;
+globalThis.workerStreamResult = null;
+const streamWorker = new Worker('data:text/javascript,' + encodeURIComponent({literal}));
+streamWorker.onmessage = event => {{workerStreamResult=event.data;workerStreamDone=true;streamWorker.terminate();}};
+streamWorker.onerror = event => {{workerStreamResult={{error:event.message}};workerStreamDone=true;streamWorker.terminate();}};
+"#))?;
+            drive_websocket_until_done(&mut page_vm,"String(workerStreamDone)","page-created Worker WebSocketStream").await?;
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(workerStreamResult)")?,r#"{"secure":true,"api":"function","value":"page-worker","done":false,"closeCode":1005}"#);
+            anyhow::Ok(())
+        }).await.expect("page Worker stream contract should run on owner lane");
+    }).await;
+}
