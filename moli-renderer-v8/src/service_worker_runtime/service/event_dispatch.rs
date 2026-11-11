@@ -273,6 +273,11 @@ impl ServiceWorkerRuntimeService {
         native_request: moli_fetch::Request,
     ) -> bool {
         let request = dispatch.request.clone();
+        // Synthetic redirects advance this retained request before a network
+        // fallback can bind the owner's cookie scope on its transport copy.
+        let native_request = dispatch
+            .request_client
+            .bind_browser_site_context(native_request);
         let fetch_job = ServiceWorkerFetchJob {
             request: native_request,
             internal_id: dispatch.internal_id,
