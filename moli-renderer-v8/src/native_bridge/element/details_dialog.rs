@@ -494,6 +494,44 @@ fn queue_dialog_close_event(
     );
 }
 
+struct DialogCloseRequest {
+    document: DomHandle,
+    dialog: DomHandle,
+    opening: u64,
+}
+
+impl DialogCloseRequest {
+    fn new(runtime: &PageScriptHost, document: DomHandle) -> Option<Self> {
+        let dialog = runtime
+            .dom_host()
+            .active_modal_dialog_for_document(document)?;
+        let opening = runtime
+            .dom_host()
+            .node(dialog)?
+            .as_element()?
+            .dialog_modal_generation();
+        Some(Self {
+            document,
+            dialog,
+            opening,
+        })
+    }
+
+    fn is_active(&self, runtime: &PageScriptHost) -> bool {
+        runtime.dom_host().is_connected(self.dialog)
+            && runtime.dom_host().owner_document_handle(self.dialog) == Some(self.document)
+            && runtime
+                .dom_host()
+                .node(self.dialog)
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| {
+                    element.dialog_modal()
+                        && element.has_attribute("open")
+                        && element.dialog_modal_generation() == self.opening
+                })
+    }
+}
+
 /// Default action for a trusted `keydown` on Escape: run the spec's
 /// light-dismiss for the topmost open modal dialog. A cancelable, non-bubbling
 /// `cancel` event is fired at the dialog, and the dialog closes unless the
@@ -508,18 +546,17 @@ pub(crate) fn perform_dialog_escape_default_action_for_dispatched_event(
     if event_string_property(scope, event, "key").as_deref() != Some("Escape") {
         return;
     }
-    let Some(handle) = unsafe { &*runtime_ptr }
-        .dom_host()
-        .active_modal_dialog_for_document(document)
-    else {
+    let Some(request) = DialogCloseRequest::new(unsafe { &*runtime_ptr }, document) else {
         return;
     };
     let Some(cancel_event) = construct_simple_event(scope, "cancel", false, true, false) else {
         return;
     };
-    let outcome = dispatch_public_event(scope, runtime_ptr, handle, cancel_event);
-    if outcome.allows_default() {
-        close_dialog_element(scope, runtime_ptr, handle, None);
+    let outcome = dispatch_public_event(scope, runtime_ptr, request.dialog, cancel_event);
+    // A cancel listener can destroy the original opening and start a new one.
+    // That new opening does not belong to this close request.
+    if outcome.allows_default() && request.is_active(unsafe { &*runtime_ptr }) {
+        close_dialog_element(scope, runtime_ptr, request.dialog, None);
     }
 }
 

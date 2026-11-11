@@ -176,6 +176,7 @@ pub struct ElementControlState {
     web_mcp_form_active: bool,
     web_mcp_submit_active: bool,
     dialog_modal: bool,
+    dialog_modal_generation: u64,
     dialog_return_value: String,
     custom_states: IndexSet<String>,
     explicit_element_references: Option<Box<ExplicitElementReferenceState>>,
@@ -481,6 +482,14 @@ impl ElementControlState {
 
     pub fn dialog_modal(&self) -> bool {
         self.dialog_modal
+    }
+
+    pub fn dialog_modal_generation(&self) -> u64 {
+        self.dialog_modal_generation
+    }
+
+    pub(super) fn invalidate_dialog_modal_opening(&mut self) {
+        self.dialog_modal_generation = self.dialog_modal_generation.wrapping_add(1);
     }
 
     pub fn dialog_return_value(&self) -> &str {
@@ -879,6 +888,9 @@ impl ElementControlState {
             return false;
         }
         self.dialog_modal = modal;
+        if modal {
+            self.invalidate_dialog_modal_opening();
+        }
         true
     }
 
