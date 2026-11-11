@@ -462,6 +462,27 @@ impl JsContextHost {
         self.lightweight_popup_access_origin(popup_id)
     }
 
+    /// Read native context state, including inherited and sandboxed empty
+    /// documents. A mutable API base URL never changes this security state.
+    pub(crate) fn window_is_secure_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+    ) -> Option<bool> {
+        match owner {
+            OwnerDispatchScope::Top => {
+                let global = scope.get_current_context().global(scope);
+                Some(crate::context_bootstrap::window_realm_secure_context_available(scope, global))
+            }
+            OwnerDispatchScope::Child(handle) => self
+                .child_browsing_context_secure_context_url(handle)
+                .map(|url| moli_url::is_potentially_trustworthy_url(&url)),
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_secure_context(popup_id)
+            }
+        }
+    }
+
     pub(crate) fn window_document_origin(&self, scope: OwnerDispatchScope) -> Option<String> {
         self.window_access_origin_for_dispatch_scope(scope)
             .map(|origin| origin.serialized_origin())

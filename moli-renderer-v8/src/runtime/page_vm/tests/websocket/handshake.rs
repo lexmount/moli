@@ -1,6 +1,98 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_popup_base_changes_preserve_inherited_handshake_origin() {
+    run_page_vm_async_test(async move {
+        for constructor in ["WebSocket", "WebSocketStream"] {
+            for relative in [false, true] {
+                for same_origin in [false, true] {
+                    let (url, headers_rx, server) = spawn_tls_header_capture_websocket_server().await;
+                    let cookie_url = moli_websocket::websocket_cookie_url(&Url::parse(&url).unwrap());
+                    let document_url = if same_origin {
+                        cookie_url.clone()
+                    } else {
+                        Url::parse("https://example.com/").unwrap()
+                    };
+                    let expected_origin = moli_url::origin_ascii_serialization(&document_url);
+                    let cookie_store = moli_cookie_jar::new_shared_browser_cookie_store();
+                    let reports = cookie_store.lock().unwrap().store_response_headers_with_reports(
+                        &cookie_url,
+                        &[
+                            ("set-cookie".to_owned(), b"strict=1; Path=/; SameSite=Strict; Secure".to_vec()),
+                            ("set-cookie".to_owned(), b"cross=1; Path=/; SameSite=None; Secure".to_vec()),
+                        ],
+                    );
+                    assert!(reports.iter().all(|report| report.is_accepted()));
+                    let base = if relative {
+                        cookie_url.to_string()
+                    } else {
+                        "https://different-origin.test/socket-base/".to_owned()
+                    };
+                    let input = if relative { "headers" } else { &url };
+                    let base_literal = serde_json::to_string(&base).unwrap();
+                    let input_literal = serde_json::to_string(input).unwrap();
+                    let script = serde_json::to_string(&format!(
+                        r#"javascript:
+                        const base = document.createElement('base');
+                        base.href = {base_literal};
+                        document.head.appendChild(base);
+                        const socket = new {constructor}({input_literal});
+                        opener.__popupWebSocketResult = [document.URL, socket.url].join('|');
+                        void 0;"#
+                    )).unwrap();
+                    let mut config = FetchConfig::default();
+                    config.set_tls_verify_host(false);
+                    let loader = crate::network::ResourceRequestClient::new_with_cookie_store(
+                        &config, cookie_store,
+                    ).unwrap();
+                    let mut page_vm = test_page_vm_with_loader_and_document_url(
+                        &loader, Vec::new(), document_url,
+                    );
+                    if same_origin {
+                        page_vm
+                            .vm_mut()
+                            .set_response_content_security_policies(&["connect-src 'self'".to_owned()]);
+                    }
+                    page_vm.retain_standalone_request_client_owner_for_test(loader);
+                    let local_executor = page_vm.local_executor.clone();
+
+                    let headers = local_executor.run(async move {
+                        page_vm.vm_mut().eval(&format!(
+                            r#"(() => {{
+                                const popup = window.open('about:blank');
+                                popup.location.href = {script};
+                            }})()"#
+                        ))?;
+                        drive_websocket_until_done(
+                            &mut page_vm,
+                            "typeof globalThis.__popupWebSocketResult !== 'undefined'",
+                            "popup WebSocket script should run",
+                        ).await?;
+                        let result = page_vm.vm_mut().eval("String(__popupWebSocketResult)")?;
+                        assert_eq!(result, format!("about:blank|{url}"));
+                        tokio::time::timeout(Duration::from_secs(3), headers_rx)
+                            .await
+                            .map_err(|_| anyhow::anyhow!("popup WebSocket handshake did not arrive"))?
+                            .map_err(|_| anyhow::anyhow!("popup WebSocket header sender dropped"))
+                    }).await.expect("popup WebSocket handshake test should run on owner lane");
+                    server.await.expect("popup WebSocket server should finish");
+                    assert_eq!(
+                        header_value(&headers, "origin").as_deref(),
+                        Some(expected_origin.as_str()),
+                        "{constructor}, relative={relative}, same_origin={same_origin}: inherited Origin"
+                    );
+                    let cookie = header_value(&headers, "cookie").expect("SameSite=None cookie");
+                    let cookies = cookie.split(';').map(str::trim).collect::<Vec<_>>();
+                    assert!(cookies.contains(&"cross=1"));
+                    assert_eq!(cookies.contains(&"strict=1"), same_origin,
+                        "{constructor}, relative={relative}: cookie context must use the native origin");
+                }
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn websocket_handshake_inherits_origin_user_agent_and_extra_headers() {
     run_page_vm_async_test(async move {
         let (url, headers_rx, server) = spawn_header_capture_websocket_server().await;

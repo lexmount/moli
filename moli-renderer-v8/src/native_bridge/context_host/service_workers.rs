@@ -1687,16 +1687,8 @@ impl JsContextHost {
         // URL resolution follows the receiver Window's current API base URL.
         // Its authority stays with the native environment origin, including
         // an inherited about:blank origin and a cross-origin <base> element.
-        let base = match owner {
-            OwnerDispatchScope::Top => {
-                Some(self.document_base_url_for_handle(self.document_handle()))
-            }
-            OwnerDispatchScope::Child(handle) => self.child_browsing_context_base_url(handle),
-            OwnerDispatchScope::LightweightPopup(id) => {
-                self.lightweight_popup_request_base_url(scope, id)
-            }
-        }
-        .ok_or(crate::service_worker_runtime::ServiceWorkerClientUrlError::Invalid)?;
+        let base = crate::network_host::subresource_api_base_url(scope, self, owner)
+            .ok_or(crate::service_worker_runtime::ServiceWorkerClientUrlError::Invalid)?;
         let origin = self
             .window_document_origin(owner)
             .map(|origin| moli_url::WebOrigin::from_serialized(&origin))

@@ -4,6 +4,103 @@ mod split30_websocket_native_receivers;
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
+#[tokio::test]
+async fn websocket_popup_http_base_does_not_bypass_mixed_content() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm_with_loader("https://websocket-popup.test/", &loader);
+    vm.eval(
+        r#"
+            (() => {
+                const popup = window.open('about:blank');
+                popup.location.href = `javascript:
+                const base = document.createElement('base');
+                base.href = 'http://different-origin.test/';
+                document.head.appendChild(base);
+                opener.__popupMixedContent = [WebSocket, WebSocketStream].map(Constructor => {
+                    try {
+                        new Constructor('ws://insecure.invalid/socket');
+                        return 'allowed';
+                    } catch (error) {
+                        return error.name;
+                    }
+                }).join('|');
+                void 0;`;
+            })()
+            "#,
+    )
+    .expect("popup mixed-content checks should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .unwrap()
+    );
+    let result = vm.eval("String(__popupMixedContent)").unwrap();
+    assert_eq!(result, "SecurityError|SecurityError");
+}
+
+#[tokio::test]
+async fn websocket_popup_https_base_does_not_create_secure_context() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm_with_loader("http://websocket-popup.test/", &loader);
+    vm.eval(
+        r#"
+            (() => {
+                const popup = window.open('about:blank');
+                popup.location.href = `javascript:
+                const base = document.createElement('base');
+                base.href = 'https://different-origin.test/';
+                document.head.appendChild(base);
+                try {
+                    opener.__popupMixedContent = new WebSocket('ws://insecure.invalid/socket').url;
+                } catch (error) {
+                    opener.__popupMixedContent = error.name;
+                }
+                void 0;`;
+            })()
+            "#,
+    )
+    .expect("insecure popup WebSocket construction should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .unwrap()
+    );
+    let result = vm.eval("String(__popupMixedContent)").unwrap();
+    assert_eq!(result, "ws://insecure.invalid/socket");
+}
+
+#[test]
+fn websocket_relative_urls_follow_each_receiver_document_base() {
+    let mut vm = new_storage_html_test_vm("https://websocket-base.test/page.html");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                const frame = document.createElement('iframe');
+                document.body.appendChild(frame);
+                return [window, frame.contentWindow].flatMap(realm => {
+                    const base = realm.document.createElement('base');
+                    base.href = 'https://different-origin.test/socket-base/';
+                    realm.document.head.appendChild(base);
+                    return ['WebSocket', 'WebSocketStream'].map(name => {
+                        return new realm[name]({toString() {
+                            base.href = 'https://live-base.test/converted/';
+                            return 'relative';
+                        }}).url;
+                    });
+                }).join('|');
+            })()
+            "#,
+        )
+        .expect("WebSocket relative URLs should follow the receiver's live base");
+    assert_eq!(
+        result,
+        ["wss://live-base.test/converted/relative"; 4].join("|")
+    );
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct LoadingWorkerWrapperProbeDeclaration {}

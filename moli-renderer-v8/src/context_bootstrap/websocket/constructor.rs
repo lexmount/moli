@@ -282,7 +282,11 @@ fn websocket_constructor_callback_inner<'s>(
             );
             return;
         };
-        if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url)
+        if !csp_outcome.blocks_request()
+            && websocket_mixed_content_is_blocked(
+                moli_url::is_potentially_trustworthy_url(&document_url),
+                &url,
+            )
         {
             throw_websocket_dom_exception(
                 scope,
@@ -313,7 +317,8 @@ fn websocket_constructor_callback_inner<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some((owner, frame_id, document_url)) = effective_websocket_document_scope(scope, host)
+    let Some((owner, environment, is_secure_context)) =
+        effective_websocket_document_scope(scope, host)
     else {
         throw_type_error(
             scope,
@@ -321,7 +326,7 @@ fn websocket_constructor_callback_inner<'s>(
         );
         return;
     };
-    let url = match normalize_websocket_url(&document_url, &parsed.url) {
+    let url = match normalize_websocket_url(&environment.base_url, &parsed.url) {
         Ok(url) => url,
         Err(message) => {
             throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
@@ -331,10 +336,11 @@ fn websocket_constructor_callback_inner<'s>(
     let csp_outcome = host.check_document_connect_csp_for_owner(
         scope,
         owner.dispatch_scope(),
-        &document_url,
+        &environment.document_url,
         &url,
     );
-    if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url) {
+    if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(is_secure_context, &url)
+    {
         throw_websocket_dom_exception(
             scope,
             "SecurityError",
@@ -349,8 +355,7 @@ fn websocket_constructor_callback_inner<'s>(
         scope,
         socket,
         owner,
-        frame_id,
-        document_url,
+        environment,
         url,
         protocols,
         csp_outcome,
@@ -360,8 +365,8 @@ fn websocket_constructor_callback_inner<'s>(
     rv.set(socket.into());
 }
 
-fn websocket_mixed_content_is_blocked(document_url: &url::Url, websocket_url: &url::Url) -> bool {
-    moli_url::is_potentially_trustworthy_url(document_url)
+fn websocket_mixed_content_is_blocked(is_secure_context: bool, websocket_url: &url::Url) -> bool {
+    is_secure_context
         && websocket_url.scheme() == "ws"
         && !websocket_url_is_potentially_trustworthy(websocket_url)
 }
@@ -402,7 +407,8 @@ fn websocket_stream_constructor_callback_inner<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some((owner, frame_id, document_url)) = effective_websocket_document_scope(scope, host)
+    let Some((owner, environment, is_secure_context)) =
+        effective_websocket_document_scope(scope, host)
     else {
         throw_type_error(
             scope,
@@ -410,7 +416,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
         );
         return;
     };
-    let url = match normalize_websocket_stream_url(&document_url, &parsed.url) {
+    let url = match normalize_websocket_stream_url(&environment.base_url, &parsed.url) {
         Ok(url) => url,
         Err(message) => {
             throw_websocket_dom_exception(scope, "SyntaxError", 12, &message);
@@ -420,10 +426,11 @@ fn websocket_stream_constructor_callback_inner<'s>(
     let csp_outcome = host.check_document_connect_csp_for_owner(
         scope,
         owner.dispatch_scope(),
-        &document_url,
+        &environment.document_url,
         &url,
     );
-    if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(&document_url, &url) {
+    if !csp_outcome.blocks_request() && websocket_mixed_content_is_blocked(is_secure_context, &url)
+    {
         throw_websocket_dom_exception(
             scope,
             "SecurityError",
@@ -467,8 +474,7 @@ fn websocket_stream_constructor_callback_inner<'s>(
         scope,
         stream,
         owner,
-        frame_id,
-        document_url,
+        environment,
         url,
         protocols,
         csp_outcome,
