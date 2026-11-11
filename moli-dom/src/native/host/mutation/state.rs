@@ -483,23 +483,8 @@ impl DomHost {
     }
 
     pub fn set_dialog_modal(&mut self, handle: DomHandle, modal: bool) -> bool {
-        let did_change = {
-            let Some(element) = self
-                .node_mut(handle)
-                .and_then(|node| node.data_mut().as_element_mut())
-            else {
-                return false;
-            };
-            element.set_dialog_modal(modal)
-        };
+        let did_change = self.dom.set_dialog_modal(handle, modal);
         if did_change {
-            if let Some(document) = self.owner_document_handle(handle)
-                && let Some(document) = self
-                    .node_mut(document)
-                    .and_then(|node| node.data_mut().as_document_mut())
-            {
-                document.update_modal_dialog(handle, modal);
-            }
             self.record_mutation(MutationScope::LocalState);
         }
         did_change

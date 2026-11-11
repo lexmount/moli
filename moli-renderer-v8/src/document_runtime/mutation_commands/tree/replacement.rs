@@ -132,6 +132,7 @@ impl DocumentRuntime {
                     insertion_plan.insertion_roots,
                     &mut inserted,
                     &mut prepublished_removals,
+                    false,
                 )
             {
                 return false;
@@ -151,6 +152,7 @@ impl DocumentRuntime {
                     insertion_plan.insertion_roots,
                     &mut inserted,
                     &mut prepublished_removals,
+                    false,
                 )
             {
                 return false;

@@ -633,3 +633,56 @@ dialogProbe.dialogs.first.addEventListener('cancel', () => {{
         );
     }
 }
+
+#[test]
+fn dialog_escape_after_adoption_uses_destination_registration() {
+    for explicit_removal in [false, true] {
+        let mut vm = new_storage_test_vm("https://dialog-escape-adoption.test/");
+        vm.eval(&format!(
+            r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+const frame = document.body.appendChild(document.createElement('iframe'));
+const dialog = dialogProbe.dialogs.first;
+if ({explicit_removal}) dialog.remove();
+frame.contentDocument.body.appendChild(dialog);
+dialog.removeAttribute('open');
+dialog.showModal();
+dialog.querySelector('button').focus();
+"#,
+            fixture = include_str!("dialog_escape_order.js"),
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+            r#"{"open":[false,false],"cancels":["first"]}"#
+        );
+    }
+}
+
+#[test]
+fn dialog_escape_after_atomic_move_keeps_original_opening_order() {
+    let mut vm = new_storage_test_vm("https://dialog-escape-atomic-move.test/");
+    vm.eval(&format!(
+        r#"
+globalThis.dialogProbe = ({fixture})({{}});
+const destination = document.body.appendChild(document.createElement('div'));
+destination.moveBefore(dialogProbe.dialogs.first, null);
+dialogProbe.dialogs.second.querySelector('button').focus();
+"#,
+        fixture = include_str!("dialog_escape_order.js"),
+    ))
+    .unwrap();
+    press_dialog_escape(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+        r#"{"open":[true,false],"cancels":["second"]}"#
+    );
+    vm.eval("dialogProbe.dialogs.first.querySelector('button').focus()")
+        .unwrap();
+    press_dialog_escape(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+        r#"{"open":[false,false],"cancels":["second","first"]}"#
+    );
+}

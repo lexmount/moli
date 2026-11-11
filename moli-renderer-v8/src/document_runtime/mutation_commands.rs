@@ -57,6 +57,7 @@ impl DocumentRuntime {
         child: DomHandle,
         insertion_roots: &[DomHandle],
         reference_child: Option<DomHandle>,
+        preserve_state: bool,
     ) -> Option<DomDebuggerTreeInsertionEffects> {
         let host = unsafe { &mut *host_ptr };
         if !host.has_dom_debugger_dom_breakpoints() {
@@ -70,10 +71,11 @@ impl DocumentRuntime {
         // breakpoint is installed.
         if insertion_roots.is_empty() {
             return Some(DomDebuggerTreeInsertionEffects {
-                effects: self.insert_before_effects_in_structural_scope(
+                effects: self.insert_before_effects_in_structural_scope_with_state_preservation(
                     parent,
                     child,
                     reference_child,
+                    preserve_state,
                 ),
                 prepublished_removals: Vec::new(),
             });
@@ -97,6 +99,7 @@ impl DocumentRuntime {
             insertion_roots,
             &mut effects,
             &mut prepublished_removals,
+            preserve_state,
         ) {
             return Some(DomDebuggerTreeInsertionEffects {
                 effects,
@@ -106,8 +109,12 @@ impl DocumentRuntime {
 
         unsafe { &mut *host_ptr }.break_on_dom_debugger_will_insert_dom_node(parent);
         for &root in insertion_roots {
-            let inserted =
-                self.insert_before_effects_in_structural_scope(parent, root, reference_child);
+            let inserted = self.insert_before_effects_in_structural_scope_with_state_preservation(
+                parent,
+                root,
+                reference_child,
+                preserve_state,
+            );
             if !inserted.did_change() {
                 return Some(DomDebuggerTreeInsertionEffects {
                     effects,
@@ -136,6 +143,7 @@ impl DocumentRuntime {
         insertion_roots: &[DomHandle],
         effects: &mut DomMutationEffects,
         prepublished_removals: &mut Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
+        preserve_state: bool,
     ) -> bool {
         for &root in insertion_roots {
             let Some(old_parent) = self.dom_host.parent_node(root) else {
@@ -143,7 +151,11 @@ impl DocumentRuntime {
             };
             prepublished_removals
                 .extend(unsafe { &mut *host_ptr }.break_on_dom_debugger_will_remove_dom_node(root));
-            let removed = self.remove_child_effects_in_structural_scope(old_parent, root);
+            let removed = self.remove_child_effects_in_structural_scope_with_state_preservation(
+                old_parent,
+                root,
+                preserve_state,
+            );
             if !removed.did_change() {
                 return false;
             }

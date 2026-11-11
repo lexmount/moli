@@ -29,6 +29,7 @@ struct OwnerLifecycleTraversal {
     candidate_tree_scope: Option<NativeNodeId>,
     collect_stylesheet_owners: bool,
     detect_base_state_owner: bool,
+    preserve_dialog_state: bool,
     changes: OwnerLifecycleChanges,
 }
 
@@ -44,12 +45,29 @@ impl OwnerLifecycleTraversal {
             candidate_tree_scope,
             collect_stylesheet_owners,
             detect_base_state_owner,
+            preserve_dialog_state: false,
             changes: OwnerLifecycleChanges::default(),
         }
     }
 }
 
 impl NativeDom {
+    pub(crate) fn set_dialog_modal(&mut self, handle: NativeNodeId, modal: bool) -> bool {
+        let owner_document = self.node(handle).and_then(Node::owner_document);
+        let did_change = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .is_some_and(|element| element.set_dialog_modal(modal));
+        if did_change
+            && let Some(document) = owner_document
+                .and_then(|document| self.node_mut(document))
+                .and_then(|node| node.data_mut().as_document_mut())
+        {
+            document.update_modal_dialog(handle, modal);
+        }
+        did_change
+    }
+
     pub(crate) fn insert_before_with_stylesheet_candidate_changes(
         &mut self,
         parent: NativeNodeId,
@@ -61,6 +79,23 @@ impl NativeDom {
             child,
             reference_child,
             true,
+            false,
+        )
+        .map(|changes| changes.stylesheet_candidates)
+    }
+
+    pub(crate) fn insert_before_preserving_state_with_stylesheet_candidate_changes(
+        &mut self,
+        parent: NativeNodeId,
+        child: NativeNodeId,
+        reference_child: Option<NativeNodeId>,
+    ) -> Option<StylesheetCandidateChanges> {
+        self.insert_before_with_stylesheet_candidate_changes_and_registration(
+            parent,
+            child,
+            reference_child,
+            true,
+            true,
         )
         .map(|changes| changes.stylesheet_candidates)
     }
@@ -71,6 +106,7 @@ impl NativeDom {
         child: NativeNodeId,
         mut reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
+        preserve_dialog_state: bool,
     ) -> Option<OwnerLifecycleChanges> {
         if !self.can_have_children(parent)
             || self.is_host_including_inclusive_ancestor(child, parent)
@@ -116,6 +152,7 @@ impl NativeDom {
                     fragment_child,
                     reference_child,
                     false,
+                    preserve_dialog_state,
                 ));
             }
             if commit_candidate_registration
@@ -140,6 +177,7 @@ impl NativeDom {
             child,
             reference_child,
             commit_candidate_registration,
+            preserve_dialog_state,
         ))
     }
 
@@ -153,6 +191,7 @@ impl NativeDom {
         child: NativeNodeId,
         reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
+        preserve_dialog_state: bool,
     ) -> OwnerLifecycleChanges {
         debug_assert!(self.can_have_children(parent));
         debug_assert!(self.node(child).is_some_and(|node| {
@@ -168,7 +207,8 @@ impl NativeDom {
                 })
         );
 
-        let mut changes = self.detach_from_parent_with_owner_lifecycle_changes(child);
+        let mut changes =
+            self.detach_from_parent_with_owner_lifecycle_changes(child, preserve_dialog_state);
 
         let previous = match reference_child {
             Some(reference_child) => self.previous_sibling(reference_child),
@@ -253,17 +293,32 @@ impl NativeDom {
         Some(self.detach_from_parent_with_stylesheet_candidate_changes(child))
     }
 
+    pub(crate) fn remove_child_preserving_state_with_stylesheet_candidate_changes(
+        &mut self,
+        parent: NativeNodeId,
+        child: NativeNodeId,
+    ) -> Option<StylesheetCandidateChanges> {
+        if self.parent_node(child) != Some(parent) {
+            return None;
+        }
+        Some(
+            self.detach_from_parent_with_owner_lifecycle_changes(child, true)
+                .stylesheet_candidates,
+        )
+    }
+
     pub(crate) fn detach_from_parent_with_stylesheet_candidate_changes(
         &mut self,
         child: NativeNodeId,
     ) -> StylesheetCandidateChanges {
-        self.detach_from_parent_with_owner_lifecycle_changes(child)
+        self.detach_from_parent_with_owner_lifecycle_changes(child, false)
             .stylesheet_candidates
     }
 
     fn detach_from_parent_with_owner_lifecycle_changes(
         &mut self,
         child: NativeNodeId,
+        preserve_dialog_state: bool,
     ) -> OwnerLifecycleChanges {
         let Some(parent) = self.parent_node(child) else {
             return OwnerLifecycleChanges::default();
@@ -304,6 +359,7 @@ impl NativeDom {
             false,
             old_tree_scope,
             base_document.is_some(),
+            preserve_dialog_state,
         );
         if changes.contains_base_state_owner
             && let Some(document) = base_document
@@ -397,12 +453,14 @@ impl NativeDom {
         in_document_tree: bool,
         old_tree_scope: Option<NativeNodeId>,
         detect_base_state_owner: bool,
+        preserve_dialog_state: bool,
     ) -> OwnerLifecycleChanges {
         let mutation = old_tree_scope
             .map(|_| StylesheetCandidateRegistryMutation::Unregister)
             .unwrap_or(StylesheetCandidateRegistryMutation::None);
         let mut traversal =
             OwnerLifecycleTraversal::new(mutation, old_tree_scope, false, detect_base_state_owner);
+        traversal.preserve_dialog_state = preserve_dialog_state;
         self.retarget_owner_lifecycle_subtree(
             root,
             owner_document,
@@ -473,6 +531,16 @@ impl NativeDom {
                 != owner_document)
                 .then(|| self.template_contents_fragment(handle))
                 .flatten();
+            if !traversal.preserve_dialog_state
+                && self.node(handle).is_some_and(|node| {
+                    node.flags().connected()
+                        && (!connected || node.owner_document() != owner_document)
+                })
+            {
+                // Removal ends the modal opening but leaves the open attribute intact.
+                // Remove its entry from the old Document before changing ownership.
+                self.set_dialog_modal(handle, false);
+            }
             self.node_mut(handle)
                 .expect("node must exist")
                 .set_tree_scope(owner_document, connected, in_document_tree);

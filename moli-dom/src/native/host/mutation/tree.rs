@@ -74,6 +74,23 @@ impl DomHost {
         parent: DomHandle,
         child: DomHandle,
     ) -> DomMutationEffects {
+        self.remove_child_effects_with_state_preservation(parent, child, false)
+    }
+
+    pub fn remove_child_preserving_state_effects(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+    ) -> DomMutationEffects {
+        self.remove_child_effects_with_state_preservation(parent, child, true)
+    }
+
+    fn remove_child_effects_with_state_preservation(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+        preserve_state: bool,
+    ) -> DomMutationEffects {
         let owner_document = self.owner_document_handle(parent);
         let records_enabled = self.mutation_records_enabled();
         let removed_tree_was_connected = self.is_connected(child);
@@ -97,9 +114,13 @@ impl DomHost {
             .unwrap_or_default();
         let previous_sibling = self.node(child).and_then(Node::prev_sibling);
         let next_sibling = self.node(child).and_then(Node::next_sibling);
-        let candidate_changes = self
-            .dom
-            .remove_child_with_stylesheet_candidate_changes(parent, child);
+        let candidate_changes = if preserve_state {
+            self.dom
+                .remove_child_preserving_state_with_stylesheet_candidate_changes(parent, child)
+        } else {
+            self.dom
+                .remove_child_with_stylesheet_candidate_changes(parent, child)
+        };
         if let Some(candidate_changes) = candidate_changes {
             self.invalidate_shadow_slot_name_index_for_tree_parent(parent);
             self.prune_disconnected_hovered_elements();
@@ -107,12 +128,14 @@ impl DomHost {
             let mut effects = DomMutationEffects::changed();
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             self.clear_popover_open_states(&removal_context.open_popovers, &mut effects);
-            effects.extend_stylesheet_owner_changes(
-                self.sync_shadow_tree_scopes_for_removed_subtree(
-                    &removal_context.shadow_hosts,
-                    removed_tree_was_connected,
-                ),
-            );
+            if !preserve_state {
+                effects.extend_stylesheet_owner_changes(
+                    self.sync_shadow_tree_scopes_for_removed_subtree(
+                        &removal_context.shadow_hosts,
+                        removed_tree_was_connected,
+                    ),
+                );
+            }
             self.record_mutation(MutationScope::QueryState);
             if let Some(document) = owner_document {
                 self.update_document_target_from_url(document);
@@ -207,6 +230,20 @@ impl DomHost {
         }
     }
 
+    fn clear_removed_shadow_modal_dialogs(&mut self, shadow_hosts: &[DomHandle]) {
+        let mut stack = shadow_hosts
+            .iter()
+            .filter_map(|host| self.shadow_root_handle(*host))
+            .collect::<Vec<_>>();
+        while let Some(handle) = stack.pop() {
+            self.dom.set_dialog_modal(handle, false);
+            stack.extend(self.child_handles(handle));
+            if let Some(root) = self.shadow_root_handle(handle) {
+                stack.push(root);
+            }
+        }
+    }
+
     pub fn insert_before(
         &mut self,
         parent: DomHandle,
@@ -222,6 +259,25 @@ impl DomHost {
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
+    ) -> DomMutationEffects {
+        self.insert_before_effects_with_state_preservation(parent, child, reference_child, false)
+    }
+
+    pub fn insert_before_preserving_state_effects(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+        reference_child: Option<DomHandle>,
+    ) -> DomMutationEffects {
+        self.insert_before_effects_with_state_preservation(parent, child, reference_child, true)
+    }
+
+    fn insert_before_effects_with_state_preservation(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+        reference_child: Option<DomHandle>,
+        preserve_state: bool,
     ) -> DomMutationEffects {
         let reference_child = if reference_child == Some(child) {
             self.node(child).and_then(Node::next_sibling)
@@ -328,11 +384,17 @@ impl DomHost {
         let inserted_shadow_slot_assignment_snapshots =
             self.slot_assignment_snapshots_for_inserted_shadow_tree_slots(parent, &inserted_roots);
         let previous_shadow_root = self.containing_shadow_root(child);
-        let candidate_changes = self.dom.insert_before_with_stylesheet_candidate_changes(
-            parent,
-            child,
-            reference_child,
-        );
+        let candidate_changes = if preserve_state {
+            self.dom
+                .insert_before_preserving_state_with_stylesheet_candidate_changes(
+                    parent,
+                    child,
+                    reference_child,
+                )
+        } else {
+            self.dom
+                .insert_before_with_stylesheet_candidate_changes(parent, child, reference_child)
+        };
         if let Some(candidate_changes) = candidate_changes {
             if inserted_fragment_children.is_empty()
                 && self.node(child).is_some_and(Node::is_document_fragment)
@@ -341,6 +403,14 @@ impl DomHost {
                 // mutation payloads or tree invalidations. Keep the success
                 // flag used by appendChild/insertBefore callers.
                 return DomMutationEffects::changed();
+            }
+            if !preserve_state
+                && single_child_was_connected_before_insert
+                && let Some((_, _, context, _)) = implicit_removal_slot_state.as_ref()
+            {
+                // Shadow descendants are retargeted separately from the light tree.
+                // An ordinary append/insert ends their modal openings as well.
+                self.clear_removed_shadow_modal_dialogs(&context.shadow_hosts);
             }
             if let Some(shadow_root) = previous_shadow_root {
                 self.invalidate_shadow_slot_name_index(shadow_root);

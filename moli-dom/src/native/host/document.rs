@@ -394,6 +394,7 @@ impl DomHost {
         let mut stack = vec![root];
         while let Some(handle) = stack.pop() {
             let owner_document = self.node(handle).and_then(Node::owner_document);
+            self.dom.set_dialog_modal(handle, false);
             if let Some(node) = self.node_mut(handle) {
                 node.set_tree_scope(owner_document, false, false);
             }
