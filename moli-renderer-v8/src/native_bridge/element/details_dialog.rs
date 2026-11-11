@@ -534,13 +534,13 @@ impl DialogCloseRequest {
     fn is_enabled(&self, runtime: &PageScriptHost) -> bool {
         !runtime
             .dom_host()
-            .get_attribute(self.dialog, "closedby")
+            .get_attribute_ns(self.dialog, None, "closedby")
             .is_some_and(|value| value.eq_ignore_ascii_case("none"))
     }
 }
 
-/// Default action for a trusted `keydown` on Escape: run the spec's
-/// light-dismiss for the topmost open modal dialog. A cancelable, non-bubbling
+/// Default action for a trusted `keydown` on Escape: request closure of the
+/// topmost open modal dialog. A cancelable, non-bubbling
 /// `cancel` event is fired at the dialog, and the dialog closes unless the
 /// event is canceled (or the keydown itself was prevented, which the caller
 /// already checks).
