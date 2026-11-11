@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use moli_shared_worker::{
@@ -9,6 +12,8 @@ use moli_shared_worker::{
     SharedWorkerInstanceRemoval, SharedWorkerKey, SharedWorkerLoadFailure, SharedWorkerLoadReady,
     SharedWorkerObservedAction, SharedWorkerRegistry, SharedWorkerRegistryDiagnostics,
 };
+
+use crate::service_worker_runtime::SERVICE_WORKER_DEFAULT_IDLE_DELAY_MS;
 
 use super::{
     client_owner_lifecycle::SharedWorkerClientOwnerLifecycleStore,
@@ -35,7 +40,6 @@ impl SharedWorkerClientOwnerIdAllocator {
     }
 }
 
-#[derive(Default)]
 pub(super) struct SharedWorkerMatchingStore {
     registry: SharedWorkerRegistry<SharedRendererSharedWorkerHost>,
     client_owner_lifecycle: SharedWorkerClientOwnerLifecycleStore,
@@ -47,8 +51,13 @@ impl SharedWorkerMatchingStore {
         client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
     ) -> Self {
         Self {
+            // HTML caps the extended lifetime at the clientless ServiceWorker
+            // lifetime. Use the same idle timeout for both worker kinds.
+            registry: SharedWorkerRegistry::with_extended_lifetime_timeout(Duration::from_millis(
+                SERVICE_WORKER_DEFAULT_IDLE_DELAY_MS,
+            )),
+            client_owner_lifecycle: SharedWorkerClientOwnerLifecycleStore::default(),
             client_owner_id_allocator,
-            ..Self::default()
         }
     }
 
@@ -98,6 +107,23 @@ impl SharedWorkerMatchingStore {
         instance_id: SharedWorkerInstanceId,
     ) -> SharedWorkerInstanceRemoval<SharedRendererSharedWorkerHost> {
         self.consume_observed_action(self.registry.remove_instance_observed(instance_id))
+    }
+
+    pub(super) fn remove_expired_idle_instance(
+        &self,
+        key: &SharedWorkerKey,
+        now: Instant,
+    ) -> SharedWorkerInstanceRemoval<SharedRendererSharedWorkerHost> {
+        self.registry.remove_expired_idle_instance(key, now)
+    }
+
+    pub(super) fn handle_idle_timeout(
+        &self,
+        key: &SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+        now: Instant,
+    ) -> Result<SharedWorkerInstanceRemoval<SharedRendererSharedWorkerHost>, Instant> {
+        self.registry.handle_idle_timeout(key, instance_id, now)
     }
 
     pub(super) fn remove_all_instances(

@@ -1229,7 +1229,10 @@ mod tests {
             1
         );
 
-        runtime.inner.shared_worker_runtime.get_or_init();
+        runtime
+            .inner
+            .shared_worker_runtime
+            .get_or_init(crate::network::RendererResourceTaskRunner::for_test());
         runtime.service_worker_runtime();
         assert_eq!(
             runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],

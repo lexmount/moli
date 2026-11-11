@@ -129,6 +129,11 @@ impl SharedWorkerRuntimeService {
     ) {
         params.reserve_service_worker_worker_client_for_main_script();
         let target_output = self.open_target_output_stream(instance_id);
+        let service_lane_owner = params
+            .launch_context
+            .service_lane_owner
+            .take()
+            .map(|runtime| self.retain_service_lane_owner(runtime));
         let host = Arc::new(RendererSharedWorkerHost::new_loading(
             instance_id,
             self.required_owner_local_host_id(),
@@ -136,6 +141,7 @@ impl SharedWorkerRuntimeService {
             params.key.script_url().to_owned(),
             params.launch_context.name.clone(),
             target_output,
+            service_lane_owner,
         ));
         host.add_client(client_id, client);
         self.store_loading_host_for_connect(instance_id, host.clone());
