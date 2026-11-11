@@ -2518,3 +2518,5 @@ async fn local_worker_content_security_policy_preserves_self_and_blocks_cross_or
         }
     }).await;
 }
+
+mod nested_worker_main_script;

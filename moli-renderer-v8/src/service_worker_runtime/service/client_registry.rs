@@ -334,6 +334,25 @@ impl ServiceWorkerRuntimeService {
         Some(client_id)
     }
 
+    /// The response URL becomes the worker's creation URL. Its controller is
+    /// still the one selected for the main request, including a SW response
+    /// whose URL lies outside that registration's scope.
+    pub(crate) fn update_reserved_worker_client_creation_url(
+        &self,
+        client_id: ServiceWorkerClientId,
+        script_url: Url,
+    ) -> bool {
+        let mut state = self.inner.state.lock();
+        let Some(client) = state.live_clients.get_mut(&client_id) else {
+            return false;
+        };
+        if !matches!(client.endpoint, ServiceWorkerClientEndpoint::PendingWorker) {
+            return false;
+        }
+        client.creation_url = script_url;
+        true
+    }
+
     pub(crate) fn activate_reserved_worker_client(
         &self,
         client_id: ServiceWorkerClientId,
