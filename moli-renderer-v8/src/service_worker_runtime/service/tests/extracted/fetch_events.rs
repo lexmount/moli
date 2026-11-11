@@ -1538,7 +1538,7 @@ fn abort_controlled_fetch_cancels_running_stream_reader() {
     }
 }
 #[test]
-fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_completion() {
+fn abort_main_worker_fetch_uses_event_id_and_ignores_late_completion() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
     let version_id = ServiceWorkerVersionId(1);
@@ -1570,7 +1570,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         version.in_flight_event_count = 1;
         let mut job = test_fetch_job(
             &service,
-            53,
+            0,
             version_id,
             &run,
             client_id,
@@ -1579,6 +1579,7 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
             completion_queue.sender(),
             cancel_handle.clone(),
         );
+        job.destination = crate::service_worker_runtime::ServiceWorkerRequestDestination::Worker;
         job.direct_completion_tx = Some(
             crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
                 direct_completion_tx,
@@ -1587,7 +1588,9 @@ fn abort_controlled_fetch_drops_direct_worker_completion_and_ignores_late_comple
         state.pending_fetch_jobs.insert(event_id, job);
     }
 
-    assert!(service.abort_controlled_fetch(53));
+    assert!(!service.abort_controlled_fetch(0));
+    assert!(!cancel_handle.is_cancelled());
+    assert!(service.abort_controlled_fetch_event_with_reason(event_id, None));
     assert!(cancel_handle.is_cancelled());
     assert!(matches!(
         direct_completion_rx.try_recv(),

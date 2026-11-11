@@ -2554,6 +2554,7 @@ mod nested_worker_main_script;
 mod service_and_shared_worker_lifecycle;
 mod window_request_referrer;
 mod window_service_worker_response_policy;
+mod worker_main_redirect;
 mod worker_messages_and_service_workers;
 mod worker_security_and_audio_worklets;
 

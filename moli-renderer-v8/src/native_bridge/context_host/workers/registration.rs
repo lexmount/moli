@@ -1557,6 +1557,7 @@ async fn fetch_worker_script_source(
                 request_client,
                 resource_task_runner,
                 ServiceWorkerRequestDestination::Worker,
+                cancel_handle.clone(),
             )
             .await
             .map_err(|error| {

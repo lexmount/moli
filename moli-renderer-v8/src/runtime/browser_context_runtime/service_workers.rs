@@ -350,6 +350,7 @@ impl RendererBrowserContextRuntime {
         request_client: &ResourceRequestClient,
         resource_task_runner: RendererResourceTaskRunner,
         destination: ServiceWorkerRequestDestination,
+        cancel_handle: FetchCancelHandle,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
         self.service_worker_runtime()
             .fetch_main_resource_for_worker_client(
@@ -359,7 +360,7 @@ impl RendererBrowserContextRuntime {
                 request_client,
                 resource_task_runner,
                 destination,
-                FetchCancelHandle::new(),
+                cancel_handle,
             )
             .await
             .map_err(|message| anyhow!(message))

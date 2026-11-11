@@ -204,6 +204,46 @@ fn apply_service_worker_synthetic_redirect(
     Ok(())
 }
 
+// Keep transport-internal redirects (for example an HTTPS upgrade) as well
+// as the caller-followed hops. A transport can echo the request's existing
+// prefix; use the enriched caller records once rather than duplicating it.
+fn prepend_worker_main_redirects(
+    response: &mut crate::protocol_types::NavigationResponse,
+    redirects: Vec<moli_fetch::RedirectInfo>,
+) {
+    let existing = std::mem::take(&mut response.redirect_chain);
+    let has_prefix = existing.len() >= redirects.len()
+        && existing.iter().zip(&redirects).all(|(a, b)| {
+            a.source == b.source
+                && a.from_url == b.from_url
+                && a.to_url == b.to_url
+                && a.status == b.status
+        });
+    let skip = if has_prefix { redirects.len() } else { 0 };
+    response.redirect_chain = redirects
+        .into_iter()
+        .map(Into::into)
+        .chain(existing.into_iter().skip(skip))
+        .collect();
+    response.redirected |= !response.redirect_chain.is_empty();
+}
+
+// Resource-task cancellation may drop the future before it polls its signal.
+// Retire the exact dispatched event in that case as well.
+struct PendingWorkerMainFetch<'a> {
+    runtime: &'a ServiceWorkerRuntimeService,
+    event_id: Option<ServiceWorkerEventId>,
+}
+
+impl Drop for PendingWorkerMainFetch<'_> {
+    fn drop(&mut self) {
+        if let Some(event_id) = self.event_id {
+            self.runtime
+                .abort_controlled_fetch_event_with_reason(event_id, None);
+        }
+    }
+}
+
 impl ServiceWorkerRuntimeService {
     pub(crate) async fn fetch_subresource_for_client(
         &self,
@@ -325,6 +365,105 @@ impl ServiceWorkerRuntimeService {
         destination: ServiceWorkerRequestDestination,
         cancel_handle: moli_fetch::FetchCancelHandle,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>, String> {
+        use crate::network_host::{ManualCorsRedirectState, ManualCorsRedirectTransition};
+        if !matches!(request.url.scheme(), "http" | "https") {
+            return Ok(None);
+        }
+        let mut redirects = ManualCorsRedirectState::new(request.clone(), Vec::new());
+        loop {
+            if cancel_handle.is_cancelled() {
+                return Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+            }
+            let hop_cancel = cancel_handle.child_for_fetch_hop();
+            redirects
+                .run_current_hop_preflight_unobserved(request_client, hop_cancel.clone())
+                .await?;
+            if !self.retarget_reserved_worker_client(client_id, redirects.request().url.clone()) {
+                return Err("worker client retired during main script loading".to_owned());
+            }
+            if let Some(mut response) = self
+                .fetch_worker_main_resource_hop(
+                    client_id,
+                    creator_client_id,
+                    redirects.request(),
+                    request_client,
+                    resource_task_runner.clone(),
+                    destination,
+                    cancel_handle.clone(),
+                )
+                .await?
+            {
+                match redirects.advance_service_worker_response(response.head())? {
+                    ManualCorsRedirectTransition::FollowedRedirect => continue,
+                    ManualCorsRedirectTransition::FinalResponse
+                    | ManualCorsRedirectTransition::ManualResponse { .. } => {
+                        prepend_worker_main_redirects(
+                            &mut response,
+                            redirects.into_redirect_chain(),
+                        );
+                        if !self.update_reserved_worker_client_creation_url(
+                            client_id,
+                            response.final_url.clone(),
+                        ) {
+                            return Err(
+                                "worker client retired before main script completion".to_owned()
+                            );
+                        }
+                        return Ok(Some(response));
+                    }
+                }
+            }
+            let observed = request_client
+                .fetch_raw_stream_with_cancel_and_network_metadata(
+                    redirects.single_hop_transport_request(),
+                    hop_cancel.clone(),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let network_extra_info_available = observed.request_observation().is_some();
+            let (response, observation) = observed.into_parts();
+            match redirects.advance(
+                response.head(),
+                network_extra_info_available,
+                response.network_request_extra_info(),
+            )? {
+                ManualCorsRedirectTransition::FollowedRedirect => response.discard_unused().await,
+                ManualCorsRedirectTransition::FinalResponse
+                | ManualCorsRedirectTransition::ManualResponse { .. } => {
+                    let text = response
+                        .into_lossy_materialized_text_response()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    cancel_handle.adopt_response_progress(&hop_cancel);
+                    let mut response = crate::protocol_types::NavigationResponse::from(text)
+                        .with_network_request_headers(
+                            observation.map(moli_fetch::NetworkRequestObservation::into_headers),
+                        );
+                    prepend_worker_main_redirects(&mut response, redirects.into_redirect_chain());
+                    if !self.update_reserved_worker_client_creation_url(
+                        client_id,
+                        response.final_url.clone(),
+                    ) {
+                        return Err(
+                            "worker client retired before main script completion".to_owned()
+                        );
+                    }
+                    return Ok(Some(response));
+                }
+            }
+        }
+    }
+
+    async fn fetch_worker_main_resource_hop(
+        &self,
+        client_id: ServiceWorkerClientId,
+        creator_client_id: Option<ServiceWorkerClientId>,
+        request: &moli_fetch::Request,
+        request_client: &ResourceRequestClient,
+        resource_task_runner: crate::network::RendererResourceTaskRunner,
+        destination: ServiceWorkerRequestDestination,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) -> Result<Option<crate::protocol_types::NavigationResponse>, String> {
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(None);
         }
@@ -373,25 +512,37 @@ impl ServiceWorkerRuntimeService {
             completion_tx,
             request_client: request_client.clone(),
             resource_task_runner,
-            cancel_handle,
+            cancel_handle: cancel_handle.clone(),
             direct_completion_tx: Some(
-                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered_with_caller_redirects(
                     direct_completion_tx,
                 ),
             ),
         };
 
-        if !self.dispatch_controlled_fetch(dispatch) {
+        let Some(receipt) = self.dispatch_controlled_fetch_with_event_id(dispatch) else {
             return Ok(None);
-        }
-
-        match direct_completion_rx.await {
+        };
+        let _pending_fetch = PendingWorkerMainFetch {
+            runtime: self,
+            event_id: receipt.event_id,
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel_handle.cancelled() => {
+                return Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+            }
+            result = direct_completion_rx => result,
+        };
+        match result {
             Ok(
                 ServiceWorkerDirectFetchResult::FallbackStream(_)
-                | ServiceWorkerDirectFetchResult::NetworkFallback { .. }
                 | ServiceWorkerDirectFetchResult::Stream(_),
             ) => Err("worker script requests cannot contain an author stream".to_owned()),
-            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
+            Ok(
+                ServiceWorkerDirectFetchResult::Fallback
+                | ServiceWorkerDirectFetchResult::NetworkFallback { .. },
+            ) => Ok(None),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(message),
             Err(_) => Err(
@@ -746,6 +897,10 @@ impl ServiceWorkerRuntimeService {
         if is_redirect_status(response.status)
             && response.response_type == "opaqueredirect"
             && service_worker_fetch_is_navigation_request(&job)
+            && !job
+                .direct_completion_tx
+                .as_ref()
+                .is_some_and(|completion| completion.defer_redirects)
         {
             match service_worker_redirect_target(&job, &response) {
                 Ok(Some(next_url)) => {
@@ -784,6 +939,10 @@ impl ServiceWorkerRuntimeService {
         }
         if is_redirect_status(response.status)
             && job.request.redirect_mode() == moli_fetch::RequestRedirectMode::Follow
+            && !job
+                .direct_completion_tx
+                .as_ref()
+                .is_some_and(|completion| completion.defer_redirects)
         {
             match service_worker_redirect_target(&job, &response) {
                 Ok(Some(next_url)) => {

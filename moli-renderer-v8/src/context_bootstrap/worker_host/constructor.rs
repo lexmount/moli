@@ -860,27 +860,19 @@ fn start_nested_worker_script_load(
     };
     let secure_context =
         worker_secure_context_for_script_url(&script_url, context.network_policy.secure_context);
-    let reserved_client = context
-        .service_worker_runtime
-        .as_ref()
-        .map(|runtime| ReservedNestedWorkerClient {
-            runtime: runtime.clone(),
-            client_id: Some(runtime.register_reserved_worker_client_with_storage_key(
-                script_url.clone(),
-                context.creator_storage_key.serialized_storage_key(),
-                ServiceWorkerClientType::DedicatedWorker,
-                secure_context,
-            )),
-        })
-        // Network-only loads register their final response URL when the
-        // global starts. Controlled requests need a reserved identity for
-        // FetchEvent.resultingClientId before their script can run.
-        .filter(|client| {
-            client
-                .runtime
-                .matching_controller_for_client(client.client_id.expect("reserved worker client"))
-                .is_some()
-        });
+    let reserved_client =
+        context
+            .service_worker_runtime
+            .as_ref()
+            .map(|runtime| ReservedNestedWorkerClient {
+                runtime: runtime.clone(),
+                client_id: Some(runtime.register_reserved_worker_client_with_storage_key(
+                    script_url.clone(),
+                    context.creator_storage_key.serialized_storage_key(),
+                    ServiceWorkerClientType::DedicatedWorker,
+                    secure_context,
+                )),
+            });
     let reserved_client_id = reserved_client.as_ref().and_then(|client| client.client_id);
     let mut timing = crate::context_bootstrap::FetchResourceTiming::for_initiator_type(
         match options.worker_type {

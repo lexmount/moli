@@ -154,6 +154,10 @@ async fn stream_navigation_preload_response(
     });
 }
 
+pub(crate) struct ServiceWorkerFetchDispatchReceipt {
+    pub(super) event_id: Option<ServiceWorkerEventId>,
+}
+
 impl ServiceWorkerRuntimeService {
     pub(super) fn start_queued_launch(&self, launch: ServiceWorkerQueuedLaunch) {
         let Some(launch) = self.defer_install_launch_until_debugger_if_needed(launch) else {
@@ -239,6 +243,14 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn dispatch_controlled_fetch(&self, dispatch: ServiceWorkerFetchDispatch) -> bool {
+        self.dispatch_controlled_fetch_with_event_id(dispatch)
+            .is_some()
+    }
+
+    pub(crate) fn dispatch_controlled_fetch_with_event_id(
+        &self,
+        dispatch: ServiceWorkerFetchDispatch,
+    ) -> Option<ServiceWorkerFetchDispatchReceipt> {
         let request = dispatch.request.clone();
         let fetch_job = ServiceWorkerFetchJob {
             direct_streaming_tx: None,
@@ -298,21 +310,23 @@ impl ServiceWorkerRuntimeService {
             direct_completion_tx: dispatch.direct_completion_tx,
         };
         self.dispatch_controlled_fetch_job(fetch_job, request)
-            .is_ok()
+            .ok()
+            .map(|event_id| ServiceWorkerFetchDispatchReceipt { event_id })
     }
 
     pub(super) fn dispatch_controlled_fetch_job(
         &self,
         mut fetch_job: ServiceWorkerFetchJob,
         mut request: ServiceWorkerFetchRequest,
-    ) -> Result<(), Box<ServiceWorkerFetchJob>> {
+    ) -> Result<Option<ServiceWorkerEventId>, Box<ServiceWorkerFetchJob>> {
+        let mut dispatched_event_id = None;
         if let Err(error) = fetch_job.request.browser_origin().and_then(|_| {
             fetch_job
                 .request
                 .validate_request_mode_for_url(&fetch_job.request.url)
         }) {
             self.complete_fetch_with_failure(fetch_job, error.to_string());
-            return Ok(());
+            return Ok(dispatched_event_id);
         }
         if !request
             .headers
@@ -395,6 +409,7 @@ impl ServiceWorkerRuntimeService {
                 fetch_job.cancel_handle.mark_service_worker_start();
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
+                dispatched_event_id = Some(event_id);
                 let event = ServiceWorkerFetchEvent {
                     event_id,
                     owner: version.run_owner(),
@@ -413,6 +428,7 @@ impl ServiceWorkerRuntimeService {
             } else {
                 let event_id =
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
+                dispatched_event_id = Some(event_id);
                 fetch_job.cancel_handle.mark_service_worker_start();
                 Self::begin_version_event_locked(version);
                 let action = match &version.running_state {
@@ -479,16 +495,16 @@ impl ServiceWorkerRuntimeService {
 
         if let Some(job) = fallback_job {
             self.dispatch_fetch_fallback(job);
-            return Ok(());
+            return Ok(dispatched_event_id);
         }
         if let Some(launch) = start_launch {
             self.start_queued_launch(launch);
         }
         let Some((host, event)) = dispatch_event else {
-            return Ok(());
+            return Ok(dispatched_event_id);
         };
         self.dispatch_fetch_event(host, event);
-        Ok(())
+        Ok(dispatched_event_id)
     }
 
     pub(super) fn dispatch_pending_activation_fetch_events(

@@ -196,20 +196,20 @@ fn browser_request_needs_redirect_checks(request: &Request) -> bool {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum ManualCorsRedirectTransition {
+pub(crate) enum ManualCorsRedirectTransition {
     FinalResponse,
     ManualResponse { response_url: url::Url },
     FollowedRedirect,
 }
 
-struct ManualCorsRedirectState {
+pub(crate) struct ManualCorsRedirectState {
     request: Request,
     original_url: url::Url,
     preflight_request_headers: Vec<(String, String)>,
 }
 
 impl ManualCorsRedirectState {
-    fn new(request: Request, preflight_request_headers: Vec<(String, String)>) -> Self {
+    pub(crate) fn new(request: Request, preflight_request_headers: Vec<(String, String)>) -> Self {
         Self {
             original_url: request.url.clone(),
             request,
@@ -217,7 +217,7 @@ impl ManualCorsRedirectState {
         }
     }
 
-    fn request(&self) -> &Request {
+    pub(crate) fn request(&self) -> &Request {
         &self.request
     }
 
@@ -227,8 +227,17 @@ impl ManualCorsRedirectState {
 
     // Construct this copy at transport dispatch, after configuring Fetch
     // policy: a later with_redirect_mode(Follow) would enable runtime following.
-    fn single_hop_transport_request(&self) -> Request {
+    pub(crate) fn single_hop_transport_request(&self) -> Request {
         self.request.clone().with_single_hop()
+    }
+
+    pub(crate) async fn run_current_hop_preflight_unobserved(
+        &self,
+        loader: &ResourceRequestClient,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<(), String> {
+        self.run_current_hop_preflight(loader, Some(cancel_handle), None)
+            .await
     }
 
     async fn run_current_hop_preflight(
@@ -252,24 +261,51 @@ impl ManualCorsRedirectState {
         .await
     }
 
-    fn advance(
+    pub(crate) fn advance(
         &mut self,
         head: ResponseHead,
         network_extra_info_available: bool,
         request_extra_info: Option<&moli_fetch::NetworkRequestExtraInfo>,
     ) -> Result<ManualCorsRedirectTransition, String> {
+        self.advance_response(
+            head,
+            network_extra_info_available,
+            request_extra_info,
+            moli_fetch::RedirectSource::Network,
+        )
+    }
+
+    pub(crate) fn advance_service_worker_response(
+        &mut self,
+        head: ResponseHead,
+    ) -> Result<ManualCorsRedirectTransition, String> {
+        self.advance_response(head, false, None, moli_fetch::RedirectSource::ServiceWorker)
+    }
+
+    fn advance_response(
+        &mut self,
+        head: ResponseHead,
+        network_extra_info_available: bool,
+        request_extra_info: Option<&moli_fetch::NetworkRequestExtraInfo>,
+        source: moli_fetch::RedirectSource,
+    ) -> Result<ManualCorsRedirectTransition, String> {
         // Redirect request records describe the next hop's cookie decision,
         // just as they do when the transport follows redirects internally.
-        if let Some(previous) = self.request.redirect_chain_mut().last_mut()
+        if source == moli_fetch::RedirectSource::Network
+            && let Some(previous) = self.request.redirect_chain_mut().last_mut()
             && previous.source == moli_fetch::RedirectSource::Network
         {
             previous.request_cookie_report = head.request_cookie_report.clone();
             previous.request_extra_info = request_extra_info.cloned();
         }
-        validate_actual_cors_response_head(&self.request, &head)?;
-        self.request
-            .validate_authentication_response(&head)
-            .map_err(format_network_error)?;
+        // SW responses have already passed respondWith's filtered-response
+        // checks. Network CORS/authentication checks apply to transport hops.
+        if source == moli_fetch::RedirectSource::Network {
+            validate_actual_cors_response_head(&self.request, &head)?;
+            self.request
+                .validate_authentication_response(&head)
+                .map_err(format_network_error)?;
+        }
         if !is_redirect_status(head.status) {
             return Ok(ManualCorsRedirectTransition::FinalResponse);
         }
@@ -346,7 +382,7 @@ impl ManualCorsRedirectState {
         // Keep the original client origin for Fetch Metadata. Recording the hop
         // makes Request origin serialization and CORS validation apply redirect taint.
         self.request.record_redirect(RedirectInfo {
-            source: moli_fetch::RedirectSource::Network,
+            source,
             from_url: head.final_url,
             to_url: next_url.clone(),
             status: redirect_status,
@@ -373,7 +409,7 @@ impl ManualCorsRedirectState {
         Ok(ManualCorsRedirectTransition::FollowedRedirect)
     }
 
-    fn into_redirect_chain(self) -> Vec<RedirectInfo> {
+    pub(crate) fn into_redirect_chain(self) -> Vec<RedirectInfo> {
         self.request.redirect_chain().to_vec()
     }
 }

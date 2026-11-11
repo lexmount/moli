@@ -50,8 +50,8 @@ pub(crate) use self::blob_url_entry::{
 };
 
 pub(crate) use self::async_fetch::{
-    collect_image_response_into_parkable, fetch_browser_subresource_for_owner,
-    fetch_browser_subresource_raw_stream_for_owner,
+    ManualCorsRedirectState, ManualCorsRedirectTransition, collect_image_response_into_parkable,
+    fetch_browser_subresource_for_owner, fetch_browser_subresource_raw_stream_for_owner,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers, fetch_cors_script_text,
     observe_async_xhr_upload, spawn_async_subresource_fetch,
