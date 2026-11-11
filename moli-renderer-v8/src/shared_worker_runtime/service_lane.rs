@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use moli_shared_worker::SharedWorkerInstanceId;
+use moli_shared_worker::{SharedWorkerInstanceId, SharedWorkerKey};
 use parking_lot::Mutex;
 
 use crate::worker::WorkerParentErrorEventKind;
@@ -17,6 +17,11 @@ pub(super) struct SharedWorkerServiceLane {
 
 enum SharedWorkerServiceLaneEvent {
     Completion(Box<SharedWorkerRuntimeCompletion>),
+    IdleTimeout {
+        runtime_service: WeakSharedWorkerRuntimeService,
+        key: SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+    },
     WorkerClosed {
         runtime_service: WeakSharedWorkerRuntimeService,
         instance_id: SharedWorkerInstanceId,
@@ -39,6 +44,21 @@ impl SharedWorkerServiceLane {
             .push_back(SharedWorkerServiceLaneEvent::Completion(Box::new(
                 completion,
             )));
+    }
+
+    pub(super) fn enqueue_idle_timeout(
+        &self,
+        runtime_service: WeakSharedWorkerRuntimeService,
+        key: SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+    ) {
+        self.events
+            .lock()
+            .push_back(SharedWorkerServiceLaneEvent::IdleTimeout {
+                runtime_service,
+                key,
+                instance_id,
+            });
     }
 
     pub(super) fn enqueue_worker_closed(
@@ -83,6 +103,15 @@ impl SharedWorkerServiceLane {
         for event in events {
             match event {
                 SharedWorkerServiceLaneEvent::Completion(completion) => completion.complete(),
+                SharedWorkerServiceLaneEvent::IdleTimeout {
+                    runtime_service,
+                    key,
+                    instance_id,
+                } => {
+                    if let Some(service) = runtime_service.upgrade() {
+                        service.finish_idle_timeout(key, instance_id);
+                    }
+                }
                 SharedWorkerServiceLaneEvent::WorkerClosed {
                     runtime_service,
                     instance_id,
