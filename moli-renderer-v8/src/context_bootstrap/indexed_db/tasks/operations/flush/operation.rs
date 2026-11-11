@@ -1,12 +1,12 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_index_object_store, indexed_db_object_store_name, indexed_db_typed_storage_scope,
+    indexed_db_index_object_store, indexed_db_object_store_id, indexed_db_typed_storage_scope,
 };
 
 pub(super) struct TransactionOperation<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) handle: TransactionHandle,
-    pub(super) store_name: moli_indexeddb::IndexedDbName,
+    pub(super) store: moli_indexeddb::sqlite::StoreId,
     pub(super) kind: IndexedDbTransactionOperation,
 }
 
@@ -160,17 +160,16 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
         store_request_error(scope, request, error);
         return;
     };
-    // Parameter conversion can run author code that renames the source or
-    // reuses its old name. Freeze its current native label here, before this
-    // request enters the FIFO, never when the queued SQL command executes.
-    let kind = match operation_store_name(scope, source, &input).and_then(|store_name| {
+    // Preserve the retained source's identity, including after reentrant
+    // conversions. Renames change only labels, never an admitted SQL target.
+    let kind = match operation_store_id(scope, source, &input).and_then(|store| {
         sql::prepare_operation(
             scope,
             &client,
             TransactionOperation {
                 source,
                 handle,
-                store_name,
+                store,
                 kind: input,
             },
         )
@@ -193,11 +192,11 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_transaction_operation<'
     pump_operations(scope, transaction, true);
 }
 
-fn operation_store_name<'s>(
+fn operation_store_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     kind: &IndexedDbTransactionOperation,
-) -> Result<moli_indexeddb::IndexedDbName, IndexedDbError> {
+) -> Result<moli_indexeddb::sqlite::StoreId, IndexedDbError> {
     let source = if matches!(kind, IndexedDbTransactionOperation::CursorIterate { .. }) {
         crate::context_bootstrap::indexed_db::cursor_source(scope, source)
             .ok_or_else(|| IndexedDbError::InvalidState("SQL cursor lost its source".into()))?
@@ -205,6 +204,6 @@ fn operation_store_name<'s>(
         source
     };
     let store = indexed_db_index_object_store(scope, source).unwrap_or(source);
-    indexed_db_object_store_name(scope, store)
+    indexed_db_object_store_id(scope, store)
         .ok_or_else(|| IndexedDbError::InvalidState("IndexedDB store lost its metadata".into()))
 }

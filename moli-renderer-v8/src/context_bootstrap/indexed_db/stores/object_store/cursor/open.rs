@@ -22,8 +22,7 @@ fn idb_object_store_open_cursor_impl<'s>(
     let Some(request) = create_operation_request(scope, store, transaction) else {
         return;
     };
-    let operation =
-        IndexedDbCursorOpenOperation::object_store(parsed.query, parsed.direction, key_only);
+    let operation = IndexedDbCursorOpenOperation::new(parsed.query, parsed.direction, key_only);
     submit_cursor_open_operation(scope, transaction, store, request, operation);
     rv.set(request.into());
 }

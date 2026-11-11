@@ -8,7 +8,8 @@ fn seeded() -> Database {
     database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "by-tag",
             IndexOptions {
                 key_path: KeyPath::String("tag".into()),
@@ -19,12 +20,15 @@ fn seeded() -> Database {
         .unwrap();
     database.commit(TX).unwrap();
     begin(&mut database, TransactionMode::ReadWrite);
+    let index_id = database
+        .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+        .unwrap();
     put(
         &mut database,
         None,
         b"kept",
         vec![IndexKeys {
-            name: "by-tag".into(),
+            index: index_id,
             keys: vec!["alpha".into()],
         }],
         None,
@@ -49,9 +53,18 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
         [&crate::IndexedDbName::from("by-tag")]
         .id;
     upgrade(&mut database);
-    database.rename_object_store(TX, "a", "renamed").unwrap();
     database
-        .rename_index(TX, "renamed", "by-tag", "new-tag")
+        .rename_object_store(TX, database.lookup_store_id("a").unwrap(), "renamed")
+        .unwrap();
+    database
+        .rename_index(
+            TX,
+            database.lookup_store_id("renamed").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("renamed").unwrap(), "by-tag")
+                .unwrap(),
+            "new-tag",
+        )
         .unwrap();
     assert_eq!(
         database.committed(),
@@ -78,9 +91,13 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
     let records = database
         .query(
             TX,
-            "renamed",
+            database.lookup_store_id("renamed").unwrap(),
             &Query {
-                source: QuerySource::Index("new-tag".into()),
+                source: QuerySource::Index(
+                    database
+                        .lookup_index_id(database.lookup_store_id("renamed").unwrap(), "new-tag")
+                        .unwrap(),
+                ),
                 ..Default::default()
             },
         )
@@ -93,12 +110,17 @@ fn schema_rename_keeps_ids_records_index_entries_and_key_generator() {
         database
             .write(
                 TX,
-                "renamed",
+                database.lookup_store_id("renamed").unwrap(),
                 RecordWrite {
                     key: None,
                     value: b"next".to_vec().into(),
                     indexes: vec![IndexKeys {
-                        name: "new-tag".into(),
+                        index: database
+                            .lookup_index_id(
+                                database.lookup_store_id("renamed").unwrap(),
+                                "new-tag"
+                            )
+                            .unwrap(),
                         keys: vec!["beta".into()],
                     }],
                     add_only: false,
@@ -133,7 +155,8 @@ fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
     let sibling = database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "other",
             IndexOptions {
                 key_path: KeyPath::String("other".into()),
@@ -143,19 +166,31 @@ fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
         )
         .unwrap();
     assert!(matches!(
-        database.rename_object_store(TX, "a", "b"),
+        database.rename_object_store(TX, database.lookup_store_id("a").unwrap(), "b"),
         Err(IndexedDbError::Constraint(_))
     ));
     assert!(matches!(
-        database.rename_index(TX, "a", "by-tag", "other"),
+        database.rename_index(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                .unwrap(),
+            "other"
+        ),
         Err(IndexedDbError::Constraint(_))
     ));
     assert!(matches!(
-        database.rename_object_store(TX, "missing", "new"),
+        database.rename_object_store(TX, database.allocate_store_id().unwrap(), "new"),
         Err(IndexedDbError::NotFound(_))
     ));
     assert!(matches!(
-        database.rename_index(TX, "a", "missing", "new"),
+        database.rename_index(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
+            "new"
+        ),
         Err(IndexedDbError::NotFound(_))
     ));
     let metadata = database.candidate_metadata(TX).unwrap();
@@ -176,11 +211,33 @@ fn schema_rename_constraint_errors_leave_the_upgrade_usable() {
         sibling.id
     );
     // Empty names are valid, and a same-name assignment leaves accounting unchanged.
-    database.rename_object_store(TX, "a", "").unwrap();
-    database.rename_index(TX, "", "by-tag", "").unwrap();
+    database
+        .rename_object_store(TX, database.lookup_store_id("a").unwrap(), "")
+        .unwrap();
+    database
+        .rename_index(
+            TX,
+            database.lookup_store_id("").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("").unwrap(), "by-tag")
+                .unwrap(),
+            "",
+        )
+        .unwrap();
     let usage = database.candidate_metadata(TX).unwrap().usage;
-    database.rename_object_store(TX, "", "").unwrap();
-    database.rename_index(TX, "", "", "").unwrap();
+    database
+        .rename_object_store(TX, database.lookup_store_id("").unwrap(), "")
+        .unwrap();
+    database
+        .rename_index(
+            TX,
+            database.lookup_store_id("").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("").unwrap(), "")
+                .unwrap(),
+            "",
+        )
+        .unwrap();
     assert_eq!(database.candidate_metadata(TX).unwrap().usage, usage);
     database.commit(TX).unwrap();
     assert_eq!(
@@ -202,9 +259,18 @@ fn schema_rename_abort_and_commit_quota_failure_restore_the_original_names() {
     for quota_failure in [false, true] {
         upgrade(&mut database);
         let new_name = "long".repeat(64);
-        database.rename_object_store(TX, "a", &new_name).unwrap();
         database
-            .rename_index(TX, &new_name, "by-tag", "renamed-index")
+            .rename_object_store(TX, database.lookup_store_id("a").unwrap(), &new_name)
+            .unwrap();
+        database
+            .rename_index(
+                TX,
+                database.lookup_store_id(&new_name).unwrap(),
+                database
+                    .lookup_index_id(database.lookup_store_id(&new_name).unwrap(), "by-tag")
+                    .unwrap(),
+                "renamed-index",
+            )
             .unwrap();
         if quota_failure {
             assert!(matches!(
@@ -226,7 +292,7 @@ fn schema_rename_abort_and_commit_quota_failure_restore_the_original_names() {
         begin(&mut database, TransactionMode::ReadOnly);
         assert_eq!(
             database
-                .get(TX, "a", &1.into())
+                .get(TX, database.lookup_store_id("a").unwrap(), &1.into())
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),
@@ -241,20 +307,39 @@ fn schema_rename_and_reusing_the_old_name_preserve_separate_storage_identities()
     let mut database = seeded();
     let original = database.committed().stores[&crate::IndexedDbName::from("a")].id;
     upgrade(&mut database);
-    database.rename_object_store(TX, "a", "kept").unwrap();
     database
-        .create_object_store(TX, "a", ObjectStoreOptions::default())
+        .rename_object_store(TX, database.lookup_store_id("a").unwrap(), "kept")
+        .unwrap();
+    database
+        .create_object_store(
+            TX,
+            database.allocate_store_id().unwrap(),
+            "a",
+            ObjectStoreOptions::default(),
+        )
         .unwrap();
     assert_ne!(
         database.candidate_metadata(TX).unwrap().stores[&crate::IndexedDbName::from("a")].id,
         original
     );
-    assert_eq!(database.count(TX, "a").unwrap(), 0);
-    assert_eq!(database.count(TX, "kept").unwrap(), 1);
-    database.delete_object_store(TX, "a").unwrap();
     assert_eq!(
         database
-            .get(TX, "kept", &1.into())
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        database
+            .count(TX, database.lookup_store_id("kept").unwrap())
+            .unwrap(),
+        1
+    );
+    database
+        .delete_object_store(TX, database.lookup_store_id("a").unwrap())
+        .unwrap();
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("kept").unwrap(), &1.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -273,21 +358,35 @@ fn schema_rename_requires_an_active_versionchange_transaction() {
     for mode in [TransactionMode::ReadOnly, TransactionMode::ReadWrite] {
         begin(&mut database, mode);
         assert!(matches!(
-            database.rename_object_store(TX, "a", "renamed"),
+            database.rename_object_store(TX, database.lookup_store_id("a").unwrap(), "renamed"),
             Err(IndexedDbError::InvalidState(_))
         ));
         assert!(matches!(
-            database.rename_index(TX, "a", "by-tag", "renamed"),
+            database.rename_index(
+                TX,
+                database.lookup_store_id("a").unwrap(),
+                database
+                    .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                    .unwrap(),
+                "renamed"
+            ),
             Err(IndexedDbError::InvalidState(_))
         ));
         database.abort(TX).unwrap();
     }
     assert!(matches!(
-        database.rename_object_store(TX, "a", "renamed"),
+        database.rename_object_store(TX, database.lookup_store_id("a").unwrap(), "renamed"),
         Err(IndexedDbError::TransactionInactive(_))
     ));
     assert!(matches!(
-        database.rename_index(TX, "a", "by-tag", "renamed"),
+        database.rename_index(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                .unwrap(),
+            "renamed"
+        ),
         Err(IndexedDbError::TransactionInactive(_))
     ));
 }
@@ -299,11 +398,21 @@ fn renaming_an_index_and_reusing_its_old_name_keeps_entries_separate() {
         [&crate::IndexedDbName::from("by-tag")]
         .id;
     upgrade(&mut database);
-    database.rename_index(TX, "a", "by-tag", "kept").unwrap();
+    database
+        .rename_index(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                .unwrap(),
+            "kept",
+        )
+        .unwrap();
     let replacement = database
         .create_index(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
+            database.allocate_index_id().unwrap(),
             "by-tag",
             IndexOptions {
                 key_path: KeyPath::String("other".into()),
@@ -316,9 +425,13 @@ fn renaming_an_index_and_reusing_its_old_name_keeps_entries_separate() {
     let old_entries = database
         .query(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
             &Query {
-                source: QuerySource::Index("kept".into()),
+                source: QuerySource::Index(
+                    database
+                        .lookup_index_id(database.lookup_store_id("a").unwrap(), "kept")
+                        .unwrap(),
+                ),
                 ..Default::default()
             },
         )
@@ -328,23 +441,39 @@ fn renaming_an_index_and_reusing_its_old_name_keeps_entries_separate() {
         database
             .query(
                 TX,
-                "a",
+                database.lookup_store_id("a").unwrap(),
                 &Query {
-                    source: QuerySource::Index("by-tag".into()),
+                    source: QuerySource::Index(
+                        database
+                            .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                            .unwrap()
+                    ),
                     ..Default::default()
                 }
             )
             .unwrap()
             .is_empty()
     );
-    database.delete_index(TX, "a", "by-tag").unwrap();
+    database
+        .delete_index(
+            TX,
+            database.lookup_store_id("a").unwrap(),
+            database
+                .lookup_index_id(database.lookup_store_id("a").unwrap(), "by-tag")
+                .unwrap(),
+        )
+        .unwrap();
     assert_eq!(
         database
             .query(
                 TX,
-                "a",
+                database.lookup_store_id("a").unwrap(),
                 &Query {
-                    source: QuerySource::Index("kept".into()),
+                    source: QuerySource::Index(
+                        database
+                            .lookup_index_id(database.lookup_store_id("a").unwrap(), "kept")
+                            .unwrap()
+                    ),
                     ..Default::default()
                 }
             )

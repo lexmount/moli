@@ -126,12 +126,12 @@ fn legacy_name_migration_preserves_records_ids_generator_and_following_commits()
     );
     assert_eq!(
         database.committed().stores[&crate::IndexedDbName::from("a")].id,
-        3
+        StoreId::from_raw(3)
     );
     begin(&mut database, TransactionMode::ReadWrite);
     assert_eq!(
         database
-            .get(TX, "a", &5.into())
+            .get(TX, database.lookup_store_id("a").unwrap(), &5.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -151,10 +151,15 @@ fn legacy_name_migration_preserves_records_ids_generator_and_following_commits()
     .unwrap();
     let mut database = Database::open(connection, identity).unwrap();
     begin(&mut database, TransactionMode::ReadOnly);
-    assert_eq!(database.count(TX, "a").unwrap(), 2);
     assert_eq!(
         database
-            .get(TX, "a", &8.into())
+            .count(TX, database.lookup_store_id("a").unwrap())
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        database
+            .get(TX, database.lookup_store_id("a").unwrap(), &8.into())
             .unwrap()
             .unwrap()
             .wire_bytes(),

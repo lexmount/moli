@@ -6,6 +6,7 @@
 //! can modify a reader's stores. Records and rollback state stay in SQLite.
 
 mod blobs;
+mod identity;
 mod names;
 mod query;
 mod records;
@@ -25,6 +26,9 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::{
     IndexOptions, IndexedDbError, Key, ObjectStoreOptions, TransactionHandle, TransactionMode,
 };
+
+use identity::SchemaIds;
+pub use identity::{IndexId, StoreId};
 
 pub use query::{Query, QuerySource, RecordPage, Seek};
 pub use records::RecordWrite;
@@ -68,13 +72,13 @@ pub struct DatabaseIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexMetadata {
-    pub id: i64,
+    pub id: IndexId,
     pub options: IndexOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreMetadata {
-    pub id: i64,
+    pub id: StoreId,
     pub options: ObjectStoreOptions,
     pub indexes: BTreeMap<crate::IndexedDbName, IndexMetadata>,
 }
@@ -99,17 +103,35 @@ impl PartialEq for DatabaseMetadata {
 }
 impl Eq for DatabaseMetadata {}
 
+impl DatabaseMetadata {
+    fn check_stores(&self, requested: &BTreeSet<StoreId>) -> Result<(), IndexedDbError> {
+        let mut missing = requested.clone();
+        for store in self.stores.values() {
+            missing.remove(&store.id);
+            if missing.is_empty() {
+                return Ok(());
+            }
+        }
+        match missing.first() {
+            Some(id) => Err(IndexedDbError::NotFound(format!(
+                "object store {id} was not found"
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
 struct ActiveTransaction {
     handle: TransactionHandle,
     mode: TransactionMode,
-    stores: BTreeSet<crate::IndexedDbName>,
+    stores: BTreeSet<StoreId>,
     pending: Option<PendingWrite>,
     first_object_id: i64,
 }
 
 struct PendingWrite {
     id: u64,
-    store_id: i64,
+    store_id: StoreId,
     key: Key,
 }
 
@@ -124,11 +146,12 @@ pub struct PreparedWrite {
 
 #[derive(Debug, Clone)]
 pub struct IndexKeys {
-    pub name: crate::IndexedDbName,
+    pub index: IndexId,
     pub keys: Vec<Key>,
 }
 
 pub struct Database {
+    schema_ids: Arc<SchemaIds>,
     connection: Connection,
     identity: Arc<DatabaseIdentity>,
     committed: Arc<DatabaseMetadata>,
@@ -145,7 +168,7 @@ impl Database {
     ) -> Result<Self, IndexedDbError> {
         let identity = Arc::new(identity);
         Self::initialize(&mut connection, &identity)?;
-        Self::open_shared(connection, identity)
+        Self::open_shared(connection, identity, Arc::default())
     }
 
     fn initialize(
@@ -185,12 +208,13 @@ impl Database {
         identity: DatabaseIdentity,
     ) -> Result<Self, IndexedDbError> {
         let identity = Arc::new(identity);
-        Self::open_shared(connection, identity)
+        Self::open_shared(connection, identity, Arc::default())
     }
 
     fn open_shared(
         mut connection: Connection,
         identity: Arc<DatabaseIdentity>,
+        schema_ids: Arc<SchemaIds>,
     ) -> Result<Self, IndexedDbError> {
         let version = names::schema_version(&connection)?;
         let saved: Option<bool> = connection.query_row(
@@ -219,7 +243,9 @@ impl Database {
             names::migrate_legacy(&mut connection, &identity.name, version)?;
         }
         let committed = schema::read_metadata(&connection)?;
+        schema_ids.observe(&connection)?;
         Ok(Self {
+            schema_ids,
             connection,
             identity,
             committed,
@@ -270,7 +296,7 @@ impl Database {
         &mut self,
         handle: TransactionHandle,
         mode: TransactionMode,
-        stores: BTreeSet<crate::IndexedDbName>,
+        stores: BTreeSet<StoreId>,
         upgrade_version: Option<u64>,
     ) -> Result<(), IndexedDbError> {
         if self.active.is_none() && !self.connection.is_autocommit() {
@@ -306,13 +332,7 @@ impl Database {
                     "regular transaction requires a live database and nonempty scope".into(),
                 ));
             }
-            for name in &stores {
-                if !self.committed.stores.contains_key(name) {
-                    return Err(IndexedDbError::NotFound(format!(
-                        "object store `{name}` was not found"
-                    )));
-                }
-            }
+            self.committed.check_stores(&stores)?;
             None
         };
         if mode == TransactionMode::ReadOnly {
@@ -482,28 +502,6 @@ impl Database {
             return Err(IndexedDbError::ReadOnly("transaction is readonly".into()));
         }
         Ok(())
-    }
-
-    fn store_id(
-        &self,
-        handle: TransactionHandle,
-        name: &crate::IndexedDbName,
-    ) -> Result<i64, IndexedDbError> {
-        let transaction = self.transaction(handle)?;
-        if transaction.mode != TransactionMode::VersionChange && !transaction.stores.contains(name)
-        {
-            return Err(IndexedDbError::InvalidState(format!(
-                "transaction does not cover object store `{name}`"
-            )));
-        }
-        self.connection
-            .query_row(
-                "SELECT store_id FROM object_stores WHERE name=?1",
-                [names::encode(name)?],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| IndexedDbError::NotFound(format!("object store `{name}` was not found")))
     }
 
     fn request<T>(

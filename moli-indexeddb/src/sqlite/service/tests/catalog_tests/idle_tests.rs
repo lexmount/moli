@@ -92,7 +92,11 @@ fn disk_reclaims_only_after_the_last_web_connection_and_transaction_finish() {
     seed(&client);
     let second = client.open_connection_for_test(Arc::new(|| {})).unwrap();
     let reader = second
-        .queue_transaction_start(&["a".into()], TransactionMode::ReadOnly, Arc::new(|| {}))
+        .queue_transaction_start(
+            &[store_by_name(second.client(), "a")],
+            TransactionMode::ReadOnly,
+            Arc::new(|| {}),
+        )
         .unwrap();
     start(&client, "a", TransactionMode::ReadOnly, &reader);
     close(&first).unwrap();
@@ -254,7 +258,7 @@ fn pending_inline_key_savepoint_prevents_idle_reclamation_without_a_web_connecti
         &client,
         Command::PrepareWrite {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             add_only: false,
         },
     )

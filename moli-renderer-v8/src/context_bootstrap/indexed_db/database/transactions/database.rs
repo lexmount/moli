@@ -138,13 +138,23 @@ fn create_regular_transaction<'s>(
     let client = indexed_db_database_sql_client(scope, database).ok_or_else(|| {
         IndexedDbError::InvalidState("IndexedDB connection is unavailable".into())
     })?;
+    let stores = store_names
+        .iter()
+        .map(|name| {
+            crate::context_bootstrap::indexed_db::indexed_db_database_store_metadata(
+                scope, database, name,
+            )
+            .map(|metadata| metadata.id())
+            .ok_or_else(|| IndexedDbError::NotFound("The object store was not found".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let transaction_handle = client.allocate_transaction_handle()?;
     let request = if let Some(connection) =
         crate::context_bootstrap::indexed_db::indexed_db_database_sql_connection(scope, database)
     {
-        connection.queue_transaction_start(store_names, mode, wake)?
+        connection.queue_transaction_start(&stores, mode, wake)?
     } else {
-        client.queue_transaction_start(handle, store_names, mode, wake)?
+        client.queue_transaction_start(handle, &stores, mode, wake)?
     };
     let Some(transaction) = create_transaction_object(scope, database, None, mode, store_names)
     else {

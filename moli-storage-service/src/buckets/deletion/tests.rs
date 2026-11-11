@@ -58,9 +58,11 @@ impl Fixture {
                 admission: None,
             },
         );
+        let sql_store_id = client.allocate_store_id().unwrap();
         execute(
             &client,
             Command::CreateStore {
+                store: sql_store_id,
                 transaction: TX,
                 name: "records".into(),
                 options: ObjectStoreOptions::default(),
@@ -70,7 +72,7 @@ impl Fixture {
             &client,
             Command::Write {
                 transaction: TX,
-                store: "records".into(),
+                store: sql_store_id,
                 key: Some(1.into()),
                 value: b"kept".to_vec().into(),
                 indexes: vec![],
@@ -177,10 +179,12 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
     fixture.revoke();
     let reply = fixture.dispatch();
     // The maintenance worker can wait for quota while the SQL lane still runs.
+    let sql_store_id =
+        client.committed().unwrap().stores[&moli_indexeddb::IndexedDbName::from("records")].id;
     let admission = client
         .queue_transaction_start(
             moli_indexeddb::DatabaseHandle::from_raw(7),
-            &["records".into()],
+            &[sql_store_id],
             TransactionMode::ReadOnly,
             Arc::new(|| {}),
         )
@@ -190,7 +194,7 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
         Command::Begin {
             transaction: TX,
             mode: TransactionMode::ReadOnly,
-            stores: BTreeSet::from(["records".into()]),
+            stores: BTreeSet::from([sql_store_id]),
             version: None,
             admission: Some(admission.handle().clone()),
         },
@@ -200,7 +204,7 @@ fn deletion_waits_for_quota_without_blocking_sql_and_releases_results_after_deli
             &client,
             Command::Count {
                 transaction: TX,
-                store: "records".into(),
+                store: sql_store_id,
                 source: Default::default(),
                 range: Default::default(),
             }

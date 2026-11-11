@@ -54,6 +54,7 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
         database
             .create_object_store(
                 TX,
+                database.allocate_store_id().unwrap(),
                 name,
                 ObjectStoreOptions {
                     auto_increment: true,
@@ -65,7 +66,8 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
             database
                 .create_index(
                     TX,
-                    name,
+                    database.lookup_store_id(name).unwrap(),
+                    database.allocate_index_id().unwrap(),
                     index,
                     IndexOptions {
                         key_path: KeyPath::String("label".into()),
@@ -78,14 +80,19 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
         database
             .write(
                 TX,
-                name,
+                database.lookup_store_id(name).unwrap(),
                 RecordWrite {
                     key: None,
                     value: vec![ordinal as u8].into(),
                     indexes: names
                         .iter()
-                        .map(|name| IndexKeys {
-                            name: name.clone(),
+                        .map(|index_name| IndexKeys {
+                            index: database
+                                .lookup_index_id(
+                                    database.lookup_store_id(name).unwrap(),
+                                    index_name,
+                                )
+                                .unwrap(),
                             keys: vec![(ordinal as i64).into()],
                         })
                         .collect(),
@@ -109,7 +116,11 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
         .begin(
             TX,
             TransactionMode::ReadOnly,
-            names.iter().cloned().collect(),
+            names
+                .iter()
+                .cloned()
+                .map(|name: crate::IndexedDbName| database.lookup_store_id(name).unwrap())
+                .collect(),
             None,
         )
         .unwrap();
@@ -118,9 +129,16 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
             let entries = database
                 .query(
                     TX,
-                    name,
+                    database.lookup_store_id(name).unwrap(),
                     &Query {
-                        source: QuerySource::Index(index.clone()),
+                        source: QuerySource::Index(
+                            database
+                                .lookup_index_id(
+                                    database.lookup_store_id(name).unwrap(),
+                                    index.clone(),
+                                )
+                                .unwrap(),
+                        ),
                         ..Default::default()
                     },
                 )
@@ -140,10 +158,21 @@ fn lossless_store_and_index_names_preserve_separate_records_across_disk_restart(
     for (ordinal, name) in names.iter().enumerate() {
         let temporary = format!("temporary-{ordinal}");
         database
-            .rename_object_store(TX, name, temporary.as_str())
+            .rename_object_store(
+                TX,
+                database.lookup_store_id(name).unwrap(),
+                temporary.as_str(),
+            )
             .unwrap();
         database
-            .rename_index(TX, temporary.as_str(), name, "temporary-index")
+            .rename_index(
+                TX,
+                database.lookup_store_id(temporary.as_str()).unwrap(),
+                database
+                    .lookup_index_id(database.lookup_store_id(temporary.as_str()).unwrap(), name)
+                    .unwrap(),
+                "temporary-index",
+            )
             .unwrap();
     }
     database.abort(TX).unwrap();
@@ -233,19 +262,22 @@ fn v2_name_migration_rolls_back_all_ddl_on_a_malformed_label_and_can_retry() {
     );
     assert_eq!(
         database.committed().stores[&IndexedDbName::from("legacy")].id,
-        3
+        StoreId::from_raw(3)
     );
     assert_eq!(
         database.committed().stores[&IndexedDbName::from("legacy")].indexes
             [&IndexedDbName::from("valid")]
             .id,
-        9
+        IndexId::from_raw(9)
     );
     database
         .begin(
             TX,
             TransactionMode::ReadWrite,
-            BTreeSet::from(["legacy".into()]),
+            (BTreeSet::from(["legacy".into()]))
+                .into_iter()
+                .map(|name: crate::IndexedDbName| database.lookup_store_id(name).unwrap())
+                .collect(),
             None,
         )
         .unwrap();
@@ -253,12 +285,14 @@ fn v2_name_migration_rolls_back_all_ddl_on_a_malformed_label_and_can_retry() {
         database
             .write(
                 TX,
-                "legacy",
+                database.lookup_store_id("legacy").unwrap(),
                 RecordWrite {
                     key: None,
                     value: b"kept".to_vec().into(),
                     indexes: vec![IndexKeys {
-                        name: "valid".into(),
+                        index: database
+                            .lookup_index_id(database.lookup_store_id("legacy").unwrap(), "valid")
+                            .unwrap(),
                         keys: vec![1.into()]
                     }],
                     add_only: true,

@@ -75,6 +75,7 @@ impl Service {
             identity,
             path,
             metadata,
+            schema_ids,
         } in headers
         {
             let mut registry = service.registry.lock();
@@ -96,7 +97,7 @@ impl Service {
                         mode: OpenMode::Existing,
                     },
                     Some(catalog.clone()),
-                    Some(metadata),
+                    Some((metadata, schema_ids)),
                     move |reply| {
                         let _ = sender.send(reply);
                     },
@@ -307,6 +308,7 @@ struct Header {
     identity: DatabaseIdentity,
     path: PathBuf,
     metadata: Arc<DatabaseMetadata>,
+    schema_ids: Arc<SchemaIds>,
 }
 
 fn inspect_header(
@@ -380,12 +382,14 @@ fn inspect_header(
     // Validate and detach the committed snapshot while this temporary probe is
     // open. Recovered owners start with no physical connection, even when the
     // entire profile is inspected before the first maintenance round.
-    let database = Database::open_shared(connection, Arc::new(identity.clone()))?;
+    let database = Database::open_shared(connection, Arc::new(identity.clone()), Arc::default())?;
     let metadata = database.committed().clone();
+    let schema_ids = database.schema_ids.clone();
     database.close()?;
     Ok(Some(Header {
         identity,
         path,
         metadata,
+        schema_ids,
     }))
 }

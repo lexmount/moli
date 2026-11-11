@@ -20,8 +20,9 @@ async fn idb_sqlite_small_write_shares_large_schema() {
     });
     for index in 0..10 {
         backend.execute(Command::CreateIndex {
+            index: backend.client.allocate_index_id().unwrap(),
             transaction,
-            store: "records".into(),
+            store: backend.store_id,
             name: format!("unused{index}").into(),
             options: IndexOptions {
                 key_path: KeyPath::String(format!("missing{index}{}", "x".repeat(8192))),

@@ -86,7 +86,11 @@ impl Entry {
             {
                 catalog.finish_preparation(path, &connection)?;
             }
-            Database::open_shared(connection, entry.identity.clone())
+            Database::open_shared(
+                connection,
+                entry.identity.clone(),
+                entry.state.schema_ids.clone(),
+            )
         })();
         match result {
             Ok(mut database) => {
@@ -189,7 +193,7 @@ impl Entry {
                         || !request.matches_key(&key.0, &key.1)
                         || request.mode() != mode
                         || request
-                            .store_names()
+                            .stores()
                             .into_iter()
                             .collect::<std::collections::BTreeSet<_>>()
                             != stores
@@ -227,50 +231,52 @@ impl Entry {
             }
             Command::CreateStore {
                 transaction,
+                store,
                 name,
                 options,
             } => database
-                .create_object_store(transaction, &name, options)
+                .create_object_store(transaction, store, &name, options)
                 .map(|_| CommandResult::Unit),
-            Command::DeleteStore { transaction, name } => database
-                .delete_object_store(transaction, &name)
+            Command::DeleteStore { transaction, store } => database
+                .delete_object_store(transaction, store)
                 .map(|_| CommandResult::Unit),
             Command::RenameStore {
                 transaction,
-                name,
+                store,
                 new_name,
             } => database
-                .rename_object_store(transaction, &name, &new_name)
+                .rename_object_store(transaction, store, &new_name)
                 .map(|_| CommandResult::Unit),
             Command::CreateIndex {
                 transaction,
                 store,
+                index,
                 name,
                 options,
             } => database
-                .create_index(transaction, &store, &name, options)
+                .create_index(transaction, store, index, &name, options)
                 .map(|_| CommandResult::Unit),
             Command::DeleteIndex {
                 transaction,
                 store,
-                name,
+                index,
             } => database
-                .delete_index(transaction, &store, &name)
+                .delete_index(transaction, store, index)
                 .map(|_| CommandResult::Unit),
             Command::RenameIndex {
                 transaction,
                 store,
-                name,
+                index,
                 new_name,
             } => database
-                .rename_index(transaction, &store, &name, &new_name)
+                .rename_index(transaction, store, index, &new_name)
                 .map(|_| CommandResult::Unit),
             Command::PrepareWrite {
                 transaction,
                 store,
                 add_only,
             } => database
-                .prepare_write(transaction, &store, None, add_only)
+                .prepare_write(transaction, store, None, add_only)
                 .map(CommandResult::Prepared),
             Command::Write {
                 transaction,
@@ -283,7 +289,7 @@ impl Entry {
             } => database
                 .write(
                     transaction,
-                    &store,
+                    store,
                     RecordWrite {
                         key,
                         value,
@@ -311,25 +317,25 @@ impl Entry {
             Command::BackfillIndex {
                 transaction,
                 store,
-                name,
+                index,
                 primary_key,
                 keys,
             } => database
-                .backfill_index_record(transaction, &store, &name, &primary_key, keys)
+                .backfill_index_record(transaction, store, index, &primary_key, keys)
                 .map(|_| CommandResult::Unit),
             Command::Query {
                 transaction,
                 store,
                 query,
             } => database
-                .query(transaction, &store, &query)
+                .query(transaction, store, &query)
                 .map(CommandResult::Records),
             Command::QueryPage {
                 transaction,
                 store,
                 query,
             } => database
-                .query_page(transaction, &store, &query)
+                .query_page(transaction, store, &query)
                 .map(CommandResult::RecordPage),
             Command::Count {
                 transaction,
@@ -337,14 +343,14 @@ impl Entry {
                 source,
                 range,
             } => database
-                .query_count(transaction, &store, &source, &range)
+                .query_count(transaction, store, &source, &range)
                 .map(CommandResult::Count),
             Command::Delete {
                 transaction,
                 store,
                 range,
             } => database
-                .delete_range(transaction, &store, &range)
+                .delete_range(transaction, store, &range)
                 .map(|_| CommandResult::Unit),
             Command::Commit { transaction, quota } => {
                 let result = database

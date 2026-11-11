@@ -823,6 +823,7 @@ fn utf16_database_name_quota_rollback_preserves_other_database_versions_and_usag
         client,
         Command::CreateStore {
             transaction: TX,
+            store: client.allocate_store_id().unwrap(),
             name: "new".into(),
             options: Default::default(),
         },

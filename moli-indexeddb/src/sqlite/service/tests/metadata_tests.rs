@@ -66,6 +66,7 @@ fn failed_schema_read_before_commit_rolls_back_and_allows_a_later_upgrade() {
             &client,
             Command::CreateStore {
                 transaction: TX,
+                store: client.allocate_store_id().unwrap(),
                 name: "new".into(),
                 options: Default::default(),
             },
@@ -168,7 +169,7 @@ fn retaining_old_snapshots_does_not_reject_new_commits() {
             &client,
             Command::Count {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: Default::default(),
                 range: Default::default(),
             }

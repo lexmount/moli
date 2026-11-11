@@ -82,9 +82,11 @@ impl Fixture {
                 admission: None,
             },
         );
+        let sql_store_id = client.allocate_store_id().unwrap();
         execute(
             &client,
             Command::CreateStore {
+                store: sql_store_id,
                 transaction: TX,
                 name: "records".into(),
                 options: ObjectStoreOptions::default(),
@@ -111,7 +113,7 @@ impl Fixture {
             &client,
             Command::Write {
                 transaction: TX,
-                store: "records".into(),
+                store: sql_store_id,
                 key: Some(1.into()),
                 value: b"kept".to_vec().into(),
                 indexes: vec![],
@@ -224,7 +226,9 @@ fn waiting_for_bucket_quota_leaves_the_database_worker_free() {
             &other,
             Command::Count {
                 transaction: TX,
-                store: "records".into(),
+                store: other.committed().unwrap().stores
+                    [&moli_indexeddb::IndexedDbName::from("records")]
+                    .id,
                 source: Default::default(),
                 range: Default::default(),
             }
@@ -294,7 +298,9 @@ fn aborting_during_quota_wait_prevents_a_delayed_commit_from_publishing_data() {
             &client,
             Command::Count {
                 transaction: TX,
-                store: "records".into(),
+                store: client.committed().unwrap().stores
+                    [&moli_indexeddb::IndexedDbName::from("records")]
+                    .id,
                 source: Default::default(),
                 range: Default::default(),
             }

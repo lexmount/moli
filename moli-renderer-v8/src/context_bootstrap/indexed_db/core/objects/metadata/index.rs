@@ -16,9 +16,12 @@ pub(in crate::context_bootstrap::indexed_db) fn set_database_index_metadata<'s>(
     database: v8::Local<'s, v8::Object>,
     store_name: &moli_indexeddb::IndexedDbName,
     info: &IndexInfo,
+    id: moli_indexeddb::sqlite::IndexId,
 ) -> Result<(), IndexedDbError> {
-    set_indexed_db_database_index_metadata(scope, database, store_name, info)?;
-    sync_indexed_db_store_handles(scope, database, store_name);
+    let store = indexed_db_database_store_metadata(scope, database, store_name)
+        .ok_or_else(|| IndexedDbError::InvalidState("The object store is unavailable".into()))?;
+    set_indexed_db_database_index_metadata(scope, database, store_name, info, id)?;
+    sync_indexed_db_store_handles(scope, database, store.id());
     Ok(())
 }
 
@@ -28,8 +31,13 @@ pub(in crate::context_bootstrap::indexed_db) fn remove_database_index_metadata<'
     store_name: &moli_indexeddb::IndexedDbName,
     index_name: &moli_indexeddb::IndexedDbName,
 ) -> Result<(), IndexedDbError> {
+    let store = indexed_db_database_store_metadata(scope, database, store_name)
+        .ok_or_else(|| IndexedDbError::InvalidState("The object store is unavailable".into()))?;
+    let index_id = store
+        .index_id(index_name)
+        .ok_or_else(|| IndexedDbError::InvalidState("The index is unavailable".into()))?;
     remove_indexed_db_database_index_metadata(scope, database, store_name, index_name)?;
-    mark_indexed_db_index_handles_deleted(scope, database, store_name, index_name);
-    sync_indexed_db_store_handles(scope, database, store_name);
+    mark_indexed_db_index_handles_deleted(scope, database, store.id(), index_id);
+    sync_indexed_db_store_handles(scope, database, store.id());
     Ok(())
 }

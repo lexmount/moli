@@ -98,15 +98,17 @@ fn command(
         | IndexedDbTransactionOperation::IndexGetKey { .. }
         | IndexedDbTransactionOperation::IndexGetAll(_)
         | IndexedDbTransactionOperation::IndexCount { .. } => {
-            let index = indexed_db_index_info(scope, operation.source).ok_or_else(|| {
-                IndexedDbError::InvalidState("IndexedDB index lost its metadata".into())
-            })?;
-            QuerySource::Index(index.name)
+            let index =
+                crate::context_bootstrap::indexed_db::indexed_db_index_id(scope, operation.source)
+                    .ok_or_else(|| {
+                        IndexedDbError::InvalidState("IndexedDB index lost its metadata".into())
+                    })?;
+            QuerySource::Index(index)
         }
         _ => QuerySource::ObjectStore,
     };
     let transaction = operation.handle;
-    let store = operation.store_name;
+    let store = operation.store;
     let (mut query, output) = match operation.kind {
         IndexedDbTransactionOperation::ObjectStoreGet { query }
         | IndexedDbTransactionOperation::IndexGet { query } => (

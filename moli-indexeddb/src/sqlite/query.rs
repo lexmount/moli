@@ -7,7 +7,7 @@ use crate::{CursorDirection, KeyRange, RecordSnapshot};
 pub enum QuerySource {
     #[default]
     ObjectStore,
-    Index(crate::IndexedDbName),
+    Index(IndexId),
 }
 
 #[derive(Debug, Clone)]
@@ -128,34 +128,34 @@ impl Database {
     fn selection(
         &self,
         transaction: TransactionHandle,
-        store_name: &crate::IndexedDbName,
+        store: StoreId,
         source: &QuerySource,
     ) -> Result<Selection, IndexedDbError> {
         self.ready(transaction)?;
-        let store = self.store_id(transaction, store_name)?;
+        let store = self.validate_store(transaction, store)?;
         match source {
             QuerySource::ObjectStore => Ok(Selection {
                 sql: " FROM records r WHERE r.store_id=?".into(),
-                parameters: vec![Value::Integer(store)],
+                parameters: vec![Value::Integer(store.into_raw())],
                 key: "r.key_sort",
                 primary: None,
                 index_unique: None,
             }),
-            QuerySource::Index(name) => {
+            QuerySource::Index(index) => {
                 let (id, unique): (i64, bool) = self
                     .connection
                     .query_row(
-                        "SELECT index_id, is_unique FROM indexes WHERE store_id=?1 AND name=?2",
-                        rusqlite::params![store, names::encode(name)?],
+                        "SELECT index_id, is_unique FROM indexes WHERE store_id=?1 AND index_id=?2",
+                        rusqlite::params![store, index],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .optional()?
                     .ok_or_else(|| {
-                        IndexedDbError::NotFound(format!("index `{name}` was not found"))
+                        IndexedDbError::NotFound(format!("index {index} was not found"))
                     })?;
                 Ok(Selection {
                     sql: " FROM index_entries e LEFT JOIN records r ON r.record_id=e.record_id AND r.key_sort=e.primary_key_sort AND r.store_id=? WHERE e.index_id=?".into(),
-                    parameters: vec![Value::Integer(store), Value::Integer(id)], key: "e.index_key_sort", primary: Some("e.primary_key_sort"), index_unique: Some(unique),
+                    parameters: vec![Value::Integer(store.into_raw()), Value::Integer(id)], key: "e.index_key_sort", primary: Some("e.primary_key_sort"), index_unique: Some(unique),
                 })
             }
         }
@@ -164,10 +164,10 @@ impl Database {
     fn compile_query(
         &self,
         transaction: TransactionHandle,
-        store_name: &crate::IndexedDbName,
+        store: StoreId,
         query: &Query,
     ) -> Result<Selection, IndexedDbError> {
-        let mut selection = self.selection(transaction, store_name, &query.source)?;
+        let mut selection = self.selection(transaction, store, &query.source)?;
         selection.range(&query.range)?;
         if let Some(seek) = &query.seek {
             selection.seek(seek, query.direction)?;
@@ -212,10 +212,10 @@ impl Database {
     pub fn query(
         &self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
         query: &Query,
     ) -> Result<Vec<RecordSnapshot>, IndexedDbError> {
-        self.read_query(transaction, &store_name.into(), query, false)
+        self.read_query(transaction, store, query, false)
             .map(|page| page.records)
     }
 
@@ -224,20 +224,20 @@ impl Database {
     pub fn query_page(
         &self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
         query: &Query,
     ) -> Result<RecordPage, IndexedDbError> {
-        self.read_query(transaction, &store_name.into(), query, true)
+        self.read_query(transaction, store, query, true)
     }
 
     fn read_query(
         &self,
         transaction: TransactionHandle,
-        store_name: &crate::IndexedDbName,
+        store: StoreId,
         query: &Query,
         paged: bool,
     ) -> Result<RecordPage, IndexedDbError> {
-        let mut selection = self.compile_query(transaction, store_name, query)?;
+        let mut selection = self.compile_query(transaction, store, query)?;
         let limit = if paged {
             query.limit.min(PAGE_RECORDS)
         } else {
@@ -354,13 +354,11 @@ impl Database {
     pub fn query_count(
         &self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
         source: &QuerySource,
         range: &KeyRange,
     ) -> Result<u64, IndexedDbError> {
-        let store_name = store_name.into();
-
-        let mut selection = self.selection(transaction, &store_name, source)?;
+        let mut selection = self.selection(transaction, store, source)?;
         selection.range(range)?;
         let count: i64 = self.connection.query_row(
             &format!("SELECT count(*){}", selection.sql),
@@ -373,13 +371,11 @@ impl Database {
     pub fn delete_range(
         &mut self,
         transaction: TransactionHandle,
-        store_name: impl Into<crate::IndexedDbName>,
+        store: StoreId,
         range: &KeyRange,
     ) -> Result<(), IndexedDbError> {
-        let store_name = store_name.into();
-
         self.writable(transaction)?;
-        let mut selection = self.selection(transaction, &store_name, &QuerySource::ObjectStore)?;
+        let mut selection = self.selection(transaction, store, &QuerySource::ObjectStore)?;
         selection.range(range)?;
         self.request(transaction, |owner| {
             owner.remove_selected_records(&selection.sql, &selection.parameters)

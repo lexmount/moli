@@ -10,7 +10,7 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
         v8::Local<'s, v8::Object>,
         v8::Local<'s, v8::Object>,
         TransactionHandle,
-        moli_indexeddb::IndexedDbName,
+        crate::context_bootstrap::indexed_db::IndexedDbObjectStoreMetadata,
     ),
     IndexedDbError,
 > {
@@ -37,6 +37,8 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
     }
     let database = indexed_db_object_store_database(scope, store).ok_or_else(invalid)?;
     let handle = transaction_handle_from_value(scope, transaction.into()).ok_or_else(invalid)?;
-    let store_name = indexed_db_object_store_name(scope, store).ok_or_else(invalid)?;
-    Ok((transaction, database, handle, store_name))
+    let metadata =
+        crate::context_bootstrap::indexed_db::indexed_db_object_store_metadata(scope, store)
+            .ok_or_else(invalid)?;
+    Ok((transaction, database, handle, metadata))
 }

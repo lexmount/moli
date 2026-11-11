@@ -323,10 +323,10 @@ impl Database {
         Ok(())
     }
 
-    pub(super) fn remove_store_records(&self, store: i64) -> Result<(), IndexedDbError> {
+    pub(super) fn remove_store_records(&self, store: StoreId) -> Result<(), IndexedDbError> {
         self.remove_selected_records(
             " FROM records r WHERE r.store_id=?",
-            &[rusqlite::types::Value::Integer(store)],
+            &[rusqlite::types::Value::Integer(store.into_raw())],
         )
     }
 

@@ -182,7 +182,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                 snapshot
                     .stores
                     .values()
-                    .find(|metadata| Rc::ptr_eq(&metadata.identity, &store.metadata.identity))
+                    .find(|metadata| metadata.id == store.metadata.id)
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
@@ -226,7 +226,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
                 index.info = metadata
                     .indexes
                     .values()
-                    .find(|candidate| Rc::ptr_eq(&candidate.identity, &index.identity))
+                    .find(|candidate| candidate.id == index.schema_id)
                     .expect("existing index has upgrade snapshot")
                     .info
                     .clone();
@@ -248,9 +248,16 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
 pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
-    store_name: &moli_indexeddb::IndexedDbName,
+    store_id: StoreId,
 ) {
-    let metadata = indexed_db_database_store_metadata(scope, database, store_name);
+    let metadata = indexed_db_database_mirror(scope, database).and_then(|mirror| {
+        mirror.borrow().metadata.as_ref().and_then(|stores| {
+            stores
+                .values()
+                .find(|metadata| metadata.id == store_id)
+                .cloned()
+        })
+    });
     let transaction = object_property_as_object(
         scope,
         database,
@@ -265,7 +272,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
         {
             let mut store = store.borrow_mut();
             if store.deleted
-                || store.name() != store_name
+                || store.metadata.id != store_id
                 || store.database.to_local(scope) != Some(database)
                 || transaction.is_some_and(|transaction| {
                     store.transaction.to_local(scope) != Some(transaction)
@@ -288,8 +295,8 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
 pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_deleted(
     scope: &mut v8::PinScope<'_, '_>,
     database: v8::Local<'_, v8::Object>,
-    store_name: &moli_indexeddb::IndexedDbName,
-    index_name: &moli_indexeddb::IndexedDbName,
+    store_id: StoreId,
+    index_id: IndexId,
 ) {
     for table in indexed_db_handle_tables(scope, database) {
         let indexes = table
@@ -299,7 +306,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             .filter_map(|(id, index)| {
                 let index = index.upgrade()?;
                 let index = index.borrow();
-                if &index.info.name != index_name {
+                if index.schema_id != index_id {
                     return None;
                 }
                 let store = index.object_store.to_local(scope)?;
@@ -308,7 +315,7 @@ pub(in crate::context_bootstrap::indexed_db) fn mark_indexed_db_index_handles_de
             .collect::<Vec<_>>();
         for (id, store) in indexes {
             if !indexed_db_object_store_is_deleted(scope, store)
-                && indexed_db_object_store_name(scope, store).as_ref() == Some(store_name)
+                && indexed_db_object_store_id(scope, store) == Some(store_id)
                 && indexed_db_object_store_database(scope, store) == Some(database)
                 && let Some(index) = table
                     .borrow()

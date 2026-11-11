@@ -76,7 +76,7 @@ fn crash_child(root: PathBuf, case: &str) {
                             &client,
                             Command::PrepareWrite {
                                 transaction: TX,
-                                store: "a".into(),
+                                store: store_by_name(&client, "a"),
                                 add_only: false,
                             },
                         )
@@ -101,6 +101,7 @@ fn crash_child(root: PathBuf, case: &str) {
                     &client,
                     Command::CreateStore {
                         transaction: TX,
+                        store: client.allocate_store_id().unwrap(),
                         name: "uncommitted".into(),
                         options: ObjectStoreOptions::default(),
                     },
@@ -244,7 +245,7 @@ fn catalog_recovers_after_forced_process_exit() {
                 &client,
                 Command::Write {
                     transaction: TX,
-                    store: "a".into(),
+                    store: store_by_name(&client, "a"),
                     key: None,
                     value: b"next".to_vec().into(),
                     indexes: vec![],

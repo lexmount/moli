@@ -45,6 +45,7 @@ fn create_store(database: &mut Database, auto_increment: bool) {
     database
         .create_object_store(
             TX,
+            database.allocate_store_id().unwrap(),
             "a",
             ObjectStoreOptions {
                 auto_increment,
@@ -102,7 +103,7 @@ fn all_key_types_survive_sqlite_reopen_and_remain_distinct() {
     let rows = database
         .query(
             TX,
-            "a",
+            database.lookup_store_id("a").unwrap(),
             &Query {
                 limit: 32,
                 keys_only: true,
@@ -124,13 +125,17 @@ fn all_key_types_survive_sqlite_reopen_and_remain_distinct() {
     assert_eq!(zero.value().to_bits(), (-0.0_f64).to_bits());
     for (index, key) in keys.iter().enumerate() {
         assert_eq!(
-            database.get(TX, "a", key).unwrap().unwrap().wire_bytes(),
+            database
+                .get(TX, database.lookup_store_id("a").unwrap(), key)
+                .unwrap()
+                .unwrap()
+                .wire_bytes(),
             &[index as u8]
         );
     }
     assert_eq!(
         database
-            .get(TX, "a", &Key::from(0))
+            .get(TX, database.lookup_store_id("a").unwrap(), &Key::from(0))
             .unwrap()
             .unwrap()
             .wire_bytes(),
@@ -154,7 +159,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
             for quota in [None, Some(u64::MAX)] {
                 let outcome = database.write(
                     TX,
-                    "a",
+                    database.lookup_store_id("a").unwrap(),
                     RecordWrite {
                         key: Some(invalid.clone()),
                         value: vec![1].into(),
@@ -167,7 +172,12 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
                     matches!(outcome, Err(IndexedDbError::Data(_))),
                     "{outcome:?}"
                 );
-                assert_eq!(database.count(TX, "a").unwrap(), 0);
+                assert_eq!(
+                    database
+                        .count(TX, database.lookup_store_id("a").unwrap())
+                        .unwrap(),
+                    0
+                );
             }
         }
         assert_eq!(
@@ -189,7 +199,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
         let rows = database
             .query(
                 TX,
-                "a",
+                database.lookup_store_id("a").unwrap(),
                 &Query {
                     limit: 3,
                     keys_only: true,
@@ -203,7 +213,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
         );
         assert_eq!(
             database
-                .get(TX, "a", &Key::from(1))
+                .get(TX, database.lookup_store_id("a").unwrap(), &Key::from(1))
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),
@@ -211,7 +221,7 @@ fn overdeep_keys_do_not_poison_sqlite_requests_generator_or_reopen() {
         );
         assert_eq!(
             database
-                .get(TX, "a", &Key::from(2))
+                .get(TX, database.lookup_store_id("a").unwrap(), &Key::from(2))
                 .unwrap()
                 .unwrap()
                 .wire_bytes(),

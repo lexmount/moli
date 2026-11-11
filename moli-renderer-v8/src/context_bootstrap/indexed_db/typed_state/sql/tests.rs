@@ -15,6 +15,7 @@ use std::{cell::Cell, sync::mpsc, time::Duration};
 const TX: TransactionHandle = TransactionHandle::from_raw(19);
 
 struct Backend {
+    store_id: moli_indexeddb::sqlite::StoreId,
     client: DatabaseClient,
     _service: ServiceClient,
     connection: DatabaseConnection,
@@ -30,6 +31,21 @@ impl Drop for Backend {
 }
 
 impl Backend {
+    fn index_id(
+        &self,
+        name: impl Into<moli_indexeddb::IndexedDbName>,
+    ) -> moli_indexeddb::sqlite::IndexId {
+        self.client
+            .committed()
+            .unwrap()
+            .stores
+            .values()
+            .find(|store| store.id == self.store_id)
+            .unwrap()
+            .indexes[&name.into()]
+            .id
+    }
+
     fn new() -> Self {
         Self::with_store(
             ObjectStoreOptions::default(),
@@ -101,7 +117,9 @@ impl Backend {
         let CommandResult::Connection(connection) = receive(&receiver).result.unwrap() else {
             panic!("expected connection receipt");
         };
+        let store_id = client.allocate_store_id().unwrap();
         let backend = Self {
+            store_id,
             client,
             _service: service_client,
             connection,
@@ -118,14 +136,16 @@ impl Backend {
             .unwrap();
         receive(&receiver).result.unwrap();
         backend.execute(Command::CreateStore {
+            store: backend.store_id,
             transaction: TX,
             name: "records".into(),
             options,
         });
         for index in indexes {
             backend.execute(Command::CreateIndex {
+                index: backend.client.allocate_index_id().unwrap(),
                 transaction: TX,
-                store: "records".into(),
+                store: backend.store_id,
                 name: index.name,
                 options: IndexOptions {
                     key_path: index.key_path,
@@ -153,7 +173,7 @@ impl Backend {
     }
 
     fn begin(&self, transaction: TransactionHandle) {
-        let stores = vec![moli_indexeddb::IndexedDbName::from("records")];
+        let stores = vec![self.store_id];
         let admission = self
             .connection
             .queue_transaction_start(&stores, TransactionMode::ReadWrite, Arc::new(|| {}))
@@ -171,7 +191,7 @@ impl Backend {
     fn count(&self) -> Command {
         Command::Count {
             transaction: TX,
-            store: "records".into(),
+            store: self.store_id,
             source: Default::default(),
             range: Default::default(),
         }
@@ -192,11 +212,11 @@ impl Backend {
     fn put(&self, value: IndexedDbValue) {
         self.execute(Command::Write {
             transaction: TX,
-            store: "records".into(),
+            store: self.store_id,
             key: Some(Key::from("primary")),
             value,
             indexes: vec![IndexKeys {
-                name: "group".into(),
+                index: self.index_id("group"),
                 keys: vec![Key::from("group-key")],
             }],
             add_only: false,
@@ -1211,9 +1231,9 @@ fn inline_sql_writes_keep_their_round_trips_in_fifo_and_index_the_snapshot() {
     ] {
         let CommandResult::Records(records) = backend.execute(Command::Query {
             transaction: TX,
-            store: "records".into(),
+            store: backend.store_id,
             query: moli_indexeddb::sqlite::Query {
-                source: moli_indexeddb::sqlite::QuerySource::Index(name.into()),
+                source: moli_indexeddb::sqlite::QuerySource::Index(backend.index_id(name)),
                 keys_only: true,
                 limit: u32::MAX,
                 ..Default::default()
@@ -1531,7 +1551,7 @@ fn discarded_inline_prepare_aborts_native_transaction() {
     assert!(matches!(
         backend.execute(Command::Count {
             transaction: next,
-            store: "records".into(),
+            store: backend.store_id,
             source: Default::default(),
             range: Default::default()
         }),
@@ -1541,7 +1561,7 @@ fn discarded_inline_prepare_aborts_native_transaction() {
     let value = serialize_js_value(scope, value).unwrap();
     let CommandResult::Key(key) = backend.execute(Command::Write {
         transaction: next,
-        store: "records".into(),
+        store: backend.store_id,
         key: None,
         value,
         indexes: Vec::new(),
@@ -1622,7 +1642,7 @@ fn discarded_schema_preparation_error_releases_its_sql_owner() {
     assert!(matches!(
         backend.execute(Command::Count {
             transaction: next,
-            store: "records".into(),
+            store: backend.store_id,
             source: Default::default(),
             range: Default::default(),
         }),
@@ -1679,7 +1699,7 @@ fn schema_preparation_error_waits_for_the_whole_preceding_inline_write() {
     assert!(matches!(
         backend.execute(Command::Count {
             transaction: next,
-            store: "records".into(),
+            store: backend.store_id,
             source: Default::default(),
             range: Default::default(),
         }),
@@ -1756,7 +1776,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     assert!(matches!(
         backend.execute(Command::Count {
             transaction: next,
-            store: "records".into(),
+            store: backend.store_id,
             source: Default::default(),
             range: Default::default()
         }),
@@ -1788,7 +1808,7 @@ fn sql_collection_batches_keep_one_operation_in_flight_until_the_whole_result_is
     for (key, value) in [(1, large), (2, small)] {
         backend.execute(Command::Write {
             transaction: TX,
-            store: "records".into(),
+            store: backend.store_id,
             key: Some(Key::from(key as i64)),
             value,
             indexes: Vec::new(),

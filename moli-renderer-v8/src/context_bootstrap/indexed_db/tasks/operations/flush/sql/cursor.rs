@@ -1,6 +1,6 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    IndexedDbCursorIteration, IndexedDbCursorSource, SqlCursorQuery, attach_indexed_db_sql_cursor,
+    IndexedDbCursorIteration, SqlCursorQuery, attach_indexed_db_sql_cursor,
     indexed_db_cursor_state, stage_indexed_db_sql_cursor_page, store_cursor_iteration_result,
     typed_state::sql::sql_transaction_cancellation,
 };
@@ -19,16 +19,9 @@ pub(super) fn prepare<'s>(
 ) -> Result<IndexedDbTransactionOperation, IndexedDbError> {
     let (descriptor, query, target) = match operation.kind {
         IndexedDbTransactionOperation::OpenCursor(input) => {
-            let source = match input.source {
-                IndexedDbCursorSource::ObjectStore => QuerySource::ObjectStore,
-                IndexedDbCursorSource::Index => {
-                    let index =
-                        indexed_db_index_info(scope, operation.source).ok_or_else(|| {
-                            IndexedDbError::InvalidState("SQL cursor lost its index".into())
-                        })?;
-                    QuerySource::Index(index.name)
-                }
-            };
+            let source =
+                crate::context_bootstrap::indexed_db::indexed_db_index_id(scope, operation.source)
+                    .map_or(QuerySource::ObjectStore, QuerySource::Index);
             let query = Query {
                 blob_references: true,
                 source,
@@ -63,18 +56,6 @@ pub(super) fn prepare<'s>(
                     IndexedDbError::InvalidState("SQL cursor has no current record".into())
                 })?;
             let mut query = page.query.query.clone();
-            // The source handle survives renames. Capture its current label now,
-            // before later schema operations can enter the same FIFO.
-            if matches!(query.source, QuerySource::Index(_)) {
-                let source = crate::context_bootstrap::indexed_db::cursor_source(scope, local)
-                    .ok_or_else(|| {
-                        IndexedDbError::InvalidState("SQL cursor lost its source".into())
-                    })?;
-                let index = indexed_db_index_info(scope, source).ok_or_else(|| {
-                    IndexedDbError::InvalidState("SQL cursor lost its index".into())
-                })?;
-                query.source = QuerySource::Index(index.name);
-            }
             let source_is_index = matches!(query.source, QuerySource::Index(_));
             let default_seek = || Seek {
                 key: current.key.clone(),
@@ -110,7 +91,7 @@ pub(super) fn prepare<'s>(
     };
     let command = Command::Query {
         transaction: operation.handle,
-        store: operation.store_name,
+        store: operation.store,
         query,
     };
     let client = client.clone();

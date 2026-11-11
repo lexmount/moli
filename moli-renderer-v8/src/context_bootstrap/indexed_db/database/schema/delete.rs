@@ -34,21 +34,24 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_database_delete_object_store
     let Some(client) = indexed_db_request_sql_client(scope, transaction) else {
         return;
     };
-    let result = if object_store_info_from_database_metadata(scope, database, &name).is_none() {
-        Err(moli_indexeddb::IndexedDbError::NotFound(
-            "The object store was not found".into(),
-        ))
-    } else {
+    let metadata = crate::context_bootstrap::indexed_db::indexed_db_database_store_metadata(
+        scope, database, &name,
+    );
+    let result = if let Some(metadata) = metadata {
         schedule_schema_operation(
             scope,
             transaction,
             client,
             Command::DeleteStore {
                 transaction: handle,
-                name: name.clone(),
+                store: metadata.id(),
             },
             None,
         )
+    } else {
+        Err(moli_indexeddb::IndexedDbError::NotFound(
+            "The object store was not found".into(),
+        ))
     };
     match result {
         Ok(()) => {

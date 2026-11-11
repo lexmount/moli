@@ -295,10 +295,10 @@ impl DatabaseConnection {
 
     pub fn queue_transaction_start(
         &self,
-        stores: &[crate::IndexedDbName],
+        stores: &[StoreId],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
-    ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
+    ) -> Result<crate::TransactionRequestLease<StoreId>, IndexedDbError> {
         let _gate = self.0.client.state.admission_gate.lock();
         if self.is_closed() {
             return Err(IndexedDbError::InvalidState(

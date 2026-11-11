@@ -18,7 +18,7 @@ fn put_blob(client: &DatabaseClient, bytes: Vec<u8>) {
         client,
         Command::Write {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(client, "a"),
             key: Some(1.into()),
             value: blob_value(bytes),
             indexes: Vec::new(),
@@ -34,7 +34,7 @@ fn read_blob(client: &DatabaseClient) -> BlobData {
         client,
         Command::Query {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(client, "a"),
             query: Query {
                 blob_references: true,
                 ..Default::default()
@@ -92,7 +92,7 @@ fn lazy_blob_preservation_error_rolls_back_delete_and_allows_the_reference_to_re
         &client,
         Command::Delete {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             range: Default::default(),
         },
     );
@@ -105,9 +105,9 @@ fn lazy_blob_preservation_error_rolls_back_delete_and_allows_the_reference_to_re
             &client,
             Command::Count {
                 transaction: TX,
-                store: "a".into(),
+                store: store_by_name(&client, "a"),
                 source: Default::default(),
-                range: Default::default()
+                range: Default::default(),
             }
         )
         .unwrap(),
@@ -119,7 +119,7 @@ fn lazy_blob_preservation_error_rolls_back_delete_and_allows_the_reference_to_re
         &client,
         Command::Delete {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             range: Default::default(),
         },
     )
@@ -198,7 +198,7 @@ fn lazy_blob_preserves_old_content_on_delete_and_owns_new_uncommitted_content_on
         &client,
         Command::Delete {
             transaction: TX,
-            store: "a".into(),
+            store: store_by_name(&client, "a"),
             range: Default::default(),
         },
     )

@@ -33,7 +33,8 @@ use moli_sqlite::{ConnectionOptions, OpenMode, Runtime, RuntimeError, RuntimeHan
 use parking_lot::{Mutex, RwLock};
 
 use super::*;
-use crate::{RecordSnapshot, TransactionRequestHandle};
+use crate::RecordSnapshot;
+type TransactionRequestHandle = crate::TransactionRequestHandle<StoreId>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServiceConfig {
@@ -111,6 +112,7 @@ struct Published {
     deleted: AtomicBool,
     failure: Mutex<Option<IndexedDbError>>,
     next_transaction: AtomicU64,
+    schema_ids: Arc<SchemaIds>,
     /// Orders admission registration against retirement, without locking SQL.
     admission_gate: Mutex<()>,
     metadata: RwLock<Option<Arc<DatabaseMetadata>>>,
@@ -125,7 +127,7 @@ pub struct DatabaseClient {
     location: Location,
     state: Arc<Published>,
     owner: Arc<Owner>,
-    admissions: Arc<crate::TransactionRequestQueues>,
+    admissions: Arc<crate::TransactionRequestQueues<StoreId>>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     next_connection: Arc<AtomicU64>,
 }
@@ -139,7 +141,7 @@ struct Entry {
     initialized: bool,
     failure: Option<IndexedDbError>,
     transactions: BTreeMap<TransactionHandle, StartedTransaction>,
-    admissions: Arc<crate::TransactionRequestQueues>,
+    admissions: Arc<crate::TransactionRequestQueues<StoreId>>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     prepared: bool,
     idle_since: Option<Instant>,
@@ -224,7 +226,11 @@ impl Entry {
                 let reopened = moli_sqlite::open_disk(path, OpenMode::Existing, config.connection)
                     .map_err(|error| IndexedDbError::Io(error.to_string()))
                     .and_then(|connection| {
-                        Database::open_shared(connection, self.identity.clone())
+                        Database::open_shared(
+                            connection,
+                            self.identity.clone(),
+                            self.state.schema_ids.clone(),
+                        )
                     });
                 match reopened {
                     Ok(database) => self.database = Some(database),
@@ -279,7 +285,7 @@ pub struct ServiceClient {
     runtime: RuntimeHandle,
     registry: Arc<Mutex<Registry>>,
     config: ServiceConfig,
-    admissions: Arc<crate::TransactionRequestQueues>,
+    admissions: Arc<crate::TransactionRequestQueues<StoreId>>,
     catalog: Option<Arc<catalog::DiskCatalog>>,
     next_connection: Arc<AtomicU64>,
     connection_requests: Arc<crate::ConnectionRequestQueues>,
@@ -388,7 +394,7 @@ impl ServiceClient {
         generation: [u8; 16],
         location: Location,
         catalog: Option<Arc<catalog::DiskCatalog>>,
-        recovered: Option<Arc<DatabaseMetadata>>,
+        recovered: Option<(Arc<DatabaseMetadata>, Arc<SchemaIds>)>,
         completion: impl FnOnce(Completion) + Send + 'static,
     ) -> Result<DatabaseClient, DispatchError> {
         if let Location::Disk { path, .. } = &location && registry.entries.iter().any(|(other_key, client)| other_key != &key && matches!(&client.location, Location::Disk { path: other, .. } if other == path)) { return Err(DispatchError::IdentityConflict); }
@@ -405,14 +411,16 @@ impl ServiceClient {
         let request_owner =
             connections::request_owner_key(&key.0).map_err(DispatchError::Storage)?;
         let initialized = recovered.is_some();
-        let previous = recovered.or_else(|| {
-            registry
-                .entries
-                .get(&key)
-                .and_then(|client| client.committed())
-        });
+        let (previous, schema_ids) = match recovered {
+            Some((metadata, schema_ids)) => (Some(metadata), schema_ids),
+            None => registry.entries.get(&key).map_or_else(
+                || (None, Arc::default()),
+                |client| (client.committed(), client.state.schema_ids.clone()),
+            ),
+        };
         let state = Arc::new(Published {
             metadata: RwLock::new(previous),
+            schema_ids,
             ..Default::default()
         });
         let owner = Owner::start(
@@ -551,13 +559,31 @@ impl DatabaseClient {
             .map_err(|_| IndexedDbError::Resource("SQL transaction handles exhausted".into()))
     }
 
+    pub fn allocate_store_id(&self) -> Result<StoreId, IndexedDbError> {
+        if self.is_closed() {
+            return Err(IndexedDbError::InvalidState(
+                "SQL database is closed".into(),
+            ));
+        }
+        self.state.schema_ids.store()
+    }
+
+    pub fn allocate_index_id(&self) -> Result<IndexId, IndexedDbError> {
+        if self.is_closed() {
+            return Err(IndexedDbError::InvalidState(
+                "SQL database is closed".into(),
+            ));
+        }
+        self.state.schema_ids.index()
+    }
+
     pub fn queue_transaction_start(
         &self,
         connection: crate::DatabaseHandle,
-        stores: &[crate::IndexedDbName],
+        stores: &[StoreId],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
-    ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
+    ) -> Result<crate::TransactionRequestLease<StoreId>, IndexedDbError> {
         let _gate = self.state.admission_gate.lock();
         self.queue_transaction_start_locked(connection, stores, mode, wake)
     }
@@ -565,10 +591,10 @@ impl DatabaseClient {
     fn queue_transaction_start_locked(
         &self,
         connection: crate::DatabaseHandle,
-        stores: &[crate::IndexedDbName],
+        stores: &[StoreId],
         mode: TransactionMode,
         wake: crate::TransactionRequestWake,
-    ) -> Result<crate::TransactionRequestLease, IndexedDbError> {
+    ) -> Result<crate::TransactionRequestLease<StoreId>, IndexedDbError> {
         if self.is_closed() || mode == TransactionMode::VersionChange || stores.is_empty() {
             return Err(IndexedDbError::InvalidState(
                 "regular transaction requires a live database and nonempty scope".into(),
@@ -578,20 +604,11 @@ impl DatabaseClient {
             .committed()
             .filter(|metadata| metadata.version != 0)
             .ok_or_else(|| IndexedDbError::InvalidState("database is not initialized".into()))?;
-        for name in stores {
-            if !metadata.stores.contains_key(name) {
-                return Err(IndexedDbError::NotFound(format!(
-                    "object store `{name}` was not found"
-                )));
-            }
-        }
-        Ok(self.admissions.enqueue(
-            queue_key(self.id),
-            connection,
-            stores.iter().cloned().collect(),
-            mode,
-            wake,
-        ))
+        let stores = stores.iter().copied().collect::<BTreeSet<_>>();
+        metadata.check_stores(&stores)?;
+        Ok(self
+            .admissions
+            .enqueue(queue_key(self.id), connection, stores, mode, wake))
     }
     pub fn id(&self) -> DatabaseId {
         self.id
