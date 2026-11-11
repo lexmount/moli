@@ -106,15 +106,6 @@ impl FetchCspRedirectState {
         Self(policy.has_policies().then(|| Arc::new(Mutex::new(None))))
     }
 
-    pub(crate) fn record_checked_url(&self, url: &Url, blocked: bool) {
-        if let Some(checked) = &self.0 {
-            *checked.lock() = Some(CheckedCspRedirect {
-                url: url.clone(),
-                blocked,
-            });
-        }
-    }
-
     pub(crate) fn was_checked(&self, url: &Url) -> bool {
         self.0.as_ref().is_some_and(|checked| {
             checked
