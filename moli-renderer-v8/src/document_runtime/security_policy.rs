@@ -161,7 +161,10 @@ impl DocumentPolicyContainer {
         final_url: &Url,
     ) -> Self {
         let response_content_security_policies =
-            response_content_security_policies_from_headers(headers);
+            response_content_security_policies_from_headers(headers)
+                .into_iter()
+                .map(|policy| policy.with_self_origin(final_url))
+                .collect::<Vec<_>>();
         let sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
             &response_content_security_policies,
         );
@@ -184,7 +187,10 @@ impl DocumentPolicyContainer {
             sandbox,
             response_content_security_policies,
             response_content_security_report_only_policies:
-                response_content_security_report_only_policies_from_headers(headers),
+                response_content_security_report_only_policies_from_headers(headers)
+                    .into_iter()
+                    .map(|policy| policy.with_self_origin(final_url))
+                    .collect(),
             content_security_reporting_endpoints:
                 crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
                     headers,
@@ -598,8 +604,11 @@ impl DocumentRuntime {
 
     #[cfg(test)]
     pub(crate) fn set_response_content_security_policies(&mut self, policies: &[String]) {
-        self.policy_container.response_content_security_policies =
-            policies.iter().cloned().map(Into::into).collect();
+        self.policy_container.response_content_security_policies = policies
+            .iter()
+            .cloned()
+            .map(|policy| ContentSecurityPolicy::from(policy).with_self_origin(self.document_url()))
+            .collect();
         self.policy_container.sandbox =
             DocumentSandboxPolicy::from_response_content_security_policies(
                 &self.policy_container.response_content_security_policies,
@@ -621,6 +630,7 @@ impl DocumentRuntime {
             .cloned()
             .map(|policy| {
                 ContentSecurityPolicy::from_header(policy, ContentSecurityPolicyDisposition::Report)
+                    .with_self_origin(self.document_url())
             })
             .collect();
     }

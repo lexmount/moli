@@ -13,6 +13,63 @@ fn request_url(raw: &str) -> Url {
     Url::parse(raw).unwrap()
 }
 
+#[test]
+fn inherited_policy_self_origin_is_independent_of_document_url() {
+    let policy =
+        ContentSecurityPolicy::from("connect-src 'self'").with_self_origin(&protected_url());
+    for document_url in [
+        "about:blank",
+        "about:srcdoc",
+        "https://different.test/document",
+    ] {
+        let document_url = Url::parse(document_url).unwrap();
+        assert!(content_security_policy_allows_url(
+            std::slice::from_ref(&policy),
+            &document_url,
+            &request_url("wss://app.test/socket"),
+            ContentSecurityPolicyResourceKind::DocumentConnect,
+        ));
+        let violation = content_security_policy_url_violation_with_redirect_status(
+            std::slice::from_ref(&policy),
+            &document_url,
+            &request_url("wss://different.test/socket"),
+            ContentSecurityPolicyResourceKind::DocumentConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+        )
+        .expect("a different origin must still violate the inherited self policy");
+        assert_eq!(violation.document_uri, csp_url_for_report(&document_url));
+    }
+}
+
+#[test]
+fn cloned_policies_keep_independent_self_origins() {
+    let policy =
+        ContentSecurityPolicy::from("connect-src 'self'").with_self_origin(&protected_url());
+    let other = policy
+        .clone()
+        .with_self_origin(&request_url("https://other.test/path"));
+    let document_url = request_url("about:srcdoc");
+    let target = request_url("wss://app.test/socket");
+    assert!(content_security_policy_allows_url(
+        std::slice::from_ref(&policy),
+        &document_url,
+        &target,
+        ContentSecurityPolicyResourceKind::DocumentConnect,
+    ));
+    assert!(!content_security_policy_allows_url(
+        std::slice::from_ref(&other),
+        &document_url,
+        &target,
+        ContentSecurityPolicyResourceKind::DocumentConnect,
+    ));
+    assert!(!content_security_policy_allows_url(
+        &[policy, other],
+        &document_url,
+        &target,
+        ContentSecurityPolicyResourceKind::DocumentConnect,
+    ));
+}
+
 fn allowed(policy: &str, kind: ContentSecurityPolicyResourceKind, request: &str) -> bool {
     content_security_policy_allows_url(
         &[policy.to_owned().into()],

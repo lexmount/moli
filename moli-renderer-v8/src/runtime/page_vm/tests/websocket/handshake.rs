@@ -1,6 +1,187 @@
 use super::*;
 
 #[tokio::test]
+async fn websocket_sandbox_srcdoc_inherits_csp_self_origin_with_opaque_handshake_origin() {
+    run_page_vm_async_test(async move {
+        for constructor in ["WebSocket", "WebSocketStream"] {
+            for change_base in [false, true] {
+                for in_popup in [false, true] {
+                    let (url, headers_rx, server) = spawn_tls_header_capture_websocket_server().await;
+                    let mut document_url = moli_websocket::websocket_cookie_url(&Url::parse(&url).unwrap());
+                    document_url.set_path("/app/page.html");
+                    let url_literal = serde_json::to_string(&url).unwrap();
+                    let child_script = format!(
+                        r#"
+                        const reportWindow = top.opener || top;
+                        addEventListener('securitypolicyviolation', event => {{
+                            reportWindow.postMessage({{kind: 'violation', directive: event.effectiveDirective}}, '*');
+                        }});
+                        if ({change_base}) {{
+                            const base = document.createElement('base');
+                            base.href = 'https://different-origin.test/';
+                            document.head.appendChild(base);
+                        }}
+                        try {{
+                            const socket = new {constructor}({url_literal});
+                            const opened = () => reportWindow.postMessage({{
+                                kind: 'result', value: document.URL + '|opened'
+                            }}, '*');
+                            if (socket.opened) {{
+                                socket.opened.then(opened, error => reportWindow.postMessage({{
+                                    kind: 'result', value: 'rejected:' + error.name
+                                }}, '*'));
+                            }} else {{
+                                socket.onopen = opened;
+                                socket.onerror = () => reportWindow.postMessage({{
+                                    kind: 'result', value: 'error'
+                                }}, '*');
+                            }}
+                        }} catch (error) {{
+                            reportWindow.postMessage({{kind: 'result', value: error.name}}, '*');
+                        }}
+                        "#,
+                    );
+                    let markup = serde_json::to_string(&format!("<script>{child_script}</script>"))
+                        .unwrap();
+                    let mut config = FetchConfig::default();
+                    config.set_tls_verify_host(false);
+                    let loader = crate::network::ResourceRequestClient::new(&config).unwrap();
+                    let policy_container = crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                        &[("Content-Security-Policy".to_owned(), b"connect-src 'self'".to_vec())],
+                        &document_url,
+                    );
+                    let mut page_vm = test_page_vm_with_loader_and_document_url(
+                        &loader, Vec::new(), document_url.clone(),
+                    );
+                    page_vm.vm_mut().set_main_navigation_policy_container(policy_container);
+                    page_vm.retain_standalone_request_client_owner_for_test(loader);
+                    let local_executor = page_vm.local_executor.clone();
+                    let headers = local_executor.run(async move {
+                        page_vm.vm_mut().eval(
+                            r#"
+                            globalThis.__sandboxWebSocketResult = 'pending';
+                            globalThis.__sandboxWebSocketViolations = [];
+                            addEventListener('message', event => {
+                                if (event.data.kind === 'result') {
+                                    __sandboxWebSocketResult = event.data.value;
+                                } else if (event.data.kind === 'violation') {
+                                    __sandboxWebSocketViolations.push(event.data.directive);
+                                }
+                            });
+                            "#,
+                        )?;
+                        let create_frame = format!(
+                            "const frame = document.createElement('iframe');\
+                             frame.sandbox = 'allow-scripts'; frame.srcdoc = {markup};\
+                             document.body.appendChild(frame); void 0;"
+                        );
+                        if in_popup {
+                            page_vm.vm_mut().eval("globalThis.__sandboxPopup = open('about:blank')")?;
+                            // Make the host policy differ from the popup's captured
+                            // policy so a fallback through the opener is observable.
+                            page_vm.vm_mut().set_main_navigation_policy_container(
+                                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                                    &[("Content-Security-Policy".to_owned(), b"connect-src 'none'".to_vec())],
+                                    &document_url,
+                                ),
+                            );
+                            let source = serde_json::to_string(&create_frame)?;
+                            page_vm.vm_mut().eval(&format!(
+                                "__sandboxPopup.location.href = 'javascript:' + encodeURIComponent({source})"
+                            ))?;
+                        } else {
+                            page_vm.vm_mut().eval(&create_frame)?;
+                        }
+                        drive_websocket_until_done(
+                            &mut page_vm,
+                            "__sandboxWebSocketResult !== 'pending'",
+                            "sandbox srcdoc WebSocket should report from its own script",
+                        ).await?;
+                        assert_eq!(
+                            page_vm.vm_mut().eval("__sandboxWebSocketResult")?,
+                            "about:srcdoc|opened",
+                            "{constructor}, change_base={change_base}, in_popup={in_popup}",
+                        );
+                        assert_eq!(page_vm.vm_mut().eval("__sandboxWebSocketViolations.length")?, "0");
+                        tokio::time::timeout(Duration::from_secs(3), headers_rx)
+                            .await
+                            .map_err(|_| anyhow::anyhow!("sandbox WebSocket handshake did not arrive"))?
+                            .map_err(|_| anyhow::anyhow!("sandbox WebSocket header sender dropped"))
+                    }).await.expect("sandbox WebSocket handshake test should run on owner lane");
+                    server.await.expect("sandbox WebSocket server should finish");
+                    assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+                }
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
+async fn websocket_sandbox_srcdoc_inherited_self_still_blocks_foreign_base_origin() {
+    run_page_vm_async_test(async move {
+        for constructor in ["WebSocket", "WebSocketStream"] {
+            let document_url = Url::parse("https://sandbox-csp.test/app/page.html").unwrap();
+            let mut page_vm = test_page_vm_with_document_url(document_url.clone());
+            page_vm.vm_mut().set_main_navigation_policy_container(
+                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                    &[("Content-Security-Policy".to_owned(), b"connect-src 'self'".to_vec())],
+                    &document_url,
+                ),
+            );
+            page_vm.vm_mut().set_fetch_subresource_interception(
+                true, Some(SubresourceResourceType::WebSocket),
+            );
+            let script = format!(
+                r#"
+                addEventListener('securitypolicyviolation', event => {{
+                    parent.postMessage({{kind: 'violation', value: [
+                        event.effectiveDirective, event.documentURI, event.disposition
+                    ].join('|')}}, '*');
+                }});
+                const base = document.createElement('base');
+                base.href = 'https://different-origin.test/';
+                document.head.appendChild(base);
+                let result = 'constructed';
+                try {{ new {constructor}('wss://different-origin.test/socket'); }}
+                catch (error) {{ result = error.name; }}
+                parent.postMessage({{kind: 'result', value: result}}, '*');
+                "#,
+            );
+            let markup = serde_json::to_string(&format!("<script>{script}</script>")).unwrap();
+            let local_executor = page_vm.local_executor.clone();
+            local_executor.run(async move {
+                page_vm.vm_mut().eval(&format!(
+                    r#"
+                    globalThis.__sandboxForeignResult = 'pending';
+                    globalThis.__sandboxForeignViolation = 'pending';
+                    addEventListener('message', event => {{
+                        if (event.data.kind === 'result') __sandboxForeignResult = event.data.value;
+                        if (event.data.kind === 'violation') __sandboxForeignViolation = event.data.value;
+                    }});
+                    const frame = document.createElement('iframe');
+                    frame.sandbox = 'allow-scripts';
+                    frame.srcdoc = {markup};
+                    document.body.appendChild(frame);
+                    "#,
+                ))?;
+                drive_websocket_until_done(&mut page_vm,
+                    "__sandboxForeignResult !== 'pending'", "sandbox WebSocket construction result"
+                ).await?;
+                // CSP failures are asynchronous. A blocked socket must never
+                // reach the intercepted network request boundary.
+                assert_eq!(page_vm.vm_mut().eval("__sandboxForeignResult")?, "constructed");
+                assert!(page_vm.vm_mut().take_pending_subresource_fetch_infos().is_empty());
+                drive_websocket_until_done(&mut page_vm,
+                    "__sandboxForeignViolation !== 'pending'", "sandbox WebSocket CSP violation event"
+                ).await?;
+                assert_eq!(page_vm.vm_mut().eval("__sandboxForeignViolation")?, "connect-src|about|enforce");
+                Ok::<_, anyhow::Error>(())
+            }).await.expect("foreign sandbox WebSocket CSP test should run on owner lane");
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn websocket_popup_base_changes_preserve_inherited_handshake_origin() {
     run_page_vm_async_test(async move {
         for constructor in ["WebSocket", "WebSocketStream"] {

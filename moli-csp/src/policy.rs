@@ -2,16 +2,18 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::ContentSecurityPolicyDisposition;
 use ::content_security_policy::{Policy, PolicyDisposition, PolicySource};
+use url::Url;
 
 /// A delivered policy keeps its original text for reports and shares its parsed
 /// directives with inherited Documents, workers, and request snapshots.
 #[derive(Clone, Debug)]
 pub struct ContentSecurityPolicy(Arc<ParsedPolicy>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ParsedPolicy {
     serialized: String,
     policy: Policy,
+    self_origin: Option<Url>,
 }
 
 impl ContentSecurityPolicy {
@@ -46,7 +48,11 @@ impl ContentSecurityPolicy {
             directive.is_valid() && !invalid_first_names.contains(&directive.name)
         });
 
-        Self(Arc::new(ParsedPolicy { serialized, policy }))
+        Self(Arc::new(ParsedPolicy {
+            serialized,
+            policy,
+            self_origin: None,
+        }))
     }
 
     /// Parse one HTTP policy while retaining its delivered text for reports.
@@ -63,6 +69,19 @@ impl ContentSecurityPolicy {
 
     pub fn from_meta(serialized: String) -> Self {
         Self::parse(serialized, PolicySource::Meta, PolicyDisposition::Enforce)
+    }
+
+    /// Capture the policy's origin at delivery. Inheriting a policy preserves
+    /// this identity even when sandboxing makes the new Document opaque.
+    pub fn with_self_origin(mut self, source_url: &Url) -> Self {
+        let origin_url = Url::parse(&source_url.origin().ascii_serialization())
+            .unwrap_or_else(|_| source_url.clone());
+        Arc::make_mut(&mut self.0).self_origin = Some(origin_url);
+        self
+    }
+
+    pub(crate) fn self_origin<'a>(&'a self, protected_url: &'a Url) -> &'a Url {
+        self.0.self_origin.as_ref().unwrap_or(protected_url)
     }
 
     pub fn as_str(&self) -> &str {
@@ -102,6 +121,7 @@ impl PartialEq for ContentSecurityPolicy {
         self.as_str() == other.as_str()
             && self.0.policy.source == other.0.policy.source
             && self.0.policy.disposition == other.0.policy.disposition
+            && self.0.self_origin == other.0.self_origin
     }
 }
 
