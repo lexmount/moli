@@ -834,9 +834,12 @@ mod tests {
             .borrow()
             .clone()
             .expect("frontend route");
-        route.route_notification(serde_json::json!({
-            "method": "Debugger.paused", "params": {"callFrames": []}
-        }));
+        route.route_notification(
+            &serde_json::json!({
+                "method": "Debugger.paused", "params": {"callFrames": []}
+            })
+            .into(),
+        );
         assert!(bridge.enter_pause().is_some());
         let dispatch = bridge.begin_command_dispatch(
             1,
@@ -863,7 +866,7 @@ mod tests {
         assert!(
             matches!(
                 route.route_notification(
-                    serde_json::json!({"method": "Debugger.resumed", "params": {}})
+                    &serde_json::json!({"method": "Debugger.resumed", "params": {}}).into()
                 ),
                 RendererInspectorPauseNotificationRoute::PublishImmediately {
                     command_output: None,
@@ -938,7 +941,7 @@ mod tests {
                 if batch.messages.iter().any(|message| matches!(
                     message,
                     RendererRuntimeInspectorMessage::Protocol(value)
-                        if value["method"] == "Runtime.consoleAPICalled"
+                        if value.payload().method() == Some("Runtime.consoleAPICalled")
                 ))
         ));
         assert_eq!(
@@ -978,7 +981,7 @@ mod tests {
                 if batch.messages.iter().any(|message| matches!(
                     message,
                     RendererRuntimeInspectorMessage::Protocol(value)
-                        if value["method"] == "Runtime.consoleAPICalled"
+                        if value.payload().method() == Some("Runtime.consoleAPICalled")
                 ))
         ));
     }
