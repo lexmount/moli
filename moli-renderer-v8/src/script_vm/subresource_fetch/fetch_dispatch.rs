@@ -658,19 +658,17 @@ impl ScriptVm {
                         record_started,
                     );
                     if let PendingSubresourceContinuation::Fetch(fetch) = &pending.continuation {
-                        crate::context_bootstrap::record_resource_performance_entry(
-                            scope,
+                        let entry = if opaque_response_blocked {
+                            // ORB removes the original headers and body measurements;
+                            // its TAO header cannot re-enable those measurements.
+                            fetch.resource_timing().failed(&pending.info.url)
+                        } else {
                             fetch.resource_timing().completed(
-                                &pending.info.url,
-                                &pending.request_origin,
-                                pending.request_mode,
-                                &response.head(),
-                                response.body_bytes().len(),
-                                opaque_response_blocked
-                                    .then_some(AsyncSubresourceFetchResponseFilter::Opaque)
-                                    .or(response_filter),
-                            ),
-                        );
+                                &pending.info.url, &pending.request_origin, pending.request_mode,
+                                &response.head(), response.body_bytes().len(), response_filter,
+                            )
+                        };
+                        crate::context_bootstrap::record_resource_performance_entry(scope, entry);
                     }
                     let mut observable_response = response;
                     if matches!(

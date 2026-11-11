@@ -1558,7 +1558,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
         let _ = request_tx.send(request);
         stream
             .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"secret\":true}",
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nTiming-Allow-Origin: *\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"secret\":true}",
             )
             .await
             .expect("write worker no-cors ORB response");
@@ -1578,6 +1578,9 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
                     url: response.url,
                     bodyIsNull: response.body === null,
                     headerCount: Array.from(response.headers).length,
+                    timing: performance.getEntriesByName({fetch_url_literal}).map(entry => [
+                        entry.responseStatus, entry.encodedBodySize, entry.decodedBodySize, entry.transferSize,
+                    ]),
                 }});
             }} catch (error) {{
                 postMessage({{
@@ -1620,7 +1623,7 @@ async fn worker_fetch_no_cors_opaque_response_blocking_returns_empty_opaque_resp
     assert!(request.contains("Sec-Fetch-Mode: no-cors\r\n"));
     assert_eq!(
         post.expect("worker no-cors ORB should post response"),
-        r#"{"fulfilled":true,"type":"opaque","status":0,"url":"","bodyIsNull":true,"headerCount":0}"#
+        r#"{"fulfilled":true,"type":"opaque","status":0,"url":"","bodyIsNull":true,"headerCount":0,"timing":[[0,0,0,0]]}"#
     );
     let record = network.expect("worker no-cors ORB should record network failure");
     assert_eq!(record.url().as_str(), fetch_url);
