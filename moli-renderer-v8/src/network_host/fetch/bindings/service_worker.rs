@@ -54,6 +54,7 @@ pub(super) fn dispatch_service_worker_fetch(
         v8::Global::new(scope, resolver),
         prepared.resource_timing.clone(),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy.clone(),
         prepared.csp_report_context.clone(),
         Some(cancel_handle.clone()),

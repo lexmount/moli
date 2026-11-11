@@ -1,6 +1,96 @@
 use super::*;
 
 #[tokio::test]
+async fn navigator_service_worker_integrity_waits_for_the_complete_response_body() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
+        const controllers = new Map();
+        self.addEventListener('activate', event => event.waitUntil(clients.claim()));
+        self.addEventListener('fetch', event => {
+          const label = new URL(event.request.url).pathname.split('/').pop();
+          event.respondWith(new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('hello '));
+              controllers.set(label, controller);
+            }
+          })));
+          event.waitUntil(clients.get(event.clientId).then(client => client.postMessage(label)));
+        });
+        self.addEventListener('message', event => {
+          const label = event.data;
+          const controller = controllers.get(label);
+          controllers.delete(label);
+          if (label === 'truncated') controller.error(new Error('truncated integrity body'));
+          else {
+            controller.enqueue(new TextEncoder().encode('integrity'));
+            controller.close();
+          }
+        });
+        "#,
+    )])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(
+        r#"
+        globalThis.integrityResult = null;
+        (async () => {
+          const failures = [];
+          const started = new Map();
+          navigator.serviceWorker.addEventListener('message', event => {
+            const resolve = started.get(event.data);
+            if (resolve) resolve();
+          });
+          await navigator.serviceWorker.register('worker.js', {scope:'./'});
+          const registration = await navigator.serviceWorker.ready;
+          for (const [label, integrity, accepted] of [
+            ['valid', 'sha256-9pyxsrnsacWVDvpoeZHDpEDkdnPx2ySEsclLyHWyL6A=', true],
+            ['invalid', 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', false],
+            ['truncated', 'sha256-9pyxsrnsacWVDvpoeZHDpEDkdnPx2ySEsclLyHWyL6A=', false],
+            ['ignored', 'sha1-ignored', true],
+            ['streaming', '', true],
+          ]) {
+            const headersReady = new Promise(resolve => started.set(label, resolve));
+            let handedOver = false;
+            const outcome = fetch(label, {integrity}).then(async response => {
+              handedOver = true;
+              return {accepted:true, body:await response.text()};
+            }, error => {
+              handedOver = true;
+              return {accepted:false, type:error.name};
+            });
+            await headersReady;
+            await new Promise(resolve => setTimeout(resolve, 0));
+            if (integrity && handedOver) failures.push(label + '/early-handover');
+            registration.active.postMessage(label);
+            const result = await outcome;
+            if (result.accepted !== accepted) failures.push(label + '/acceptance');
+            if (accepted && result.body !== 'hello integrity') failures.push(label + '/body');
+            if (!accepted && result.type !== 'TypeError') failures.push(label + '/exception');
+          }
+          integrityResult = JSON.stringify(failures);
+        })().catch(error => integrityResult = String(error.stack || error));
+        "#,
+    )
+    .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(integrityResult !== null)",
+        "true",
+    )
+    .await;
+    assert_eq!(vm.eval("integrityResult").unwrap(), "[]");
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn navigator_service_worker_shim_controls_window_fetch() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
@@ -814,7 +904,8 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
                   cache: "reload",
                   referrer: "./referrer.html",
                   referrerPolicy: "origin",
-                  integrity: "sha256-test",
+                  // This response reflects the metadata, so use an unsupported algorithm.
+                  integrity: "sha1-test",
                   keepalive: true,
                   priority: "low"
                 });
@@ -835,7 +926,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_window_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|cache=reload|referrer={base_url}/app/referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
+            "200|cache=reload|referrer={base_url}/app/referrer.html|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
         ),
     )
     .await;
@@ -1017,7 +1108,8 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
               cache: "reload",
               referrer: "./worker-referrer.html",
               referrerPolicy: "origin",
-              integrity: "sha256-test",
+              // This response reflects the metadata, so use an unsupported algorithm.
+                  integrity: "sha1-test",
               keepalive: true,
               priority: "high"
             });
@@ -1070,7 +1162,7 @@ async fn navigator_service_worker_fetch_event_request_preserves_worker_fetch_pol
         &loader,
         "String(globalThis.__serviceWorkerWorkerFetchRequestPolicyMetadataProbe)",
         &format!(
-            "200|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha256-test|keepalive=true"
+            "200|cache=reload|referrer={base_url}/app/worker-referrer.html|referrerPolicy=origin|integrity=sha1-test|keepalive=true"
         ),
     )
     .await;

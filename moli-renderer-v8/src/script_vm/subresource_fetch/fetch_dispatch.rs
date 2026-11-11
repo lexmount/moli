@@ -11,6 +11,7 @@ impl ScriptVm {
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
         result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) -> Result<()> {
@@ -44,6 +45,12 @@ impl ScriptVm {
                         pending.policy_context,
                     )?;
                 }
+                validate_pending_window_fetch_integrity(
+                    &pending,
+                    &request_method,
+                    &response,
+                    response_filter.as_ref(),
+                )?;
                 Ok(response)
             })
         } else {
@@ -445,6 +452,7 @@ impl ScriptVm {
                     request_body,
                     response_status_text,
                     skip_fetch_security_validation,
+                    response_filter,
                     network_error_text,
                     result,
                 )
@@ -566,6 +574,9 @@ impl ScriptVm {
                         Err(violation) => return Err(violation.into_message()),
                     }
                 }
+                validate_pending_window_fetch_integrity(
+                    &pending, &request_method, &response, response_filter.as_ref(),
+                )?;
                 Ok(response)
             });
             trace_async_subresource_stage(
