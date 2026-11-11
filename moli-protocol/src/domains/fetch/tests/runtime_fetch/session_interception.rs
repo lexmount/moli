@@ -1859,3 +1859,425 @@ async fn continue_request_returns_before_delayed_subresource_response() {
 
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_path() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn trapped() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "path-trap-body")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/js/google-analytics.com.js", get(trapped)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 38_600,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [
+                { "urlPattern": "*google-analytics.com*", "requestStage": "Request" }
+            ]
+        }
+    }))
+    .await;
+    ctx.expect_result(38_600, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38_601).await;
+
+    // An ad-blocker-style client enables a deliberately wide substring
+    // pattern without a resourceType and decides per paused request. The
+    // synchronous XHR below targets the client's own host and only carries
+    // the tracker domain in its path. Chromium pauses it and the client
+    // continues it to a 200. moli cannot pause a synchronous send (its
+    // renderer thread would deadlock), so the request must keep its
+    // ordinary network path instead of failing with a fabricated
+    // NetworkError before the host is ever contacted.
+    ctx.process_async(json!({
+        "id": 38_602,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  try {
+    const request = new XMLHttpRequest();
+    request.open('GET', '/js/google-analytics.com.js', false);
+    request.send();
+    return `sync:${request.status}:${request.responseText}`;
+  } catch (error) {
+    return `sync-error:${error && error.name}`;
+  }
+})()"#
+        }
+    }))
+    .await;
+
+    let observed = take_response_by_id(&mut ctx, 38_602);
+    assert_eq!(
+        observed["result"]["result"]["value"],
+        json!("sync:200:path-trap-body"),
+        "a synchronous XHR whose URL merely contains the pattern marker in its path must reach the network; sent={:?}",
+        ctx.sent
+    );
+
+    let paused = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/js/google-analytics.com.js"))
+        })
+        .count();
+    assert_eq!(
+        paused, 0,
+        "synchronous XHR interception is unsupported, so the send must not pause: {:?}",
+        ctx.sent
+    );
+    // Bind the lifecycle assertions to the trap request itself so a fixture
+    // or event-order change cannot satisfy them with an unrelated request.
+    let trap_request_id = ctx
+        .sent
+        .iter()
+        .find_map(|message| {
+            let matches = message["method"] == json!("Network.requestWillBeSent")
+                && message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/js/google-analytics.com.js"));
+            matches.then(|| message["params"]["requestId"].as_str().unwrap().to_owned())
+        })
+        .expect("the synchronous trap XHR must announce itself over Network");
+    assert!(
+        ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.loadingFinished")
+                && message["params"]["requestId"].as_str() == Some(trap_request_id.as_str())
+        }),
+        "the synchronous XHR must complete its network lifecycle: {:?}",
+        ctx.sent
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != json!("Network.loadingFailed")),
+        "the synchronous XHR must not fail: {:?}",
+        ctx.sent
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn substring_pattern_request_pause_continues_asynchronous_xhr_onto_the_network() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn trapped() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "path-trap-body")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/js/google-analytics.com.js", get(trapped)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let trapped_url = format!("http://{addr}/js/google-analytics.com.js");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 38_620,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [
+                { "urlPattern": "*google-analytics.com*", "requestStage": "Request" }
+            ]
+        }
+    }))
+    .await;
+    ctx.expect_result(38_620, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38_621).await;
+
+    // The asynchronous counterpart keeps the full interception contract:
+    // the substring pattern pauses the request even though only its path
+    // carries the marker, and continueRequest re-injects it onto the
+    // network exactly like Chromium.
+    ctx.process_async(json!({
+        "id": 38_622,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  globalThis.__lm_path_trap_result = "pending";
+  const request = new XMLHttpRequest();
+  request.open('GET', '/js/google-analytics.com.js', true);
+  request.onload = () => {
+    globalThis.__lm_path_trap_result = `async:${request.status}:${request.responseText}`;
+  };
+  request.onerror = () => {
+    globalThis.__lm_path_trap_result = 'async-error';
+  };
+  request.send();
+  return "scheduled";
+})()"#
+        }
+    }))
+    .await;
+    let observed = take_response_by_id(&mut ctx, 38_622);
+    assert_eq!(
+        observed["result"]["result"]["value"],
+        json!("scheduled"),
+        "the asynchronous probe must schedule: {:?}",
+        ctx.sent
+    );
+
+    let paused = ctx
+        .wait_for_scheduler_message("substring Fetch.requestPaused", |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["request"]["url"] == json!(trapped_url)
+                && message["params"]["resourceType"] == json!("XHR")
+        })
+        .await;
+    let request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("substring async XHR pause request id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 38_623,
+        "method": "Fetch.continueRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": request_id }
+    }))
+    .await;
+    ctx.expect_result(38_623, json!({}), Some("SID-1"));
+
+    let resolved = evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        38_624,
+        "globalThis.__lm_path_trap_result !== 'pending' ? globalThis.__lm_path_trap_result : 'pending'",
+        &json!("async:200:path-trap-body"),
+        "substring-paused asynchronous XHR continued onto the network",
+    )
+    .await;
+    assert_eq!(
+        resolved["result"]["result"]["value"], "async:200:path-trap-body",
+        "asynchronous XHR paused by a substring pattern and continued by the client must reach the network"
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn api() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "api-body")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/api", get(api)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 38_700,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [ { "urlPattern": "*", "requestStage": "Request" } ]
+        }
+    }))
+    .await;
+    ctx.expect_result(38_700, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 38_701,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(38_701, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 38_702,
+        "method": "Network.emulateNetworkConditions",
+        "sessionId": "SID-1",
+        "params": { "offline": true, "latency": 0, "downloadThroughput": 0, "uploadThroughput": 0 }
+    }))
+    .await;
+    ctx.expect_result(38_702, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38_703).await;
+
+    // Interception covering the XHR class must not let a synchronous XHR
+    // escape offline emulation: the ordinary synchronous path (and the
+    // offline gate it shares with the no-interception case) still applies.
+    ctx.process_async(json!({
+        "id": 38_704,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  try {
+    const request = new XMLHttpRequest();
+    request.open('GET', '/api', false);
+    request.send();
+    return `sync:${request.status}:${request.responseText}`;
+  } catch (error) {
+    return `sync-error:${error && error.name}`;
+  }
+})()"#
+        }
+    }))
+    .await;
+
+    let observed = take_response_by_id(&mut ctx, 38_704);
+    assert_eq!(
+        observed["result"]["result"]["value"],
+        json!("sync-error:NetworkError"),
+        "a synchronous XHR under interception and offline emulation must not reach the network; sent={:?}",
+        ctx.sent
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_xhr_pattern_still_keeps_synchronous_xhr_on_the_network_path() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn api() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "typed-api-body")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/api", get(api)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    // The client explicitly names the XHR class and a URL pattern the
+    // request below matches. Chromium would pause this synchronous send and
+    // hand the decision to the client; moli cannot pause it without
+    // deadlocking the renderer, and must not fabricate a failure either:
+    // the request keeps its network path, and the unavailable pause is the
+    // documented divergence (deliberate blocking of synchronous XHR).
+    ctx.process_async(json!({
+        "id": 38_750,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [ { "urlPattern": "*", "resourceType": "XHR", "requestStage": "Request" } ]
+        }
+    }))
+    .await;
+    ctx.expect_result(38_750, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38_751).await;
+
+    ctx.process_async(json!({
+        "id": 38_752,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  try {
+    const request = new XMLHttpRequest();
+    request.open('GET', '/api', false);
+    request.send();
+    return `sync:${request.status}:${request.responseText}`;
+  } catch (error) {
+    return `sync-error:${error && error.name}`;
+  }
+})()"#
+        }
+    }))
+    .await;
+
+    let observed = take_response_by_id(&mut ctx, 38_752);
+    assert_eq!(
+        observed["result"]["result"]["value"],
+        json!("sync:200:typed-api-body"),
+        "a synchronous XHR matching a typed XHR pattern must still reach the network; sent={:?}",
+        ctx.sent
+    );
+    let paused = ctx
+        .sent
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/api"))
+        })
+        .count();
+    assert_eq!(
+        paused, 0,
+        "no pause can be published for a synchronous send: {:?}",
+        ctx.sent
+    );
+
+    server.abort();
+}
