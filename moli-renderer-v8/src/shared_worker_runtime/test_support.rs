@@ -168,6 +168,7 @@ pub(super) fn loading_host(
         key.script_url().to_owned(),
         "loader".to_owned(),
         target_output,
+        None,
     ))
 }
 
@@ -186,6 +187,7 @@ pub(super) fn loading_host_with_runtime_service(
         key.script_url().to_owned(),
         "loader".to_owned(),
         runtime_service.open_target_output_stream(instance_id),
+        None,
     ))
 }
 

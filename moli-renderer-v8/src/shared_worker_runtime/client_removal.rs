@@ -1,17 +1,30 @@
-use moli_shared_worker::{SharedWorkerClientId, SharedWorkerClientRemoval, SharedWorkerInstanceId};
+use moli_shared_worker::{SharedWorkerClientId, SharedWorkerClientRemoval};
 
-use super::{host::SharedRendererSharedWorkerHost, service::SharedWorkerRuntimeService};
+use super::service::SharedWorkerRuntimeService;
 
 impl SharedWorkerRuntimeService {
     pub(crate) fn remove_client(&self, client_id: SharedWorkerClientId) {
-        match self.remove_client_from_registry(client_id) {
+        match self.remove_matching_client(client_id) {
             SharedWorkerClientRemoval::RemovedFromLoading { instance_id } => {
-                if let Some(host) = self.loading_host_for_client_removal(instance_id) {
+                if let Some(host) = self.loading_host(instance_id) {
                     host.remove_client_endpoint(client_id);
                 }
             }
             SharedWorkerClientRemoval::RemovedFromRunning { instance: host, .. } => {
                 host.remove_client_endpoint(client_id);
+            }
+            SharedWorkerClientRemoval::Retain {
+                instance_id,
+                key,
+                instance,
+                schedule_timeout_at,
+            } => {
+                if let Some(host) = instance.or_else(|| self.loading_host(instance_id)) {
+                    host.remove_client_endpoint(client_id);
+                }
+                if let Some(deadline) = schedule_timeout_at {
+                    self.schedule_idle_timeout(key, instance_id, deadline);
+                }
             }
             SharedWorkerClientRemoval::Terminate { instance: host, .. } => {
                 host.remove_client_endpoint(client_id);
@@ -19,34 +32,13 @@ impl SharedWorkerRuntimeService {
                 host.terminate_and_join();
             }
             SharedWorkerClientRemoval::CancelLoading { instance_id, .. } => {
-                if let Some(host) = self.take_loading_host_for_client_removal(instance_id) {
+                if let Some(host) = self.remove_loading_host(instance_id) {
                     host.remove_client_endpoint(client_id);
                     host.cancel_loading();
                 }
             }
             SharedWorkerClientRemoval::Missing => {}
         }
-    }
-
-    fn remove_client_from_registry(
-        &self,
-        client_id: SharedWorkerClientId,
-    ) -> SharedWorkerClientRemoval<SharedRendererSharedWorkerHost> {
-        self.remove_matching_client(client_id)
-    }
-
-    fn loading_host_for_client_removal(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> Option<SharedRendererSharedWorkerHost> {
-        self.loading_host(instance_id)
-    }
-
-    fn take_loading_host_for_client_removal(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-    ) -> Option<SharedRendererSharedWorkerHost> {
-        self.remove_loading_host(instance_id)
     }
 }
 

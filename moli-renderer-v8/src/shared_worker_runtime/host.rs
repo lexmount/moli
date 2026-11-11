@@ -33,6 +33,9 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
     target_output_retired: AtomicBool,
+    // An extended-lifetime worker needs an owner to drain script completion
+    // and expiry even after the last Page has released its renderer runtime.
+    _service_lane_owner: Option<Arc<dyn crate::runtime::RendererRuntimeLease>>,
     #[cfg(feature = "devtools")]
     pub(super) runtime_response_publications: Mutex<SharedWorkerRuntimeResponsePublicationState>,
 }
@@ -59,6 +62,7 @@ impl RendererSharedWorkerHost {
         initial_script_url: String,
         name: String,
         target_output: crate::runtime::RendererTurnOutputJournal,
+        service_lane_owner: Option<Arc<dyn crate::runtime::RendererRuntimeLease>>,
     ) -> Self {
         Self {
             instance_id,
@@ -70,6 +74,7 @@ impl RendererSharedWorkerHost {
             clients: Mutex::new(HashMap::new()),
             target_output,
             target_output_retired: AtomicBool::new(false),
+            _service_lane_owner: service_lane_owner,
             #[cfg(feature = "devtools")]
             runtime_response_publications: Mutex::new(
                 SharedWorkerRuntimeResponsePublicationState::Active,

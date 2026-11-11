@@ -1,6 +1,7 @@
 use std::{
     fmt,
     sync::{Arc, OnceLock, Weak},
+    time::Instant,
 };
 
 use moli_shared_worker::{
@@ -12,7 +13,11 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 use tracing::trace;
 
-use crate::{runtime::RendererOwnerLocalHostId, worker_owner_wake::WorkerOwnerWakeRoutes};
+use crate::{
+    network::RendererResourceTaskRunner,
+    runtime::{RendererOwnerLocalHostId, RendererRuntimeLease},
+    worker_owner_wake::WorkerOwnerWakeRoutes,
+};
 
 use super::{
     host::SharedRendererSharedWorkerHost,
@@ -25,13 +30,20 @@ use super::{
 
 pub(crate) fn new_shared_worker_runtime_service_with_client_owner_id_allocator(
     client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
+    resource_task_runner: RendererResourceTaskRunner,
 ) -> SharedWorkerRuntimeService {
     SharedWorkerRuntimeService {
         inner: Arc::new(SharedWorkerRuntimeInner {
             matching: Arc::new(SharedWorkerMatchingStore::with_client_owner_id_allocator(
                 client_owner_id_allocator,
             )),
-            ..SharedWorkerRuntimeInner::default()
+            resource_task_runner,
+            hosts: Default::default(),
+            service_lane: Default::default(),
+            service_lane_owner: Default::default(),
+            owner_wake: Default::default(),
+            owner_local_host_id: Default::default(),
+            target_output_streams: Default::default(),
         }),
     }
 }
@@ -46,11 +58,12 @@ pub(crate) struct WeakSharedWorkerRuntimeService {
     inner: Weak<SharedWorkerRuntimeInner>,
 }
 
-#[derive(Default)]
 struct SharedWorkerRuntimeInner {
     matching: Arc<SharedWorkerMatchingStore>,
+    resource_task_runner: RendererResourceTaskRunner,
     hosts: Arc<SharedWorkerHostStore>,
     service_lane: Arc<SharedWorkerServiceLane>,
+    service_lane_owner: Mutex<Option<Weak<dyn RendererRuntimeLease>>>,
     owner_wake: Mutex<WorkerOwnerWakeRoutes<SharedWorkerRuntimeOwnerWake>>,
     owner_local_host_id: Mutex<Option<RendererOwnerLocalHostId>>,
     target_output_streams: OnceLock<SharedWorkerTargetOutputStreams>,
@@ -123,6 +136,21 @@ impl SharedWorkerRuntimeService {
         self.inner.service_lane.as_ref()
     }
 
+    pub(super) fn retain_service_lane_owner(
+        &self,
+        runtime: Arc<dyn RendererRuntimeLease>,
+    ) -> Arc<dyn RendererRuntimeLease> {
+        // Use one owner for all retained hosts in this context. Different
+        // owners can drain the lane, so pinning each creator would let two
+        // owner threads try to join each other when their last hosts retire.
+        let mut owner = self.inner.service_lane_owner.lock();
+        if let Some(runtime) = owner.as_ref().and_then(Weak::upgrade) {
+            return runtime;
+        }
+        *owner = Some(Arc::downgrade(&runtime));
+        runtime
+    }
+
     pub(crate) fn add_owner_wake_sender(&self, sender: SharedWorkerRuntimeOwnerWakeSender) {
         self.inner.owner_wake.lock().register(sender.clone());
         if self.pending_service_lane_event_count() > 0 {
@@ -161,6 +189,11 @@ impl SharedWorkerRuntimeService {
         descriptor: SharedWorkerDescriptor,
         client_owner_id: SharedWorkerClientOwnerId,
     ) -> SharedWorkerConnectAction<SharedRendererSharedWorkerHost> {
+        let expired = self
+            .inner
+            .matching
+            .remove_expired_idle_instance(&key, Instant::now());
+        self.take_removed_host(expired).terminate_and_join();
         self.inner
             .matching
             .connect(key, descriptor, client_owner_id)
@@ -195,6 +228,39 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
     ) -> SharedWorkerInstanceRemoval<SharedRendererSharedWorkerHost> {
         self.inner.matching.remove_instance(instance_id)
+    }
+
+    pub(super) fn schedule_idle_timeout(
+        &self,
+        key: SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+        deadline: Instant,
+    ) {
+        let runtime_service = self.downgrade();
+        self.inner.resource_task_runner.spawn(async move {
+            tokio::time::sleep_until(deadline.into()).await;
+            if let Some(service) = runtime_service.upgrade() {
+                service
+                    .service_lane()
+                    .enqueue_idle_timeout(runtime_service, key, instance_id);
+                service.signal_service_lane_wake();
+            }
+        });
+    }
+
+    pub(super) fn finish_idle_timeout(
+        &self,
+        key: SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+    ) {
+        match self
+            .inner
+            .matching
+            .handle_idle_timeout(&key, instance_id, Instant::now())
+        {
+            Ok(removed) => self.take_removed_host(removed).terminate_and_join(),
+            Err(deadline) => self.schedule_idle_timeout(key, instance_id, deadline),
+        }
     }
 
     pub(super) fn remove_all_matching_instances(
@@ -291,11 +357,13 @@ impl SharedWorkerRuntimeService {
     }
 }
 
+#[cfg(test)]
 impl Default for SharedWorkerRuntimeService {
     fn default() -> Self {
-        Self {
-            inner: Arc::new(SharedWorkerRuntimeInner::default()),
-        }
+        new_shared_worker_runtime_service_with_client_owner_id_allocator(
+            SharedWorkerClientOwnerIdAllocator::default(),
+            RendererResourceTaskRunner::for_test(),
+        )
     }
 }
 
