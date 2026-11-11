@@ -384,6 +384,29 @@ pub(crate) enum InlineSelection {
     Caret { offset: usize, color: PaintColor },
 }
 
+/// Glyph-to-source mapping shared by semantic text and selection coverage.
+pub(crate) fn glyph_cluster_ranges(run: &parley::Run<'_, TextBrush>) -> Vec<Range<usize>> {
+    // Join ligature continuations in logical order first: in RTL their
+    // visual order puts the continuation before the glyph-bearing cluster.
+    let mut atoms: Vec<(Range<usize>, usize)> = Vec::new();
+    for cluster in run.clusters() {
+        if cluster.is_ligature_continuation() {
+            if let Some((range, _)) = atoms.last_mut() {
+                range.end = cluster.text_range().end;
+            }
+        } else {
+            atoms.push((cluster.text_range(), cluster.glyphs().count()));
+        }
+    }
+    if run.is_rtl() {
+        atoms.reverse();
+    }
+    atoms
+        .into_iter()
+        .flat_map(|(range, count)| std::iter::repeat_n(range, count))
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct InlineLinePlacement {
     pub(crate) line_index: usize,

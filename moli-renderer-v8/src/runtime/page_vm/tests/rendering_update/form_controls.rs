@@ -345,6 +345,167 @@ async fn contenteditable_atomic_inline_caret_keeps_effects_and_viewport_culling(
     .expect("atomic caret effects fixture");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn contenteditable_atomic_inlines_paint_glyphless_selection_ranges() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-selection.html")?,
+        );
+        page.vm_mut().eval(include_str!("atomic_inline_caret.js"))?;
+        page.vm_mut().sync_live_document_style_sources();
+        for (label, text, start, end, expected_lines) in [
+            ("selected newline", "\nX", 0, 1, vec![0]),
+            ("selected empty line", "X\n\nY", 2, 3, vec![1]),
+            ("text and newlines", "X\n\nY", 0, 4, vec![0, 1, 2]),
+            ("glyph without newline", "X\nY", 0, 1, vec![0]),
+            ("reversed empty line", "X\n\nY", 3, 2, vec![1]),
+            ("UTF-16 newline offset", "😀\nX", 2, 3, vec![0]),
+        ] {
+            page.vm_mut().eval(&format!(
+                "setAtomicRange({}, {start}, {end});'updated'",
+                serde_json::to_string(text)?,
+            ))?;
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 140, 1.0))?
+                .expect("atomic range layout");
+            let rects = range_selection_rects(&snapshot);
+            assert!(
+                !rects.is_empty(),
+                "{label}: selected text needs highlight commands"
+            );
+            let mut lines = rects
+                .iter()
+                .map(|rect| (rect.y / 32.0).round() as usize)
+                .collect::<Vec<_>>();
+            lines.sort_unstable();
+            lines.dedup();
+            assert_eq!(
+                lines, expected_lines,
+                "{label}: every selected line is painted"
+            );
+            for (index, rect) in rects.iter().enumerate() {
+                assert!(
+                    rect.width > 0.0 && rect.height > 0.0,
+                    "{label}: positive highlight geometry"
+                );
+                for other in &rects[index + 1..] {
+                    let width = rect.right().min(other.right()) - rect.x.max(other.x);
+                    let height = rect.bottom().min(other.bottom()) - rect.y.max(other.y);
+                    assert!(
+                        width <= 0.01 || height <= 0.01,
+                        "{label}: selection is not painted twice: {rect:?}, {other:?}"
+                    );
+                }
+            }
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            assert!(
+                has_selection_pixels(&image),
+                "{label}: visible highlight pixels"
+            );
+            if label == "text and newlines" {
+                assert!(
+                    dark_pixels(&image, 24, 0, 56, 32) > 0,
+                    "selected first-line glyphs stay above the highlight"
+                );
+                assert!(
+                    dark_pixels(&image, 0, 64, 80, 32) > 0,
+                    "selected last-line glyphs stay above the highlight"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("glyphless atomic selection fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn contenteditable_atomic_inline_selection_keeps_order_effects_and_culling() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-selection-effects.html")?,
+        );
+        page.vm_mut().eval(include_str!("atomic_inline_caret.js"))?;
+        page.vm_mut().sync_live_document_style_sources();
+        for (label, styles, overlap, visible) in [
+            ("translated", "transform:translate(17px,11px)", "", true),
+            ("transparent", "opacity:0", "", false),
+            ("clip path", "clip-path:inset(0 0 0 50%)", "", false),
+            ("highlight-only capture", "", "", true),
+            ("above earlier atomic", "", "earlier", true),
+            ("below later atomic", "", "later", false),
+        ] {
+            page.vm_mut().eval(&format!(
+                "setAtomicRange('\\nX', 0, 1, {}, {});'updated'",
+                serde_json::to_string(styles)?,
+                serde_json::to_string(overlap)?,
+            ))?;
+            let capture = if label == "highlight-only capture" {
+                moli_layout::PaintCaptureRequest::page_clip(
+                    moli_layout::PaintRect::new(26.0, 0.0, 2.0, 32.0),
+                    1.0,
+                )
+            } else {
+                moli_layout::PaintCaptureRequest::viewport()
+            };
+            let snapshot = page
+                .vm_mut()
+                .paint_layout_snapshot_with_capture(
+                    moli_layout::PaintViewport::new(160, 140, 1.0),
+                    moli_layout::LayoutFlushReason::Screenshot,
+                    capture,
+                )?
+                .expect("atomic range effects layout");
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            assert_eq!(
+                has_selection_pixels(&image),
+                visible,
+                "{label}: selection compositing"
+            );
+            if overlap == "later" {
+                assert!(
+                    !range_selection_rects(&snapshot).is_empty(),
+                    "the highlight is painted before being covered"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("atomic selection order and effects fixture");
+}
+
+fn range_selection_rects(snapshot: &moli_layout::PaintSnapshot) -> Vec<moli_layout::PaintRect> {
+    let selection_color = moli_layout::PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
+    snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            moli_layout::PaintFragment::Fill {
+                shape: moli_layout::PaintShape::Rect(rect),
+                brush: moli_layout::PaintBrush::Solid(color),
+                transform,
+                ..
+            } if *color == selection_color => Some(transform.map_rect(*rect).bounding_rect()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_selection_pixels(image: &moli_paint::RasterImage) -> bool {
+    image
+        .rgba
+        .chunks_exact(4)
+        .any(|p| p[0].abs_diff(180) <= 1 && p[1].abs_diff(213) <= 1 && p[2] >= 254)
+}
+
 fn dark_pixels(image: &moli_paint::RasterImage, x: u32, y: u32, width: u32, height: u32) -> usize {
     (y..y + height)
         .flat_map(|y| (x..x + width).map(move |x| ((y * image.width + x) * 4) as usize))
