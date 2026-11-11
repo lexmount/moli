@@ -121,6 +121,7 @@ impl DocumentRuntime {
             child,
             insertion_plan.insertion_roots,
             None,
+            false,
         ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
@@ -372,10 +373,16 @@ impl DocumentRuntime {
             child,
             insertion_plan.insertion_roots,
             reference_child,
+            dispatch_atomic_move_callbacks,
         ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
-                self.insert_before_effects_in_structural_scope(parent, child, reference_child),
+                self.insert_before_effects_in_structural_scope_with_state_preservation(
+                    parent,
+                    child,
+                    reference_child,
+                    dispatch_atomic_move_callbacks,
+                ),
                 Vec::new(),
             ),
         };

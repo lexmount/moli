@@ -1131,9 +1131,30 @@ impl DocumentRuntime {
         child: DomHandle,
         reference_child: Option<DomHandle>,
     ) -> DomMutationEffects {
+        self.insert_before_effects_in_structural_scope_with_state_preservation(
+            parent,
+            child,
+            reference_child,
+            false,
+        )
+    }
+
+    #[track_caller]
+    fn insert_before_effects_in_structural_scope_with_state_preservation(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+        reference_child: Option<DomHandle>,
+        preserve_state: bool,
+    ) -> DomMutationEffects {
         let _guard = self.enter_structural_mutation();
-        self.dom_host
-            .insert_before_effects(parent, child, reference_child)
+        if preserve_state {
+            self.dom_host
+                .insert_before_preserving_state_effects(parent, child, reference_child)
+        } else {
+            self.dom_host
+                .insert_before_effects(parent, child, reference_child)
+        }
     }
 
     #[track_caller]
@@ -1142,8 +1163,23 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
     ) -> DomMutationEffects {
+        self.remove_child_effects_in_structural_scope_with_state_preservation(parent, child, false)
+    }
+
+    #[track_caller]
+    fn remove_child_effects_in_structural_scope_with_state_preservation(
+        &mut self,
+        parent: DomHandle,
+        child: DomHandle,
+        preserve_state: bool,
+    ) -> DomMutationEffects {
         let _guard = self.enter_structural_mutation();
-        self.dom_host.remove_child_effects(parent, child)
+        if preserve_state {
+            self.dom_host
+                .remove_child_preserving_state_effects(parent, child)
+        } else {
+            self.dom_host.remove_child_effects(parent, child)
+        }
     }
 
     #[track_caller]

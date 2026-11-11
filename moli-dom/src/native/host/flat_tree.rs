@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 impl DomHost {
     /// Parent in the distributed tree used for rendering and click targeting.
     /// Shadow roots are transparent; assigned light children belong to slots.
