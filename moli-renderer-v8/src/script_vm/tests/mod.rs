@@ -2447,3 +2447,4 @@ mod fetch_referrer;
 mod sqlite_web_storage;
 
 mod dynamic_inline_scripts;
+mod native_request_url_provenance;
