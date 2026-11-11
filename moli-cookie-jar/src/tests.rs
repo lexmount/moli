@@ -2887,6 +2887,7 @@ fn redirected_top_level_get_with_same_site_initiator_and_frame_projects_partial_
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -2939,6 +2940,7 @@ fn redirected_top_level_post_with_same_site_initiator_and_frame_projects_partial
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -2999,6 +3001,7 @@ fn redirected_subresource_get_with_same_site_initiator_and_frame_projects_partia
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3052,6 +3055,7 @@ fn redirected_subresource_post_with_same_site_initiator_and_frame_projects_parti
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3213,6 +3217,7 @@ fn redirected_subresource_get_with_same_site_initiator_and_frame_projects_all_sa
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3262,6 +3267,7 @@ fn redirected_subresource_post_with_same_site_initiator_and_frame_projects_all_s
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3319,6 +3325,7 @@ fn redirected_subresource_get_with_cross_site_initiator_and_same_site_frame_proj
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3372,6 +3379,7 @@ fn redirected_subresource_post_with_cross_site_initiator_and_same_site_frame_pro
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3442,6 +3450,7 @@ fn redirected_top_level_get_with_cross_site_final_keeps_lax_allowance_like_chrom
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3503,6 +3512,7 @@ fn redirected_subresource_get_with_same_site_chain_but_cross_site_final_stays_cr
         initial_request_context,
         &original_request_url,
         &request_url,
+        "GET",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3565,6 +3575,7 @@ fn redirected_top_level_post_with_cross_site_final_keeps_unsafe_allowance_like_c
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);
@@ -3633,6 +3644,7 @@ fn redirected_subresource_post_with_same_site_chain_but_cross_site_final_stays_c
         initial_request_context,
         &original_request_url,
         &request_url,
+        "POST",
     );
 
     let report = store.cookie_access_report_for_request(&request_url, request_context);

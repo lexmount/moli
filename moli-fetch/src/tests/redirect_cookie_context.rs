@@ -329,28 +329,94 @@ fn browser_redirect_cookie_context_keeps_explicit_cross_site_restrictions() -> R
 
 #[test]
 fn network_cookie_context_uses_the_current_overridden_request_method() -> Result<()> {
+    use moli_cookie_jar::test_support::{
+        NetworkSameSiteContext::{SameSiteLax, SameSiteLaxMethodUnsafe},
+        NetworkSiteContext,
+    };
+
     let request_url = Url::parse("https://other.test/target")?;
     let origin = Url::parse("https://example.test/page")?;
-    let mut request = Request::new_browser(
-        "POST",
-        request_url,
-        None,
-        vec![],
-        moli_url::WebOrigin::from_url(&origin),
-    )
-    .with_top_level_navigation_cookie_context();
-    request.method = "GET".to_owned();
-    let actual = request.network_cookie_context();
-    let expected = NetworkCookieRequestContext::top_level_navigation("GET");
-    assert!(actual.is_method_safe);
-    assert_eq!(
-        actual.site_context_metadata.context.http_method,
-        expected.site_context_metadata.context.http_method
-    );
-    assert_eq!(
-        actual.site_context_metadata.schemeful_context.http_method,
-        expected.site_context_metadata.schemeful_context.http_method
-    );
+    for (initial_method, method, initial_context, expected_context) in [
+        ("POST", "GET", SameSiteLaxMethodUnsafe, SameSiteLax),
+        ("GET", "POST", SameSiteLax, SameSiteLaxMethodUnsafe),
+    ] {
+        let mut request = Request::new_browser(
+            initial_method,
+            request_url.clone(),
+            None,
+            vec![],
+            moli_url::WebOrigin::from_url(&origin),
+        )
+        .with_top_level_navigation_cookie_context()
+        .with_initiator_url(&origin);
+        assert_eq!(
+            request.cookie_context.site_context,
+            NetworkSiteContext::new(initial_context, initial_context),
+            "the context must already be computed before the method override"
+        );
+        request.method = method.to_owned();
+        let actual = request.network_cookie_context();
+        let expected = NetworkCookieRequestContext::top_level_navigation(method);
+        assert_eq!(actual.is_method_safe, expected.is_method_safe);
+        assert_eq!(
+            actual.site_context,
+            NetworkSiteContext::new(expected_context, expected_context)
+        );
+        assert_eq!(
+            actual.site_context_metadata.context.http_method,
+            expected.site_context_metadata.context.http_method
+        );
+        assert_eq!(
+            actual.site_context_metadata.schemeful_context.http_method,
+            expected.site_context_metadata.schemeful_context.http_method
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn overridden_navigation_method_controls_cookie_headers_in_all_transports() -> Result<()> {
+    for transport in Transport::ALL {
+        let server = ScriptedHttpServer::spawn(vec![ScriptedResponse::ok("target"); 2]);
+        let target = Url::parse(&server.url())?;
+        let initiator = Url::parse("http://initiator.test/page")?;
+        let cookies = new_shared_browser_cookie_store();
+        seed_redirect_cookies(&cookies, &target, "/");
+        let client = FetchClient::new(&FetchConfig::default(), cookies);
+        for (index, (initial_method, method, expected_cookies)) in [
+            ("POST", "GET", vec!["aged=1", "lax=1", "unspecified=1"]),
+            ("GET", "POST", vec!["unspecified=1"]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut request = Request::new_browser(
+                initial_method,
+                target.clone(),
+                None,
+                vec![],
+                (&initiator).into(),
+            )
+            .with_top_level_navigation_cookie_context()
+            .with_initiator_url(&initiator)
+            .with_credentials_mode(RequestCredentialsMode::Include);
+            assert_eq!(
+                request.cookie_context.is_method_safe,
+                initial_method == "GET"
+            );
+            request.method = method.to_owned();
+            transport.fetch(&client, request).await?;
+            let received = &server.requests()[index];
+            assert!(received.starts_with(&format!("{method} ")), "{received}");
+            assert_eq!(
+                request_cookies(received),
+                expected_cookies,
+                "{transport:?}, {initial_method} -> {method}: {received}"
+            );
+        }
+        assert_eq!(server.hits(), 2, "{transport:?}");
+        server.shutdown();
+    }
     Ok(())
 }
 

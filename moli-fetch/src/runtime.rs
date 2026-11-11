@@ -1574,6 +1574,7 @@ impl RuntimeOwner {
                     job.current_cookie_context,
                     &job.request.url,
                     &upgraded_url,
+                    &job.request.method,
                 );
                 job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
@@ -1698,12 +1699,11 @@ impl RuntimeOwner {
                 negotiated_http_version: response.negotiated_http_version,
             });
             job.request.apply_redirect_status(response.status);
-            job.current_cookie_context
-                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
+                &job.request.method,
             );
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
@@ -1886,6 +1886,7 @@ impl RuntimeOwner {
                     job.current_cookie_context,
                     &job.request.url,
                     &upgraded_url,
+                    &job.request.method,
                 );
                 job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
@@ -2004,12 +2005,11 @@ impl RuntimeOwner {
                 negotiated_http_version,
             });
             job.request.apply_redirect_status(status);
-            job.current_cookie_context
-                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
+                &job.request.method,
             );
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
@@ -2213,6 +2213,7 @@ impl RuntimeOwner {
                     job.current_cookie_context,
                     &job.request.url,
                     &upgraded_url,
+                    &job.request.method,
                 );
                 job.request.redirect_chain.push(https_upgrade_redirect_info(
                     job.current_url.clone(),
@@ -2402,12 +2403,11 @@ impl RuntimeOwner {
                     negotiated_http_version,
                 });
                 job.request.apply_redirect_status(status);
-                job.current_cookie_context
-                    .set_request_method(&job.request.method);
                 job.current_cookie_context = advance_cookie_request_context(
                     job.current_cookie_context,
                     &job.request.url,
                     &next_url,
+                    &job.request.method,
                 );
                 job.current_url = next_url;
                 job.origin_key = origin_key_for_url(&job.current_url);
@@ -2540,12 +2540,11 @@ impl RuntimeOwner {
                 negotiated_http_version: None,
             });
             job.request.apply_redirect_status(cached.status);
-            job.current_cookie_context
-                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
+                &job.request.method,
             );
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
@@ -2606,12 +2605,11 @@ impl RuntimeOwner {
                 negotiated_http_version: None,
             });
             job.request.apply_redirect_status(cached.status);
-            job.current_cookie_context
-                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
+                &job.request.method,
             );
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);

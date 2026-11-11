@@ -795,9 +795,14 @@ fn redirect_chain_cookie_context_preserves_cross_site_downgrade_across_later_sam
         request.cookie_context.clone(),
         &request.url,
         &first_redirect_url,
+        &request.method,
     );
-    let final_hop_context =
-        advance_cookie_request_context(first_hop_context, &request.url, &final_url);
+    let final_hop_context = advance_cookie_request_context(
+        first_hop_context,
+        &request.url,
+        &final_url,
+        &request.method,
+    );
 
     assert_eq!(
         cookie_header_for_request(&cookie_store, &final_url, final_hop_context).unwrap(),

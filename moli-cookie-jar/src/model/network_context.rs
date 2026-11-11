@@ -955,12 +955,14 @@ fn merge_redirect_type(
     }
 }
 
-/// Advances request context after a redirect while preserving prior downgrades.
+/// Advances a redirect using the new hop's method while preserving site/chain limits.
 pub fn advance_cookie_request_context(
-    previous_context: NetworkCookieRequestContext,
+    mut previous_context: NetworkCookieRequestContext,
     original_request_url: &Url,
     current_request_url: &Url,
+    current_request_method: &str,
 ) -> NetworkCookieRequestContext {
+    previous_context.set_request_method(current_request_method);
     let mut recomputed = previous_context.clone();
     recomputed.preserve_site_context = true;
     let recomputed = recomputed.recompute_site_context_for_request(current_request_url);
@@ -1173,6 +1175,46 @@ mod tests {
     }
 
     #[test]
+    fn redirect_advancement_synchronizes_method_before_preserving_site_limits() {
+        use NetworkSameSiteContext::{SameSiteLax, SameSiteLaxMethodUnsafe};
+
+        let initiator = parse("https://example.test/page");
+        let original = parse("https://other.test/start");
+        let next = parse("https://other.test/final");
+        for (initial_method, method, expected_site, expected_http_method) in [
+            ("POST", "GET", SameSiteLax, NetworkSameSiteHttpMethod::Get),
+            (
+                "GET",
+                "POST",
+                SameSiteLaxMethodUnsafe,
+                NetworkSameSiteHttpMethod::Post,
+            ),
+        ] {
+            for cross_site in [false, true] {
+                let mut initial = NetworkCookieRequestContext::top_level_navigation(initial_method)
+                    .with_initiator_url(&original, &initiator);
+                if cross_site {
+                    initial = initial.with_cross_site_context();
+                }
+                let advanced = advance_cookie_request_context(initial, &original, &next, method);
+                let expected_site = if cross_site {
+                    NetworkSiteContext::cross_site()
+                } else {
+                    NetworkSiteContext::new(expected_site, expected_site)
+                };
+                assert_eq!(advanced.site_context, expected_site);
+                assert_eq!(advanced.is_method_safe, method == "GET");
+                for metadata in [
+                    advanced.site_context_metadata.context,
+                    advanced.site_context_metadata.schemeful_context,
+                ] {
+                    assert_eq!(metadata.http_method, expected_http_method);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn redirect_chain_keeps_subresource_request_cross_site_when_original_hop_was_cross_site() {
         let initiator_url = parse("https://example.com/index.html");
         let original_request_url = parse("https://other.test/start");
@@ -1180,8 +1222,12 @@ mod tests {
 
         let initial = NetworkCookieRequestContext::subresource("GET")
             .with_initiator_url(&original_request_url, &initiator_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1216,8 +1262,12 @@ mod tests {
 
         let initial = NetworkCookieRequestContext::top_level_navigation("GET")
             .with_initiator_url(&original_request_url, &initiator_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1248,8 +1298,12 @@ mod tests {
 
         let initial = NetworkCookieRequestContext::top_level_navigation("POST")
             .with_initiator_url(&original_request_url, &initiator_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "POST",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1284,8 +1338,12 @@ mod tests {
 
         let initial = NetworkCookieRequestContext::subresource("GET")
             .with_initiator_url(&original_request_url, &initiator_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1328,8 +1386,12 @@ mod tests {
 
         let initial = NetworkCookieRequestContext::subresource("GET")
             .with_initiator_url(&original_request_url, &initiator_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1376,8 +1438,12 @@ mod tests {
             .with_initiator_url(&original_request_url, &initiator_url)
             .with_site_for_cookies_url(&original_request_url, &same_site_frame_url)
             .with_top_frame_origin_url(&original_request_url, &same_site_frame_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1412,8 +1478,12 @@ mod tests {
             .with_initiator_url(&original_request_url, &initiator_url)
             .with_site_for_cookies_url(&original_request_url, &same_site_frame_url)
             .with_top_frame_origin_url(&original_request_url, &same_site_frame_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "POST",
+        );
 
         assert_eq!(
             advanced.site_context.context,
@@ -1452,8 +1522,12 @@ mod tests {
             .with_initiator_url(&original_request_url, &initiator_url)
             .with_site_for_cookies_url(&original_request_url, &same_site_frame_url)
             .with_top_frame_origin_url(&original_request_url, &same_site_frame_url);
-        let advanced =
-            advance_cookie_request_context(initial, &original_request_url, &current_request_url);
+        let advanced = advance_cookie_request_context(
+            initial,
+            &original_request_url,
+            &current_request_url,
+            "GET",
+        );
 
         assert_eq!(
             advanced.site_context.context,
