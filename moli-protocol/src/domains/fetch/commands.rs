@@ -93,14 +93,24 @@ pub(super) fn start_devtools_fetch_command_for_owner(
 }
 
 fn navigation_fail_request_failure(error_reason: Option<ErrorReason>) -> DevToolsRequestFailure {
-    match error_reason {
-        Some(ErrorReason::Aborted) => DevToolsRequestFailure::Aborted,
-        Some(ErrorReason::BlockedByClient) => {
-            DevToolsRequestFailure::Failed(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
-        }
-        Some(reason) => DevToolsRequestFailure::Failed(reason.as_ref().to_owned()),
-        None => DevToolsRequestFailure::Failed("Fetch request failed".to_owned()),
-    }
+    let error_text = match error_reason {
+        Some(ErrorReason::Aborted) => return DevToolsRequestFailure::Aborted,
+        Some(ErrorReason::Failed) => "net::ERR_FAILED",
+        Some(ErrorReason::TimedOut) => "net::ERR_TIMED_OUT",
+        Some(ErrorReason::AccessDenied) => "net::ERR_ACCESS_DENIED",
+        Some(ErrorReason::ConnectionClosed) => "net::ERR_CONNECTION_CLOSED",
+        Some(ErrorReason::ConnectionReset) => "net::ERR_CONNECTION_RESET",
+        Some(ErrorReason::ConnectionRefused) => "net::ERR_CONNECTION_REFUSED",
+        Some(ErrorReason::ConnectionAborted) => "net::ERR_CONNECTION_ABORTED",
+        Some(ErrorReason::ConnectionFailed) => "net::ERR_CONNECTION_FAILED",
+        Some(ErrorReason::NameNotResolved) => "net::ERR_NAME_NOT_RESOLVED",
+        Some(ErrorReason::InternetDisconnected) => "net::ERR_INTERNET_DISCONNECTED",
+        Some(ErrorReason::AddressUnreachable) => "net::ERR_ADDRESS_UNREACHABLE",
+        Some(ErrorReason::BlockedByClient) => BLOCKED_BY_CLIENT_ERROR_TEXT,
+        Some(ErrorReason::BlockedByResponse) => "net::ERR_BLOCKED_BY_RESPONSE",
+        None => "Fetch request failed",
+    };
+    DevToolsRequestFailure::Failed(error_text.to_owned())
 }
 
 fn optional_response_code(code: Option<i64>) -> Result<Option<u16>, ()> {
@@ -1654,7 +1664,7 @@ mod protocol_neutral_tests {
         ));
         assert_eq!(
             navigation_fail_request_failure(Some(ErrorReason::ConnectionAborted)),
-            DevToolsRequestFailure::Failed("ConnectionAborted".to_owned()),
+            DevToolsRequestFailure::Failed("net::ERR_CONNECTION_ABORTED".to_owned()),
         );
     }
 

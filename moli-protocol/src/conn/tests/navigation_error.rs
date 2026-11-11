@@ -376,9 +376,6 @@ async fn context_wrapped_cancellation_preserves_the_committed_page_and_releases_
     for error in [
         anyhow::Error::new(moli_fetch::FetchCancelled),
         anyhow::Error::new(crate::automation::DevToolsRequestFailure::Aborted),
-        anyhow::Error::new(crate::automation::DevToolsRequestFailure::Failed(
-            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
-        )),
     ] {
         let token = ctx.with_fixture(|conn| {
             conn.start_document_navigation_for_owner(

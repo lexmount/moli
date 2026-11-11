@@ -211,13 +211,7 @@ impl PendingDocumentNavigation {
         let is_request = matches!(&self.response, DocumentNavigationResponse::Request(_));
         let response = match self.response {
             DocumentNavigationResponse::Failure(error) => {
-                return CompletedDocumentNavigation {
-                    token: self.token,
-                    state: self.state,
-                    commit: self.commit,
-                    outcome: DocumentNavigationOutcome::Other(Err(error)),
-                    prefix: self.prefix,
-                };
+                PreparedFetchNavigationResponse::Result(Err(error))
             }
             DocumentNavigationResponse::Prepared(response) => response,
             DocumentNavigationResponse::Request(request) => request.prepare(driver).await,
