@@ -35,11 +35,20 @@ async fn auxiliary_module_completions_follow_the_committed_document_without_a_fr
                 if uri.path().contains('.') {
                     observed.lock().push(uri.path().to_owned());
                 }
-                (
+                let mut response = (
                     status,
                     [("content-type", mime), ("access-control-allow-origin", "*")],
                     body,
-                ).into_response()
+                ).into_response();
+                if uri.path() == "/parent" {
+                    response.headers_mut().insert(
+                        "content-security-policy",
+                        axum::http::HeaderValue::from_static(
+                            "script-src 'self' 'unsafe-eval'; connect-src 'self'",
+                        ),
+                    );
+                }
+                response
             }
         })),
         "auxiliary-module-completion",

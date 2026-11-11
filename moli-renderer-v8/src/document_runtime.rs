@@ -647,6 +647,8 @@ pub(crate) struct DocumentPolicyContainer {
     pub(crate) document_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) response_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
+    // Local-scheme Documents keep the source URL of their inherited policy.
+    pub(crate) content_security_policy_self_url: Option<Url>,
     pub(crate) content_security_reporting_endpoints:
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     pub(crate) credentialless: bool,

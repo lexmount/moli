@@ -334,6 +334,9 @@ impl ChildBrowsingContextEntry {
         credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     ) {
         self.document_policy_container.referrer_policy = policy_container.referrer_policy.clone();
+        self.document_policy_container
+            .content_security_policy_self_url =
+            policy_container.content_security_policy_self_url.clone();
         self.document_policy_container.cross_origin_embedder_policy =
             policy_container.cross_origin_embedder_policy;
         self.document_policy_container.document_isolation_policy =
@@ -375,6 +378,11 @@ impl ChildBrowsingContextEntry {
             self.document_policy_container.credentialless_storage_nonce;
         self.document_policy_container.referrer_policy =
             snapshot.policy_container.referrer_policy.clone();
+        self.document_policy_container
+            .content_security_policy_self_url = snapshot
+            .policy_container
+            .content_security_policy_self_url
+            .clone();
         self.document_policy_container.cross_origin_embedder_policy =
             snapshot.policy_container.cross_origin_embedder_policy;
         self.document_policy_container.document_isolation_policy =
