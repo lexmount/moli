@@ -58,7 +58,8 @@ async fn check_window_request_referrer(policy: &'static str) {
                 });
             });
             let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-            let hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+            let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+            hooks.resource_task_runner = Some(loader.resource_task_runner());
             let document_url = Url::parse(&format!("{origin}/app/page.html?policy={policy}&marker=private#fragment")).unwrap();
             let mut page = test_page_vm_with_loader_document_url_and_hooks(&loader, Vec::new(), document_url.clone(), hooks);
             page.retain_standalone_request_client_owner_for_test(loader);
@@ -84,10 +85,8 @@ async fn check_window_request_referrer(policy: &'static str) {
                 for row in rows {
                     assert!(row.get("error").is_none(), "{policy}/{controlled}: {row}");
                     let route = row["route"].as_str().unwrap();
-                    // Main's synchronous XHR sends directly to the network.
-                    let uses_service_worker = controlled && row["kind"] != "syncxhr";
-                    let synthetic = uses_service_worker && matches!(route, "synthetic-same" | "synthetic-cross");
-                    let is_cross = route.ends_with("-cross") || (uses_service_worker && route == "synthetic-redirect");
+                    let synthetic = controlled && matches!(route, "synthetic-same" | "synthetic-cross");
+                    let is_cross = route.ends_with("-cross") || (controlled && route == "synthetic-redirect");
                     let expected = if route == "network-policy-redirect" || effective_policy == "no-referrer" || (effective_policy == "same-origin" && is_cross) {
                         None
                     } else if effective_policy == "origin" || (effective_policy == "strict-origin-when-cross-origin" && is_cross) {
@@ -95,12 +94,12 @@ async fn check_window_request_referrer(policy: &'static str) {
                     } else { Some(full_referrer.to_string()) };
                     let data = &row["data"];
                     if synthetic {
-                        assert_eq!(data["source"], "serviceworker", "{policy}/{controlled}: {row}");
+                        assert_eq!(data["source"], "serviceworker");
                         assert_eq!(data["referrer"], expected.as_deref().unwrap_or(""), "{policy}/{controlled}: {row}");
                         assert_eq!(data["referrerPolicy"], effective_policy);
                         assert_eq!(data["cache"], if row["kind"] == "eventsource" { "no-store" } else { "default" });
                     } else {
-                        assert_eq!(data["source"], "network", "{policy}/{controlled}: {row}");
+                        assert_eq!(data["source"], "network");
                         assert_eq!(data["referrer"], serde_json::to_value(expected)?, "{policy}/{controlled}: {row}");
                     }
                 }
