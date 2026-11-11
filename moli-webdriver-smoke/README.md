@@ -62,7 +62,8 @@ non-yielding WebDriver timeout behavior.
   a `contextCreated` subscription while their causing script is still pending.
   With lifecycle events subscribed, popup creation precedes prompt opening under
   manual handling and automatic acceptance/dismissal. Closing a popup while its
-  prompt is waiting also produces one creation before one destruction.
+  prompt is waiting produces one prompt closure before one destruction. A nested popup
+  with a configured preload channel checks parent/child creation order and modal progress.
   A shared Classic/BiDi session
   checks that explicit empty, omitted, and replacement BiDi text override text
   previously stored by Classic. The group also covers
