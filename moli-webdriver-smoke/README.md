@@ -57,7 +57,8 @@ non-yielding WebDriver timeout behavior.
   exactly one `browsingContext.userPromptOpened`/`userPromptClosed` notification
   per alert/confirm/prompt under `ignore`, `accept`, and `dismiss`, JavaScript
   return values after manual or automatic handling, and one-shot handling
-  followed by live commands in the same session. Popup dialogs work without
+  followed by live commands in the same session. Alert close events report
+  acknowledgement for both automatic and manual dismissal. Popup dialogs work without
   a `contextCreated` subscription while their causing script is still pending.
   A shared Classic/BiDi session
   checks that explicit empty, omitted, and replacement BiDi text override text
