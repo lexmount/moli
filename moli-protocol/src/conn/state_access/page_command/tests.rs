@@ -136,7 +136,10 @@ async fn assert_owned_page_wait(method: &str) {
         ) else {
             panic!("peer completes while Native is held");
         };
-        let (_, mut published_work, _) = peer.into_protocol_event_parts();
+        let _ = peer.into_protocol_event_parts();
+        let mut published_work = handle
+            .with_state(|state| state.take_published_protocol_work())
+            .unwrap();
         handle
             .with_state(|state| {
                 assert!(state.connection.state_access.is_some());
@@ -198,10 +201,22 @@ async fn assert_owned_page_wait(method: &str) {
         else {
             panic!("one finite handoff");
         };
-        let (events, scheduler_events, _) = outcome.into_protocol_event_parts();
-        published_work.extend(scheduler_events);
+        let (events, _scheduler_events, _) = outcome.into_protocol_event_parts();
+        published_work.extend(
+            handle
+                .with_state(|state| state.take_published_protocol_work())
+                .unwrap(),
+        );
         if method == "Page.close" {
-            assert_eq!(published_work.iter().filter(|event| matches!(event, crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction)).count(), 1, "one original target retirement survives command recovery");
+            assert_eq!(
+                published_work
+                    .iter()
+                    .filter(|work| work.kind()
+                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction)
+                    .count(),
+                1,
+                "one original target retirement survives command recovery"
+            );
         }
         let messages = events
             .into_iter()

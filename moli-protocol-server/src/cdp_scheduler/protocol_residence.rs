@@ -110,6 +110,11 @@ pub(super) enum ClientTurnPredecessor {
 }
 
 impl ProtocolSchedulerResidence {
+    pub(super) fn waits_for_command_output(&self) -> bool {
+        matches!(self, Self::ProtocolWork { work, .. }
+            if work.is_waiting_for_command_output())
+    }
+
     pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match self {
             // These events were already authorized and projected from a
@@ -123,23 +128,27 @@ impl ProtocolSchedulerResidence {
     }
 
     pub(super) fn should_yield_to_client_turn(&self) -> bool {
-        matches!(
-            self,
-            Self::RendererOutputPublication(RendererOutputPublicationWork {
-                client_turn_predecessor: ClientTurnPredecessor::Pending,
-                projection_pending: false,
-                ..
-            }) | Self::ProtocolWork {
-                client_turn_predecessor: ClientTurnPredecessor::Pending,
-                ..
-            }
-        )
+        !self.waits_for_command_output()
+            && matches!(
+                self,
+                Self::RendererOutputPublication(RendererOutputPublicationWork {
+                    client_turn_predecessor: ClientTurnPredecessor::Pending,
+                    projection_pending: false,
+                    ..
+                }) | Self::ProtocolWork {
+                    client_turn_predecessor: ClientTurnPredecessor::Pending,
+                    ..
+                }
+            )
     }
 
     pub(super) fn is_ready_to_complete(
         &self,
         conn: &moli_protocol::ProtocolWorkflowState<'_>,
     ) -> bool {
+        if self.waits_for_command_output() {
+            return false;
+        }
         match self {
             Self::RendererOutputPublication(work) => {
                 !work.projection_pending
@@ -164,6 +173,9 @@ impl ProtocolSchedulerResidence {
     }
 
     fn mark_client_turn_yielded(&mut self) {
+        if self.waits_for_command_output() {
+            return;
+        }
         match self {
             Self::ProtocolWork {
                 client_turn_predecessor,
@@ -552,22 +564,8 @@ impl SchedulerQueues {
             .expect("scheduler protocol work publish sequence exhausted");
     }
 
-    pub(super) fn enqueue_protocol_work(
-        &mut self,
-        work: ProtocolSchedulerWork,
-        load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
-        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
-    ) {
+    pub(super) fn enqueue_protocol_work(&mut self, work: ProtocolSchedulerWork) {
         self.admit_protocol_work_publish_sequence(work.publish_sequence());
-        self.enqueue_admitted_protocol_work(work, load_predecessors, future_load_predecessor);
-    }
-
-    pub(super) fn enqueue_admitted_protocol_work(
-        &mut self,
-        work: ProtocolSchedulerWork,
-        load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
-        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
-    ) {
         // A projection may materialize events behind an independent Native
         // fence. Keep those events and their full predecessors on the original
         // publication, so its delivery receipt cannot precede its creation fact.
@@ -606,7 +604,7 @@ impl SchedulerQueues {
         let (load_predecessors, future_load_predecessor) = work
             .renderer_output_source()
             .and_then(|cursor| self.renderer_output_order(cursor))
-            .unwrap_or((load_predecessors, future_load_predecessor));
+            .unwrap_or_default();
         // A replacement must reach its owner before the pending load completes,
         // so it can cancel that load. Keep the client-turn boundary and the
         // action's owner checks, but never make it a successor of that load.

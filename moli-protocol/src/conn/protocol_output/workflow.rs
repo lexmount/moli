@@ -79,7 +79,7 @@ impl PendingProtocolWorkflow {
                 conn.take_scheduler_events(),
             );
         };
-        let scheduler_start = conn.scheduler_state.scheduler_event_count();
+        let scheduler_start = conn.scheduler_state.protocol_work_publication_mark();
         let mut context = std::mem::take(&mut *self.context.borrow_mut());
         let mut plan = completed.finish(conn, &mut context);
         if let Some(Err(error)) = plan.take_command_status() {
@@ -143,7 +143,7 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BackgroundProtocolEvent, CdpSchedulerEvent};
+    use crate::conn::BackgroundProtocolEvent;
     use crate::domains::{activity::RendererPublicationOwner, command_output::CommandOutputPlan};
     use moli_core::{
         RendererOutputCursor, RendererOutputFence, RendererOutputPublication,
@@ -208,17 +208,11 @@ mod tests {
                 });
                 let pending = PendingProtocolWorkflow::prepare(workflow, None);
                 let completed = pending.wait().await;
-                let (output, events) = pending
+                let (output, _events) = pending
                     .finish(&mut conn, completed)
                     .into_protocol_event_parts();
                 assert!(output.is_empty());
-                let work = events
-                    .into_iter()
-                    .map(|event| match event {
-                        CdpSchedulerEvent::ProtocolWorkPublished { work } => work,
-                        _ => panic!("only the original fenced output was published"),
-                    })
-                    .collect::<Vec<_>>();
+                let work = conn.take_published_protocol_work();
                 assert_eq!(work.len(), if emit_events { 2 } else { 1 });
                 assert!(
                     work.iter()

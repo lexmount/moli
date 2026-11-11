@@ -634,13 +634,32 @@ mod tests {
                 access.defer_cleanup(Box::new(move |conn| {
                     let mut replies = Vec::new();
                     let mut messages = Vec::new();
-                    conn.route_registered_runtime_inspector_response_into(response, &mut replies, &mut messages);
+                    conn.route_registered_runtime_inspector_response_into(
+                        response,
+                        &mut replies,
+                        &mut messages,
+                    );
                     assert!(replies.is_empty());
-                    assert_eq!(messages.len(), 1, "the original long listener owns one message");
-                    let (_, Some(crate::automation::AutomationEvent::ScriptMessage(message))) = messages.pop().unwrap().into_parts() else { panic!("the original listener produces a channel event"); };
+                    assert_eq!(
+                        messages.len(),
+                        1,
+                        "the original long listener owns one message"
+                    );
+                    let (_, Some(crate::automation::AutomationEvent::ScriptMessage(message))) =
+                        messages.pop().unwrap().into_parts()
+                    else {
+                        panic!("the original listener produces a channel event");
+                    };
                     assert_eq!(message.channel, "recovery-channel");
                     assert_eq!(message.data.value, json!("once"));
-                    let restarts = conn.take_scheduler_events().into_iter().filter(|event| matches!(event, crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.bidi_channel_owner_action_kind() == Some(crate::conn::BidiChannelOwnerActionKind::StartListener))).count();
+                    let restarts = conn
+                        .take_published_protocol_work()
+                        .into_iter()
+                        .filter(|work| {
+                            work.bidi_channel_owner_action_kind()
+                                == Some(crate::conn::BidiChannelOwnerActionKind::StartListener)
+                        })
+                        .count();
                     assert_eq!(restarts, 1, "recovery cannot add a second listener");
                 }));
                 assert!(matches!(
@@ -725,7 +744,7 @@ mod tests {
             assert!(!page_owner.is_current(conn));
         }));
         let completed = pending.clone().wait().await;
-        let (events, scheduled) = handle
+        let (events, _scheduled) = handle
             .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
             .unwrap()
             .into_protocol_event_parts();
@@ -733,16 +752,11 @@ mod tests {
             events.is_empty(),
             "the fact must remain fenced rather than bypassing projection"
         );
-        let work = scheduled
+        let work = handle
+            .with_state(|state| state.take_published_protocol_work())
+            .unwrap()
             .into_iter()
-            .find_map(|event| match event {
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if !work.renderer_output_predecessors().is_empty() =>
-                {
-                    Some(work)
-                }
-                _ => None,
-            })
+            .find(|work| !work.renderer_output_predecessors().is_empty())
             .expect("recovery publishes the original fenced fact");
         assert_eq!(
             work.renderer_output_predecessors()[0].cursor(),
@@ -804,12 +818,9 @@ mod tests {
             )
         });
         let work = ctx.with_fixture(|conn| {
-            conn.take_scheduler_events()
+            conn.take_published_protocol_work()
                 .into_iter()
-                .find_map(|event| match event {
-                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => Some(work),
-                    _ => None,
-                })
+                .next()
                 .unwrap()
         });
         ctx.with_fixture(|conn| assert!(!work.renderer_output_predecessor_is_projected(conn)));

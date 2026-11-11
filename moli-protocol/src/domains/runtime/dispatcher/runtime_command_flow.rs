@@ -627,7 +627,7 @@ pub(super) fn prepare_pending_runtime_inspector_command(
                 receiver,
             }))
         }
-        None => continuation.finish_routed(conn),
+        None => continuation.finish_routed(conn, response_flush),
     }
 }
 
@@ -917,7 +917,7 @@ pub(super) fn prepare_pending_runtime_binding_inspector_command(
                 receiver,
             }))
         }
-        None => continuation.finish_routed(conn),
+        None => continuation.finish_routed(conn, response_flush),
     }
 }
 

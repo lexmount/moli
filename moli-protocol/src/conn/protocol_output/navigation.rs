@@ -308,14 +308,11 @@ impl CdpConnection {
         &mut self,
         pending: PendingBackgroundNavigationProtocol,
     ) {
-        let sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::navigation_protocol_completion(
-            sequence, pending,
-        );
-        self.scheduler_state
-            .push_scheduler_event(crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |sequence| {
+            crate::domains::activity::ProtocolSchedulerWork::navigation_protocol_completion(
+                sequence, pending,
+            )
+        });
     }
 
     pub(in crate::conn) fn finish_background_navigation_protocol(

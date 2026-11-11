@@ -756,15 +756,12 @@ impl CdpConnection {
     }
 
     pub(super) fn publish_bidi_channel_owner_action(&mut self, action: BidiChannelOwnerAction) {
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::bidi_channel_owner_action(
-            publish_sequence,
-            action,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        self.publish_protocol_work(move |publish_sequence| {
+            crate::domains::activity::ProtocolSchedulerWork::bidi_channel_owner_action(
+                publish_sequence,
+                action,
+            )
+        });
     }
 
     pub(crate) fn forget_pending_inspector_await(

@@ -157,19 +157,10 @@ mod workflow_tests {
                     !conn
                         .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))
                 );
-                conn.take_scheduler_events()
-                    .into_iter()
-                    .map(|event| match event {
-                        crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } => {
-                            assert_eq!(
-                                work.bidi_channel_owner_action_kind(),
-                                Some(crate::conn::BidiChannelOwnerActionKind::ReleaseObjectGroup)
-                            );
-                            work
-                        }
-                        other => panic!("unexpected work before author admission: {other:?}"),
-                    })
-                    .collect::<Vec<_>>()
+                let work = conn.take_published_protocol_work();
+                assert!(work.iter().all(|work| work.bidi_channel_owner_action_kind()
+                    == Some(crate::conn::BidiChannelOwnerActionKind::ReleaseObjectGroup)));
+                work
             });
             assert_eq!(work.len(), handles.len());
             for work in work {

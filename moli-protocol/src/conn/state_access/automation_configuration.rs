@@ -887,11 +887,29 @@ mod tests {
         ) {
             use crate::conn::CdpSchedulerEvent;
             use futures_util::FutureExt as _;
-            let mut events = std::collections::VecDeque::from(events);
+            enum Input {
+                Event(CdpSchedulerEvent),
+                Work(crate::ProtocolSchedulerWork),
+            }
+            let mut events = events
+                .into_iter()
+                .map(Input::Event)
+                .collect::<std::collections::VecDeque<_>>();
             while let Some(event) = events.pop_front() {
                 let pending = match event {
-                    CdpSchedulerEvent::ProtocolTaskPrepared { pending } => Some(pending),
-                    CdpSchedulerEvent::ProtocolWorkPublished { work } => handle
+                    Input::Event(CdpSchedulerEvent::ProtocolTaskPrepared { pending }) => {
+                        Some(pending)
+                    }
+                    Input::Event(CdpSchedulerEvent::ProtocolWorkReady) => {
+                        let publications = handle
+                            .with_state(|state| state.take_published_protocol_work())
+                            .unwrap();
+                        for work in publications.into_iter().rev() {
+                            events.push_front(Input::Work(work));
+                        }
+                        continue;
+                    }
+                    Input::Work(work) => handle
                         .with_state(|state| {
                             match state
                                 .connection
@@ -905,13 +923,19 @@ mod tests {
                                         .unwrap_or_else(|_| {
                                             panic!("fixture observation is finite")
                                         });
-                                    events.extend(output.into_protocol_event_parts().1);
+                                    events.extend(
+                                        output
+                                            .into_protocol_event_parts()
+                                            .1
+                                            .into_iter()
+                                            .map(Input::Event),
+                                    );
                                     None
                                 }
                             }
                         })
                         .unwrap(),
-                    CdpSchedulerEvent::PageScreencastStarted { .. } => {
+                    Input::Event(CdpSchedulerEvent::PageScreencastStarted { .. }) => {
                         panic!("navigation fixture does not request a screencast")
                     }
                 };

@@ -142,7 +142,7 @@ impl ProtocolAdapterScheduler {
 mod tests {
     use moli_core::{PageId, RendererOutputResidenceIdentity, RendererOwnerLocalHostId};
     use moli_protocol::{
-        CdpConnection, CdpSchedulerEvent, ProtocolSchedulerWork,
+        CdpConnection, ProtocolSchedulerWork,
         test_support::{
             deferred_main_document_load_observation_id,
             deferred_main_document_load_output_interest, root_frame_stopped_loading_work,
@@ -175,9 +175,7 @@ mod tests {
     fn pending_exact_load_observation_allows_independent_protocol_residence() {
         let observation_id = deferred_main_document_load_observation_id(1);
         let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
-        scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-            work: protocol_observation(1),
-        }]);
+        scheduler.apply_protocol_work_publications(vec![protocol_observation(1)]);
         let adapter = ProtocolAdapterScheduler::default();
         scheduler.queues.start_main_document_load(
             observation_id,
@@ -253,9 +251,7 @@ mod tests {
             .run_until(async {
                 let (mut scheduler, _protocol_completions) =
                     CdpScheduler::new(CdpConnection::new());
-                scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
-                    work: protocol_observation(1),
-                }]);
+                scheduler.apply_protocol_work_publications(vec![protocol_observation(1)]);
                 let mut adapter = ProtocolAdapterScheduler::default();
 
                 adapter.schedule_turn_if_needed(&scheduler, false);

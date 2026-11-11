@@ -456,7 +456,8 @@ impl PreparedPageTargetTermination {
         if let Some(error) = result.first_error {
             tracing::warn!(%error, "Page close cleanup failed; retaining target retirement");
         }
-        driver.with_state(move |state| state.publish_page_output_close(self.action))
+        let output = context.context_mut().response_flush().clone();
+        driver.with_state(move |state| state.publish_page_output_close(self.action, output))
     }
 }
 
@@ -496,10 +497,13 @@ mod tests {
 
         let work = ctx.with_fixture(|conn| {
             conn.publish_page_target_termination_owner_action(action);
-            conn.take_scheduler_events().into_iter().find_map(|event| match event {
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction => Some(work),
-                _ => None,
-            }).unwrap()
+            conn.take_published_protocol_work()
+                .into_iter()
+                .find(|work| {
+                    work.kind()
+                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                })
+                .unwrap()
         });
         ctx.run_fixture_scheduler_work(work).await;
         ctx.with_fixture(|conn| {
@@ -536,10 +540,13 @@ mod tests {
 
         let work = ctx.with_fixture(|conn| {
             conn.publish_page_target_termination_owner_action(action);
-            conn.take_scheduler_events().into_iter().find_map(|event| match event {
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.kind() == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction => Some(work),
-                _ => None,
-            }).unwrap()
+            conn.take_published_protocol_work()
+                .into_iter()
+                .find(|work| {
+                    work.kind()
+                        == crate::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
+                })
+                .unwrap()
         });
         let outcome = ctx.run_fixture_scheduler_work(work).await;
         assert!(outcome.into_parts().0.is_empty());

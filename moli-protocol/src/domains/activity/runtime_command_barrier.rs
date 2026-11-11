@@ -878,26 +878,19 @@ mod tests {
         ctx: &mut crate::testing::TestContext,
         command_context: &mut CommandDispatchContext,
     ) {
-        let [event]: [crate::conn::CdpSchedulerEvent; 1] = ctx
-            .with_fixture(|conn| conn.take_scheduler_events())
+        let [work]: [crate::ProtocolSchedulerWork; 1] = ctx
+            .with_fixture(|conn| conn.take_published_protocol_work())
             .try_into()
             .expect("barrier release should publish one concrete navigation action");
-        let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-            panic!("barrier release must publish concrete protocol work");
-        };
         assert!(work.is_top_level_navigation_owner_action());
-        let (events, nested_scheduler_events) = ctx
+        let (events, _nested_scheduler_events) = ctx
             .run_fixture_scheduler_work(work)
             .await
             .into_protocol_event_parts();
         assert!(
-            !nested_scheduler_events.iter().any(|event| {
-                matches!(
-                    event,
-                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                        if work.is_top_level_navigation_owner_action()
-                )
-            }),
+            !ctx.with_fixture(|conn| conn.take_published_protocol_work())
+                .iter()
+                .any(|work| work.is_top_level_navigation_owner_action()),
             "executing the concrete navigation must not republish its own owner action"
         );
         command_context.protocol_events_mut().extend(events);
@@ -1438,15 +1431,13 @@ mod tests {
                 with_barriers(&ctx, |_conn, barriers| barriers.held_output_count()),
                 0
             );
-            let events = ctx.with_fixture(|conn| conn.take_scheduler_events());
+            let publications = ctx.with_fixture(|conn| conn.take_published_protocol_work());
             assert_eq!(
-                events.len(),
+                publications.len(),
                 1,
                 "the original owner continuation is published exactly once"
             );
-            assert!(
-                matches!(&events[0], crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } if work.is_top_level_navigation_owner_action())
-            );
+            assert!(publications[0].is_top_level_navigation_owner_action());
         }
     }
 
@@ -1594,8 +1585,7 @@ mod tests {
             2
         );
         project_ready(&mut ctx, &mut context, first_ready).await;
-        let urls = ctx.with_fixture(|conn| conn.take_scheduler_events().into_iter().map(|event| {
-            let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else { panic!("navigation owner action"); };
+        let urls = ctx.with_fixture(|conn| conn.take_published_protocol_work().into_iter().map(|work| {
             let super::super::scheduler_work::ReadyProtocolSchedulerWork::TopLevelNavigationOwnerAction(action) = work.into_ready() else { panic!("original navigation owner action"); };
             match action.into_parts().2 {
                 crate::conn::TopLevelNavigationRequest::Location(navigation) => navigation.url().to_owned(),

@@ -27,8 +27,9 @@ impl ProtocolWorkflowState<'_> {
         response: Result<moli_core::RendererRuntimeInspectorAsyncCompletion>,
         context: &mut CommandWorkflowContext,
     ) -> PageRuntimeCompletion {
+        let flush = context.context_mut().response_flush().clone();
         continuation
-            .finish_response(self.connection, response)
+            .finish_response(self.connection, response, &flush)
             .retain(context)
     }
 
@@ -38,8 +39,9 @@ impl ProtocolWorkflowState<'_> {
         result: Result<CompletedRuntimeBindingPageCommandDispatch>,
         context: &mut CommandWorkflowContext,
     ) -> PageRuntimeCompletion {
+        let flush = context.context_mut().response_flush().clone();
         continuation
-            .finish_binding_state(self.connection, result)
+            .finish_binding_state(self.connection, result, &flush)
             .retain(context)
     }
 }

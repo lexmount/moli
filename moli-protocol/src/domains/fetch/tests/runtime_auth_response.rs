@@ -5280,11 +5280,20 @@ async fn close_aborts_paused_response_stage_runtime_xhr_subresource() {
     assert_eq!(response_paused["params"]["request"]["url"], xhr_url);
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 898,
-        "method": "Page.close",
-        "sessionId": "SID-1"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 898,
+            "method": "Page.close",
+            "sessionId": "SID-1"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.wait_until_scheduler_state("original session retirement", |conn| {
         !conn.has_attached_devtools_session("SID-1")
@@ -5635,11 +5644,20 @@ async fn close_aborts_paused_runtime_xhr_auth_subresource() {
     assert_eq!(auth_required["params"]["resourceType"], "XHR");
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 7944,
-        "method": "Page.close",
-        "sessionId": "SID-1"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 7944,
+            "method": "Page.close",
+            "sessionId": "SID-1"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.wait_until_scheduler_state("original session retirement", |conn| {
         !conn.has_attached_devtools_session("SID-1")

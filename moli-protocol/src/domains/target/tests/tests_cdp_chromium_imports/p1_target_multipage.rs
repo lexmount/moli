@@ -1002,12 +1002,21 @@ async fn run_waiting_popup_initial_document_after_resume(
     );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 260_220,
-        "method": "Runtime.runIfWaitingForDebugger",
-        "sessionId": popup_session_id
-    }))
-    .await;
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 260_220,
+            "method": "Runtime.runIfWaitingForDebugger",
+            "sessionId": popup_session_id
+        }))
+        .await;
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Fetch.requestPaused"),
+        "the initial popup navigation must stay held until its resume response flushes"
+    );
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
     crate::testing::wait_until_scheduler_message(
         ctx,
         "popup document request after debugger resume",

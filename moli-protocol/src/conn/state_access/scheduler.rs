@@ -401,6 +401,10 @@ impl ProtocolWorkflowState<'_> {
         self.connection.take_scheduler_events()
     }
 
+    pub fn take_published_protocol_work(self) -> Vec<crate::ProtocolSchedulerWork> {
+        self.connection.take_published_protocol_work()
+    }
+
     pub fn try_complete_protocol_scheduler_work_turn(
         self,
         work: crate::domains::activity::ProtocolSchedulerWork,

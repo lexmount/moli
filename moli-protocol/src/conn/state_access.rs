@@ -83,7 +83,7 @@ impl<'state> ProtocolWorkflowState<'state> {
             return operation(self);
         };
         let connection = self.connection;
-        let start = connection.scheduler_state.scheduler_event_count();
+        let start = connection.scheduler_state.protocol_work_publication_mark();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             operation(ProtocolWorkflowState { connection })
         }));
@@ -390,18 +390,53 @@ mod tests {
     use futures_util::FutureExt as _;
 
     use super::*;
-    use crate::conn::CdpSchedulerEvent;
     use crate::domains::activity::ProtocolSchedulerWork;
 
     fn publish_event(connection: &mut CdpConnection) {
-        let sequence = connection
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work =
-            ProtocolSchedulerWork::renderer_fenced_output(sequence, Vec::new(), Vec::new(), None);
-        connection
-            .scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
+        connection.publish_protocol_work(|sequence| {
+            ProtocolSchedulerWork::renderer_fenced_output(sequence, Vec::new(), Vec::new(), None)
+        });
+    }
+
+    #[test]
+    fn renderer_source_binds_only_its_publications_even_if_a_command_takes_the_wake() {
+        use moli_core::{PageId, RendererOutputCursor, RendererOutputStreamIdentity};
+        let mut conn = CdpConnection::new();
+        let first = RendererOutputCursor::new_for_test(
+            RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(1)),
+            1,
+        );
+        let second = RendererOutputCursor::new_for_test(
+            RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(2)),
+            1,
+        );
+
+        publish_event(&mut conn);
+        ProtocolWorkflowState::new(&mut conn).in_renderer_output_source(Some(first), |state| {
+            publish_event(state.connection);
+            // A turn can take its scheduler wakes without taking ownership
+            // of the work or changing the source-binding publication mark.
+            drop(state.connection.take_scheduler_events());
+            publish_event(state.connection);
+        });
+        ProtocolWorkflowState::new(&mut conn)
+            .in_renderer_output_source(Some(second), |state| publish_event(state.connection));
+        let publications = conn.take_published_protocol_work();
+        assert_eq!(
+            publications
+                .iter()
+                .map(|work| work.publish_sequence().get())
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            publications
+                .iter()
+                .map(ProtocolSchedulerWork::renderer_output_source)
+                .collect::<Vec<_>>(),
+            [None, Some(first), Some(first), Some(second)]
+        );
+        assert!(conn.take_scheduler_events().is_empty());
     }
 
     #[tokio::test]
@@ -431,9 +466,10 @@ mod tests {
                     "the actor must wake during the first external wait"
                 );
                 let first = owner
-                    .with_state(|state| state.take_scheduler_events())
+                    .with_state(|state| state.take_published_protocol_work())
                     .unwrap();
                 assert_eq!(first.len(), 1);
+                assert_eq!(first[0].publish_sequence().get(), 1);
                 next.send(()).unwrap();
                 tokio::time::timeout(std::time::Duration::from_secs(5), events_ready.notified())
                     .await
@@ -445,13 +481,14 @@ mod tests {
                 task.abort();
                 assert!(task.await.unwrap_err().is_cancelled());
                 let second = owner
-                    .with_state(|state| state.take_scheduler_events())
+                    .with_state(|state| state.take_published_protocol_work())
                     .unwrap();
                 assert_eq!(
                     second.len(),
                     1,
                     "cancellation cannot discard an accepted scheduler event"
                 );
+                assert_eq!(second[0].publish_sequence().get(), 2);
                 assert!(
                     owner
                         .with_state(|state| state.take_scheduler_events())

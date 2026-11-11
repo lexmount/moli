@@ -299,7 +299,6 @@ impl TestContext {
         >,
         initial: crate::conn::CdpRendererOwnerTurnOutcome,
     ) -> Vec<Value> {
-        use crate::domains::activity::ProtocolSchedulerWorkKind;
         let mut turns = std::collections::VecDeque::from([initial]);
         let mut messages = Vec::new();
         loop {
@@ -310,19 +309,35 @@ impl TestContext {
                 let mut other_events = Vec::new();
                 for event in scheduler_events {
                     match event {
-                    crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                        if work.kind() == ProtocolSchedulerWorkKind::NavigationProtocolCompletionOwnerAction => {
-                        let pending = self.with_fixture(|conn| conn.try_start_owned_protocol_scheduler_work(work)
-                            .unwrap_or_else(|_| panic!("navigation uses its existing supervisor")).unwrap());
-                        let mut wait = Box::pin(pending.wait());
-                        let completed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-                            (&mut wait).await
-                        }).await.unwrap();
-                        let handoff = self.with_fixture(|conn| conn.complete_owned_protocol_scheduler_work(completed));
-                        turns.push_back(handoff.with_renderer_output_predecessor(None));
+                        crate::conn::CdpSchedulerEvent::ProtocolWorkReady => {
+                            let publications =
+                                self.with_fixture(|conn| conn.take_published_protocol_work());
+                            for work in publications {
+                                if !work.can_start_on_admission() {
+                                    self.pending_protocol_scheduler_work.push_back(work);
+                                    continue;
+                                }
+                                let pending = self.with_fixture(|conn| {
+                                    conn.try_start_owned_protocol_scheduler_work(work)
+                                        .unwrap_or_else(|_| {
+                                            panic!("navigation uses its existing supervisor")
+                                        })
+                                        .unwrap()
+                                });
+                                let completed = tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    pending.wait(),
+                                )
+                                .await
+                                .unwrap();
+                                let handoff = self.with_fixture(|conn| {
+                                    conn.complete_owned_protocol_scheduler_work(completed)
+                                });
+                                turns.push_back(handoff.with_renderer_output_predecessor(None));
+                            }
+                        }
+                        event => other_events.push(event),
                     }
-                    event => other_events.push(event),
-                }
                 }
                 self.route_direct_command_output_for_test(Vec::new(), other_events)
                     .await;
@@ -2366,8 +2381,18 @@ impl TestContext {
                     self.pending_owned_protocol_work
                         .push(pending.wait().boxed_local());
                 }
-                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
-                    self.pending_protocol_scheduler_work.push_back(work);
+                CdpSchedulerEvent::ProtocolWorkReady => {
+                    let publications = self
+                        .state
+                        .with_state(|state| state.take_published_protocol_work())
+                        .expect("live test owner");
+                    for publication in &publications {
+                        if let Some(output) = publication.command_output_dependency() {
+                            let ready = self.state.scheduler_events_ready();
+                            output.defer_until_response_flush(move || ready.notify_one());
+                        }
+                    }
+                    self.pending_protocol_scheduler_work.extend(publications);
                 }
                 CdpSchedulerEvent::PageScreencastStarted { .. } => {}
             }
@@ -2386,17 +2411,24 @@ impl TestContext {
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         loop {
-            let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front)
-                    if self
-                        .state
-                        .with_state(|state| state.protocol_work_predecessor_is_projected(front))
-                        .expect("live test owner") =>
-                {
-                    0
-                }
-                Some(_) | None => return,
+            let Some(selected_index) = self
+                .pending_protocol_scheduler_work
+                .iter()
+                .position(|work| !work.is_waiting_for_command_output())
+            else {
+                return;
             };
+            if !self
+                .state
+                .with_state(|state| {
+                    state.protocol_work_predecessor_is_projected(
+                        &self.pending_protocol_scheduler_work[selected_index],
+                    )
+                })
+                .expect("live test owner")
+            {
+                return;
+            }
             if !self.background_navigation_scheduler_enabled
                 && self
                     .pending_protocol_scheduler_work
@@ -2765,16 +2797,36 @@ pub(crate) async fn collect_ready_scheduler_output(
     scheduler_events: Vec<CdpSchedulerEvent>,
     materialize: fn(BackgroundProtocolEvent) -> Value,
 ) {
-    let mut queue = VecDeque::from(scheduler_events);
+    enum Input {
+        Event(CdpSchedulerEvent),
+        Work(ProtocolSchedulerWork),
+    }
+    let mut queue = scheduler_events
+        .into_iter()
+        .map(Input::Event)
+        .collect::<VecDeque<_>>();
     while let Some(event) = queue.pop_front() {
         let outcome = match event {
-            CdpSchedulerEvent::ProtocolTaskPrepared { pending } => {
+            Input::Event(CdpSchedulerEvent::ProtocolTaskPrepared { pending }) => {
                 let completed = pending.wait().await;
                 state
                     .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
                     .expect("live test owner")
             }
-            CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+            Input::Event(CdpSchedulerEvent::ProtocolWorkReady) => {
+                let publications = state
+                    .with_state(|state| state.take_published_protocol_work())
+                    .expect("live test owner");
+                for work in publications.into_iter().rev() {
+                    queue.push_front(Input::Work(work));
+                }
+                continue;
+            }
+            Input::Work(work) => {
+                assert!(
+                    !work.is_waiting_for_command_output(),
+                    "pending command output requires the stateful test scheduler"
+                );
                 assert!(
                     state
                         .with_state(|state| state.protocol_work_predecessor_is_projected(&work))
@@ -2800,7 +2852,7 @@ pub(crate) async fn collect_ready_scheduler_output(
                         .expect("finite work"),
                 }
             }
-            CdpSchedulerEvent::PageScreencastStarted { .. } => continue,
+            Input::Event(CdpSchedulerEvent::PageScreencastStarted { .. }) => continue,
         };
         let (events, scheduler_events) = outcome.into_protocol_event_parts();
         out.extend(
@@ -2809,11 +2861,13 @@ pub(crate) async fn collect_ready_scheduler_output(
                 .filter(BackgroundProtocolEvent::has_protocol_wire_message)
                 .map(materialize),
         );
-        queue.extend(scheduler_events);
+        queue.extend(scheduler_events.into_iter().map(Input::Event));
         queue.extend(
             state
                 .with_state(|state| state.take_scheduler_events())
-                .expect("live test owner"),
+                .expect("live test owner")
+                .into_iter()
+                .map(Input::Event),
         );
     }
 }

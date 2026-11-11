@@ -1,71 +1,32 @@
-use moli_protocol::{BackgroundProtocolEvent, CdpSchedulerEvent, RendererOutputDependencies};
+use moli_protocol::{BackgroundProtocolEvent, RendererOutputDependencies};
 
 use super::{CommandOutputReleasePermit, ProtocolOutputSequence};
-
-/// Work publication order is admitted before a command can wait on Native
-/// output. Execution still belongs after that command's response flush.
-#[derive(Default)]
-pub(crate) struct PostFlushSchedulerEvents {
-    pub(super) events: Vec<CdpSchedulerEvent>,
-}
-
-impl std::ops::Deref for PostFlushSchedulerEvents {
-    type Target = [CdpSchedulerEvent];
-
-    fn deref(&self) -> &Self::Target {
-        &self.events
-    }
-}
 
 pub(crate) struct CommandTurnOutput {
     protocol_output: ProtocolOutputSequence,
     post_renderer_output: ProtocolOutputSequence,
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
-    post_flush_scheduler_events: PostFlushSchedulerEvents,
     renderer_output_dependencies: RendererOutputDependencies,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
 
 impl CommandTurnOutput {
-    pub(super) fn new(
-        protocol_output: ProtocolOutputSequence,
-        post_flush_scheduler_events: PostFlushSchedulerEvents,
-    ) -> Self {
-        Self::new_with_post_response_events(
-            protocol_output,
-            Vec::new(),
-            post_flush_scheduler_events,
-        )
+    pub(super) fn new(protocol_output: ProtocolOutputSequence) -> Self {
+        Self::new_with_post_response_events(protocol_output, Vec::new())
     }
 
     pub(super) fn new_with_post_response_events(
         protocol_output: ProtocolOutputSequence,
         post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: PostFlushSchedulerEvents,
-    ) -> Self {
-        Self::new_with_post_response_events_and_permit(
-            protocol_output,
-            post_response_events,
-            post_flush_scheduler_events,
-            None,
-        )
-    }
-
-    pub(super) fn new_with_post_response_events_and_permit(
-        protocol_output: ProtocolOutputSequence,
-        post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: PostFlushSchedulerEvents,
-        output_release_permit: Option<CommandOutputReleasePermit>,
     ) -> Self {
         Self {
             protocol_output,
             post_renderer_output: ProtocolOutputSequence::empty(),
             renderer_output_boundary: None,
             post_response_events,
-            post_flush_scheduler_events,
             renderer_output_dependencies: RendererOutputDependencies::default(),
-            output_release_permit,
+            output_release_permit: None,
         }
     }
 
@@ -140,7 +101,6 @@ impl CommandTurnOutput {
         ProtocolOutputSequence,
         Option<moli_core::RendererOutputFence>,
         Vec<BackgroundProtocolEvent>,
-        PostFlushSchedulerEvents,
         RendererOutputDependencies,
         Option<CommandOutputReleasePermit>,
     ) {
@@ -149,7 +109,6 @@ impl CommandTurnOutput {
             self.post_renderer_output,
             self.renderer_output_boundary,
             self.post_response_events,
-            self.post_flush_scheduler_events,
             self.renderer_output_dependencies,
             self.output_release_permit,
         )

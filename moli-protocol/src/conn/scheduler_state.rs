@@ -12,9 +12,10 @@ pub enum CdpSchedulerEvent {
     ProtocolTaskPrepared {
         pending: super::PendingProtocolSchedulerWork,
     },
-    ProtocolWorkPublished {
-        work: crate::domains::activity::ProtocolSchedulerWork,
-    },
+    /// A coalesced wake only. The connection retains every concrete work item
+    /// until its scheduler drains the publication FIFO, including when this
+    /// wake is carried by a command which has not completed yet.
+    ProtocolWorkReady,
     PageScreencastStarted {
         registration: crate::domains::page::PageScreencastRegistration,
     },
@@ -249,6 +250,7 @@ pub(super) struct CdpConnectionSchedulerState {
     pending_navigation_background_events: Vec<NavigationBackgroundEvent>,
     next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
+    published_protocol_work: Vec<crate::ProtocolSchedulerWork>,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
     pub(super) runtime_command_output_barriers:
         crate::domains::activity::RuntimeCommandOutputBarriers,
@@ -258,16 +260,28 @@ pub(super) struct CdpConnectionSchedulerState {
 }
 
 impl CdpConnectionSchedulerState {
-    pub(super) fn allocate_protocol_work_publish_sequence(
+    /// Allocating a publication identity and taking durable ownership are one
+    /// finite operation. Commands and owner continuations carry wakes only.
+    pub(super) fn publish_protocol_work(
         &mut self,
-    ) -> crate::domains::activity::ProtocolWorkPublishSequence {
+        build: impl FnOnce(crate::ProtocolWorkPublishSequence) -> crate::ProtocolSchedulerWork,
+    ) {
         self.next_protocol_work_publish_sequence = self
             .next_protocol_work_publish_sequence
             .checked_add(1)
             .expect("protocol work publish sequence exhausted");
-        crate::domains::activity::ProtocolWorkPublishSequence::new(
+        let sequence = crate::domains::activity::ProtocolWorkPublishSequence::new(
             self.next_protocol_work_publish_sequence,
-        )
+        );
+        self.published_protocol_work.push(build(sequence));
+    }
+
+    pub(super) fn protocol_work_publication_mark(&self) -> u64 {
+        self.next_protocol_work_publish_sequence
+    }
+
+    pub(super) fn take_published_protocol_work(&mut self) -> Vec<crate::ProtocolSchedulerWork> {
+        std::mem::take(&mut self.published_protocol_work)
     }
 
     pub(super) fn allocate_deferred_main_document_load_observation_id(
@@ -291,35 +305,41 @@ impl CdpConnectionSchedulerState {
     }
 
     pub(super) fn scheduler_event_count(&self) -> usize {
-        self.scheduler_events.len()
+        self.scheduler_events.len() + self.published_protocol_work.len()
     }
 
     pub(super) fn bind_renderer_delivery_predecessor_since(
         &mut self,
-        start: usize,
+        start: u64,
         predecessor: moli_core::RendererOutputCursor,
     ) {
-        for event in &mut self.scheduler_events[start..] {
-            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
-                work.bind_renderer_delivery_predecessor(predecessor);
-            }
+        let first_new = self
+            .published_protocol_work
+            .partition_point(|work| work.publish_sequence().get() <= start);
+        for work in &mut self.published_protocol_work[first_new..] {
+            work.bind_renderer_delivery_predecessor(predecessor);
         }
     }
 
     pub(super) fn bind_renderer_output_source_since(
         &mut self,
-        start: usize,
+        start: u64,
         source: moli_core::RendererOutputCursor,
     ) {
-        for event in &mut self.scheduler_events[start..] {
-            if let CdpSchedulerEvent::ProtocolWorkPublished { work } = event {
-                work.bind_renderer_output_source(source);
-            }
+        let first_new = self
+            .published_protocol_work
+            .partition_point(|work| work.publish_sequence().get() <= start);
+        for work in &mut self.published_protocol_work[first_new..] {
+            work.bind_renderer_output_source(source);
         }
     }
 
     pub(super) fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {
-        std::mem::take(&mut self.scheduler_events)
+        let mut events = std::mem::take(&mut self.scheduler_events);
+        if !self.published_protocol_work.is_empty() {
+            events.push(CdpSchedulerEvent::ProtocolWorkReady);
+        }
+        events
     }
 
     pub(super) fn push_activity_trace(&mut self, mut event: Value) {
@@ -348,6 +368,7 @@ impl CdpConnectionSchedulerState {
         json!({
             "pendingNavigationBackgroundEventCount": self.pending_navigation_background_events.len(),
             "pendingSchedulerEventCount": self.scheduler_events.len(),
+            "pendingProtocolWorkCount": self.published_protocol_work.len(),
             "recentActivityTraceCount": self.recent_activity_traces.len(),
             "recentActivityTraces": self
                 .recent_activity_traces

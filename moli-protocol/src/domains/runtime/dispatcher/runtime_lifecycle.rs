@@ -54,6 +54,7 @@ pub(super) fn start_runtime_disable_command_for_owner(
 pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> RuntimeCommandTaskStep {
     if let Some(crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. }) =
         conn.session_route(cmd.session_id)
@@ -67,7 +68,7 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
             && let Some(page_target_id) = page_target_id
         {
             crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
-                conn, &page_target_id,
+                conn, &page_target_id, response_flush,
             );
         }
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());

@@ -107,13 +107,10 @@ fn page_residence_identity_for_test(
 fn take_top_level_location_navigation_work_for_test(
     conn: &mut CdpConnection,
 ) -> crate::domains::activity::ProtocolSchedulerWork {
-    let [event]: [crate::conn::CdpSchedulerEvent; 1] = conn
-        .take_scheduler_events()
+    let [work]: [crate::ProtocolSchedulerWork; 1] = conn
+        .take_published_protocol_work()
         .try_into()
         .expect("prepared navigation should publish one concrete scheduler action");
-    let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-        panic!("prepared navigation must not publish a source-shaped scheduler event");
-    };
     assert!(work.is_top_level_navigation_owner_action());
     work
 }
@@ -1389,18 +1386,14 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
         .unwrap();
 
     let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
-    let (navigation_events, nested_scheduler_events) = ctx
+    let (navigation_events, _nested_scheduler_events) = ctx
         .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
     assert!(
-        !nested_scheduler_events.iter().any(|event| {
-            matches!(
-                event,
-                crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                    if work.is_top_level_navigation_owner_action()
-            )
-        }),
+        !ctx.with_fixture(|conn| conn.take_published_protocol_work())
+            .iter()
+            .any(|work| work.is_top_level_navigation_owner_action()),
         "executing the concrete navigation must not republish its own owner action"
     );
     command_context
@@ -2882,7 +2875,7 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
         initialization.expect("creation transfers initialization to its own task")
     });
     let completed = ctx.drive_owned_wait(initialization.wait()).await;
-    let (_, scheduler_events) = ctx
+    let (_, _scheduler_events) = ctx
         .with_fixture(|conn| conn.complete_owned_protocol_scheduler_work(completed))
         .into_protocol_event_parts();
     ctx.with_fixture(|conn| {
@@ -2897,10 +2890,13 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             "target creation should install only the initial empty Document"
         )
     });
-    assert_eq!(scheduler_events.iter().filter(|event| matches!(event,
-        crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-            if work.kind() == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
-    )).count(), 1, "initialization publishes one navigation; Native publication tasks are independent");
+    let publications = ctx.with_fixture(|conn| conn.take_published_protocol_work());
+    assert!(matches!(
+        publications.as_slice(),
+        [work]
+            if work.kind()
+                == crate::domains::activity::ProtocolSchedulerWorkKind::PopupTargetNavigationOwnerAction
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3968,17 +3964,15 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
     });
 
     let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
-    let (events, scheduler_events) = ctx
+    let (events, _scheduler_events) = ctx
         .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
-    assert!(!scheduler_events.iter().any(|event| {
-        matches!(
-            event,
-            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.is_top_level_navigation_owner_action()
-        )
-    }));
+    assert!(
+        !ctx.with_fixture(|conn| conn.take_published_protocol_work())
+            .iter()
+            .any(|work| work.is_top_level_navigation_owner_action())
+    );
     let events = events
         .into_iter()
         .map(BackgroundProtocolEvent::into_parts)
@@ -4042,17 +4036,15 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
         )
     });
     let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
-    let (out, scheduler_events) = ctx
+    let (out, _scheduler_events) = ctx
         .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
-    assert!(!scheduler_events.iter().any(|event| {
-        matches!(
-            event,
-            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.is_top_level_navigation_owner_action()
-        )
-    }));
+    assert!(
+        !ctx.with_fixture(|conn| conn.take_published_protocol_work())
+            .iter()
+            .any(|work| work.is_top_level_navigation_owner_action())
+    );
 
     assert!(
         out.into_iter().any(|event| matches!(
@@ -4112,11 +4104,11 @@ async fn stale_page_residence_top_level_navigation_cannot_replace_current_page()
         )
     });
     let work = ctx.with_fixture(take_top_level_location_navigation_work_for_test);
-    let (out, scheduler_events) = ctx
+    let (out, _scheduler_events) = ctx
         .run_fixture_scheduler_work(work)
         .await
         .into_protocol_event_parts();
-    assert!(scheduler_events.is_empty());
+    assert!(_scheduler_events.is_empty());
 
     assert!(out.is_empty(), "a retired Page must start no navigation");
     ctx.with_fixture(|conn| {

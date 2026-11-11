@@ -3184,11 +3184,20 @@ async fn close_aborts_paused_request_stage_navigation_and_clears_state() {
     assert_eq!(paused["sessionId"], "SID-1");
     let network_id = paused["params"]["networkId"].clone();
 
-    ctx.process_async(json!({
-        "id": 245,
-        "method": "Page.close",
-        "sessionId": "SID-1"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 245,
+            "method": "Page.close",
+            "sessionId": "SID-1"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(245, json!({}), Some("SID-1"));
 
@@ -3297,11 +3306,20 @@ async fn close_aborts_background_paused_navigation_without_activation() {
     let network_id = paused["params"]["networkId"].clone();
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 249,
-        "method": "Page.close",
-        "sessionId": "SID-background"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 249,
+            "method": "Page.close",
+            "sessionId": "SID-background"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(249, json!({}), Some("SID-background"));
 
@@ -3457,11 +3475,20 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
     assert_eq!(auth_required["params"]["resourceType"], "Document");
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 262,
-        "method": "Page.close",
-        "sessionId": "SID-1"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 262,
+            "method": "Page.close",
+            "sessionId": "SID-1"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(262, json!({}), Some("SID-1"));
 
@@ -3508,11 +3535,20 @@ async fn close_without_inspector_enabled_emits_inspector_detached_event() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
 
-    ctx.process_async(json!({
-        "id": 246,
-        "method": "Page.close",
-        "sessionId": "SID-1"
-    }))
+    let response_flush = ctx
+        .process_command_holding_response_flush_for_test(json!({
+            "id": 246,
+            "method": "Page.close",
+            "sessionId": "SID-1"
+        }))
+        .await;
+    ctx.finish_held_command_response_flush_for_test(response_flush)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "target retirement after its command response",
+        |message| message["method"] == "Target.detachedFromTarget",
+    )
     .await;
     ctx.expect_result(246, json!({}), Some("SID-1"));
 
@@ -3573,11 +3609,12 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
     assert!(post_renderer_output_events.is_empty());
     assert!(renderer_output_predecessor.is_empty());
     events.extend(post_response_events);
-    let [CdpSchedulerEvent::ProtocolWorkPublished { work }] = <[_; 1]>::try_from(scheduler_events)
-        .expect("Page.close should publish exactly one target-termination owner action")
-    else {
-        unreachable!("array pattern fixes the only event kind")
-    };
+    assert!(matches!(
+        scheduler_events.as_slice(),
+        [CdpSchedulerEvent::ProtocolWorkReady]
+    ));
+    let [work] = <[_; 1]>::try_from(ctx.with_fixture(|conn| conn.take_published_protocol_work()))
+        .expect("Page.close should publish exactly one target-termination owner action");
     assert_eq!(
         work.kind(),
         crate::domains::activity::ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
