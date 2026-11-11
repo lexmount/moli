@@ -105,7 +105,11 @@ fn try_start_binding(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCo
         move |reply| match reply {
             Ok(RendererPageReply::RuntimeInspectorProtocolMessages(output)) => {
                 if let Some(error) = output.messages().iter().find_map(|message| match message {
-                    RendererRuntimeInspectorMessage::Protocol(message) => message.get("error"),
+                    RendererRuntimeInspectorMessage::Protocol(message)
+                        if message.payload().has_field("error") =>
+                    {
+                        message.value().get("error")
+                    }
                     _ => None,
                 }) {
                     return RendererNativeProtocolResponse::error(

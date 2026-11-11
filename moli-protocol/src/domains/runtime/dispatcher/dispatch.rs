@@ -13,8 +13,7 @@ pub(super) fn command_response_succeeded(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return false;
         };
-        message.get("id").and_then(Value::as_u64) == Some(command_id)
-            && message.get("result").is_some()
+        message.payload().id_u64() == Some(command_id) && message.payload().has_field("result")
     })
 }
 
@@ -31,9 +30,8 @@ pub(super) fn command_response_succeeded_for_events(
         {
             return matches!(payload, BackgroundCommandResponsePayloadRef::Success { .. });
         }
-        event.protocol_message().is_some_and(|message| {
-            message.get("id").and_then(Value::as_u64) == Some(command_id)
-                && message.get("result").is_some()
+        event.protocol_json().is_some_and(|message| {
+            message.id_u64() == Some(command_id) && message.has_field("result")
         })
     })
 }
@@ -1100,5 +1098,42 @@ pub(super) fn forget_pre_registered_runtime_await(
 ) {
     if let Some(command_id) = command_id {
         conn.forget_pending_inspector_await_for_owner(command_id, owner);
+    }
+}
+
+#[cfg(test)]
+mod raw_response_tests {
+    use super::*;
+    use moli_inspector_json::InspectorJson;
+
+    #[test]
+    fn command_success_checks_use_raw_metadata_without_parsing_the_body() {
+        for (body, succeeded) in [
+            (
+                format!(r#""result":{{"value":"{}"}}"#, "x".repeat(1024 * 1024)),
+                true,
+            ),
+            (
+                format!(r#""result":{}0{}"#, "[".repeat(150), "]".repeat(150)),
+                true,
+            ),
+            (
+                r#""error":{"code":-32603,"message":"\ud800"}"#.to_owned(),
+                false,
+            ),
+        ] {
+            let source =
+                InspectorJson::from_slice(format!(r#"{{"id":7,{body}}}"#).as_bytes()).unwrap();
+            let messages = [RendererRuntimeInspectorMessage::protocol(source.clone())];
+            assert_eq!(command_response_succeeded(&messages, Some(7)), succeeded);
+            assert!(!command_response_succeeded(&messages, Some(8)));
+            let events = [BackgroundProtocolEvent::immediate(source.clone())];
+            assert_eq!(
+                command_response_succeeded_for_events(&events, Some(7)),
+                succeeded
+            );
+            assert!(!command_response_succeeded_for_events(&events, Some(8)));
+            assert!(!source.is_materialized());
+        }
     }
 }

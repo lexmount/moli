@@ -1002,7 +1002,8 @@ async fn runtime_enable_events_include_renderer_root_frame_id_for_default_contex
     let default_contexts = events
         .iter()
         .filter(|message| {
-            message.get("method") == Some(&serde_json::json!("Runtime.executionContextCreated"))
+            message.get("method").and_then(serde_json::Value::as_str)
+                == Some("Runtime.executionContextCreated")
                 && message["params"]["context"]["auxData"]["isDefault"] == serde_json::json!(true)
                 && message["params"]["context"]["auxData"]["type"] == serde_json::json!("default")
         })
@@ -1230,7 +1231,7 @@ async fn inspector_output_flushes_v8_state_for_commands_and_notifications() {
                     ) if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("id").and_then(serde_json::Value::as_i64) == Some(701)
+                            if message.payload().id_i64() == Some(701)
                     ))
                 )
             })
@@ -1255,8 +1256,7 @@ async fn inspector_output_flushes_v8_state_for_commands_and_notifications() {
                         && batch.messages.iter().any(|message| matches!(
                             message,
                             RendererRuntimeInspectorMessage::Protocol(message)
-                                if message.get("method")
-                                    == Some(&serde_json::json!("Runtime.consoleAPICalled"))
+                                if message.payload().method() == Some("Runtime.consoleAPICalled")
                         ))
             ))
         }),
@@ -1315,8 +1315,7 @@ async fn owner_command_fences_exact_cursor_when_later_output_is_already_publishe
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("method")
-                                == Some(&serde_json::json!("Runtime.consoleAPICalled"))
+                            if message.payload().method() == Some("Runtime.consoleAPICalled")
                     ))
             )),
         "the early publication must own the Runtime notification emitted by the owner command"
@@ -1419,8 +1418,7 @@ async fn page_diagnostics_snapshot_is_read_only_for_current_inspector_output() {
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.get("method")
-                                == Some(&serde_json::json!("Runtime.consoleAPICalled"))
+                            if message.payload().method() == Some("Runtime.consoleAPICalled")
                     ))
             ))
         }),
@@ -4171,9 +4169,9 @@ async fn pending_expression_publishes_console_output_before_settlement() {
                     let RendererRuntimeInspectorMessage::Protocol(message) = message else {
                         continue;
                     };
-                    if message.get("method").and_then(serde_json::Value::as_str)
+                    if message.payload().method()
                         == Some("Runtime.consoleAPICalled")
-                        && let Some(value) = message["params"]["args"][0]["value"].as_str()
+                        && let Some(value) = message.value()["params"]["args"][0]["value"].as_str()
                     {
                         observed.push(value.to_owned());
                     }
@@ -4277,8 +4275,8 @@ async fn navigation_follow_publishes_command_output_before_replacing_document() 
                     if batch.messages.iter().any(|message| matches!(
                         message,
                         RendererRuntimeInspectorMessage::Protocol(message)
-                            if message["method"] == "Runtime.consoleAPICalled"
-                                && message["params"]["args"][0]["value"] == "command-output-before-navigation"
+                            if message.payload().method() == Some("Runtime.consoleAPICalled")
+                                && message.value()["params"]["args"][0]["value"] == "command-output-before-navigation"
                     ))
             ))
         })

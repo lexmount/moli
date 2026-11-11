@@ -479,7 +479,7 @@ impl ServiceWorkerRuntimeService {
                 .into_iter()
                 .partition(|message| match message {
                     RendererRuntimeInspectorMessage::Protocol(message) => {
-                        message.get("id").is_some()
+                        message.payload().has_field("id")
                     }
                     RendererRuntimeInspectorMessage::RuntimeContext(_) => false,
                 });

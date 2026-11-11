@@ -40,6 +40,7 @@ impl CdpFrontendRoutingState {
                     flattened_protocol,
                 } => {
                     if let Some(child_session_id) = message
+                        .value()
                         .pointer("/result/sessionId")
                         .and_then(Value::as_str)
                         .map(str::to_owned)
@@ -77,11 +78,11 @@ impl CdpFrontendRoutingState {
         let target_event_session_id = method
             .as_deref()
             .filter(|method| method.starts_with("Target."))
-            .and_then(|_| message.pointer("/params/sessionId"))
+            .and_then(|_| message.value().pointer("/params/sessionId"))
             .and_then(Value::as_str)
             .map(str::to_owned);
         let target_event_target_id = (method.as_deref() == Some("Target.attachedToTarget"))
-            .then(|| message.pointer("/params/targetInfo/targetId"))
+            .then(|| message.value().pointer("/params/targetInfo/targetId"))
             .flatten()
             .and_then(Value::as_str)
             .map(str::to_owned);
