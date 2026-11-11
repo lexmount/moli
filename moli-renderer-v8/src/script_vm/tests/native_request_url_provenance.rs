@@ -8,14 +8,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 async fn window_fetch_retains_native_request_urls_and_rejects_converted_credentials() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = url::Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let (stop_server, mut stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for _ in 0..4 {
-            let (mut socket, _) =
-                tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
-                    .await
-                    .unwrap()
-                    .unwrap();
+        loop {
+            let (mut socket, _) = tokio::select! {
+                _ = &mut stopped => break,
+                accepted = listener.accept() => accepted.unwrap(),
+            };
             let mut head = Vec::new();
             while !head.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
@@ -27,7 +27,7 @@ async fn window_fetch_retains_native_request_urls_and_rejects_converted_credenti
         }
         requests
     });
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let loader = static_http_loader([]);
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(base.as_str(), &loader);
     let mut native_url = base.join("native-request").unwrap();
     native_url.set_username("alice").unwrap();
@@ -67,7 +67,12 @@ async fn window_fetch_retains_native_request_urls_and_rejects_converted_credenti
             for (const request of copies) accepted.push([request === original ? url : request.url, await (await fetch(request)).text()]);
             const refused = [];
             for (const input of [url, {url}]) {
-                try { await fetch(input); refused.push('allowed'); } catch (error) { refused.push(error.name); }
+                try {
+                    await fetch(input);
+                    refused.push({allowed:true});
+                } catch (error) {
+                    refused.push({name:error.name, message:error.message});
+                }
             }
             return {accepted, refused};
         })().then(result => nativeURLResult = result, error => nativeURLResult = {error:String(error)});
@@ -86,9 +91,13 @@ async fn window_fetch_retains_native_request_urls_and_rejects_converted_credenti
         result,
         serde_json::json!({
             "accepted": vec![serde_json::json!([native_url.as_str(), "ok"]); 4],
-            "refused": ["TypeError", "TypeError"],
+            "refused": vec![serde_json::json!({
+                "name": "TypeError",
+                "message": "Request URL must not include credentials",
+            }); 2],
         })
     );
+    stop_server.send(()).unwrap();
     let requests = server.await.unwrap();
     assert_eq!(requests.len(), 4);
     assert!(
