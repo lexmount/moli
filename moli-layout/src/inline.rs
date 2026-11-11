@@ -548,6 +548,7 @@ impl InlinePaintBounds {
 pub(crate) struct InlineSourceFragment {
     pub(crate) line_index: usize,
     pub(crate) box_id: LayoutBoxId,
+    pub(crate) output_range: Range<usize>,
     pub(crate) source_byte_range: Range<usize>,
     pub(crate) source_utf16_range: Range<usize>,
     pub(crate) rtl: bool,
@@ -670,7 +671,7 @@ pub(crate) fn build_inline_fragments(
                 }
             }
             for source in overlapping_output_ranges(&context.source_map, &range) {
-                source_fragments
+                let accumulator = source_fragments
                     .entry(SourceFragmentKey {
                         box_index: source.box_id.index(),
                         source_byte_start: source.source_byte_range.start,
@@ -680,8 +681,15 @@ pub(crate) fn build_inline_fragments(
                         line_index,
                         rtl: cluster.is_rtl(),
                     })
-                    .or_default()
-                    .include(rect);
+                    .or_default();
+                accumulator.include(rect);
+                accumulator.output_range = Some(match accumulator.output_range {
+                    Some((start, end)) => (
+                        start.min(source.output_range.start),
+                        end.max(source.output_range.end),
+                    ),
+                    None => (source.output_range.start, source.output_range.end),
+                });
             }
         }
 
@@ -752,6 +760,10 @@ pub(crate) fn build_inline_fragments(
         .filter_map(|(key, accumulator)| {
             let line_rect = fragments.lines.get(key.line_index)?.rect;
             Some(InlineSourceFragment {
+                output_range: {
+                    let (start, end) = accumulator.output_range?;
+                    start..end
+                },
                 line_index: key.line_index,
                 box_id: LayoutBoxId::from_index(key.box_index),
                 source_byte_range: key.source_byte_start..key.source_byte_end,
@@ -1881,6 +1893,7 @@ struct SourceFragmentKey {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct FragmentAccumulator {
+    output_range: Option<(usize, usize)>,
     min_x: Option<f32>,
     min_y: Option<f32>,
     max_x: Option<f32>,

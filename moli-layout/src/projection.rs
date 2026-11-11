@@ -770,6 +770,7 @@ where
         );
         self.assign_box_clip_metadata(self.world.root, Some(viewport_clip), viewport_clip);
         self.paint_events = build_paint_order(self.world);
+        let mut text_owners = HashMap::new();
         for event in self.paint_events.clone() {
             match event {
                 PaintOrderEvent::BoxBackground(id) => {
@@ -778,8 +779,67 @@ where
                         self.assign_fragment_paint_metadata(fragment, self.background_clips[index]);
                     }
                 }
-                PaintOrderEvent::BoxContents(id) => self.assign_owner_paint_metadata(id, false),
+                PaintOrderEvent::InlineContents(id) => {
+                    self.assign_owner_paint_metadata(id, false);
+                }
                 PaintOrderEvent::BoxText(id) => self.assign_owner_paint_metadata(id, true),
+                PaintOrderEvent::InlineBox { owner, fragment } => {
+                    let fragment = self.owner_paint_fragments[owner.index()][fragment];
+                    self.assign_fragment_paint_metadata(
+                        fragment,
+                        self.content_clips[owner.index()],
+                    );
+                }
+                PaintOrderEvent::InlineText { owner, line, item } => {
+                    // Index the shaped line and its hit fragments once. Repeated
+                    // runs must not scan the paragraph or all its text nodes.
+                    let lines = text_owners.entry(owner).or_insert_with(|| {
+                        let context = self.world.boxes[owner.index()]
+                            .inline_layout
+                            .as_ref()
+                            .unwrap();
+                        let layout = context.laid_out.as_ref().unwrap();
+                        let mut lines = layout
+                            .lines()
+                            .map(|line| {
+                                let ranges = line
+                                    .items()
+                                    .map(|item| match item {
+                                        parley::PositionedLayoutItem::GlyphRun(run) => {
+                                            Some(run.run().text_range())
+                                        }
+                                        parley::PositionedLayoutItem::InlineBox(_) => None,
+                                    })
+                                    .collect::<Vec<_>>();
+                                (ranges, Vec::new())
+                            })
+                            .collect::<Vec<_>>();
+                        for (index, text) in context.fragments.text.iter().enumerate() {
+                            lines[text.line_index].1.push((
+                                text.output_range.clone(),
+                                self.owner_paint_fragments[owner.index()]
+                                    [context.fragments.boxes.len() + index],
+                            ));
+                        }
+                        for (_, fragments) in &mut lines {
+                            fragments.sort_by_key(|(range, _)| (range.start, range.end));
+                        }
+                        lines
+                    });
+                    let (ranges, fragments) = &lines[line];
+                    let range = ranges[item].as_ref().unwrap();
+                    let start =
+                        fragments.partition_point(|(fragment, _)| fragment.end <= range.start);
+                    for (_, fragment) in fragments[start..]
+                        .iter()
+                        .take_while(|(fragment, _)| fragment.start < range.end)
+                    {
+                        self.assign_fragment_paint_metadata(
+                            *fragment,
+                            self.content_clips[owner.index()],
+                        );
+                    }
+                }
                 PaintOrderEvent::BoxOutline(id) => {
                     let index = id.index();
                     let extent = &self.scroll_extents[index];
@@ -791,6 +851,7 @@ where
                     }
                 }
                 PaintOrderEvent::BoxOutsetShadow(_)
+                | PaintOrderEvent::BoxContents(_)
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}

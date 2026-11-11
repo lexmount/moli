@@ -182,8 +182,28 @@ where
         PaintOrderEvent::BoxOutsetShadow(id) => outset_shadow_bounds(projection, id),
         PaintOrderEvent::BoxBackground(id) => box_background_bounds(projection, id),
         PaintOrderEvent::TableCollapsedBorders(id) => table_border_bounds(projection, id),
-        PaintOrderEvent::BoxContents(id) | PaintOrderEvent::BoxText(id) => {
-            box_contents_bounds(projection, id)
+        PaintOrderEvent::BoxContents(id)
+        | PaintOrderEvent::InlineContents(id)
+        | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
+        PaintOrderEvent::InlineBox { owner, fragment } => {
+            let id = projection.owner_paint_fragments[owner.index()][fragment];
+            map_box_rect(projection, owner, projection.fragments[id.index()].rect)
+        }
+        PaintOrderEvent::InlineText { owner, line, .. } => {
+            let layout_box = &projection.world.boxes[owner.index()];
+            let context = layout_box.inline_layout.as_ref().unwrap();
+            match context.fragments.lines[line].paint_bounds {
+                InlinePaintBounds::Empty => PaintCullBounds::Empty,
+                InlinePaintBounds::Unbounded => PaintCullBounds::Unbounded,
+                InlinePaintBounds::Bounded(bounds) => {
+                    let layout = layout_box.final_layout;
+                    let origin = LayoutPoint::new(
+                        layout.border.left + layout.padding.left,
+                        layout.border.top + layout.padding.top,
+                    );
+                    map_box_rect(projection, owner, offset_rect(bounds, origin))
+                }
+            }
         }
         PaintOrderEvent::BoxOutline(id) => box_outline_bounds(projection, id),
         PaintOrderEvent::PushStackingContext(_) | PaintOrderEvent::PopStackingContext(_) => {

@@ -1,0 +1,13 @@
+<!doctype html>
+<style>
+  body { margin: 0; font: 40px/40px monospace; }
+  .atomic { display: inline-block; vertical-align: top; width: 120px; height: 40px; background: blue; }
+  .inline { background: lime; }
+</style>
+<div style="display: inline-block; vertical-align: top; width: 120px; height: 80px">
+  <div id="floating-order" style="float: left; width: 80px; height: 40px; background: lime"></div>
+  <div id="block-order" style="height: 80px; background: blue"></div>
+</div>
+<div><span id="atomic-under-order" class="atomic" style="margin-right: -120px"></span><span id="later-order" class="inline">XXXXX</span></div>
+<div><span id="earlier-order" class="inline">XXXXX</span><span id="atomic-top-order" class="atomic" style="margin-left: -120px"></span></div>
+<div id="bare-order">before<span id="bare-atomic-order" class="atomic" style="margin-right: -120px"></span>after</div>
