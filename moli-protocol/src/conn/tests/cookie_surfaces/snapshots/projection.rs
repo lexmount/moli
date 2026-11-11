@@ -294,6 +294,7 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
         headers: vec![("location".into(), final_url.as_str().into())],
         network_extra_info_available: true,
         request_extra_info: None,
+        dispatched_request: None,
         response_extra_info: None,
         redirect_has_extra_info: true,
         request_cookie_report: None,

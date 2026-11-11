@@ -100,6 +100,13 @@ async fn create_target_empty_url_initializes_blank_document_before_navigation() 
                     navigation["result"].get("errorText").is_none(),
                     "{context}: {navigation:?}"
                 );
+                crate::testing::wait_until_renderer_document_load(
+                    &mut ctx,
+                    Some(session_id),
+                    navigation["result"]["frameId"].as_str().expect(&context),
+                    navigation["result"]["loaderId"].as_str().expect(&context),
+                )
+                .await;
                 ctx.process_async(json!({"id": 10, "method": "Runtime.evaluate", "sessionId": session_id,
                     "params": {"expression": "[location.href, history.length, document.body.textContent]", "returnByValue": true}})).await;
                 let navigated = take_response_by_id(&mut ctx, 10);

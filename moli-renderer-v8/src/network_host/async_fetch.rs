@@ -176,6 +176,9 @@ impl ManualCorsRedirectState {
         head: ResponseHead,
         network_extra_info_available: bool,
     ) -> Result<ManualCorsRedirectTransition, String> {
+        // The single-hop transport refines request snapshots, including cache
+        // hits and internal redirects. Keep them when carrying the chain on.
+        self.request.observe_redirect_requests(&head.redirect_chain);
         // Keep redirect-mode error precedence aligned with Fetch: an error-mode
         // redirect is rejected before the redirect response is CORS-checked.
         if self.request.redirect_mode() == RequestRedirectMode::Error {
@@ -219,6 +222,7 @@ impl ManualCorsRedirectState {
                 headers: head.headers,
                 network_extra_info_available,
                 request_extra_info: None,
+                dispatched_request: None,
                 response_extra_info: None,
                 redirect_has_extra_info: network_extra_info_available,
                 request_cookie_report: head.request_cookie_report,
@@ -1992,6 +1996,7 @@ mod tests {
             )],
             network_extra_info_available: false,
             request_extra_info: None,
+            dispatched_request: None,
             response_extra_info: None,
             redirect_has_extra_info: false,
             request_cookie_report: None,

@@ -549,6 +549,7 @@ async fn tls_client_certificate_preserves_service_worker_redirect_taint() -> Res
                 )],
                 network_extra_info_available: false,
                 request_extra_info: None,
+                dispatched_request: None,
                 response_extra_info: None,
                 redirect_has_extra_info: false,
                 request_cookie_report: None,

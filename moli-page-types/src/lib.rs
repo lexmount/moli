@@ -266,6 +266,7 @@ pub struct NavigationRedirect {
     pub headers: Vec<(String, Vec<u8>)>,
     pub network_extra_info_available: bool,
     pub request_extra_info: Option<NetworkRequestExtraInfo>,
+    pub dispatched_request: Option<std::sync::Arc<moli_fetch::DispatchedRequest>>,
     pub response_extra_info: Option<NetworkResponseExtraInfo>,
     pub redirect_has_extra_info: bool,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -284,6 +285,7 @@ impl From<RedirectInfo> for NavigationRedirect {
             headers: value.headers,
             network_extra_info_available: value.network_extra_info_available,
             request_extra_info: value.request_extra_info,
+            dispatched_request: value.dispatched_request,
             response_extra_info: value.response_extra_info,
             redirect_has_extra_info: value.redirect_has_extra_info,
             request_cookie_report: value.request_cookie_report,
@@ -304,6 +306,7 @@ impl From<NavigationRedirect> for RedirectInfo {
             headers: value.headers,
             network_extra_info_available: value.network_extra_info_available,
             request_extra_info: value.request_extra_info,
+            dispatched_request: value.dispatched_request,
             response_extra_info: value.response_extra_info,
             redirect_has_extra_info: value.redirect_has_extra_info,
             request_cookie_report: value.request_cookie_report,
@@ -578,8 +581,6 @@ impl From<NavigationResponse> for Response {
                 NetworkRequestExtraInfo {
                     headers,
                     cookie_report: request_cookie_report,
-                    request_method: None,
-                    request_body: None,
                 }
             }))
     }

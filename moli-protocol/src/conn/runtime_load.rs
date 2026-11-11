@@ -110,15 +110,11 @@ fn response_status_may_use_http_error_page(status: u16) -> bool {
 
 fn no_content_navigation_from_response(
     head: ResponseHead,
-    request_method: String,
-    request_headers: moli_fetch::RequestHeaders,
     network_observation_journal: NetworkObservationJournal,
     body_progress_source: &MainDocumentBodyProgressSource,
 ) -> NavigationLoadOutcome {
     let network_extra_info_available = !network_observation_journal.is_empty();
     let network_events = CompletedMainDocumentNetworkEvents::new(
-        request_method,
-        request_headers.to_byte_strings(),
         head.request_cookie_report,
         head.status,
         head.headers,
@@ -1529,8 +1525,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         .map(Into::into)
         .collect::<Vec<_>>();
     let network_events = CompletedMainDocumentNetworkEvents::new(
-        request_method.clone(),
-        request_headers.to_byte_strings(),
         initial_request_cookie_report.clone(),
         response_status,
         response_headers.clone(),
@@ -3092,8 +3086,6 @@ impl CdpConnection {
         let redirect_chain = Vec::new();
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
-                request_method.clone(),
-                request_headers.to_byte_strings(),
                 initial_request_cookie_report.clone(),
                 response_status,
                 response_headers.clone(),
@@ -3340,8 +3332,6 @@ impl CdpConnection {
         .await?;
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
-                request_method.clone(),
-                request_headers.to_byte_strings(),
                 initial_request_cookie_report.clone(),
                 response_status,
                 response_headers.clone(),
@@ -3441,8 +3431,6 @@ impl CdpConnection {
     }
 
     fn build_download_from_raw_response(
-        request_method: String,
-        request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: &MainDocumentBodyProgressSource,
@@ -3456,8 +3444,6 @@ impl CdpConnection {
         let negotiated_http_version = head.negotiated_http_version;
         let final_url = head.final_url;
         let network_events = CompletedMainDocumentNetworkEvents::new(
-            request_method,
-            request_headers.to_byte_strings(),
             head.request_cookie_report,
             head.status,
             head.headers,
@@ -3579,12 +3565,8 @@ async fn prepare_captured_document_response_with_engine_async(
         .auxiliary_document_response
         .as_ref()
         .map(|producer| (producer.clone(), head.clone()));
-    let body_network_progress_state = body_progress_source.body_network_progress_for_response_head(
-        &request_method,
-        &request_headers,
-        &head,
-        network_observation_journal,
-    );
+    let body_network_progress_state = body_progress_source
+        .body_network_progress_for_response_head(&head, network_observation_journal);
     let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
         load_inputs.fetch_subresource_interception;
     let response_from_cache = head.from_cache;

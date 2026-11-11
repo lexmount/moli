@@ -1513,7 +1513,7 @@ pub(crate) struct TargetSubresourceResponseStartedOutput {
     delivery_order_index: usize,
     index: usize,
     request: Arc<TargetSubresourceRequestStartedOutput>,
-    redirect_chain: Vec<TargetSubresourceRedirectOutput>,
+    redirect_chain: Vec<NavigationRedirect>,
     final_url: Url,
     status: u16,
     status_text: Option<String>,
@@ -1535,11 +1535,7 @@ impl TargetSubresourceResponseStartedOutput {
             delivery_order_index,
             index,
             request,
-            redirect_chain: response
-                .redirect_chain()
-                .iter()
-                .map(TargetSubresourceRedirectOutput::from_page_redirect)
-                .collect(),
+            redirect_chain: response.redirect_chain().to_vec(),
             final_url: response.final_url().clone(),
             status: response.status(),
             status_text: response.status_text().map(str::to_owned),
@@ -1569,7 +1565,7 @@ impl TargetSubresourceResponseStartedOutput {
         &self.request
     }
 
-    pub(crate) fn redirect_chain(&self) -> &[TargetSubresourceRedirectOutput] {
+    pub(crate) fn redirect_chain(&self) -> &[NavigationRedirect] {
         &self.redirect_chain
     }
 
@@ -2131,7 +2127,7 @@ impl TargetSubresourceNetworkDeliveryOutput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TargetSubresourceMetadataOutcome {
     Success {
-        redirect_chain: Vec<TargetSubresourceRedirectOutput>,
+        redirect_chain: Vec<NavigationRedirect>,
         final_url: Url,
         status: u16,
         status_text: Option<String>,
@@ -2154,10 +2150,7 @@ impl TargetSubresourceMetadataOutcome {
                 response_headers,
                 response_body,
             } => Self::Success {
-                redirect_chain: redirect_chain
-                    .iter()
-                    .map(TargetSubresourceRedirectOutput::from_page_redirect)
-                    .collect(),
+                redirect_chain: redirect_chain.clone(),
                 final_url: final_url.clone(),
                 status: *status,
                 status_text: status_text.clone(),
@@ -2167,35 +2160,6 @@ impl TargetSubresourceMetadataOutcome {
             SubresourceNetworkOutcome::Failure { error_text } => Self::Failure {
                 error_text: error_text.clone(),
             },
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TargetSubresourceRedirectOutput {
-    pub(crate) from_url: Url,
-    pub(crate) to_url: Url,
-    pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, Vec<u8>)>,
-    pub(crate) request_extra_info: Option<moli_fetch::NetworkRequestExtraInfo>,
-    pub(crate) request_cookie_report: Option<StoredCookieQueryReport>,
-    pub(crate) cookie_set_reports: Vec<StoredCookieSetReport>,
-    pub(crate) from_cache: bool,
-    pub(crate) negotiated_http_version: Option<NegotiatedHttpVersion>,
-}
-
-impl TargetSubresourceRedirectOutput {
-    fn from_page_redirect(redirect: &NavigationRedirect) -> Self {
-        Self {
-            from_url: redirect.from_url.clone(),
-            to_url: redirect.to_url.clone(),
-            status: redirect.status,
-            headers: redirect.headers.clone(),
-            request_extra_info: redirect.request_extra_info.clone(),
-            request_cookie_report: redirect.request_cookie_report.clone(),
-            cookie_set_reports: redirect.cookie_set_reports.clone(),
-            from_cache: redirect.from_cache,
-            negotiated_http_version: redirect.negotiated_http_version,
         }
     }
 }
@@ -3728,6 +3692,7 @@ mod tests {
                 )],
                 network_extra_info_available: false,
                 request_extra_info: None,
+                dispatched_request: None,
                 response_extra_info: None,
                 redirect_has_extra_info: false,
                 request_cookie_report: None,
