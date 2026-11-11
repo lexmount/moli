@@ -2,7 +2,6 @@
 <html>
   <head>
     <script>
-      window.blockingStyleImportStart = Date.now();
       window.blockingStyleImportOrder = [];
       window.blockingStyleImportDclSeen = false;
       document.addEventListener("DOMContentLoaded", () => {
@@ -14,14 +13,13 @@
       @import url("/assets/blocking_stylesheet_slow.css");
     </style>
     <script>
-      window.blockingStylesheetStart = window.blockingStyleImportStart;
       window.blockingStylesheetOrder = window.blockingStyleImportOrder;
       window.blockingStylesheetDclSeen = window.blockingStyleImportDclSeen;
     </script>
     <script src="/assets/blocking_stylesheet_parser_blocking.js"></script>
     <script>
-      window.blockingStyleImportParserBlockedEnough =
-        window.blockingStylesheetParserBlockedEnough;
+      window.blockingStyleImportParserSawStylesheet =
+        window.blockingStylesheetParserSawStylesheet;
       window.blockingStyleImportParserSawLate =
         window.blockingStylesheetParserSawLate;
       window.blockingStyleImportParserSawDcl =

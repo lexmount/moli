@@ -2,7 +2,6 @@
 <html>
   <head>
     <script>
-      window.blockingStylesheetStart = Date.now();
       window.blockingStylesheetModuleOrder = [];
       document.addEventListener("DOMContentLoaded", () => {
         window.blockingStylesheetModuleOrder.push("dcl");
@@ -12,10 +11,8 @@
     </script>
     <link rel="stylesheet" href="/assets/blocking_stylesheet_slow.css">
     <script type="module">
-      window.blockingStylesheetModuleElapsed =
-        Date.now() - window.blockingStylesheetStart;
-      window.blockingStylesheetModuleBlockedEnough =
-        window.blockingStylesheetModuleElapsed >= 50;
+      window.blockingStylesheetModuleSawStylesheet =
+        getComputedStyle(document.documentElement).color === "rgb(1, 2, 3)";
       window.blockingStylesheetModuleSawLate = !!document.getElementById("late");
       window.blockingStylesheetModuleSawDcl =
         window.blockingStylesheetModuleOrder.includes("dcl");

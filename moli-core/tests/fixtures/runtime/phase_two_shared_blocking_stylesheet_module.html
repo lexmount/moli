@@ -2,13 +2,8 @@
 <html>
   <head>
     <script>
-      window.sharedBlockingModuleStart = Date.now();
       window.sharedBlockingModuleOrder = [];
       document.addEventListener("DOMContentLoaded", () => {
-        window.sharedBlockingModuleElapsed =
-          Date.now() - window.sharedBlockingModuleStart;
-        window.sharedBlockingModuleBlockedEnough =
-          window.sharedBlockingModuleElapsed >= 50;
         window.sharedBlockingModuleOrder.push("dcl");
         window.sharedBlockingModuleOrderResult =
           window.sharedBlockingModuleOrder.join(",");
@@ -16,6 +11,8 @@
     </script>
     <link rel="stylesheet" href="/assets/blocking_stylesheet_slow.css?shared=module">
     <script type="module">
+      window.sharedBlockingModuleSawStylesheet =
+        getComputedStyle(document.body).color === "rgb(1, 2, 3)";
       window.sharedBlockingModuleOrder.push("module-left");
       Promise.resolve().then(() =>
         window.sharedBlockingModuleOrder.push("module-left-microtask")

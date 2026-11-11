@@ -2,13 +2,10 @@
 <html>
   <head>
     <script>
-      window.blockingStylesheetStart = Date.now();
       window.blockingStylesheetDeferOrder = [];
       document.addEventListener("DOMContentLoaded", () => {
-        window.blockingStylesheetDeferDclElapsed =
-          Date.now() - window.blockingStylesheetStart;
-        window.blockingStylesheetDeferDclBlockedEnough =
-          window.blockingStylesheetDeferDclElapsed >= 50;
+        window.blockingStylesheetDeferDclSawStylesheet =
+          getComputedStyle(document.documentElement).color === "rgb(1, 2, 3)";
         window.blockingStylesheetDeferOrder.push("dcl");
         window.blockingStylesheetDeferDclOrder =
           window.blockingStylesheetDeferOrder.join(",");

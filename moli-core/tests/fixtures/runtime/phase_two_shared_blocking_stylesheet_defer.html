@@ -2,14 +2,9 @@
 <html>
   <head>
     <script>
-      window.sharedBlockingDeferStart = Date.now();
       window.sharedBlockingDeferOrder = [];
       window.deferLikeOrder = window.sharedBlockingDeferOrder;
       document.addEventListener("DOMContentLoaded", () => {
-        window.sharedBlockingDeferElapsed =
-          Date.now() - window.sharedBlockingDeferStart;
-        window.sharedBlockingDeferBlockedEnough =
-          window.sharedBlockingDeferElapsed >= 50;
         window.sharedBlockingDeferOrder.push("dcl");
         window.sharedBlockingDeferOrderResult =
           window.sharedBlockingDeferOrder.join(",");
