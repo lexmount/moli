@@ -1446,6 +1446,8 @@ async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hi
         "outer-atomic",
         "inner-atomic",
         "nested-inner",
+        "atomic-block",
+        "block-child",
     ] {
         let backend_id = renderer_backend_node_id_for_live_expression(
             &mut ctx,
@@ -1471,7 +1473,7 @@ async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hi
     let samples = response["result"]["result"]["value"]
         .as_array()
         .unwrap_or_else(|| panic!("the hit-test fixture must return samples: {response}"));
-    assert_eq!(samples.len(), 51);
+    assert_eq!(samples.len(), 68);
 
     for sample in samples {
         command_id += 1;

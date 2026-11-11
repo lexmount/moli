@@ -231,6 +231,12 @@ fn collect_subtree<N>(
                 PaintGroup::AtomicInline
             } else if layout_box.style.is_floated() {
                 PaintGroup::Float
+            } else if layout_box.inline_context_owner.is_some() && !layout_box.inline_flattened {
+                // An in-flow atomic item and its ordinary descendants belong
+                // to the inline paint level, just like flex/grid items. Keep
+                // their backgrounds with their contents instead of painting
+                // them behind the enclosing IFC's inline fragments.
+                PaintGroup::AtomicInline
             } else {
                 PaintGroup::NormalFlow
             }
