@@ -499,9 +499,8 @@ impl RendererInspectorPauseBridge {
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
-        message: impl Into<InspectorJson>,
+        message: &InspectorJson,
     ) -> RendererInspectorPauseNotificationRoute {
-        let message = message.into();
         let method = message.method();
         let is_paused_notification = method == Some("Debugger.paused");
         let is_resumed_notification = method == Some("Debugger.resumed");
@@ -554,6 +553,7 @@ impl RendererInspectorPauseBridge {
         }
         if is_paused_notification {
             let is_instrumentation_pause = message
+                .value()
                 .get("params")
                 .and_then(|params| params.get("reason"))
                 .and_then(Value::as_str)
@@ -618,7 +618,7 @@ impl RendererInspectorPauseBridge {
 impl RendererInspectorSessionOutboundRoute {
     pub(crate) fn route_notification(
         &self,
-        message: impl Into<InspectorJson>,
+        message: &InspectorJson,
     ) -> RendererInspectorPauseNotificationRoute {
         self.target
             .pause_ref()
