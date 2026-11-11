@@ -1963,7 +1963,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             metadata,
         )
     };
-    let resolved_url = resolve_context_url(base_url, &url_input, None)?;
+    let resolved_url = resolve_context_url(base_url, url_input.as_str(), None)?;
+    url_input.validate_credentials(&resolved_url)?;
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);

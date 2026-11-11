@@ -80,6 +80,56 @@ impl<'s> webidl::WebIdlConverter<'s> for RequestInfo<'s> {
     }
 }
 
+/// Keep native URL authority through constructor and fetch preparation.
+/// The request-like compatibility extension still uses ordinary URL validation.
+pub(crate) enum RequestInputUrl {
+    Native(String),
+    Converted(String),
+}
+
+impl RequestInputUrl {
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::Native(url) | Self::Converted(url) => url,
+        }
+    }
+
+    pub(crate) fn validate_credentials(&self, parsed: &Url) -> Result<(), webidl::WebIdlError> {
+        match self {
+            Self::Native(_) => Ok(()),
+            Self::Converted(_) => validate_request_url_credentials(parsed),
+        }
+    }
+
+    pub(crate) fn into_constructor_url(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        child_handle: Option<crate::document_runtime::DomHandle>,
+        base_url: Option<Url>,
+    ) -> Result<String, webidl::WebIdlError> {
+        match self {
+            Self::Native(url) => Ok(url),
+            Self::Converted(url) => {
+                let resolved = try_resolve_request_constructor_url_for_scope(
+                    scope,
+                    &url,
+                    child_handle,
+                    base_url,
+                )
+                .map_err(|_| {
+                    webidl::WebIdlError::custom_message(
+                        "Failed to construct 'Request': invalid URL",
+                    )
+                })?;
+                if let Ok(parsed) = Url::parse(&resolved) {
+                    validate_request_url_credentials(&parsed)?;
+                }
+                Ok(resolved)
+            }
+        }
+    }
+}
+
 impl<'s> RequestInfo<'s> {
     pub(crate) fn materialize_for_fetch(
         self,
@@ -87,7 +137,7 @@ impl<'s> RequestInfo<'s> {
         inherit_body: bool,
     ) -> Result<
         (
-            String,
+            RequestInputUrl,
             Option<RequestInputSnapshot>,
             Option<v8::Local<'s, v8::Object>>,
         ),
@@ -115,21 +165,27 @@ impl<'s> RequestInfo<'s> {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> Result<
         (
-            String,
+            RequestInputUrl,
             Option<RequestInputSnapshot>,
             Option<v8::Local<'s, v8::Object>>,
         ),
         webidl::WebIdlError,
     > {
         match self {
-            Self::Url(url) => Ok((url, None, None)),
-            Self::Legacy(source, snapshot) => {
-                Ok((snapshot.url.clone(), Some(*snapshot), Some(source)))
-            }
+            Self::Url(url) => Ok((RequestInputUrl::Converted(url), None, None)),
+            Self::Legacy(source, snapshot) => Ok((
+                RequestInputUrl::Converted(snapshot.url.clone()),
+                Some(*snapshot),
+                Some(source),
+            )),
             Self::Native(source) => {
                 let snapshot = request_input_snapshot_for_constructor(scope, source.into())?
                     .expect("native Request snapshot");
-                Ok((snapshot.url.clone(), Some(snapshot), Some(source)))
+                Ok((
+                    RequestInputUrl::Native(snapshot.url.clone()),
+                    Some(snapshot),
+                    Some(source),
+                ))
             }
         }
     }
@@ -497,4 +553,13 @@ fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<We
     } else {
         crate::worker::worker_global_origin(scope)
     }
+}
+
+fn validate_request_url_credentials(url: &url::Url) -> Result<(), webidl::WebIdlError> {
+    if !url.username().is_empty() || url.password().is_some_and(|value| !value.is_empty()) {
+        return Err(webidl::WebIdlError::custom_message(
+            "Request URL must not include credentials",
+        ));
+    }
+    Ok(())
 }

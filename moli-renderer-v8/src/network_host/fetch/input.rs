@@ -3,7 +3,7 @@ use crate::webidl;
 use std::str::FromStr;
 
 pub(super) struct ParsedWindowFetchInput {
-    pub(super) url: String,
+    pub(super) url: RequestInputUrl,
     pub(super) method: String,
     pub(super) body: Option<bytes::Bytes>,
     pub(super) headers: Vec<(String, String)>,
