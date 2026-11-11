@@ -1473,9 +1473,20 @@ impl TestContext {
                         mut post_renderer_output_events,
                         renderer_output_boundary,
                         mut post_response_events,
-                        mut new_scheduler_events,
+                        new_scheduler_events,
                         mut renderer_output_predecessor,
                     ) = outcome.into_renderer_owner_turn_parts();
+                    let (prefixes, mut new_scheduler_events): (Vec<_>, Vec<_>) =
+                        new_scheduler_events.into_iter().partition(|event| {
+                            matches!(
+                                event,
+                                CdpSchedulerEvent::RendererOutputPrefixPublished { .. }
+                            )
+                        });
+                    if !prefixes.is_empty() {
+                        Box::pin(self.route_test_scheduler_causal_batch(Vec::new(), prefixes))
+                            .await;
+                    }
                     renderer_output_predecessor
                         .merge(command_context.take_renderer_output_dependencies());
                     for predecessor in renderer_output_predecessor {
@@ -1741,6 +1752,16 @@ impl TestContext {
             scheduler_events,
             renderer_output_predecessor,
         ) = outcome.into_renderer_owner_turn_parts();
+        let (prefixes, scheduler_events): (Vec<_>, Vec<_>) =
+            scheduler_events.into_iter().partition(|event| {
+                matches!(
+                    event,
+                    CdpSchedulerEvent::RendererOutputPrefixPublished { .. }
+                )
+            });
+        if !prefixes.is_empty() {
+            Box::pin(self.route_test_scheduler_causal_batch(Vec::new(), prefixes)).await;
+        }
         for predecessor in renderer_output_predecessor {
             Box::pin(self.route_renderer_output_predecessor_before_command_response(predecessor))
                 .await;
@@ -1896,6 +1917,17 @@ impl TestContext {
                         .expect("live test owner");
                     let (events, scheduler_events) = if renderer_cursor.is_some() {
                         let (events, scheduler) = output.into_protocol_event_parts();
+                        let (prefixes, scheduler): (Vec<_>, Vec<_>) =
+                            scheduler.into_iter().partition(|event| {
+                                matches!(
+                                    event,
+                                    CdpSchedulerEvent::RendererOutputPrefixPublished { .. }
+                                )
+                            });
+                        if !prefixes.is_empty() {
+                            Box::pin(self.route_scheduler_events_for_test_context(prefixes, work))
+                                .await;
+                        }
                         (
                             self.retain_renderer_insertion_output(renderer_cursor, events),
                             scheduler,
@@ -2346,6 +2378,18 @@ impl TestContext {
                     self.pending_owned_protocol_work
                         .push(pending.wait().boxed_local());
                 }
+                CdpSchedulerEvent::RendererOutputPrefixPublished { prefix } => {
+                    let (_, events, predecessors, _) = prefix.into_parts();
+                    for predecessor in predecessors {
+                        Box::pin(
+                            self.route_renderer_output_predecessor_before_command_response(
+                                predecessor,
+                            ),
+                        )
+                        .await;
+                    }
+                    Box::pin(self.route_protocol_events_like_scheduler(events, work)).await;
+                }
                 CdpSchedulerEvent::ProtocolWorkPublished { work } => {
                     self.pending_protocol_scheduler_work.push_back(work);
                 }
@@ -2748,6 +2792,24 @@ pub(crate) async fn collect_ready_scheduler_output(
     let mut queue = VecDeque::from(scheduler_events);
     while let Some(event) = queue.pop_front() {
         let outcome = match event {
+            CdpSchedulerEvent::RendererOutputPrefixPublished { prefix } => {
+                let (_, events, predecessors, _) = prefix.into_parts();
+                assert!(
+                    state
+                        .with_state(|state| predecessors
+                            .iter()
+                            .all(|fence| state.renderer_output_cursor_is_projected(fence.cursor())))
+                        .expect("live test owner"),
+                    "pending prefix requires the stateful test scheduler"
+                );
+                out.extend(
+                    events
+                        .into_iter()
+                        .filter(BackgroundProtocolEvent::has_protocol_wire_message)
+                        .map(materialize),
+                );
+                continue;
+            }
             CdpSchedulerEvent::RendererOutputProjectionPrepared { pending } => {
                 let completed = pending.wait().await;
                 state

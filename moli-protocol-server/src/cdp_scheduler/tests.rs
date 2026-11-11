@@ -700,6 +700,191 @@ fn renderer_owner_work_waits_for_its_original_projection_and_exact_load() {
 }
 
 #[test]
+fn projected_renderer_prefix_keeps_load_order_without_finishing_its_source() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let load = deferred_main_document_load_observation_id(1);
+    let mut queues = SchedulerQueues::default();
+    queues.enqueue_pending_renderer_output_projection(cursor, vec![load], None);
+    queues.enqueue_renderer_output_prefix(
+        moli_protocol::test_support::projected_renderer_output_prefix(
+            cursor,
+            vec![BackgroundProtocolEvent::immediate(
+                json!({"method": "Target.targetCreated"}),
+            )],
+        ),
+        Vec::new(),
+        None,
+    );
+    assert!(
+        queues
+            .protocol_residences
+            .front()
+            .unwrap()
+            .is_projected_renderer_prefix()
+    );
+    assert!(matches!(queues.protocol_residences.get(1),
+        Some(ProtocolSchedulerResidence::RendererOutputPublication(work))
+            if work.renderer_output_cursor == cursor
+    ));
+    let owner = moli_protocol::ProtocolStateOwner::new(CdpConnection::new());
+    queues.satisfy_front_client_turn_predecessor();
+    assert!(
+        !owner
+            .with_state(|state| queues.should_complete_next_residence(&state))
+            .unwrap()
+    );
+    queues.satisfy_load_predecessor(load);
+    assert!(
+        owner
+            .with_state(|state| queues.should_complete_next_residence(&state))
+            .unwrap()
+    );
+    let mut prefix = queues.take_projected_renderer_output_snapshot();
+    assert_eq!(prefix.len(), 1);
+    assert!(!queues.renderer_output_source_is_pending(&prefix.pop_front().unwrap()));
+    let original = queues.protocol_residences.front().unwrap();
+    assert!(queues.renderer_output_source_is_pending(original));
+    assert!(
+        queues.take_unconstrained_renderer_output(cursor).is_none(),
+        "delivering a prefix cannot complete the source or release its suffix"
+    );
+}
+
+#[test]
+fn projected_renderer_prefix_holds_later_native_output_until_its_load_predecessor() {
+    let parent = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let child = post_load_renderer_publication(PageId::new_for_testing(8), 1);
+    let parent_cursor = publication_cursor(&parent);
+    let load = deferred_main_document_load_observation_id(1);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(parent_cursor, vec![load], None);
+    scheduler.queues.enqueue_renderer_output_prefix(
+        moli_protocol::test_support::projected_renderer_output_prefix(
+            parent_cursor,
+            vec![BackgroundProtocolEvent::immediate(
+                json!({"method": "Target.targetCreated"}),
+            )],
+        ),
+        Vec::new(),
+        None,
+    );
+    scheduler.queues.enqueue_renderer_output_publication(
+        publication_cursor(&child),
+        ProtocolOutputSequence::from_messages(vec![
+            json!({"method": "Page.javascriptDialogOpening"}),
+        ]),
+        Vec::new(),
+        None,
+    );
+    assert!(
+        scheduler.complete_projected_renderer_output().is_empty(),
+        "a later Native completion cannot bypass a held creation prefix"
+    );
+    scheduler.queues.satisfy_load_predecessor(load);
+    let output = scheduler
+        .complete_projected_renderer_output()
+        .into_messages();
+    assert_eq!(
+        output,
+        [
+            json!({"method": "Target.targetCreated"}),
+            json!({"method": "Page.javascriptDialogOpening"})
+        ]
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(parent_cursor)
+            .is_none()
+    );
+}
+
+#[test]
+fn ordinary_renderer_output_keeps_its_original_completion_path() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    let event = json!({"method": "Runtime.executionContextCreated"});
+    scheduler.queues.enqueue_renderer_output_publication(
+        cursor,
+        ProtocolOutputSequence::from_messages(vec![event.clone()]),
+        Vec::new(),
+        None,
+    );
+    assert!(
+        scheduler.complete_projected_renderer_output().is_empty(),
+        "prefix delivery must not drain unrelated publications"
+    );
+    assert_eq!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .unwrap()
+            .into_messages(),
+        [event]
+    );
+}
+
+#[test]
+fn command_completion_delivers_native_prefix_before_reply_and_retains_post_reply_work() {
+    let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+    let cursor = publication_cursor(&publication);
+    let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(cursor, Vec::new(), None);
+    let created = json!({"method": "Target.targetCreated"});
+    let response = json!({"id": 41, "result": {}});
+    let complete = moli_protocol::test_support::command_completion_with_scheduler_events(
+        vec![BackgroundProtocolEvent::immediate(response.clone())],
+        vec![
+            CdpSchedulerEvent::RendererOutputPrefixPublished {
+                prefix: moli_protocol::test_support::projected_renderer_output_prefix(
+                    cursor,
+                    vec![BackgroundProtocolEvent::immediate(created.clone())],
+                ),
+            },
+            CdpSchedulerEvent::ProtocolWorkPublished {
+                work: root_frame_stopped_loading_work(1, "FRAME-source"),
+            },
+        ],
+    );
+    let super::CommandTaskStep::Complete(output) =
+        scheduler.materialize_command_dispatch_step(complete)
+    else {
+        panic!("finite command completion");
+    };
+    let (output, _, _, _, after_reply, _, _) = output.into_parts();
+    assert_eq!(output.into_messages(), [created, response]);
+    assert_eq!(
+        after_reply.len(),
+        1,
+        "only owner work waits for the reply flush"
+    );
+    assert!(matches!(
+        &after_reply[0],
+        CdpSchedulerEvent::ProtocolWorkPublished { .. }
+    ));
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(cursor)
+            .is_none()
+    );
+    // The next producer can publish while the original command is flushing
+    // Native output. Its sequence must follow the registered, deferred work.
+    scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
+        work: root_frame_stopped_loading_work(2, "FRAME-peer"),
+    }]);
+    scheduler.finish_command_dispatch_output_flush(after_reply, None);
+    assert_eq!(scheduler.queues.protocol_residence_len(), 3);
+}
+
+#[test]
 fn renderer_output_handoff_keeps_before_and_after_response_order() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);

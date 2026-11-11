@@ -429,6 +429,155 @@ async fn websocket_bidi_attached_session_inherits_classic_dialog_policy() {
 }
 
 #[tokio::test]
+async fn websocket_bidi_popup_creation_precedes_manually_handled_prompt() {
+    assert_popup_creation_precedes_prompt("ignore", false).await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_popup_creation_precedes_automatically_handled_prompt() {
+    assert_popup_creation_precedes_prompt("accept", false).await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_popup_creation_precedes_close_during_prompt() {
+    assert_popup_creation_precedes_prompt("ignore", true).await;
+}
+
+async fn assert_popup_creation_precedes_prompt(handler: &str, close_popup: bool) {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, context) = dialog_session(addr, json!({"default": handler})).await;
+    let subscribed = send_bidi_command_response(
+        &mut socket,
+        3,
+        "session.subscribe",
+        json!({"events": [
+            "browsingContext.contextCreated", "browsingContext.contextDestroyed",
+            "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
+        ]}),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success");
+    socket.send(WsMessage::Text(json!({
+        "id": 4, "method": "script.evaluate", "params": {
+            "expression": "(() => { const child = window.open('about:blank'); return child.confirm('creation order'); })()",
+            "target": {"context": context}, "awaitPromise": false,
+        },
+    }).to_string().into())).await.unwrap();
+    let mut messages = collect_bidi_messages_until_method_count(
+        &mut socket,
+        Vec::new(),
+        "browsingContext.userPromptOpened",
+        1,
+    )
+    .await;
+    let opened = bidi_events_by_method(&messages, "browsingContext.userPromptOpened")[0];
+    let popup = opened["params"]["context"].clone();
+    assert_ne!(popup, json!(context));
+    let created = messages.iter().position(|message| {
+        message["method"] == "browsingContext.contextCreated"
+            && message["params"]["context"] == popup
+    });
+    let opening = messages
+        .iter()
+        .position(|message| {
+            message["method"] == "browsingContext.userPromptOpened"
+                && message["params"]["context"] == popup
+        })
+        .unwrap();
+    assert!(
+        created.is_some_and(|created| created < opening),
+        "popup creation must already be visible before its prompt: {messages:#?}"
+    );
+    assert_eq!(
+        messages[created.unwrap()]["params"]["originalOpener"],
+        context
+    );
+    if handler == "ignore" {
+        assert!(!messages.iter().any(|message| message["id"] == 4));
+        let (method, params) = if close_popup {
+            ("browsingContext.close", json!({"context": popup}))
+        } else {
+            (
+                "browsingContext.handleUserPrompt",
+                json!({"context": popup, "accept": true}),
+            )
+        };
+        socket
+            .send(WsMessage::Text(
+                json!({
+                    "id": 5, "method": method, "params": params,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    messages = collect_bidi_messages_until(
+        &mut socket,
+        messages,
+        |messages| {
+            messages.iter().any(|message| message["id"] == 4)
+                && (handler != "ignore" || messages.iter().any(|message| message["id"] == 5))
+                && messages.iter().any(|message| {
+                    message["params"]["context"] == popup
+                        && message["method"]
+                            == if close_popup {
+                                "browsingContext.contextDestroyed"
+                            } else {
+                                "browsingContext.userPromptClosed"
+                            }
+                })
+        },
+        "popup resolution and original script response",
+    )
+    .await;
+    assert_eq!(
+        bidi_message_by_id(&messages, 4)["result"]["result"],
+        json!({
+            "type": "boolean", "value": !close_popup,
+        })
+    );
+    if handler == "ignore" {
+        assert_eq!(bidi_message_by_id(&messages, 5)["type"], "success");
+    }
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message["method"] == "browsingContext.contextCreated"
+                    && message["params"]["context"] == popup
+            })
+            .count(),
+        1,
+        "one creation fact per popup: {messages:#?}"
+    );
+    if close_popup {
+        let destroyed = messages
+            .iter()
+            .position(|message| {
+                message["method"] == "browsingContext.contextDestroyed"
+                    && message["params"]["context"] == popup
+            })
+            .unwrap();
+        assert!(created.unwrap() < destroyed);
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| {
+                    message["method"] == "browsingContext.contextDestroyed"
+                        && message["params"]["context"] == popup
+                })
+                .count(),
+            1,
+            "one destruction fact per popup: {messages:#?}"
+        );
+    }
+    socket.close(None).await.unwrap();
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_popup_dialog_does_not_wait_for_the_causing_script() {
     let (addr, server) = spawn_test_protocol_server().await;
     let direct = "(() => { const child = window.open('about:blank'); return child.confirm('popup prompt'); })()";

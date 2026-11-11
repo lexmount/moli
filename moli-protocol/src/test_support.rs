@@ -148,6 +148,28 @@ pub fn protocol_work_from_renderer_output(
     work
 }
 
+pub fn projected_renderer_output_prefix(
+    source: moli_core::RendererOutputCursor,
+    events: Vec<crate::BackgroundProtocolEvent>,
+) -> crate::RendererOutputProjectionPrefix {
+    crate::RendererOutputProjectionPrefix {
+        source,
+        events,
+        predecessors: Vec::new(),
+        target_id: None,
+    }
+}
+
+pub fn command_completion_with_scheduler_events(
+    events: Vec<crate::BackgroundProtocolEvent>,
+    scheduler_events: Vec<crate::CdpSchedulerEvent>,
+) -> crate::CdpCommandTaskStep {
+    crate::CdpCommandTaskStep::Complete(
+        crate::CdpTurnOutcome::new_with_protocol_events(events, scheduler_events)
+            .with_renderer_output_predecessor(None),
+    )
+}
+
 pub fn root_frame_stopped_loading_work_for_target(
     publish_sequence: u64,
     session_ids: Vec<Option<String>>,

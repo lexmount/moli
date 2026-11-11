@@ -71,7 +71,7 @@ impl PreparedPopupTarget {
     pub(crate) async fn run_using(
         self,
         driver: &mut crate::conn::ProtocolWorkflowDriver,
-        out: &mut Vec<BackgroundProtocolEvent>,
+        context: &mut crate::conn::CommandWorkflowContext,
     ) -> Result<Option<String>> {
         let Self::New(prepared) = self else {
             let Self::Existing(target_id) = self else {
@@ -82,8 +82,20 @@ impl PreparedPopupTarget {
         let target_id = prepared.target_id.clone();
         let browser_context_id = prepared.browser_context_id.clone();
         let ensure_target = target_id.clone();
-        let start =
-            driver.with_state(move |state| state.start_popup_initial_document(ensure_target))?;
+        let ensure_context = browser_context_id.clone();
+        let start = driver.with_state(move |state| {
+            state.start_popup_initial_document(ensure_context, ensure_target)
+        })?;
+        let announced = start.is_some();
+        let start = if let Some((pending, events)) = start {
+            context.context_mut().protocol_events_mut().extend(events);
+            // The exact Page output owner and control route now exist. Publish
+            // its creation before adoption can wait for a dialog in that Page.
+            context.publish_projection_prefix(driver, Some(target_id.clone()))?;
+            Some(pending)
+        } else {
+            None
+        };
         let ensured = match start {
             Some(Some(pending)) => match pending.wait().await {
                 Ok(completed) => match completed.install_using(driver).await {
@@ -104,16 +116,19 @@ impl PreparedPopupTarget {
         let target = if ensured {
             let (target, events) =
                 driver.with_state(move |state| state.finish_popup_target(prepared))?;
-            out.extend(events);
+            context.context_mut().protocol_events_mut().extend(events);
             target
         } else {
             None
         };
         if target.is_none() {
-            let pending = driver.with_state(move |state| {
-                state.prepare_popup_rollback(browser_context_id, target_id)
+            let (pending, events) = driver.with_state(move |state| {
+                state.prepare_popup_rollback(browser_context_id, target_id, announced)
             })?;
-            pending.run_using(driver).await?;
+            if let Some(pending) = pending {
+                pending.run_using(driver).await?;
+            }
+            context.context_mut().protocol_events_mut().extend(events);
         }
         Ok(target)
     }
@@ -411,6 +426,27 @@ pub(crate) fn prepare_popup_target(
     }))
 }
 
+pub(crate) fn popup_target_created_events(
+    conn: &mut CdpConnection,
+    browser_context_id: &str,
+    target_id: &str,
+) -> Option<Vec<BackgroundProtocolEvent>> {
+    let target_info = conn
+        .browser_context_by_id(browser_context_id)
+        .and_then(|context| context.devtools_target_info(target_id))?;
+    let mut out = Vec::new();
+    if conn.has_any_target_discovery() {
+        push_target_created_events(conn, &mut out, target_id);
+    } else {
+        // Automation observes the browsing context independently of CDP
+        // discovery and before its Inspector adoption completes.
+        out.push(BackgroundProtocolEvent::automation_only(
+            events::target_created_automation_event(target_info),
+        ));
+    }
+    Some(out)
+}
+
 pub(crate) fn finish_popup_target(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -429,20 +465,6 @@ pub(crate) fn finish_popup_target(
         .browser_context_by_id(&browser_context_id)
         .and_then(|browser_context| browser_context.devtools_target_info(&target_id))?;
     let tab_target_info = conn.tab_target_info(&tab_target_id)?;
-    if conn.has_any_target_discovery() {
-        push_target_created_events(conn, out, &target_id);
-    } else {
-        // Chromium's BiDi mapper keeps a target observer alive independently
-        // of whether any frontend subscribed to `Target.targetCreated`.
-        // Preserve that separation here: CDP discovery controls only the CDP
-        // notification, while the accepted auxiliary browsing-context action
-        // always publishes one typed automation lifecycle fact. This is
-        // especially important for popup creation that settles after the
-        // causing Runtime command response.
-        out.push(BackgroundProtocolEvent::automation_only(
-            events::target_created_automation_event(target_info.clone()),
-        ));
-    }
     push_committed_auto_attached_session_events(
         conn,
         out,

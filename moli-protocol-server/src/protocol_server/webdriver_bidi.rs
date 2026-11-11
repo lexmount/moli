@@ -1698,6 +1698,22 @@ impl BidiDevToolsEventSources {
             .push(BidiDevToolsEventSource::AutomationEvent(Box::new(event)));
     }
 
+    fn push_missing_target_destroyed_event(&mut self, event: TargetLifecycleEvent) {
+        let already_emitted = self.sources.iter().any(|source| {
+            let automation_event = match source {
+                BidiDevToolsEventSource::AutomationEvent(event) => event.as_ref(),
+                BidiDevToolsEventSource::ProtocolMessageWithAutomationEvent { automation_event, .. } => automation_event.as_ref(),
+                _ => return false,
+            };
+            matches!(automation_event, AutomationEvent::TargetDestroyed(existing) if existing.target_id == event.target_id)
+        });
+        // The close command needs a fallback when CDP discovery is disabled,
+        // but must not repeat a Native destruction already in its output.
+        if !already_emitted {
+            self.push_automation_event(AutomationEvent::TargetDestroyed(event));
+        }
+    }
+
     fn push_background_event(&mut self, event: BackgroundProtocolEvent) {
         if event.is_frame_lifecycle_projection() || event.is_javascript_dialog_opening_projection()
         {
@@ -2371,7 +2387,7 @@ async fn complete_bidi_automation_command_execution(
         event_sources.push_automation_event(AutomationEvent::TargetCreated(event));
     }
     if close_succeeded && let Some(event) = close_target_event {
-        event_sources.push_automation_event(AutomationEvent::TargetDestroyed(event));
+        event_sources.push_missing_target_destroyed_event(event);
     }
     if observe_browsing_context_load && script_may_create_targets {
         event_sources.push_initial_load_events_for_script_created_targets();

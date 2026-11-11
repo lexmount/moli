@@ -913,7 +913,8 @@ mod tests {
                             }
                         })
                         .unwrap(),
-                    CdpSchedulerEvent::PageScreencastStarted { .. } => {
+                    CdpSchedulerEvent::RendererOutputPrefixPublished { .. }
+                    | CdpSchedulerEvent::PageScreencastStarted { .. } => {
                         panic!("navigation fixture does not request a screencast")
                     }
                 };

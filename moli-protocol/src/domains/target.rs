@@ -60,7 +60,7 @@ pub(in crate::domains) use browser_context::devtools_client_window_info_for_targ
 pub(crate) use popup::{
     NewPopupTarget, PopupTargetCreation, PopupTargetOpenerIdentity, PreparedPopupNavigation,
     PreparedPopupTarget, emit_target_info_changed_for_owner_background_event, finish_popup_target,
-    prepare_popup_target, prepare_popup_target_activation,
+    popup_target_created_events, prepare_popup_target, prepare_popup_target_activation,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };

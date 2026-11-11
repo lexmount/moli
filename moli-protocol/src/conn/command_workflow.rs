@@ -329,6 +329,32 @@ impl CommandWorkflowContext {
         );
     }
 
+    /// Deliver the completed prefix before a Native wait without completing
+    /// its source cursor or releasing the original workflow's output permits.
+    pub(crate) fn publish_projection_prefix(
+        &mut self,
+        driver: &mut ProtocolWorkflowDriver,
+        target_id: Option<String>,
+    ) -> Result<()> {
+        let Some(source) = driver.renderer_output_source() else {
+            return Ok(());
+        };
+        self.materialize_projection_output();
+        let context = self.context_mut();
+        let dependencies = context.take_renderer_output_dependencies();
+        context.extend_renderer_output_dependencies(dependencies.clone());
+        let (events, boundary, after) = context.take_renderer_fenced_protocol_events();
+        if let Some(boundary) = &boundary {
+            context.add_renderer_output_dependency(boundary.clone());
+        }
+        let mut prefix = CommandDispatchContext::default();
+        prefix.extend_renderer_output_dependencies(dependencies);
+        prefix.append_renderer_fenced_protocol_events(events, boundary, after);
+        driver.with_state(move |state| {
+            state.publish_projected_protocol_prefix(prefix, source, target_id);
+        })
+    }
+
     /// A terminal built by state remains durable before the reply channel
     /// delivers it. Losing that ready result cannot replace success with a
     /// second, invented terminal during recovery.
@@ -542,6 +568,134 @@ mod tests {
     use super::*;
     use crate::conn::{BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection};
     use serde_json::json;
+
+    #[test]
+    fn projected_prefix_preserves_native_fences_and_suffix_dependencies() {
+        use crate::conn::{CdpSchedulerEvent, ProtocolStateOwner};
+        use moli_core::{RendererOutputCursor, RendererOutputFence, RendererOutputStreamIdentity};
+
+        for independent_predecessor in [false, true] {
+            let cursors = [1, 2, 3].map(|instance| {
+                RendererOutputCursor::new_for_test(
+                    RendererOutputStreamIdentity::new_shared_worker_for_protocol_test(instance),
+                    1,
+                )
+            });
+            let owner = ProtocolStateOwner::new(CdpConnection::new());
+            let mut driver = ProtocolWorkflowDriver::new(owner.handle());
+            driver.replace_renderer_output_source(Some(cursors[2]));
+            let mut actor_context = CommandDispatchContext::default();
+            let (mut context, _recovery) =
+                CommandWorkflowContext::take_from(&mut actor_context, None, None);
+            let mut plan = CommandOutputPlan::default();
+            let mut expected_dependencies = Vec::new();
+            if independent_predecessor {
+                plan.set_renderer_output_predecessor(RendererOutputFence::new_for_test(cursors[0]));
+                expected_dependencies.push(cursors[0]);
+            }
+            plan.push_background_event(BackgroundProtocolEvent::immediate(
+                json!({"method": "Moli.before"}),
+            ));
+            plan.insert_renderer_output_boundary(RendererOutputFence::new_for_test(cursors[1]));
+            plan.push_background_event(BackgroundProtocolEvent::immediate(
+                json!({"method": "Target.targetCreated"}),
+            ));
+            context.retain_output(plan);
+            context
+                .publish_projection_prefix(&mut driver, None)
+                .unwrap();
+            expected_dependencies.push(cursors[1]);
+            let dependencies = context.context_mut().take_renderer_output_dependencies();
+            assert_eq!(
+                dependencies
+                    .iter()
+                    .map(|fence| fence.cursor())
+                    .collect::<Vec<_>>(),
+                expected_dependencies
+            );
+            context
+                .context_mut()
+                .extend_renderer_output_dependencies(dependencies);
+            assert!(context.context_mut().take_protocol_events().is_empty());
+            let events = owner
+                .with_state(|state| state.fixture(|conn| conn.take_scheduler_events()))
+                .unwrap();
+            let work = events
+                .into_iter()
+                .map(|event| match event {
+                    CdpSchedulerEvent::RendererOutputPrefixPublished { prefix } => prefix,
+                    _ => panic!("only the materialized prefix was published"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(work.len(), 2);
+            let mut methods = Vec::new();
+            for (index, work) in work.into_iter().enumerate() {
+                assert_eq!(work.source(), cursors[2]);
+                assert_eq!(
+                    work.predecessors()
+                        .iter()
+                        .map(|fence| fence.cursor())
+                        .collect::<Vec<_>>(),
+                    if index == 0 {
+                        &expected_dependencies[..expected_dependencies.len() - 1]
+                    } else {
+                        &expected_dependencies[..]
+                    }
+                );
+                let (_, events, _, _) = work.into_parts();
+                methods.extend(
+                    events
+                        .into_iter()
+                        .map(|event| event.into_protocol_message()["method"].clone()),
+                );
+            }
+            assert_eq!(
+                methods,
+                [json!("Moli.before"), json!("Target.targetCreated")]
+            );
+            context
+                .context_mut()
+                .protocol_events_mut()
+                .push(BackgroundProtocolEvent::immediate(
+                    json!({"method": "Moli.suffix"}),
+                ));
+            context
+                .publish_projection_prefix(&mut driver, None)
+                .unwrap();
+            let events = owner
+                .with_state(|state| state.fixture(|conn| conn.take_scheduler_events()))
+                .unwrap();
+            assert_eq!(
+                events.len(),
+                1,
+                "previous prefix events must not be replayed"
+            );
+            let CdpSchedulerEvent::RendererOutputPrefixPublished { prefix: work } = &events[0]
+            else {
+                panic!("original fenced suffix")
+            };
+            assert_eq!(
+                work.predecessors()
+                    .iter()
+                    .map(|fence| fence.cursor())
+                    .collect::<Vec<_>>(),
+                expected_dependencies
+            );
+            let next_work = owner
+                .with_state(|state| {
+                    state.fixture(|conn| {
+                        conn.scheduler_state
+                            .allocate_protocol_work_publish_sequence()
+                    })
+                })
+                .unwrap();
+            assert_eq!(
+                next_work.get(),
+                1,
+                "Native prefixes must not reserve post-command work sequence numbers"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn accepted_transport_terminal_is_durable_before_first_poll_and_after_ready_loss() {

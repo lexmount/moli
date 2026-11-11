@@ -97,9 +97,7 @@ impl PreparedPopupOutputProjection {
                 driver.with_state(move |state| state.prepare_popup_output(activation))?;
             context.context_mut().protocol_events_mut().extend(events);
             let target_id = if let Some(prepared) = prepared {
-                prepared
-                    .run_using(driver, context.context_mut().protocol_events_mut())
-                    .await?
+                prepared.run_using(driver, context).await?
             } else {
                 None
             };

@@ -53,6 +53,10 @@ impl ProtocolWorkflowDriver {
     pub(crate) fn state_access(&self) -> ProtocolStateHandle {
         self.access.clone()
     }
+
+    pub(crate) fn renderer_output_source(&self) -> Option<moli_core::RendererOutputCursor> {
+        self.renderer_output_source
+    }
     pub(crate) fn with_state<T: 'static>(
         &mut self,
         operation: impl for<'state> FnOnce(ProtocolWorkflowState<'state>) -> T,
@@ -91,6 +95,16 @@ impl<'state> ProtocolWorkflowState<'state> {
 }
 
 impl ProtocolWorkflowState<'_> {
+    pub(crate) fn publish_projected_protocol_prefix(
+        self,
+        prefix: CommandDispatchContext,
+        source: moli_core::RendererOutputCursor,
+        target_id: Option<String>,
+    ) {
+        self.connection
+            .publish_projected_protocol_prefix(prefix, source, target_id);
+    }
+
     /// Fixture setup and assertions only. Test workflows use the same driver
     /// as production; this callback cannot return a state borrow or future.
     #[cfg(test)]
