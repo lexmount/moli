@@ -805,3 +805,83 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
             .expect("repeated traverseTo should share one traversal task")
     );
 }
+
+#[tokio::test]
+async fn sandboxed_joint_history_allows_self_and_descendants_but_blocks_siblings() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (target_kind, allow_top) in [
+        ("self", false),
+        ("descendant", false),
+        ("sibling", false),
+        ("self", true),
+        ("descendant", true),
+        ("sibling", true),
+    ] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://joint-history-sandbox-targets.test/parent",
+            &loader,
+        );
+        let sandbox = if allow_top {
+            "allow-scripts allow-same-origin allow-top-navigation"
+        } else {
+            "allow-scripts allow-same-origin"
+        };
+        vm.eval(&format!("globalThis.sandboxTokens = {sandbox:?};"))
+            .unwrap();
+        vm.eval(
+            r#"
+            globalThis.sourceFrame = document.createElement('iframe');
+            sourceFrame.sandbox = sandboxTokens;
+            sourceFrame.srcdoc = '<p>source</p>';
+            globalThis.siblingFrame = document.createElement('iframe');
+            siblingFrame.srcdoc = '<p>sibling</p>';
+            const root = document.body || document.documentElement || document;
+            root.appendChild(sourceFrame); root.appendChild(siblingFrame);
+        "#,
+        )
+        .unwrap();
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+            .await
+            .unwrap();
+        vm.eval(
+            r#"
+            globalThis.source = sourceFrame.contentWindow;
+            const descendant = source.document.createElement('iframe');
+            descendant.srcdoc = '<p>descendant</p>';
+            source.document.body.appendChild(descendant);
+        "#,
+        )
+        .unwrap();
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+            .await
+            .unwrap();
+        let target = match target_kind {
+            "self" => "source",
+            "descendant" => "source.document.querySelector('iframe').contentWindow",
+            _ => "siblingFrame.contentWindow",
+        };
+        vm.eval(&format!(
+            r#"
+            globalThis.target = {target};
+            target.history.replaceState(0, '');
+            target.history.pushState(1, '', '#target');
+            source.eval('history.back()');
+        "#
+        ))
+        .unwrap();
+        let allowed = target_kind != "sibling";
+        assert_eq!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap(),
+            allowed,
+            "{target_kind}, allow_top={allow_top}"
+        );
+        assert_eq!(
+            vm.eval("String(target.history.state)").unwrap(),
+            if allowed { "0" } else { "1" },
+            "{target_kind}, allow_top={allow_top}"
+        );
+        assert!(vm.take_pending_top_level_history_traversal().is_none());
+    }
+}

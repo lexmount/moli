@@ -2531,10 +2531,12 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,
-                allows_top_navigation: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }
@@ -2546,10 +2548,12 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: false,
                 allows_scripts: true,
                 allows_modals: true,
-                allows_top_navigation: false,
                 allows_popups_to_escape: true,
                 sandboxes_document_domain: true,
             }
@@ -2562,10 +2566,12 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,
-                allows_top_navigation: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }
