@@ -387,6 +387,7 @@ impl ServiceWorkerRuntimeService {
                         skip_fetch_security_validation: true,
                         response_filter: service_worker_response_type_filter(
                             &started.response_head.response_type,
+                            started.response_head.timing_allow_passed,
                         ),
                         internal_id: job.internal_id,
                         request_url: job.request.url.clone(),
@@ -889,22 +890,31 @@ fn service_worker_fetch_response_filter(
     if is_redirect_status(response.status)
         && !matches!(response.response_type.as_str(), "opaque" | "opaqueredirect")
     {
-        Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+        Some(AsyncSubresourceFetchResponseFilter::service_worker(
+            crate::types::FetchResponseType::OpaqueRedirect,
+            response.timing_allow_passed,
+        ))
     } else {
-        service_worker_response_type_filter(&response.response_type)
+        service_worker_response_type_filter(&response.response_type, response.timing_allow_passed)
     }
 }
 
 fn service_worker_response_type_filter(
     response_type: &str,
+    timing_allow_passed: bool,
 ) -> Option<AsyncSubresourceFetchResponseFilter> {
-    match response_type {
-        "basic" => Some(AsyncSubresourceFetchResponseFilter::Basic),
-        "cors" => Some(AsyncSubresourceFetchResponseFilter::Cors),
-        "opaque" => Some(AsyncSubresourceFetchResponseFilter::Opaque),
-        "opaqueredirect" => Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
-        _ => None,
-    }
+    use crate::types::FetchResponseType;
+    let kind = match response_type {
+        "default" | "basic" => FetchResponseType::Basic,
+        "cors" => FetchResponseType::Cors,
+        "opaque" => FetchResponseType::Opaque,
+        "opaqueredirect" => FetchResponseType::OpaqueRedirect,
+        _ => return None,
+    };
+    Some(AsyncSubresourceFetchResponseFilter::service_worker(
+        kind,
+        timing_allow_passed,
+    ))
 }
 
 #[cfg(test)]
@@ -1266,6 +1276,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 202,
                 status_text: "Accepted".to_owned(),
@@ -1280,7 +1291,13 @@ mod tests {
         assert_eq!(completion.request_method, "GET");
         assert_eq!(completion.response_status_text.as_deref(), Some("Accepted"));
         assert!(completion.skip_fetch_security_validation);
-        assert_eq!(completion.response_filter, None);
+        assert_eq!(
+            completion.response_filter,
+            Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                crate::types::FetchResponseType::Basic,
+                true
+            ))
+        );
         let response = completion
             .result
             .expect("service worker response should resolve");
@@ -1366,6 +1383,7 @@ mod tests {
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 202,
                 status_text: "Accepted".to_owned(),
@@ -1404,6 +1422,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 202,
                 status_text: "Accepted".to_owned(),
@@ -1451,6 +1470,7 @@ mod tests {
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -1524,6 +1544,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaque".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 0,
                 status_text: String::new(),
@@ -1536,7 +1557,10 @@ mod tests {
         assert_eq!(completion.internal_id, 315);
         assert_eq!(
             completion.response_filter,
-            Some(AsyncSubresourceFetchResponseFilter::Opaque)
+            Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                crate::types::FetchResponseType::Opaque,
+                false
+            ))
         );
         let response = completion
             .result
@@ -1569,6 +1593,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 0,
                 status_text: String::new(),
@@ -1581,7 +1606,10 @@ mod tests {
         assert_eq!(completion.internal_id, 316);
         assert_eq!(
             completion.response_filter,
-            Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+            Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                crate::types::FetchResponseType::OpaqueRedirect,
+                false
+            ))
         );
         let response = completion
             .result
@@ -1613,6 +1641,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: true,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -1656,6 +1685,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://example.test/app/manual-final.txt")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: true,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -1704,6 +1734,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
@@ -1827,6 +1858,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
@@ -1840,7 +1872,10 @@ mod tests {
         assert!(completion.skip_fetch_security_validation);
         assert_eq!(
             completion.response_filter,
-            Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+            Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                crate::types::FetchResponseType::OpaqueRedirect,
+                true
+            ))
         );
         let response = completion
             .result
@@ -1888,6 +1923,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
@@ -1995,6 +2031,7 @@ mod tests {
         let response = ServiceWorkerFetchResponse {
             final_url: Some(request_url.clone()),
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             redirected: false,
             status: 303,
             status_text: "See Other".to_owned(),
@@ -2092,6 +2129,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
@@ -2139,6 +2177,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(response_url.clone()),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
@@ -2206,6 +2245,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "error".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 0,
                 status_text: String::new(),
@@ -2253,6 +2293,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cross-origin.test/data.txt")),
                 response_type: "cors".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2299,6 +2340,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaque".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 0,
                 status_text: String::new(),
@@ -2361,6 +2403,7 @@ mod tests {
                 result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                     final_url: None,
                     response_type: "opaque".to_owned(),
+                    timing_allow_passed: false,
                     redirected: false,
                     status: 0,
                     status_text: String::new(),
@@ -2408,6 +2451,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2461,6 +2505,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/image.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2524,6 +2569,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2583,6 +2629,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2641,6 +2688,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2699,6 +2747,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2758,6 +2807,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2811,6 +2861,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2869,6 +2920,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2926,6 +2978,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -2977,6 +3030,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3036,6 +3090,7 @@ mod tests {
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3104,6 +3159,7 @@ mod tests {
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3169,6 +3225,7 @@ mod tests {
             response_head: MaterializedServiceWorkerFetchResponseHead {
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3220,6 +3277,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3266,6 +3324,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: Some(url("https://cdn.example.test/app/data.json")),
                 response_type: "default".to_owned(),
+                timing_allow_passed: true,
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3277,7 +3336,13 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 332);
         assert!(completion.skip_fetch_security_validation);
-        assert_eq!(completion.response_filter, None);
+        assert_eq!(
+            completion.response_filter,
+            Some(AsyncSubresourceFetchResponseFilter::service_worker(
+                crate::types::FetchResponseType::Basic,
+                true
+            ))
+        );
         let response = completion
             .result
             .expect("Service Worker response should not need ACAO");
@@ -3310,6 +3375,7 @@ mod tests {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 final_url: None,
                 response_type: "opaqueredirect".to_owned(),
+                timing_allow_passed: false,
                 redirected: false,
                 status: 0,
                 status_text: String::new(),

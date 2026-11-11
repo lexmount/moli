@@ -2818,6 +2818,7 @@ fn service_worker_fetch_response_from_materialized(
     ServiceWorkerFetchResponse {
         final_url: response.final_url,
         response_type: response.response_type,
+        timing_allow_passed: response.timing_allow_passed,
         redirected: response.redirected,
         status: response.status,
         status_text: response.status_text,
@@ -2833,6 +2834,7 @@ fn service_worker_fetch_response_head_from_materialized(
         status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
+        timing_allow_passed: head.timing_allow_passed,
         redirected: head.redirected,
         status: head.status,
         headers: head.headers.clone(),

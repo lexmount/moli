@@ -44,13 +44,11 @@ impl FetchResponseFilter {
 
 impl From<crate::types::AsyncSubresourceFetchResponseFilter> for FetchResponseFilter {
     fn from(value: crate::types::AsyncSubresourceFetchResponseFilter) -> Self {
-        match value {
-            crate::types::AsyncSubresourceFetchResponseFilter::Basic => Self::Basic,
-            crate::types::AsyncSubresourceFetchResponseFilter::Cors => Self::Cors,
-            crate::types::AsyncSubresourceFetchResponseFilter::Opaque => Self::Opaque,
-            crate::types::AsyncSubresourceFetchResponseFilter::OpaqueRedirect => {
-                Self::OpaqueRedirect
-            }
+        match value.response_type {
+            crate::types::FetchResponseType::Basic => Self::Basic,
+            crate::types::FetchResponseType::Cors => Self::Cors,
+            crate::types::FetchResponseType::Opaque => Self::Opaque,
+            crate::types::FetchResponseType::OpaqueRedirect => Self::OpaqueRedirect,
         }
     }
 }
@@ -108,15 +106,14 @@ pub(crate) fn network_response_filter(
     request_mode: RequestMode,
 ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
     let request_origin = request_origin.into();
-    use crate::types::AsyncSubresourceFetchResponseFilter;
 
     if is_redirect_status(head.status) {
-        Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+        Some(crate::types::FetchResponseType::OpaqueRedirect.into())
     } else if request_mode == RequestMode::NoCors
         && head.final_url.scheme() != "data"
         && head.url_list().has_cross_origin_url(&request_origin)
     {
-        Some(AsyncSubresourceFetchResponseFilter::Opaque)
+        Some(crate::types::FetchResponseType::Opaque.into())
     } else {
         None
     }
@@ -494,6 +491,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
 pub(crate) struct MaterializedResponseObject {
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
+    pub(crate) timing_allow_passed: bool,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
@@ -505,6 +503,7 @@ pub(crate) struct MaterializedResponseObject {
 pub(crate) struct MaterializedResponseHead {
     pub(crate) final_url: Option<url::Url>,
     pub(crate) response_type: String,
+    pub(crate) timing_allow_passed: bool,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
@@ -516,6 +515,7 @@ impl MaterializedResponseHead {
         MaterializedResponseObject {
             final_url: self.final_url,
             response_type: self.response_type,
+            timing_allow_passed: self.timing_allow_passed,
             redirected: self.redirected,
             status: self.status,
             status_text: self.status_text,
@@ -613,10 +613,18 @@ pub(crate) fn materialize_response_object_head<'s>(
         })
         .unwrap_or_default();
 
+    let timing_allow_passed = response_slot_value(
+        scope,
+        response,
+        super::super::fetch_surface::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+    )
+    .map(|value| value.boolean_value(scope))
+    .unwrap_or(matches!(response_type.as_str(), "default" | "basic"));
     Ok((
         MaterializedResponseHead {
             final_url,
             response_type,
+            timing_allow_passed,
             redirected: response_slot_bool(scope, response, RESPONSE_REDIRECTED_SLOT),
             status: status as u16,
             status_text,

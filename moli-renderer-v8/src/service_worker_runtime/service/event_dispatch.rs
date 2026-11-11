@@ -66,6 +66,7 @@ fn navigation_preload_response_head(
         status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),
+        timing_allow_passed: true,
         redirected: head.redirected,
         status: head.status,
         headers: head.headers,

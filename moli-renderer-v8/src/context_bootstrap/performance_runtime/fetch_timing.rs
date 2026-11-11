@@ -48,12 +48,27 @@ impl FetchResourceTiming {
             entry.response_status = 0.0;
             entry.content_type.clear();
         }
-        if !timing_allowed(origin, head) {
+        if filter.is_some_and(|filter| filter.service_worker_timing.is_some()) {
+            // Bytes delivered by a Service Worker are not a network transfer
+            // to this global, even when respondWith forwards a fetched body.
+            entry.transfer_size = 0.0;
+        }
+        if !Self::allows_timing(origin, head, filter) {
             entry.transfer_size = 0.0;
             entry.encoded_body_size = 0.0;
             entry.decoded_body_size = 0.0;
         }
         entry
+    }
+
+    pub(crate) fn allows_timing(
+        origin: &WebOrigin,
+        head: &ResponseHead,
+        filter: Option<AsyncSubresourceFetchResponseFilter>,
+    ) -> bool {
+        filter
+            .and_then(|filter| filter.service_worker_timing)
+            .unwrap_or_else(|| timing_allowed(origin, head))
     }
 
     pub(crate) fn failed(&self, url: &Url) -> ResourcePerformanceEntry {

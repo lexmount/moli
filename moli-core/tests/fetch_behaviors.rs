@@ -24,6 +24,9 @@ mod fetch_resource_timing;
 #[path = "fetch_behaviors/fetch_abort_timing.rs"]
 mod fetch_abort_timing;
 
+#[path = "fetch_behaviors/service_worker_fetch_timing.rs"]
+mod service_worker_fetch_timing;
+
 fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapshot> {
     page.script_execution().global(name)
 }

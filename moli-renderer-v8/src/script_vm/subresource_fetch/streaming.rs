@@ -990,6 +990,13 @@ impl ScriptVm {
                         started.body_source_id,
                         started.response_filter,
                     );
+                    crate::network_host::set_response_slot_bool(
+                        scope, response_obj,
+                        crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+                        crate::context_bootstrap::FetchResourceTiming::allows_timing(
+                            &pending.request_origin, &started.head, started.response_filter,
+                        ),
+                    );
                     resolver.resolve(scope, response_obj.into());
                 }
                 PendingSubresourceContinuation::Image {
