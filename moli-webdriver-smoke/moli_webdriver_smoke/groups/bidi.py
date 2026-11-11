@@ -277,6 +277,11 @@ async def _run_bidi_user_prompt_smoke(
             websocket, context, results, handler=handler, close_during_prompt=close_during_prompt,
         )
 
+    if handler == "ignore":
+        await _run_bidi_popup_creation_order_smoke(
+            websocket, context, results, handler=handler, close_during_prompt=False, nested=True,
+        )
+
 
 async def _run_bidi_popup_prompt_smoke(
     websocket: Any,
@@ -337,6 +342,7 @@ async def _run_bidi_popup_creation_order_smoke(
     *,
     handler: str,
     close_during_prompt: bool,
+    nested: bool = False,
 ) -> None:
     await _send(websocket, 240, "session.subscribe", {"events": [
         "browsingContext.contextCreated", "browsingContext.contextDestroyed",
@@ -344,8 +350,16 @@ async def _run_bidi_popup_creation_order_smoke(
     ]})
     # Subscription can replay existing contexts before its response.
     subscribed = await _recv_success(websocket, 240, "BiDi popup creation subscription")
+    preload = None
+    if nested:
+        await _send(websocket, 246, "script.addPreloadScript", {
+            "functionDeclaration": "(channel) => { globalThis.__popupPreload = () => channel('popup'); }",
+            "arguments": [{"type": "channel", "value": {"channel": "popup-initialization"}}],
+        })
+        preload = (await _recv_success(websocket, 246, "popup preload channel"))["result"]["script"]
     await _send(websocket, 241, "script.evaluate", {
-        "expression": "(() => { const child = window.open('about:blank'); return child.confirm('creation order'); })()",
+        "expression": ("(() => { const parent = window.open('about:blank'); const child = parent.open('about:blank'); return child.confirm('creation order'); })()"
+                       if nested else "(() => { const child = window.open('about:blank'); return child.confirm('creation order'); })()"),
         "target": {"context": context}, "awaitPromise": False,
     })
     seen: list[dict[str, Any]] = []
@@ -364,7 +378,14 @@ async def _run_bidi_popup_creation_order_smoke(
         popup = opened["params"]["context"]
         created = events("browsingContext.contextCreated", popup)
         assert_equal(len(created), 1, f"popup must be announced before its prompt: {seen!r}")
-        assert_equal(created[0]["params"]["originalOpener"], context, "popup creation identifies its opener")
+        parent = created[0]["params"]["originalOpener"] if nested else None
+        if nested:
+            parent_created = events("browsingContext.contextCreated", parent)
+            assert_equal(len(parent_created), 1, "nested parent exists before its child prompt")
+            assert_equal(parent_created[0]["params"]["originalOpener"], context, "nested parent opener")
+            assert_true(seen.index(parent_created[0]) < seen.index(created[0]), "parent creation precedes child creation")
+        else:
+            assert_equal(created[0]["params"]["originalOpener"], context, "popup creation identifies its opener")
         assert_true(seen.index(created[0]) < seen.index(opened), "popup creation precedes its prompt")
         if handler == "ignore":
             assert_equal(response(241), None, "popup creation does not complete its waiting script")
@@ -389,16 +410,32 @@ async def _run_bidi_popup_creation_order_smoke(
             while response(243) is None or not events("browsingContext.contextDestroyed", popup):
                 seen.append(await _recv(websocket))
         assert_equal(response(243)["type"], "success", "BiDi announced popup cleanup")
+    if parent is not None:
+        await _send(websocket, 247, "browsingContext.close", {"context": parent})
+        async with asyncio.timeout(5):
+            while response(247) is None or not events("browsingContext.contextDestroyed", parent):
+                seen.append(await _recv(websocket))
+        assert_equal(response(247)["type"], "success", "nested parent cleanup")
+    if preload is not None:
+        await _send(websocket, 248, "script.removePreloadScript", {"script": preload})
+        seen.extend(await _recv_until_id(websocket, 248))
+        assert_equal(response(248)["type"], "success", "popup preload cleanup")
     await _send(websocket, 244, "session.status", {})
     seen.extend(await _recv_until_id(websocket, 244))
     assert_equal(len(events("browsingContext.contextCreated", popup)), 1, "popup creation is not repeated after adoption")
     assert_equal(len(events("browsingContext.contextDestroyed", popup)), 1, "one popup destruction")
     assert_equal(len(events("browsingContext.userPromptOpened", popup)), 1, "one announced popup prompt")
+    closed = events("browsingContext.userPromptClosed", popup)
+    assert_equal(len(closed), 1, "one native prompt close, including target termination")
+    assert_equal(closed[0]["params"]["accepted"], handler != "dismiss" and not close_during_prompt,
+                 "closed prompt reports the actual completion")
+    assert_true(seen.index(opened) < seen.index(closed[0]) < seen.index(events("browsingContext.contextDestroyed", popup)[0]),
+                "prompt closure precedes target destruction")
     assert_true(seen.index(created[0]) < seen.index(events("browsingContext.contextDestroyed", popup)[0]),
                 "popup destruction follows its creation, including before adoption finishes")
     await _send(websocket, 245, "session.unsubscribe", {"subscriptions": [subscribed["result"]["subscription"]]})
     await _recv_success(websocket, 245, "BiDi popup creation unsubscribe")
-    action = "close" if close_during_prompt else handler
+    action = "nested_preload" if nested else "close" if close_during_prompt else handler
     record(results, f"bidi_popup_creation_order_{action}", {
         "events": [message["method"] for message in seen
                    if message.get("params", {}).get("context") == popup],
