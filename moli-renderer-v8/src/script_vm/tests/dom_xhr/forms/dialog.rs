@@ -519,3 +519,38 @@ fn dialog_escape_untrusted_keydown_keeps_modal_order() {
         r#"{"open":[false,true],"cancels":["first"]}"#
     );
 }
+
+#[test]
+fn dialog_escape_uses_internal_keyboard_key() {
+    for replace_prototype in [false, true] {
+        for (key, code, spoof, expected_open, expected_cancels) in [
+            ("a", "KeyA", "Escape", true, 0),
+            ("Escape", "Escape", "x", false, 1),
+        ] {
+            let mut vm = new_storage_test_vm("https://dialog-escape-internal-key.test/");
+            vm.eval(&format!(
+                r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+globalThis.keyReads = 0;
+document.addEventListener('keydown', event => {{
+  const target = {replace_prototype} ? KeyboardEvent.prototype : event;
+  Object.defineProperty(target, 'key', {{configurable:true, get() {{
+    keyReads++;
+    return '{spoof}';
+  }}}});
+}});
+"#,
+                fixture = include_str!("dialog_escape_order.js"),
+            ))
+            .unwrap();
+            vm.dispatch_key_event("keydown", key, code, "", 0, false, false)
+                .unwrap();
+            assert_eq!(
+                vm.eval("JSON.stringify([dialogProbe.dialogs.first.open, dialogProbe.state().cancels.length, keyReads])")
+                    .unwrap(),
+                format!("[{expected_open},{expected_cancels},0]"),
+                "key {key}, public key {spoof}, prototype override {replace_prototype}"
+            );
+        }
+    }
+}

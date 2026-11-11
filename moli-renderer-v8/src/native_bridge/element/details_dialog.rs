@@ -529,7 +529,7 @@ fn event_string_property(
     name: &str,
 ) -> Option<String> {
     let key = v8_string(scope, name)?;
-    event
+    crate::context_bootstrap::event_backing(scope, event)
         .get(scope, key.into())
         .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
         .map(|value| value.to_rust_string_lossy(scope))
