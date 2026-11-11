@@ -447,7 +447,9 @@ async fn direct_network_fallback_after_synthetic_redirect_enforces_page_policy()
             .pending_fetch_jobs
             .get_mut(&event.event_id)
             .unwrap()
-            .direct_completion_tx = Some(direct_tx);
+            .direct_completion_tx = Some(
+            crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(direct_tx),
+        );
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id: event.event_id,
             owner: event.owner,

@@ -361,7 +361,11 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         ))
     } else if worker_url_blocked(&blocked_url_patterns, &prepared.resolved_url) {
         Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
-    } else if network_offline {
+    } else if async_request
+        && network_offline
+        && super::fetch::worker_service_worker_controller(&state.borrow(), &prepared.resolved_url)
+            .is_none()
+    {
         Some("Network emulation offline".to_owned())
     } else {
         None
@@ -434,6 +438,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 credentials_mode: prepared.credentials_mode,
 
                 load: load.clone(),
+
             },
         );
         xhr_id
@@ -453,7 +458,9 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                     result: Ok(response),
                     local_request: Some(local_request),
                     csp_violations: Vec::new(),
+                    response_filter: None,
                 })));
+
             }
             Err(error_text) => {
                 let _ = state.worker_wake_tx.send(WorkerMessage::DispatchXhrFailure { xhr_id, error_text, local_request });
@@ -467,6 +474,11 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let info = worker_xhr_info(&prepared);
     let request = worker_xhr_request(&state.borrow(), &prepared);
     let redirect_owner = crate::network_host::RedirectOwner::Worker(WorkerRedirectOwner::xhr(completion_tx.clone(), xhr_id, load.clone()));
+    let (runtime, client_id, policy_context) = {
+        let state = state.borrow();
+        (state.service_worker_runtime.clone(), state.service_worker_client_id, state.policy_context)
+    };
+    let metadata = crate::service_worker_runtime::service_worker_fetch_request_metadata(&request);
     let timing = prepared.timing.clone();
     timing.begin_transport(cancel_handle.clone());
     load.task_runner().spawn(async move {
@@ -487,11 +499,16 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 prepared.request_headers.to_byte_strings(),
             )
             .with_redirect_owner(Some(redirect_owner))
+            .with_service_worker(runtime, client_id, metadata)
+            .with_service_worker_policy(policy_context)
             .run()
             .await;
         if let Ok(response) = &completed.result {
             timing.observe_head(&response.head());
             timing.observe_chunk(response.body_bytes().len());
+            if let Some(filter) = completed.response_filter.clone() {
+                timing.select_response(&response.head(), filter, response.body_bytes().len(), true);
+            }
         } else {
             timing.discard_response();
         }
@@ -500,10 +517,12 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             xhr_id,
             local_request: None,
             csp_violations: completed.csp_violations,
+            response_filter: completed.response_filter,
             result: completed.result,
         })));
         let _ = completion_tx.send(WorkerXhrEvent::ResourceTiming { xhr_id: Some(xhr_id), timing });
     });
+
 
 
     true
@@ -801,6 +820,7 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
 
 
 
+
     let Some(pending) = state.borrow_mut().pending_xhrs.remove(&completion.xhr_id) else {
         return;
     };
@@ -828,14 +848,14 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 pending.timing.observe_head(&response.head());
                 pending.timing.observe_chunk(response.body_bytes().len());
                 pending.timing.complete();
+
             }
             let (mut head, body) = response.into_body();
-            head.headers = filter_cors_exposed_response_headers(
-                pending.timing.origin(),
-                &head,
-                pending.credentials_mode,
-                pending.load.request_client().web_security_disabled(),
-            );
+            let web_security_disabled = pending.load.request_client().web_security_disabled();
+            let filter = completion.response_filter.unwrap_or_else(|| {
+                head.fetch_response_type_with_web_security(pending.timing.origin(), RequestMode::Cors, web_security_disabled).into()
+            });
+            head.headers = crate::network_host::xhr_response_headers_for_filter(pending.timing.origin(), &head, &filter, pending.credentials_mode, web_security_disabled);
             pending.timing.publish(scope);
             apply_xhr_response_body_source(scope, xhr, head, body);
 

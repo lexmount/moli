@@ -188,6 +188,7 @@ impl ControlledResourceLoad {
             Err(error) => (Err(error), None),
         };
         let mut completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
+        completed.response_filter = self.response_filter.clone();
         completed.csp_violations = std::mem::take(&mut self.csp_violations);
         completed.network_record = completed
             .network_record
@@ -609,6 +610,7 @@ impl ControlledResourceLoad {
                 super::response_hop::network_response_extra_info(&response.head, &observations);
             let mut response = response;
             if handle_auth_requests
+                && self.response_filter.as_ref().is_none_or(|filter| filter.service_worker_metadata().is_none())
                 && matches!(response.head.status, 401 | 407)
                 && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
                     &response.head.headers,

@@ -414,6 +414,7 @@ fn send_worker_content_security_policy_report_for_state(
         .run()
         .await;
 
+
     });
 }
 

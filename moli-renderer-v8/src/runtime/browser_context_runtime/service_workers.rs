@@ -228,7 +228,11 @@ impl RendererBrowserContextRuntime {
             request_client: navigation_loader.request_client().clone(),
             resource_task_runner: navigation_loader.task_runner(),
             cancel_handle: navigation_loader.cancel_handle(),
-            direct_completion_tx: Some(direct_completion_tx),
+            direct_completion_tx: Some(
+                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                    direct_completion_tx,
+                ),
+            ),
         };
 
         // Retain the upload's protocol text view and native request context,
@@ -241,6 +245,7 @@ impl RendererBrowserContextRuntime {
         match main_resource_completion_rx.await {
             Ok(
                 ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::NetworkFallback { .. }
                 | ServiceWorkerDirectFetchResult::Stream(_),
             ) => Err(anyhow!(
                 "navigation requests cannot contain an author stream"

@@ -25,6 +25,7 @@ impl BufferedXhrResponse {
 
 #[derive(Debug)]
 pub(crate) struct XhrLoadResult {
+    pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     pub(crate) result: Result<Response, String>,
     pub(crate) info: PendingSubresourceFetchInfo,
     pub(crate) network_record: SubresourceNetworkRecord,
@@ -98,6 +99,7 @@ impl XhrLoadResult {
             result: result.map(|delivered| delivered.response),
             network_record,
             csp_violations: Vec::new(),
+            response_filter: None,
         }
     }
 }

@@ -2078,8 +2078,8 @@ async fn service_worker_soft_reload_exposes_native_cache_mode_on_request_copies(
             let request = ServiceWorkerFetchRequest {
                 body_stream: None,
 
-                client_id: crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(
-                    7,
+                client_id: Some(
+                    crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7),
                 ),
                 resulting_client_id: None,
                 url,
