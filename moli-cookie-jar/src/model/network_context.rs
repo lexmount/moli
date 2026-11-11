@@ -286,21 +286,36 @@ impl NetworkCookieRequestContext {
         .with_http_method(parse_network_same_site_http_method(method))
     }
 
-    /// Records the initiator and recomputes SameSite context for the request URL.
+    /// Initializes an initiator and its default browser cookie scope.
     pub fn with_initiator_url(mut self, request_url: &Url, initiator_url: &Url) -> Self {
-        self.initiator_url = Some(initiator_url.clone());
         self.browser_context = self
             .browser_context
             .with_site_for_cookies_url(initiator_url)
             .with_top_frame_origin_url(initiator_url);
-        self.site_context = self.site_context_for_request(request_url);
         if self.browser_context.cookie_partition_key.is_none() {
             self.browser_context.cookie_partition_key = Some(StoredCookiePartitionKey::site(
                 site_for_url(initiator_url),
                 false,
             ));
         }
-        self
+        self.with_cookie_initiator_origin(request_url, initiator_url)
+    }
+
+    /// Updates the cookie initiator without changing frame scope or partition.
+    pub fn with_cookie_initiator_origin(mut self, request_url: &Url, origin: &Url) -> Self {
+        self.initiator_url = Some(origin.clone());
+        self.recompute_site_context_for_request(request_url)
+    }
+
+    pub fn set_subresource_request_type(&mut self) {
+        self.request_type = NetworkCookieRequestType::Subresource;
+    }
+
+    pub fn is_top_level_navigation(&self) -> bool {
+        matches!(
+            self.request_type,
+            NetworkCookieRequestType::TopLevelNavigation
+        )
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -336,48 +351,10 @@ impl NetworkCookieRequestContext {
         self.site_context_metadata = NetworkSiteContextMetadata::new(
             site_context_metadata
                 .context
-                .with_http_method(
-                    if matches!(
-                        site_context_metadata.context.http_method,
-                        NetworkSameSiteHttpMethod::Unset
-                    ) {
-                        self.site_context_metadata.context.http_method
-                    } else {
-                        site_context_metadata.context.http_method
-                    },
-                )
-                .with_redirect_type(
-                    if matches!(
-                        site_context_metadata.context.redirect_type,
-                        NetworkSameSiteRedirectType::Unset
-                    ) {
-                        self.site_context_metadata.context.redirect_type
-                    } else {
-                        site_context_metadata.context.redirect_type
-                    },
-                ),
+                .inherit_unset(self.site_context_metadata.context),
             site_context_metadata
                 .schemeful_context
-                .with_http_method(
-                    if matches!(
-                        site_context_metadata.schemeful_context.http_method,
-                        NetworkSameSiteHttpMethod::Unset
-                    ) {
-                        self.site_context_metadata.schemeful_context.http_method
-                    } else {
-                        site_context_metadata.schemeful_context.http_method
-                    },
-                )
-                .with_redirect_type(
-                    if matches!(
-                        site_context_metadata.schemeful_context.redirect_type,
-                        NetworkSameSiteRedirectType::Unset
-                    ) {
-                        self.site_context_metadata.schemeful_context.redirect_type
-                    } else {
-                        site_context_metadata.schemeful_context.redirect_type
-                    },
-                ),
+                .inherit_unset(self.site_context_metadata.schemeful_context),
         );
         self
     }
@@ -387,31 +364,11 @@ impl NetworkCookieRequestContext {
         self.site_context_metadata.context = self
             .site_context_metadata
             .context
-            .with_http_method(method)
-            .with_redirect_type(
-                if matches!(
-                    self.site_context_metadata.context.redirect_type,
-                    NetworkSameSiteRedirectType::Unset
-                ) {
-                    NetworkSameSiteRedirectType::NoRedirect
-                } else {
-                    self.site_context_metadata.context.redirect_type
-                },
-            );
+            .for_request_method(method);
         self.site_context_metadata.schemeful_context = self
             .site_context_metadata
             .schemeful_context
-            .with_http_method(method)
-            .with_redirect_type(
-                if matches!(
-                    self.site_context_metadata.schemeful_context.redirect_type,
-                    NetworkSameSiteRedirectType::Unset
-                ) {
-                    NetworkSameSiteRedirectType::NoRedirect
-                } else {
-                    self.site_context_metadata.schemeful_context.redirect_type
-                },
-            );
+            .for_request_method(method);
         self
     }
 
@@ -589,6 +546,39 @@ pub struct NetworkSiteContextTrackMetadata {
 }
 
 impl NetworkSiteContextTrackMetadata {
+    fn inherit_unset(mut self, previous: Self) -> Self {
+        if self.http_method == NetworkSameSiteHttpMethod::Unset {
+            self.http_method = previous.http_method;
+        }
+        if self.redirect_type == NetworkSameSiteRedirectType::Unset {
+            self.redirect_type = previous.redirect_type;
+        }
+        self
+    }
+
+    fn for_request_method(mut self, method: NetworkSameSiteHttpMethod) -> Self {
+        self.http_method = method;
+        if self.redirect_type == NetworkSameSiteRedirectType::Unset {
+            self.redirect_type = NetworkSameSiteRedirectType::NoRedirect;
+        }
+        self
+    }
+
+    fn advance_redirect(
+        self,
+        previous: NetworkSameSiteContext,
+        current: NetworkSameSiteContext,
+        redirect_type: NetworkSameSiteRedirectType,
+    ) -> Self {
+        let downgrade = site_context_downgrade_type(previous, current).or(self.downgrade_type);
+        Self::new(
+            self.downgraded_by_cross_site_redirect || downgrade.is_some(),
+            downgrade,
+        )
+        .with_http_method(self.http_method)
+        .with_redirect_type(merge_redirect_type(self.redirect_type, redirect_type))
+    }
+
     /// Builds track metadata before method and redirect labels are attached.
     pub fn new(
         downgraded_by_cross_site_redirect: bool,
@@ -963,68 +953,30 @@ pub fn advance_cookie_request_context(
     current_request_method: &str,
 ) -> NetworkCookieRequestContext {
     previous_context.set_request_method(current_request_method);
-    let mut recomputed = previous_context.clone();
-    recomputed.preserve_site_context = true;
-    let recomputed = recomputed.recompute_site_context_for_request(current_request_url);
-    let site_context = recomputed.site_context;
+    let previous_site = previous_context.site_context;
+    let previous_metadata = previous_context.site_context_metadata;
+    previous_context.preserve_site_context = true;
+    let recomputed = previous_context.recompute_site_context_for_request(current_request_url);
     let redirect_types = redirect_types_for_request(
         original_request_url,
         current_request_url,
-        previous_context.initiator_url.as_ref(),
-        &previous_context.browser_context,
-        previous_context.request_type,
-        previous_context.is_method_safe,
+        recomputed.initiator_url.as_ref(),
+        &recomputed.browser_context,
+        recomputed.request_type,
+        recomputed.is_method_safe,
     );
-    let context_downgrade_type =
-        site_context_downgrade_type(previous_context.site_context.context, site_context.context)
-            .or(previous_context
-                .site_context_metadata
-                .context
-                .downgrade_type);
-    let schemeful_context_downgrade_type = site_context_downgrade_type(
-        previous_context.site_context.schemeful_context,
-        site_context.schemeful_context,
-    )
-    .or(previous_context
-        .site_context_metadata
-        .schemeful_context
-        .downgrade_type);
-
+    let site = recomputed.site_context;
     recomputed.with_site_context_metadata(NetworkSiteContextMetadata::new(
-        NetworkSiteContextTrackMetadata::new(
-            previous_context
-                .site_context_metadata
-                .context
-                .downgraded_by_cross_site_redirect
-                || context_downgrade_type.is_some(),
-            context_downgrade_type,
-        )
-        .with_http_method(previous_context.site_context_metadata.context.http_method)
-        .with_redirect_type(merge_redirect_type(
-            previous_context.site_context_metadata.context.redirect_type,
+        previous_metadata.context.advance_redirect(
+            previous_site.context,
+            site.context,
             redirect_types.context.redirect_type,
-        )),
-        NetworkSiteContextTrackMetadata::new(
-            previous_context
-                .site_context_metadata
-                .schemeful_context
-                .downgraded_by_cross_site_redirect
-                || schemeful_context_downgrade_type.is_some(),
-            schemeful_context_downgrade_type,
-        )
-        .with_http_method(
-            previous_context
-                .site_context_metadata
-                .schemeful_context
-                .http_method,
-        )
-        .with_redirect_type(merge_redirect_type(
-            previous_context
-                .site_context_metadata
-                .schemeful_context
-                .redirect_type,
+        ),
+        previous_metadata.schemeful_context.advance_redirect(
+            previous_site.schemeful_context,
+            site.schemeful_context,
             redirect_types.schemeful_context.redirect_type,
-        )),
+        ),
     ))
 }
 
@@ -1172,6 +1124,27 @@ mod tests {
 
     fn parse(url: &str) -> Url {
         Url::parse(url).unwrap()
+    }
+
+    #[test]
+    fn cookie_initiator_update_preserves_browser_scope() {
+        let target = parse("https://example.test/data");
+        let origin = parse("https://example.test/");
+        let mut context = NetworkCookieRequestContext::subresource("GET")
+            .with_initiator_url(&target, &parse("about:blank"));
+        let scope = NetworkBrowserSiteContext::default()
+            .with_site_for_cookies_url(&origin)
+            .with_top_frame_origin_url(&origin)
+            .with_storage_access_status(NetworkStorageAccessStatus::Granted)
+            .with_cookie_partition_key(StoredCookiePartitionKey::site(
+                "https://partition.test".to_owned(),
+                true,
+            ));
+        context.browser_context = scope.clone();
+        let updated = context.with_cookie_initiator_origin(&target, &origin);
+        assert_eq!(updated.browser_context, scope);
+        assert_eq!(updated.initiator_url.as_ref(), Some(&origin));
+        assert_eq!(updated.site_context, NetworkSiteContext::same_site());
     }
 
     #[test]
