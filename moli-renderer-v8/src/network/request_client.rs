@@ -1086,8 +1086,9 @@ impl ResourceRequestClient {
         self.resource_runtime.client().prepare_request(request);
     }
 
-    fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
-        request.browser_origin()?;
+    /// Bind the owner's cookie scope before a caller retains redirect state,
+    /// using the same partition handling as transport dispatch.
+    pub(crate) fn bind_browser_site_context(&self, mut request: Request) -> Request {
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
             let mut browser_site_context = browser_site_context.clone();
             // Child navigations bind the destination frame's partition before
@@ -1098,6 +1099,12 @@ impl ResourceRequestClient {
             }
             request = request.with_browser_site_context(browser_site_context);
         }
+        request
+    }
+
+    fn apply_network_policy(&self, request: Request) -> Result<Request> {
+        request.browser_origin()?;
+        let request = self.bind_browser_site_context(request);
         let mut request = self
             .page_network_policy
             .snapshot()

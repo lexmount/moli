@@ -273,7 +273,10 @@ async fn fetch_browser_subresource_with_manual_preflight_redirects(
     // Unfinished bodies can stall these paths until cancellation or timeout.
     // Covered by buffered_redirect_body_wait_is_cancellable_without_committing_completion
     // in moli-fetch/src/tests/response_progress.rs.
-    let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
+    let mut redirects = ManualCorsRedirectState::new(
+        loader.bind_browser_site_context(request),
+        preflight_request_headers,
+    );
     let cancel_handle = cancel_handle.unwrap_or_default();
 
     loop {
@@ -313,7 +316,10 @@ async fn fetch_browser_subresource_raw_stream_with_manual_preflight_redirects(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
-    let mut redirects = ManualCorsRedirectState::new(request, preflight_request_headers);
+    let mut redirects = ManualCorsRedirectState::new(
+        loader.bind_browser_site_context(request),
+        preflight_request_headers,
+    );
     let cancel_handle = cancel_handle.unwrap_or_default();
 
     loop {

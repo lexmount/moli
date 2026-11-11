@@ -172,8 +172,6 @@ impl NavigationInterception {
             from_cache: head.from_cache,
             negotiated_http_version: head.negotiated_http_version,
         };
-        self.request
-            .update_referrer_for_redirect(&head.final_url, &head.headers);
         self.request.follow_redirect(redirect.clone())?;
         self.loader.restart_after_response()?;
         self.navigation_url = next_url;
