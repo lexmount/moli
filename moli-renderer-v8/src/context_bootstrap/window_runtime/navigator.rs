@@ -65,6 +65,8 @@ const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT: &str = "__moliStorageBucketCa
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT: &str = "__moliStorageBucketCachePutResponseUrl";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT: &str =
     "__moliStorageBucketCachePutResponseRedirected";
+const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT: &str =
+    "__moliStorageBucketCachePutResponseTimingAllowPassed";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_SLOT: &str =
     "__moliStorageBucketCachePutResponseStatus";
 const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT: &str =
@@ -457,6 +459,9 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)]
     response_type: String,
+
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT)]
+    response_timing_allow_passed: bool,
 
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT)]
     response_url: String,
@@ -1802,6 +1807,7 @@ fn storage_bucket_cache_put_pending_body<'s>(
         request_headers_json: serde_json::to_string(&request.headers)
             .unwrap_or_else(|_| "[]".to_owned()),
         response_type: head.response_type,
+        response_timing_allow_passed: head.timing_allow_passed,
         response_url: head
             .final_url
             .map(|url| url.to_string())
@@ -1869,6 +1875,7 @@ fn storage_bucket_cache_put_body_fulfilled_callback<'s>(
     };
     let response = StorageBucketCachedResponse {
         response_type: pending.response_type,
+        timing_allow_passed: pending.response_timing_allow_passed,
         url: pending.response_url,
         redirected: pending.response_redirected,
         status: pending.response_status,
@@ -1901,6 +1908,7 @@ struct StorageBucketCachePutPendingData<'scope> {
     handle: StorageBucketCacheHandle,
     request: CacheRequestInfo,
     response_type: String,
+    response_timing_allow_passed: bool,
     response_url: String,
     response_redirected: bool,
     response_status: u16,
@@ -1942,6 +1950,11 @@ fn storage_bucket_cache_put_pending_data<'s>(
         serde_json::from_str::<Vec<(String, String)>>(&request_headers_json).unwrap_or_default();
     let response_type =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)?;
+    let response_timing_allow_passed = data_private_bool(
+        scope,
+        data,
+        STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+    );
     let response_url =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT)?;
     let response_redirected = data_private_bool(
@@ -1979,6 +1992,7 @@ fn storage_bucket_cache_put_pending_data<'s>(
             headers: request_headers,
         },
         response_type,
+        response_timing_allow_passed,
         response_url,
         response_redirected,
         response_status,
@@ -2843,6 +2857,7 @@ fn storage_bucket_cached_response_from_head_body(
 ) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
         response_type: head.response_type,
+        timing_allow_passed: head.timing_allow_passed,
         url: head
             .final_url
             .map(|url| url.to_string())
@@ -2937,6 +2952,7 @@ fn build_storage_bucket_cached_response_object<'s>(
             &response.response_type,
             &response.url,
             response.body,
+            response.timing_allow_passed,
         );
     }
     let body: v8::Local<'s, v8::Value> = if matches!(response.status, 204 | 205 | 304) {
@@ -2979,6 +2995,12 @@ fn build_storage_bucket_cached_response_object<'s>(
         response_obj,
         crate::network_host::RESPONSE_REDIRECTED_SLOT,
         response.redirected,
+    );
+    crate::network_host::set_response_slot_bool(
+        scope,
+        response_obj,
+        crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+        response.timing_allow_passed,
     );
     Some(response_obj)
 }

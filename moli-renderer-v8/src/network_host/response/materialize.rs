@@ -455,6 +455,7 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     response_type: &str,
     internal_url: &str,
     body: Vec<u8>,
+    timing_allow_passed: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let response_type = match response_type {
         "opaque" => "opaque",
@@ -476,6 +477,12 @@ pub(crate) fn build_filtered_cached_response_object<'s>(
     }
     mark_response_object(scope, obj);
 
+    set_response_slot_bool(
+        scope,
+        obj,
+        RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+        timing_allow_passed,
+    );
     let headers = filter_headers_for_guard(&[], HeadersGuard::Response);
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);

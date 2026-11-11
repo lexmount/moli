@@ -126,6 +126,7 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             request: StorageBucketCachedRequest::default(),
             response: StorageBucketCachedResponse {
                 response_type: "default".into(),
+                timing_allow_passed: true,
                 url: "https://a.test/resource".into(),
                 redirected: false,
                 status: 200,
