@@ -323,6 +323,7 @@ impl RendererBrowserContextRuntime {
                 destination,
                 resource_type,
                 Default::default(),
+                Vec::new(),
                 cancel_handle,
             )
             .await
