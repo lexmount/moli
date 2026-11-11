@@ -145,13 +145,32 @@ async fn discovery_endpoints_accept_trailing_slashes() {
         .iter()
         .find(|domain| domain["domain"] == json!("Page"))
         .unwrap();
+    let navigate = page["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["name"] == "navigate")
+        .expect("Page.navigate must be advertised");
     assert!(
-        page["commands"]
+        navigate["parameters"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|command| command["name"] == json!("navigate")),
-        "Page.navigate must be advertised"
+            .any(|field| { field["name"] == "url" && field["type"] == "string" })
+    );
+    assert!(
+        navigate["returns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| { field["name"] == "frameId" && field["$ref"] == "FrameId" })
+    );
+    assert!(
+        page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| { event["name"] == "loadEventFired" && event["parameters"].is_array() })
     );
 
     assert_eq!(

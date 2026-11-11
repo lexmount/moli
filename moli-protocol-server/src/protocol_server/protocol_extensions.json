@@ -1,0 +1,277 @@
+{
+  "domains": [
+    {
+      "domain": "Browser",
+      "commands": [
+        {
+          "name": "openDownloadAsStream",
+          "description": "Moli extension. Opens a completed download for reading with IO.read.",
+          "experimental": true,
+          "parameters": [
+            {
+              "name": "guid",
+              "type": "string"
+            }
+          ],
+          "returns": [
+            {
+              "name": "stream",
+              "$ref": "IO.StreamHandle"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "CSS",
+      "types": [
+        {
+          "id": "MoliStyleSheet",
+          "type": "object",
+          "description": "Moli stylesheet contents and source location.",
+          "properties": [
+            {
+              "name": "styleSheetId",
+              "$ref": "DOM.StyleSheetId"
+            },
+            {
+              "name": "frameId",
+              "$ref": "Page.FrameId"
+            },
+            {
+              "name": "sourceURL",
+              "type": "string"
+            },
+            {
+              "name": "origin",
+              "$ref": "StyleSheetOrigin"
+            },
+            {
+              "name": "title",
+              "type": "string"
+            },
+            {
+              "name": "disabled",
+              "type": "boolean"
+            },
+            {
+              "name": "isInline",
+              "type": "boolean"
+            },
+            {
+              "name": "startLine",
+              "type": "number"
+            },
+            {
+              "name": "startColumn",
+              "type": "number"
+            },
+            {
+              "name": "endLine",
+              "type": "number"
+            },
+            {
+              "name": "endColumn",
+              "type": "number"
+            },
+            {
+              "name": "length",
+              "type": "number"
+            },
+            {
+              "name": "text",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "getStyleSheet",
+          "description": "Moli extension. Returns stylesheet metadata and text.",
+          "experimental": true,
+          "parameters": [
+            {
+              "name": "styleSheetId",
+              "$ref": "DOM.StyleSheetId"
+            }
+          ],
+          "returns": [
+            {
+              "name": "styleSheet",
+              "$ref": "MoliStyleSheet"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Emulation",
+      "commands": [
+        {
+          "name": "enable",
+          "description": "Moli extension. Accepted for compatibility; emulation settings are configured by the individual override commands.",
+          "experimental": true
+        },
+        {
+          "name": "disable",
+          "description": "Moli extension. Accepted for compatibility; emulation settings are configured by the individual override commands.",
+          "experimental": true
+        }
+      ]
+    },
+    {
+      "domain": "Fetch",
+      "commands": [
+        {
+          "name": "dispatchWebSocketMessage",
+          "description": "Moli extension. Delivers a message to a synthetic WebSocket. Binary data is base64 encoded.",
+          "experimental": true,
+          "parameters": [
+            {
+              "name": "requestId",
+              "$ref": "RequestId"
+            },
+            {
+              "name": "opcode",
+              "type": "string",
+              "optional": true,
+              "enum": [
+                "Text",
+                "Binary",
+                "text",
+                "binary"
+              ],
+              "description": "Defaults to Text."
+            },
+            {
+              "name": "data",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "closeWebSocket",
+          "description": "Moli extension. Closes a synthetic WebSocket.",
+          "experimental": true,
+          "parameters": [
+            {
+              "name": "requestId",
+              "$ref": "RequestId"
+            },
+            {
+              "name": "code",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "HeapProfiler",
+      "commands": [
+        {
+          "name": "moliDiagnostics",
+          "description": "Moli extension. Returns Moli memory and lifecycle diagnostics. Diagnostic object contents may grow independently of the CDP schema.",
+          "experimental": true,
+          "returns": [
+            {
+              "name": "connection",
+              "type": "object"
+            },
+            {
+              "name": "isolateScope",
+              "type": "object"
+            },
+            {
+              "name": "scheduler",
+              "type": "object"
+            },
+            {
+              "name": "activeBrowserContext",
+              "type": "any"
+            },
+            {
+              "name": "inactiveBrowserContexts",
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          ]
+        },
+        {
+          "name": "moliResetIdleEngine",
+          "description": "Moli extension. Releases the idle navigation engine when there are no live targets.",
+          "experimental": true,
+          "returns": [
+            {
+              "name": "reset",
+              "type": "boolean"
+            },
+            {
+              "name": "reason",
+              "type": "string"
+            },
+            {
+              "name": "loadedBrowserContextCount",
+              "type": "integer"
+            },
+            {
+              "name": "liveTargetBrowserContextCount",
+              "type": "integer"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Storage",
+      "commands": [
+        {
+          "name": "deleteCookies",
+          "description": "Moli extension. Deletes cookies matching the provided filters.",
+          "experimental": true,
+          "parameters": [
+            {
+              "name": "name",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "url",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "domain",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "path",
+              "type": "string",
+              "optional": true
+            },
+            {
+              "name": "partitionKey",
+              "$ref": "Network.CookiePartitionKey",
+              "optional": true
+            },
+            {
+              "name": "browserContextId",
+              "$ref": "Browser.BrowserContextID",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
