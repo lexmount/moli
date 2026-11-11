@@ -74,6 +74,7 @@ pub(super) struct RendererOutputPublicationWork {
     /// Materialized protocol events, initially empty while the original
     /// projection is pending. Releasing them never rescans the renderer.
     pub(super) output: ProtocolOutputSequence,
+    pub(super) insertion: Option<RendererOutputInsertion>,
     projection_pending: bool,
     delivery_predecessor: Option<RendererOutputCursor>,
     predecessors: Vec<moli_core::RendererOutputFence>,
@@ -94,6 +95,23 @@ pub(super) struct RendererOutputPublicationWork {
     /// frozen. The first client-turn yield closes this candidate when no
     /// matching load action was published.
     future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
+}
+
+/// An independent, complete Native publication inserted between this
+/// projection's protocol events. Neither cursor has a partial delivery state.
+#[derive(Debug)]
+pub(super) struct RendererOutputInsertion {
+    pub(super) boundary: moli_core::RendererOutputFence,
+    pub(super) after: ProtocolOutputSequence,
+}
+
+impl RendererOutputPublicationWork {
+    fn append_output(&mut self, output: ProtocolOutputSequence) {
+        match &mut self.insertion {
+            Some(insertion) => insertion.after.append(output),
+            None => self.output.append(output),
+        }
+    }
 }
 
 /// Explicit scheduler predecessor for concrete protocol work that must not
@@ -142,33 +160,13 @@ impl ProtocolSchedulerResidence {
             )
     }
 
-    pub(super) fn is_ready_to_complete(
-        &self,
-        conn: &moli_protocol::ProtocolWorkflowState<'_>,
-    ) -> bool {
-        if self.waits_for_command_output() {
-            return false;
-        }
+    fn renderer_insertion_boundary(&self) -> Option<(RendererOutputCursor, RendererOutputCursor)> {
         match self {
-            Self::RendererOutputPublication(work) => {
-                !work.projection_pending
-                    && work.client_turn_predecessor == ClientTurnPredecessor::Satisfied
-                    && work.load_predecessors.is_empty()
-                    && work
-                        .predecessors
-                        .iter()
-                        .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
-            }
-            Self::ProtocolWork {
-                work,
-                client_turn_predecessor,
-                load_predecessors,
-                ..
-            } => {
-                *client_turn_predecessor == ClientTurnPredecessor::Satisfied
-                    && load_predecessors.is_empty()
-                    && conn.protocol_work_predecessor_is_projected(work)
-            }
+            Self::RendererOutputPublication(work) => work
+                .insertion
+                .as_ref()
+                .map(|insertion| (work.renderer_output_cursor, insertion.boundary.cursor())),
+            Self::ProtocolWork { .. } => None,
         }
     }
 
@@ -321,13 +319,15 @@ impl SchedulerQueues {
         );
         self.undelivered_renderer_outputs
             .insert(renderer_output_cursor);
+        let delivery_predecessor = self.same_stream_insertion_predecessor(renderer_output_cursor);
         self.protocol_residences
             .push_back(ProtocolSchedulerResidence::RendererOutputPublication(
                 RendererOutputPublicationWork {
                     renderer_output_cursor,
                     output,
+                    insertion: None,
                     projection_pending: false,
-                    delivery_predecessor: None,
+                    delivery_predecessor,
                     predecessors: Vec::new(),
                     client_turn_predecessor: if future_load_predecessor.is_some() {
                         ClientTurnPredecessor::Pending
@@ -350,6 +350,7 @@ impl SchedulerQueues {
             return;
         }
         self.undelivered_renderer_outputs.insert(cursor);
+        let delivery_predecessor = self.same_stream_insertion_predecessor(cursor);
         let position = self.protocol_residences.iter().position(|residence| matches!(residence,
             ProtocolSchedulerResidence::RendererOutputPublication(work)
                 if work.renderer_output_cursor.stream() == cursor.stream() && work.renderer_output_cursor.sequence() > cursor.sequence()
@@ -359,8 +360,9 @@ impl SchedulerQueues {
             ProtocolSchedulerResidence::RendererOutputPublication(RendererOutputPublicationWork {
                 renderer_output_cursor: cursor,
                 output: ProtocolOutputSequence::empty(),
+                insertion: None,
                 projection_pending: true,
-                delivery_predecessor: None,
+                delivery_predecessor,
                 predecessors: Vec::new(),
                 client_turn_predecessor: if future_load_predecessor.is_some() {
                     ClientTurnPredecessor::Pending
@@ -443,7 +445,7 @@ impl SchedulerQueues {
         else {
             return Err(output);
         };
-        work.output.append(output);
+        work.append_output(output);
         Ok(())
     }
 
@@ -451,9 +453,13 @@ impl SchedulerQueues {
         &mut self,
         cursor: RendererOutputCursor,
     ) -> Option<ProtocolOutputSequence> {
+        if self.renderer_output_is_inserted(cursor) {
+            return None;
+        }
         let index = self.protocol_residences.iter().position(|residence| {
             matches!(residence, ProtocolSchedulerResidence::RendererOutputPublication(work)
                 if work.renderer_output_cursor == cursor && !work.projection_pending
+                    && work.insertion.is_none()
                     && !self.delivery_predecessor_is_pending(work.delivery_predecessor)
                     && work.predecessors.is_empty()
                     && work.load_predecessors.is_empty() && work.future_load_predecessor.is_none())
@@ -479,6 +485,7 @@ impl SchedulerQueues {
         cursor: RendererOutputCursor,
         predecessor: Option<RendererOutputCursor>,
     ) {
+        let insertion_predecessor = self.same_stream_insertion_predecessor(cursor);
         if let Some(work) =
             self.protocol_residences
                 .iter_mut()
@@ -491,7 +498,11 @@ impl SchedulerQueues {
                     _ => None,
                 })
         {
-            work.delivery_predecessor = predecessor;
+            work.delivery_predecessor = insertion_predecessor
+                .or(work.delivery_predecessor.filter(|earlier| {
+                    earlier.stream() == cursor.stream() && earlier.sequence() < cursor.sequence()
+                }))
+                .or(predecessor);
         }
     }
 
@@ -506,6 +517,44 @@ impl SchedulerQueues {
         predecessor.is_some_and(|cursor| self.undelivered_renderer_outputs.contains(&cursor))
     }
 
+    fn same_stream_insertion_predecessor(
+        &self,
+        cursor: RendererOutputCursor,
+    ) -> Option<RendererOutputCursor> {
+        self.protocol_residences
+            .iter()
+            .filter_map(ProtocolSchedulerResidence::renderer_insertion_boundary)
+            .filter(|(source, boundary)| {
+                source.stream() == cursor.stream()
+                    && source.sequence() < cursor.sequence()
+                    && !inserted_cursor(cursor, *source, *boundary)
+            })
+            .map(|(source, _)| source)
+            .max_by_key(|source| source.sequence())
+    }
+
+    fn bind_same_stream_insertion_successors(
+        &mut self,
+        source: RendererOutputCursor,
+        boundary: RendererOutputCursor,
+    ) {
+        for residence in &mut self.protocol_residences {
+            if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence
+                && work.renderer_output_cursor.stream() == source.stream()
+                && work.renderer_output_cursor.sequence() > source.sequence()
+                && !inserted_cursor(work.renderer_output_cursor, source, boundary)
+                && work.delivery_predecessor.is_none_or(|earlier| {
+                    earlier.stream() != source.stream() || earlier.sequence() < source.sequence()
+                })
+            {
+                // Same-stream successors share their source's creation
+                // dependency. This chain retains it transitively while also
+                // keeping their output after the complete insertion.
+                work.delivery_predecessor = Some(source);
+            }
+        }
+    }
+
     pub(super) fn renderer_output_source_is_pending(
         &self,
         residence: &ProtocolSchedulerResidence,
@@ -515,7 +564,8 @@ impl SchedulerQueues {
         // drains must not turn "projected" into "delivered".
         let (source, requires_delivery) = match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => {
-                return work.projection_pending
+                return self.renderer_output_is_inserted(work.renderer_output_cursor)
+                    || work.projection_pending
                     || self.delivery_predecessor_is_pending(work.delivery_predecessor);
             }
             ProtocolSchedulerResidence::ProtocolWork { work, .. } => (
@@ -546,7 +596,117 @@ impl SchedulerQueues {
         residence: &ProtocolSchedulerResidence,
         conn: &moli_protocol::ProtocolWorkflowState<'_>,
     ) -> bool {
-        !self.renderer_output_source_is_pending(residence) && residence.is_ready_to_complete(conn)
+        self.residence_scheduler_step(residence, conn)
+            == ProtocolSchedulerStep::CompleteReadyResidence
+    }
+
+    pub(super) fn residence_scheduler_step(
+        &self,
+        residence: &ProtocolSchedulerResidence,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
+    ) -> ProtocolSchedulerStep {
+        if residence.waits_for_command_output() || self.renderer_output_source_is_pending(residence)
+        {
+            return ProtocolSchedulerStep::Wait;
+        }
+        if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence {
+            return self.publication_scheduler_step(work, conn, &mut HashSet::new());
+        }
+        if residence.should_yield_to_client_turn() {
+            ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        } else if let ProtocolSchedulerResidence::ProtocolWork {
+            work,
+            load_predecessors,
+            ..
+        } = residence
+            && load_predecessors.is_empty()
+            && conn.protocol_work_predecessor_is_projected(work)
+        {
+            ProtocolSchedulerStep::CompleteReadyResidence
+        } else {
+            ProtocolSchedulerStep::Wait
+        }
+    }
+
+    fn publication_scheduler_step(
+        &self,
+        work: &RendererOutputPublicationWork,
+        conn: &moli_protocol::ProtocolWorkflowState<'_>,
+        visiting: &mut HashSet<RendererOutputCursor>,
+    ) -> ProtocolSchedulerStep {
+        if work.projection_pending
+            || self.delivery_predecessor_is_pending(work.delivery_predecessor)
+        {
+            return ProtocolSchedulerStep::Wait;
+        }
+        if work.client_turn_predecessor == ClientTurnPredecessor::Pending {
+            return ProtocolSchedulerStep::SatisfyClientTurnPredecessor;
+        }
+        if !work.load_predecessors.is_empty()
+            || !work
+                .predecessors
+                .iter()
+                .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
+        {
+            return ProtocolSchedulerStep::Wait;
+        }
+        if let Some(insertion) = &work.insertion {
+            if !visiting.insert(work.renderer_output_cursor)
+                || !conn.renderer_output_cursor_is_projected(insertion.boundary.cursor())
+            {
+                return ProtocolSchedulerStep::Wait;
+            }
+            for native in
+                self.inserted_publications(work.renderer_output_cursor, insertion.boundary.cursor())
+            {
+                let step = self.publication_scheduler_step(native, conn, visiting);
+                if step != ProtocolSchedulerStep::CompleteReadyResidence {
+                    return step;
+                }
+            }
+        }
+        visiting.remove(&work.renderer_output_cursor);
+        ProtocolSchedulerStep::CompleteReadyResidence
+    }
+
+    fn inserted_publications(
+        &self,
+        source: RendererOutputCursor,
+        boundary: RendererOutputCursor,
+    ) -> impl Iterator<Item = &RendererOutputPublicationWork> {
+        self.protocol_residences
+            .iter()
+            .filter_map(move |residence| match residence {
+                ProtocolSchedulerResidence::RendererOutputPublication(work)
+                    if inserted_cursor(work.renderer_output_cursor, source, boundary) =>
+                {
+                    Some(work)
+                }
+                _ => None,
+            })
+    }
+
+    fn renderer_output_is_inserted(&self, cursor: RendererOutputCursor) -> bool {
+        self.protocol_residences.iter().any(|residence| {
+            matches!(residence,
+            ProtocolSchedulerResidence::RendererOutputPublication(work)
+                if work.insertion.as_ref().is_some_and(|insertion|
+                    inserted_cursor(cursor, work.renderer_output_cursor, insertion.boundary.cursor())))
+        })
+    }
+
+    pub(super) fn take_inserted_renderer_output(
+        &mut self,
+        source: RendererOutputCursor,
+        boundary: RendererOutputCursor,
+    ) -> VecDeque<ProtocolSchedulerResidence> {
+        // Use the same checkout rules as ordinary drains: a nested insertion
+        // stays in the FIFO until its own source consumes it at that position.
+        self.take_snapshot(|residence| {
+            matches!(residence,
+            ProtocolSchedulerResidence::RendererOutputPublication(work)
+                if inserted_cursor(work.renderer_output_cursor, source, boundary))
+        })
     }
 
     pub(super) fn admit_protocol_work_publish_sequence(
@@ -573,7 +733,11 @@ impl SchedulerQueues {
             && self.renderer_output_order(source).is_some()
         {
             match work.into_renderer_fenced_output() {
-                Ok((events, predecessors)) => {
+                Ok(output) => {
+                    let insertion = output.insertion_boundary;
+                    let insertion_cursor = insertion.as_ref().map(|fence| fence.cursor());
+                    let predecessors = output.predecessors;
+                    let events = output.events;
                     let publication = self
                         .protocol_residences
                         .iter_mut()
@@ -586,14 +750,27 @@ impl SchedulerQueues {
                             _ => None,
                         })
                         .expect("source publication retains its output");
+                    let output = ProtocolOutputSequence::from_background_events(events);
+                    if let Some(boundary) = insertion {
+                        assert!(
+                            publication.insertion.is_none(),
+                            "one projection has one Native insertion"
+                        );
+                        publication.insertion = Some(RendererOutputInsertion {
+                            boundary,
+                            after: output,
+                        });
+                    } else {
+                        publication.append_output(output);
+                    }
                     publication
-                        .output
-                        .append(ProtocolOutputSequence::from_background_events(events));
-                    publication.predecessors.extend(
-                        predecessors
-                            .into_iter()
-                            .filter(|fence| fence.cursor() != source),
-                    );
+                        .predecessors
+                        .extend(predecessors.into_iter().filter(|fence| {
+                            fence.cursor() != source && Some(fence.cursor()) != insertion_cursor
+                        }));
+                    if let Some(boundary) = insertion_cursor {
+                        self.bind_same_stream_insertion_successors(source, boundary);
+                    }
                     return;
                 }
                 Err(work) => *work,
@@ -657,9 +834,8 @@ impl SchedulerQueues {
     }
 
     pub(super) fn satisfy_front_client_turn_predecessor(&mut self) {
-        self.close_future_load_predecessor_window();
-        if let Some(residence) = self.protocol_residences.front_mut() {
-            residence.mark_client_turn_yielded();
+        if !self.protocol_residences.is_empty() {
+            self.satisfy_client_turn_predecessor_at(0);
         }
     }
 
@@ -674,6 +850,30 @@ impl SchedulerQueues {
     ) {
         self.close_future_load_predecessor_window();
         residence.mark_client_turn_yielded();
+        self.satisfy_inserted_client_turn_predecessors(residence.renderer_insertion_boundary());
+    }
+
+    fn satisfy_inserted_client_turn_predecessors(
+        &mut self,
+        boundary: Option<(RendererOutputCursor, RendererOutputCursor)>,
+    ) {
+        let mut pending = boundary.into_iter().collect::<Vec<_>>();
+        let mut visited = HashSet::new();
+        while let Some((source, boundary)) = pending.pop() {
+            for residence in &mut self.protocol_residences {
+                if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence
+                    && inserted_cursor(work.renderer_output_cursor, source, boundary)
+                    && visited.insert(work.renderer_output_cursor)
+                    && !work.projection_pending
+                {
+                    work.client_turn_predecessor = ClientTurnPredecessor::Satisfied;
+                    work.future_load_predecessor = None;
+                    pending.extend(work.insertion.as_ref().map(|insertion| {
+                        (work.renderer_output_cursor, insertion.boundary.cursor())
+                    }));
+                }
+            }
+        }
     }
 
     /// Closes every provisional load-binding window admitted before the next
@@ -751,10 +951,13 @@ impl SchedulerQueues {
 
     pub(super) fn satisfy_client_turn_predecessor_at(&mut self, index: usize) {
         self.close_future_load_predecessor_window();
-        self.protocol_residences
+        let residence = self
+            .protocol_residences
             .get_mut(index)
-            .expect("selected protocol residence must still exist")
-            .mark_client_turn_yielded();
+            .expect("selected protocol residence must still exist");
+        residence.mark_client_turn_yielded();
+        let boundary = residence.renderer_insertion_boundary();
+        self.satisfy_inserted_client_turn_predecessors(boundary);
     }
 
     pub(super) fn take_protocol_residence_at(
@@ -768,6 +971,13 @@ impl SchedulerQueues {
         &mut self,
         mut selected: impl FnMut(&ProtocolSchedulerResidence) -> bool,
     ) -> VecDeque<ProtocolSchedulerResidence> {
+        // Keep inserted Native publications available to their source even
+        // when a specialized drain checks that source out of the main FIFO.
+        let insertions = self
+            .protocol_residences
+            .iter()
+            .filter_map(ProtocolSchedulerResidence::renderer_insertion_boundary)
+            .collect::<Vec<_>>();
         let sources = self
             .protocol_residences
             .iter()
@@ -790,6 +1000,9 @@ impl SchedulerQueues {
             let pending = match &residence {
                 ProtocolSchedulerResidence::RendererOutputPublication(work) => {
                     work.projection_pending
+                        || insertions.iter().any(|(source, boundary)| {
+                            inserted_cursor(work.renderer_output_cursor, *source, *boundary)
+                        })
                 }
                 ProtocolSchedulerResidence::ProtocolWork { work, .. } => work
                     .renderer_output_source()
@@ -897,6 +1110,16 @@ impl SchedulerQueues {
 pub(super) struct PendingMainDocumentLoadObservation {
     pub(super) observation_id: DeferredMainDocumentLoadObservationId,
     pub(super) output_interest: moli_protocol::DeferredMainDocumentLoadCompletionOutputInterest,
+}
+
+fn inserted_cursor(
+    cursor: RendererOutputCursor,
+    source: RendererOutputCursor,
+    boundary: RendererOutputCursor,
+) -> bool {
+    cursor != source
+        && cursor.stream() == boundary.stream()
+        && cursor.sequence() <= boundary.sequence()
 }
 
 fn protocol_residence_is_command_followup_activity(residence: &ProtocolSchedulerResidence) -> bool {

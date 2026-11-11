@@ -2235,7 +2235,20 @@ impl CdpScheduler {
         match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => self
                 .state
-                .with_state(|state| work.output.navigation_gate_target_ids(&state))
+                .with_state(|state| {
+                    let mut targets = work.output.navigation_gate_target_ids(&state);
+                    if targets.is_empty() && !work.output.is_empty() {
+                        return targets;
+                    }
+                    if let Some(insertion) = &work.insertion {
+                        let after_targets = insertion.after.navigation_gate_target_ids(&state);
+                        if after_targets.is_empty() && !insertion.after.is_empty() {
+                            return Vec::new();
+                        }
+                        append_unique_target_ids(&mut targets, after_targets);
+                    }
+                    targets
+                })
                 .expect("live protocol actor state"),
             ProtocolSchedulerResidence::ProtocolWork { work, .. } => work
                 .navigation_gate_target_id()
@@ -2305,15 +2318,19 @@ impl CdpScheduler {
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
-            if !residence.should_yield_to_client_turn()
-                && !self
-                    .state
-                    .with_state(|state| {
-                        self.queues
-                            .residence_is_ready_to_complete(residence, &state)
-                    })
-                    .expect("live protocol actor state")
+            if self
+                .state
+                .with_state(|state| self.queues.residence_scheduler_step(residence, &state))
+                .expect("live protocol actor state")
+                == ProtocolSchedulerStep::Wait
             {
+                // An independent Native insertion can still need owner work
+                // behind this source. Let that work progress; the delivery
+                // ledger keeps later same-stream and child output behind S.
+                if matches!(residence, ProtocolSchedulerResidence::RendererOutputPublication(work) if work.insertion.is_some())
+                {
+                    continue;
+                }
                 if target_ids.is_empty() {
                     return None;
                 }
@@ -2387,9 +2404,9 @@ impl CdpScheduler {
         Ok(())
     }
 
-    /// Native facts may be delivered while later records await adoption or a
-    /// dialog. Keep ready prefixes and completed publications in target order;
-    /// a fenced creation prefix must also hold that Page's later dialog output.
+    /// Keep each complete publication in target order, including any Native
+    /// insertion in its projection. Child output also waits for full delivery
+    /// of the publication that created its Page.
     pub(crate) fn complete_protocol_work(
         &mut self,
         completion: protocol_task::ProtocolWorkCompletion,
@@ -3085,20 +3102,9 @@ impl CdpScheduler {
             .protocol_residences
             .get(index)
             .expect("selected protocol residence must exist");
-        if residence.should_yield_to_client_turn() {
-            return ProtocolSchedulerStep::SatisfyClientTurnPredecessor;
-        }
-        if self
-            .state
-            .with_state(|state| {
-                self.queues
-                    .residence_is_ready_to_complete(residence, &state)
-            })
+        self.state
+            .with_state(|state| self.queues.residence_scheduler_step(residence, &state))
             .expect("live protocol actor state")
-        {
-            return ProtocolSchedulerStep::CompleteReadyResidence;
-        }
-        ProtocolSchedulerStep::Wait
     }
 
     fn satisfy_front_protocol_residence_client_turn_predecessor(&mut self) {
@@ -3159,8 +3165,6 @@ impl CdpScheduler {
         }
         match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => {
-                self.queues
-                    .finish_renderer_output_delivery(work.renderer_output_cursor);
                 assert!(
                     work.load_predecessors.is_empty(),
                     "scheduler selected renderer output before its exact load predecessor"
@@ -3175,6 +3179,20 @@ impl CdpScheduler {
                 out.append(self.route_background_events_around_inflight_navigation(
                     work.output.into_background_events(),
                 ));
+                if let Some(insertion) = work.insertion {
+                    let inserted = self.queues.take_inserted_renderer_output(
+                        work.renderer_output_cursor,
+                        insertion.boundary.cursor(),
+                    );
+                    for residence in inserted {
+                        out.append(self.complete_protocol_residence(residence));
+                    }
+                    out.append(self.route_background_events_around_inflight_navigation(
+                        insertion.after.into_background_events(),
+                    ));
+                }
+                self.queues
+                    .finish_renderer_output_delivery(work.renderer_output_cursor);
             }
             ProtocolSchedulerResidence::ProtocolWork {
                 work,
