@@ -38,12 +38,14 @@ impl RendererPageServiceWorkerClientMessageOwner {
 pub(crate) struct RendererPageServiceWorkerClientMessageTask {
     owner: RendererPageServiceWorkerClientMessageOwner,
     completion: ServiceWorkerClientMessageCompletion,
+    client_queue_delivery: bool,
 }
 
 impl RendererPageServiceWorkerClientMessageTask {
     fn new(
         root_document: RendererDocumentToken,
         completion: ServiceWorkerClientMessageCompletion,
+        client_queue_delivery: bool,
     ) -> Self {
         Self {
             owner: RendererPageServiceWorkerClientMessageOwner::new(
@@ -51,6 +53,7 @@ impl RendererPageServiceWorkerClientMessageTask {
                 completion.target,
             ),
             completion,
+            client_queue_delivery,
         }
     }
 
@@ -60,6 +63,10 @@ impl RendererPageServiceWorkerClientMessageTask {
 
     pub(crate) fn into_completion(self) -> ServiceWorkerClientMessageCompletion {
         self.completion
+    }
+
+    pub(crate) const fn is_client_queue_delivery(&self) -> bool {
+        self.client_queue_delivery
     }
 }
 
@@ -104,9 +111,28 @@ impl RendererPageServiceWorkerClientMessageSender {
         &self,
         completion: ServiceWorkerClientMessageCompletion,
     ) -> Result<(), RendererPageServiceWorkerClientMessageRouteClosed> {
+        self.send_with_client_queue_state(completion, false)
+    }
+
+    pub(crate) fn send_client_queue_delivery(
+        &self,
+        completion: ServiceWorkerClientMessageCompletion,
+    ) -> Result<(), RendererPageServiceWorkerClientMessageRouteClosed> {
+        self.send_with_client_queue_state(completion, true)
+    }
+
+    fn send_with_client_queue_state(
+        &self,
+        completion: ServiceWorkerClientMessageCompletion,
+        client_queue_delivery: bool,
+    ) -> Result<(), RendererPageServiceWorkerClientMessageRouteClosed> {
         self.task_route
             .send_and_signal_if_newly_ready(ReadyPageTask::new(
-                RendererPageServiceWorkerClientMessageTask::new(self.root_document, completion),
+                RendererPageServiceWorkerClientMessageTask::new(
+                    self.root_document,
+                    completion,
+                    client_queue_delivery,
+                ),
             ))
             .map_err(|_| RendererPageServiceWorkerClientMessageRouteClosed)
     }
@@ -194,6 +220,9 @@ pub(crate) enum ServiceWorkerClientMessageCallbackEffect {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageServiceWorkerClientMessageTargetEffect {
+    /// The exact current Document retained the message for asynchronous FIFO
+    /// delivery on its client message queue.
+    QueuedForClientMessageQueue,
     /// A `message` or `messageerror` event was dispatched in the exact
     /// current Window client. `callback_effect` determines whether selected
     /// completion performs callback reconciliation or checkpoint only.

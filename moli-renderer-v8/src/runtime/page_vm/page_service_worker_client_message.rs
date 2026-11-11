@@ -24,6 +24,9 @@ use super::{IntoPageTaskCompletion, PageTaskCompletion, PageVm};
 impl From<ServiceWorkerClientMessageBodyEffect> for PageServiceWorkerClientMessageTargetEffect {
     fn from(effect: ServiceWorkerClientMessageBodyEffect) -> Self {
         match effect {
+            ServiceWorkerClientMessageBodyEffect::QueuedForClientMessageQueue => {
+                Self::QueuedForClientMessageQueue
+            }
             ServiceWorkerClientMessageBodyEffect::EventDispatched {
                 event_kind,
                 callback_effect,
@@ -63,7 +66,8 @@ impl IntoPageTaskCompletion for PageServiceWorkerClientMessageTurnAction {
                 callback_effect: ServiceWorkerClientMessageCallbackEffect::CurrentTargetHadNoCallback,
                 ..
             }
-            | PageServiceWorkerClientMessageTargetEffect::CurrentTargetProducedNoDispatchableEvent => {
+            | PageServiceWorkerClientMessageTargetEffect::CurrentTargetProducedNoDispatchableEvent
+            | PageServiceWorkerClientMessageTargetEffect::QueuedForClientMessageQueue => {
                 PageTaskCompletion::CheckpointOnly
             }
             PageServiceWorkerClientMessageTargetEffect::DiscardedStaleTarget
