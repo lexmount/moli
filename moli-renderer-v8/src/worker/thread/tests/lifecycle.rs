@@ -203,3 +203,5 @@ mod worker_and_fetch_lifecycle;
 mod worker_errors_and_teardown;
 
 mod fetch_request_headers;
+
+mod fetch_request_urls;

@@ -11,11 +11,18 @@ pub(super) enum FetchPrepareError {
     PolicyContextUnavailable,
     ReportContextUnavailable,
     Url(ResolveContextUrlError),
+    WebIdl(crate::webidl::WebIdlError),
 }
 
 impl From<ResolveContextUrlError> for FetchPrepareError {
     fn from(error: ResolveContextUrlError) -> Self {
         Self::Url(error)
+    }
+}
+
+impl From<crate::webidl::WebIdlError> for FetchPrepareError {
+    fn from(error: crate::webidl::WebIdlError) -> Self {
+        Self::WebIdl(error)
     }
 }
 
@@ -38,6 +45,7 @@ impl fmt::Display for FetchPrepareError {
                 f.write_str("fetch: document report context is unavailable")
             }
             Self::Url(error) => error.fmt(f),
+            Self::WebIdl(error) => error.fmt(f),
         }
     }
 }
@@ -127,7 +135,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let cors_preflight_request_headers = request_headers.clone();
     let request_headers =
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
-    let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
+    let resolved_url = resolve_context_url(&base_url, parsed.url.as_str(), None)?;
+    parsed.url.validate_credentials(&resolved_url)?;
 
     Ok(PreparedWindowFetchRequest {
         frame_id,
