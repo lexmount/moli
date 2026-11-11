@@ -11,7 +11,8 @@ use crate::service_worker_runtime::{
     ServiceWorkerNavigationPreloadStateError, ServiceWorkerNotificationAction,
     ServiceWorkerNotificationMetadata, ServiceWorkerPushSubscriptionSnapshot,
     ServiceWorkerRegistrationSnapshot, ServiceWorkerRequestDestination,
-    ServiceWorkerUnregisterStart, ServiceWorkerVersionId, service_worker_fetch_request_metadata,
+    ServiceWorkerUnregisterStart, ServiceWorkerVersionId, ServiceWorkerWindowClientDocument,
+    service_worker_fetch_request_metadata,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
@@ -415,7 +416,7 @@ impl RendererBrowserContextRuntime {
 
     pub(crate) fn register_service_worker_client(
         &self,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
@@ -424,7 +425,7 @@ impl RendererBrowserContextRuntime {
         let client_id = self.inner.service_worker_runtime.allocate_client_id();
         let inserted = self.inner.service_worker_runtime.register_window_client(
             client_id,
-            document_url,
+            document,
             storage_key,
             frame_type,
             document_owner,
@@ -445,7 +446,7 @@ impl RendererBrowserContextRuntime {
     ) -> bool {
         self.inner.service_worker_runtime.register_window_client(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -539,7 +540,7 @@ impl RendererBrowserContextRuntime {
     ) -> bool {
         self.inner.service_worker_runtime.update_window_client(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -550,7 +551,7 @@ impl RendererBrowserContextRuntime {
     pub(crate) fn update_service_worker_client_document_and_page_endpoint(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
@@ -558,7 +559,7 @@ impl RendererBrowserContextRuntime {
     ) -> bool {
         self.inner.service_worker_runtime.update_window_client(
             client_id,
-            document_url,
+            document,
             storage_key,
             frame_type,
             document_owner,
