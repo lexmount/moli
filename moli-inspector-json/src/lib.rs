@@ -153,8 +153,12 @@ impl InspectorJson {
         match self {
             Self::Parsed(value) => value["id"] = Value::from(id),
             Self::Raw(raw) => {
+                let id = Number::from(id);
+                if raw.id.as_ref() == Some(&id) {
+                    return;
+                }
                 let raw = Arc::make_mut(raw);
-                raw.id = Some(Number::from(id));
+                raw.id = Some(id);
                 raw.value.take();
             }
         }
@@ -170,6 +174,9 @@ impl InspectorJson {
                 }
             }
             Self::Raw(raw) => {
+                if raw.session_id.as_deref() == session_id {
+                    return;
+                }
                 let raw = Arc::make_mut(raw);
                 raw.session_id = session_id.map(str::to_owned);
                 raw.value.take();

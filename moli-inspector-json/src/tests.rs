@@ -62,6 +62,85 @@ fn clones_share_payload_but_envelope_updates_are_independent() {
 }
 
 #[test]
+fn repeated_id_preserves_raw_cache_and_shared_envelope() {
+    for id in [0, 7, u64::MAX] {
+        for materialized in [false, true] {
+            for shared in [false, true] {
+                let mut message = InspectorJson::from_slice(
+                    format!(r#"{{"id":{id},"result":{{"value":"\ud800"}}}}"#).as_bytes(),
+                )
+                .unwrap();
+                if materialized {
+                    let _ = message.value();
+                }
+                let original = shared.then(|| message.clone());
+                let encoded = message.to_string();
+
+                message.set_id(id);
+
+                assert_eq!(message.is_materialized(), materialized);
+                assert_eq!(message.to_string(), encoded);
+                if let Some(InspectorJson::Raw(original)) = original {
+                    let InspectorJson::Raw(current) = &message else {
+                        panic!("expected raw data")
+                    };
+                    assert!(Arc::ptr_eq(&original, current));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn repeated_session_preserves_raw_cache_and_shared_envelope() {
+    for session_id in [None, Some(""), Some("SID-\"quoted")] {
+        for materialized in [false, true] {
+            for shared in [false, true] {
+                let mut message =
+                    InspectorJson::from_slice(br#"{"id":7,"result":{"value":"\ud800"}}"#).unwrap();
+                message.set_session_id(session_id);
+                if materialized {
+                    let _ = message.value();
+                }
+                let original = shared.then(|| message.clone());
+                let encoded = message.to_string();
+
+                message.set_session_id(session_id);
+
+                assert_eq!(message.is_materialized(), materialized);
+                assert_eq!(message.to_string(), encoded);
+                if let Some(InspectorJson::Raw(original)) = original {
+                    let InspectorJson::Raw(current) = &message else {
+                        panic!("expected raw data")
+                    };
+                    assert!(Arc::ptr_eq(&original, current));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn changed_session_invalidates_only_the_updated_raw_view() {
+    let original =
+        InspectorJson::from_slice(br#"{"id":7,"sessionId":"old","result":{"value":"\ud800"}}"#)
+            .unwrap();
+    assert_eq!(original.value()["sessionId"], "old");
+    let mut updated = original.clone();
+
+    updated.set_session_id(Some("new"));
+    assert!(!updated.is_materialized());
+    assert_eq!(original.value()["sessionId"], "old");
+    assert_eq!(updated.value()["sessionId"], "new");
+
+    updated.set_session_id(None);
+    assert!(!updated.is_materialized());
+    assert!(updated.value().get("sessionId").is_none());
+    assert_eq!(original.value()["sessionId"], "old");
+    assert!(updated.to_string().contains(r"\ud800"));
+}
+
+#[test]
 fn session_removal_and_error_routing_do_not_materialize_payload() {
     let mut message = InspectorJson::from_slice(
         br#"{"id":7,"sessionId":"old","error":{"code":-32603,"message":"\udfff"}}"#,
