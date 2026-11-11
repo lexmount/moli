@@ -574,7 +574,7 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
-    target: EventTargetHandle,
+    document: DomHandle,
 ) {
     if !event_boolean_property(scope, event, "altKey")
         || event_boolean_property(scope, event, "ctrlKey") != cfg!(target_os = "macos")
@@ -589,16 +589,6 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
         return;
     }
     let runtime = unsafe { &*runtime_ptr };
-    let document = match target {
-        EventTargetHandle::Node(handle) => runtime.dom_host().owner_document_handle(handle),
-        EventTargetHandle::Window => Some(runtime.document_handle()),
-        EventTargetHandle::ChildWindow(window) => {
-            runtime.child_browsing_context_document_handle(window.child_handle())
-        }
-    };
-    let Some(document) = document else {
-        return;
-    };
     let Some(target) = access_key_target(runtime, document, &key) else {
         return;
     };
