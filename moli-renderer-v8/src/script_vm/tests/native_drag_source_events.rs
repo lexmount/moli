@@ -229,3 +229,25 @@ fn ordinary_native_drag_updates_the_source_before_target_updates_and_cancel() {
     );
     assert!(vm.active_drag_session.is_none());
 }
+
+#[test]
+fn cancel_drag_command_completes_dragend_microtasks_before_returning() {
+    let mut vm = source_drag_vm(false);
+    vm.eval(
+        "globalThis.cancelReady = false; document.addEventListener('dragend', () => { \
+         Promise.resolve().then(() => { cancelReady = true; }); }); 'ready'",
+    )
+    .unwrap();
+    mouse(&mut vm, "mousedown", 20.0, false);
+    mouse(&mut vm, "mousemove", 120.0, false);
+    assert!(vm.active_drag_session.is_some());
+    vm.clear_active_drag_data_transfer().unwrap();
+    // Reading through a HandleScope does not run the eval() checkpoint.
+    vm.with_default_context_scope(|scope, _| {
+        let key = v8::String::new(scope, "cancelReady").unwrap();
+        let global = scope.get_current_context().global(scope);
+        assert!(global.get(scope, key.into()).unwrap().boolean_value(scope));
+        Ok(())
+    })
+    .unwrap();
+}
