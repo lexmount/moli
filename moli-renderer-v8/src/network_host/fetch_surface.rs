@@ -224,36 +224,6 @@ pub(in crate::network_host) fn set_request_slot_value(
     set_private_value(scope, request, slot, value);
 }
 
-pub(crate) fn set_request_destination_for_service_worker_fetch_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
-    destination: &str,
-) {
-    let Some(destination) = v8_string(scope, destination) else {
-        return;
-    };
-    set_request_slot_value(scope, request, REQUEST_DESTINATION_SLOT, destination.into());
-}
-
-pub(crate) fn set_request_mode_for_service_worker_fetch_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
-    mode: &str,
-) {
-    let Some(mode) = v8_string(scope, mode) else {
-        return;
-    };
-    set_request_slot_value(scope, request, REQUEST_MODE_SLOT, mode.into());
-}
-
-pub(crate) fn set_request_reload_navigation_for_service_worker_fetch_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
-    is_reload: bool,
-) {
-    set_request_slot_bool(scope, request, REQUEST_IS_RELOAD_NAVIGATION_SLOT, is_reload);
-}
-
 pub(in crate::network_host) fn set_request_slot_bool(
     scope: &mut v8::PinScope<'_, '_>,
     request: v8::Local<'_, v8::Object>,
@@ -816,16 +786,9 @@ fn request_clone_callback<'s>(
             set_request_slot_value(scope, clone, slot, value);
         }
     }
-    let entries = request_slot_object(scope, this, REQUEST_HEADERS_SLOT)
-        .map(|headers| headers_list(scope, headers))
-        .unwrap_or_default();
-    let guard = if request_slot_string(scope, this, REQUEST_MODE_SLOT).as_deref() == Some("no-cors")
-    {
-        HeadersGuard::RequestNoCors
-    } else {
-        HeadersGuard::Request
-    };
-    let headers = super::headers::build_headers_object_with_state(scope, &entries, guard, false);
+    let headers = request_slot_object(scope, this, REQUEST_HEADERS_SLOT)
+        .map(|headers| super::headers::clone_headers_object(scope, headers))
+        .unwrap_or_else(|| super::headers::build_headers_object(scope, &[]));
     set_request_slot_value(scope, clone, REQUEST_HEADERS_SLOT, headers.into());
     let signal_source = request_slot_object(scope, this, REQUEST_SIGNAL_SLOT);
     let Some(signal) = new_abort_signal_for_request_with_source(scope, signal_source) else {

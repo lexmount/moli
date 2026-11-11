@@ -6,6 +6,7 @@ use self::init::{
 };
 use super::input::request_headers_guard_for_mode;
 use super::*;
+use crate::network_host::fetch_surface::{set_request_slot_bool, set_request_slot_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -164,3 +165,55 @@ pub(crate) fn request_constructor_callback<'s>(
 }
 
 use crate::network_host::fetch_surface::callback_base_url;
+
+/// Build an intercepted internal Request without invoking author constructors
+/// or RequestInit conversion, retaining its privileged header entries.
+pub(crate) fn build_service_worker_request_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: &crate::service_worker_runtime::ServiceWorkerFetchRequest,
+) -> Option<(v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>)> {
+    let mode: &'static str = source.request_mode.into();
+    let credentials: &'static str = source.credentials_mode.into();
+    let redirect: &'static str = source.redirect_mode.into();
+    let priority: &'static str = source.priority.map_or("auto", Into::into);
+    let headers = build_headers_object_with_state(
+        scope,
+        &source.headers,
+        request_headers_guard_for_mode(mode),
+        true,
+    );
+    let signal = new_abort_signal_for_request_with_source(scope, None)?;
+    let signal_object = v8::Local::<v8::Object>::try_from(signal).ok()?;
+    let request = RequestInstanceDeclaration::new(
+        source.method.clone(),
+        source.url.to_string(),
+        headers,
+        source.metadata.referrer.clone(),
+        source.metadata.referrer_policy.clone(),
+        mode.to_owned(),
+        credentials.to_owned(),
+        source.metadata.cache.clone(),
+        redirect.to_owned(),
+        source.metadata.integrity.clone(),
+        source.metadata.keepalive,
+        priority.to_owned(),
+        signal,
+        "half".to_owned(),
+        v8::null(scope).into(),
+    )
+    .bind(scope)
+    .ok()?;
+    let destination = v8::String::new(scope, source.destination.as_str())?;
+    set_request_slot_value(scope, request, REQUEST_DESTINATION_SLOT, destination.into());
+    set_request_slot_bool(
+        scope,
+        request,
+        REQUEST_IS_RELOAD_NAVIGATION_SLOT,
+        source.is_reload,
+    );
+    if let Some(bytes) = &source.body {
+        let body = PreparedBodySource::Bytes(bytes.clone()).into_body_stream(scope, request)?;
+        set_request_slot_value(scope, request, REQUEST_BODY_SLOT, body.into());
+    }
+    Some((request, signal_object))
+}

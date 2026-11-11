@@ -143,6 +143,14 @@ pub(super) fn apply_request_init_overrides<'s>(
     parsed: RequestInitMembers<'s>,
     state: &mut RequestConstructionState,
 ) -> Result<(), webidl::WebIdlError> {
+    let has_init_members = parsed.has_any_member();
+    if has_init_members {
+        if state.mode == "navigate" {
+            state.mode = "same-origin".to_owned();
+        }
+        state.referrer = "about:client".to_owned();
+        state.referrer_policy.clear();
+    }
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
         state.method = normalize_request_method(&method)?;
@@ -249,8 +257,11 @@ pub(super) fn apply_request_init_overrides<'s>(
             "Request with a ReadableStream body requires cors or same-origin mode",
         ));
     }
-    let guard = request_headers_guard_for_mode(&state.mode);
-    state.headers = filter_headers_for_guard(&state.headers, guard);
+    // Preserve an internal request's privileged headers for an empty init.
+    if has_init_members {
+        let guard = request_headers_guard_for_mode(&state.mode);
+        state.headers = filter_headers_for_guard(&state.headers, guard);
+    }
     Ok(())
 }
 

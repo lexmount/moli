@@ -201,3 +201,5 @@ mod fetch_events_and_messages;
 mod messages_clients_and_windows;
 mod worker_and_fetch_lifecycle;
 mod worker_errors_and_teardown;
+
+mod fetch_request_headers;
