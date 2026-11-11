@@ -3016,6 +3016,211 @@ fn block_in_inline_offset_parent_uses_the_structural_inline_ancestor() {
 }
 
 #[test]
+fn sticky_tracks_viewport_scroll_and_stops_at_its_containing_block() {
+    let mut source = Source(vec![
+        Node::html_element("root", "html", vec![1]),
+        Node::html_element("body", "body", vec![2, 5]),
+        Node::element("wrapper", vec![3]),
+        Node::element("sticky", vec![4]),
+        Node::element("sticky-child", vec![]),
+        Node::element("tail", vec![]),
+    ]);
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let mut styles = Styles(HashMap::from([
+        (0, resolved(LayoutDisplay::Block, Style::default())),
+        (
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            ),
+        ),
+        (
+            2,
+            resolved(
+                LayoutDisplay::Flex,
+                Style {
+                    size: Size {
+                        width: length(320.0),
+                        height: length(600.0),
+                    },
+                    ..Style::default()
+                },
+            ),
+        ),
+        (
+            3,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(50.0),
+                        height: length(40.0),
+                    },
+                    margin: Rect {
+                        top: length(84.0),
+                        ..Rect::zero()
+                    },
+                    inset: Rect {
+                        top: length(60.0),
+                        ..Rect::auto()
+                    },
+                    ..Style::default()
+                },
+                red,
+            )
+            .with_position(LayoutPosition::Sticky),
+        ),
+        (4, fixed_size(LayoutDisplay::Block, 10.0, 10.0)),
+        (5, fixed_size(LayoutDisplay::Block, 320.0, 600.0)),
+    ]));
+    for (requested, applied, expected_y) in [
+        (0.0, 0.0, 84.0),
+        (100.0, 100.0, 60.0),
+        (550.0, 550.0, 10.0),
+        (10_000.0, 960.0, -400.0),
+        (0.0, 0.0, 84.0),
+    ] {
+        source.0[0].scroll.y = requested;
+        let output = build_with_request(
+            &source,
+            &mut styles,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Test,
+            )
+            .with_environment(LayoutEnvironment {
+                scrollbars_hidden: true,
+            }),
+        );
+        assert_close(output.viewport_scroll.y, applied);
+        for node in [3, 4] {
+            assert_close(
+                output.client_rects_for_source(node)[0].bounding_rect().y,
+                expected_y,
+            );
+        }
+        assert_close(
+            output
+                .element_metrics_for_source(3)
+                .unwrap()
+                .offset_position
+                .y,
+            applied + expected_y,
+        );
+        let fragments = &output.paint_snapshot().unwrap().fragments;
+        if expected_y >= 0.0 {
+            assert_eq!(
+                output
+                    .hit_test(LayoutPoint::new(20.0, expected_y + 5.0), false)
+                    .unwrap()
+                    .source,
+                3
+            );
+            let (rect, _, transform) = fragments[solid_fill_index(fragments, red)]
+                .solid_fill()
+                .unwrap();
+            assert_close(transform.map_rect(rect).bounding_rect().y, expected_y);
+        } else {
+            assert!(!fragments.iter().any(|fragment| {
+                fragment
+                    .solid_fill()
+                    .is_some_and(|(_, color, _)| color == red)
+            }));
+        }
+    }
+}
+
+#[test]
+fn sticky_uses_the_nearest_scrollers_applied_offset() {
+    let mut source = Source(vec![
+        Node::element("root", vec![1, 2, 6]),
+        Node::element("spacer", vec![]),
+        Node::element("scroller", vec![3]),
+        Node::element("content", vec![4, 5]),
+        Node::element("sticky", vec![]),
+        Node::element("filler", vec![]),
+        Node::element("tail", vec![]),
+    ]);
+    source.0[0].scroll.y = 50.0;
+    let mut styles = Styles(HashMap::from([
+        (0, fixed_size(LayoutDisplay::Block, 320.0, 1000.0)),
+        (1, fixed_size(LayoutDisplay::Block, 200.0, 80.0)),
+        (
+            2,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(120.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Style::default()
+                },
+            ),
+        ),
+        (3, fixed_size(LayoutDisplay::Block, 200.0, 600.0)),
+        (
+            4,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(50.0),
+                        height: length(30.0),
+                    },
+                    inset: Rect {
+                        top: length(10.0),
+                        ..Rect::auto()
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Sticky),
+        ),
+        (5, fixed_size(LayoutDisplay::Block, 200.0, 570.0)),
+        (6, fixed_size(LayoutDisplay::Block, 200.0, 800.0)),
+    ]));
+    for direct_child in [false, true] {
+        if direct_child {
+            source.0[2].children = vec![4, 5];
+            source.0[3].children.clear();
+        }
+        for (requested, applied) in [(0.0, 0.0), (120.0, 120.0), (10_000.0, 480.0)] {
+            source.0[2].scroll.y = requested;
+            let output = build(&source, &mut styles);
+            assert_close(
+                output
+                    .element_metrics_for_source(2)
+                    .unwrap()
+                    .scroll_offset
+                    .y,
+                applied,
+            );
+            assert_close(output.client_rects_for_source(4)[0].bounding_rect().y, 40.0);
+            assert_close(
+                output
+                    .element_metrics_for_source(4)
+                    .unwrap()
+                    .offset_position
+                    .y,
+                90.0 + applied,
+            );
+        }
+    }
+}
+
+#[test]
 fn scroll_is_sampled_per_pass_and_updates_geometry_clip_and_hit_testing() {
     let mut source = Source(vec![
         Node::element("root", vec![1]),
