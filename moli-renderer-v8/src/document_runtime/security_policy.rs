@@ -811,33 +811,14 @@ impl DocumentRuntime {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
-        let document_url = self.document_url();
-        let policies = self.document_content_security_policies_for_optional_document(
+        self.document_connect_csp_check_for_document_with_redirect_status(
             Some(self.document_handle()),
-            &self.policy_container.response_content_security_policies,
-            &self.policy_container.content_security_reporting_endpoints,
-        );
-        let enforced_violation = document_connect_policy_violation_from_document_policies(
-            policies,
-            document_url,
-            request_url,
-            redirect_status,
-            ContentSecurityPolicyDisposition::Enforce,
-        );
-        let report_only_violation = document_connect_policy_violation(
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
             self.document_url(),
+            None,
+            &self.policy_container,
             request_url,
             redirect_status,
-            ContentSecurityPolicyDisposition::Report,
-        );
-        DocumentContentSecurityPolicyCheck {
-            report_only_violation,
-            enforced_violation,
-        }
+        )
     }
 
     pub(crate) fn module_fetch_csp_context(
@@ -1010,6 +991,7 @@ impl DocumentRuntime {
         let enforced_violation = document_url_policy_violation_from_document_policies(
             policies,
             document_url,
+            None,
             request_url,
             kind.resource_kind(),
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1402,19 +1384,15 @@ impl DocumentRuntime {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
-        let mut policies = self.document_content_security_policies_for_optional_document(
+        let policies = self.document_content_security_policies_for_optional_document(
             document_handle,
             &policy_container.response_content_security_policies,
             &policy_container.content_security_reporting_endpoints,
         );
-        if let Some(origin) = document_origin {
-            for policy in &mut policies {
-                policy.policy = policy.policy.clone().with_fallback_self_origin(origin);
-            }
-        }
         let enforced_violation = document_connect_policy_violation_from_document_policies(
             policies,
             document_url,
+            document_origin,
             request_url,
             redirect_status,
             ContentSecurityPolicyDisposition::Enforce,
@@ -2124,6 +2102,7 @@ fn document_response_content_security_policies(
 fn document_connect_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
+    fallback_self_origin: Option<&Url>,
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
@@ -2131,6 +2110,7 @@ fn document_connect_policy_violation_from_document_policies(
     document_url_policy_violation_from_document_policies(
         policies,
         document_url,
+        fallback_self_origin,
         request_url,
         ContentSecurityPolicyResourceKind::DocumentConnect,
         redirect_status,
@@ -2148,6 +2128,7 @@ fn document_frame_policy_violation_from_document_policies(
     document_url_policy_violation_from_document_policies(
         policies,
         document_url,
+        None,
         request_url,
         ContentSecurityPolicyResourceKind::DocumentFrame,
         redirect_status,
@@ -2183,7 +2164,7 @@ fn document_module_url_policy_violation_from_document_policies(
     };
     policies.iter().find_map(|policy| {
         let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
-            std::slice::from_ref(&policy.policy), document_url, request_url, original_url,
+            std::slice::from_ref(&policy.policy), document_url, None, request_url, original_url,
             resource_kind, redirect_status, disposition, &policy.reporting_endpoints, request,
         )?;
         apply_document_policy_reporting_flags(&mut violation, policy);
@@ -2194,21 +2175,24 @@ fn document_module_url_policy_violation_from_document_policies(
 fn document_url_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
+    fallback_self_origin: Option<&Url>,
     request_url: &Url,
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
     policies.into_iter().find_map(|policy| {
-        let single_policy = [policy.policy.clone()];
-        let mut violation = document_url_policy_violation(
-            &single_policy,
-            &policy.reporting_endpoints,
+        let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+            std::slice::from_ref(&policy.policy),
             document_url,
+            fallback_self_origin,
+            request_url,
             request_url,
             kind,
             redirect_status,
             disposition,
+            &policy.reporting_endpoints,
+            crate::content_security_policy::ContentSecurityPolicyUrlRequest::Standard,
         )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
