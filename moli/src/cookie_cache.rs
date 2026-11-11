@@ -8,7 +8,7 @@ use moli_cookie_cache::{
 use moli_cookie_jar::StoredCookie;
 use moli_core::runtime::Browser;
 
-pub use moli_cookie_cache::load_cookie_file;
+pub use moli_cookie_cache::{load_cookie_file, save_cookie_file};
 
 pub fn load_browser_cookie_cache(browser: &Browser, path: impl AsRef<Path>) -> Result<usize> {
     browser.import_cookies(load_cookie_cache(path)?)
