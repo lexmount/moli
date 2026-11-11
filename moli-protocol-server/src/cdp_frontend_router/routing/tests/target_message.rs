@@ -83,9 +83,9 @@ fn legacy_transport_admits_actual_command_and_routes_its_background_reply_once()
         .route_message(background.clone(), Some("SID-page-1"), None)
         .unwrap();
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
+    assert!(event.session_id().is_none());
     assert_eq!(
-        unwrap_message(&event, "SID-page-1"),
+        unwrap_message(event.value(), "SID-page-1"),
         json!({"id":42,"result":{"loaderId":"LID-1"}})
     );
     assert!(
@@ -132,7 +132,7 @@ fn recursive_transport_preserves_ack_paths_and_explicit_payload_session() {
             None,
         )
         .unwrap();
-    let inner = unwrap_message(&response, "SID-page-1");
+    let inner = unwrap_message(response.value(), "SID-page-1");
     assert!(inner.get("sessionId").is_none());
     assert_eq!(
         unwrap_message(&inner, "SID-worker"),
@@ -163,9 +163,9 @@ fn transport_with_explicit_carrier_keeps_only_that_carrier_on_outer_event() {
     let (_, response) = routing
         .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
         .unwrap();
-    assert_eq!(response["sessionId"], "SID-page-1");
+    assert_eq!(response.session_id(), Some("SID-page-1"));
     assert_eq!(
-        unwrap_message(&response, "SID-worker"),
+        unwrap_message(response.value(), "SID-worker"),
         json!({"id":42,"result":{}})
     );
 }
@@ -247,7 +247,7 @@ fn nested_attach_keeps_normal_registration_and_disconnect_retires_pending_reply(
         )
         .unwrap();
     assert_eq!(
-        unwrap_message(&response, "SID-page-1"),
+        unwrap_message(response.value(), "SID-page-1"),
         json!({"id":42,"result":{"sessionId":"SID-other"}})
     );
     let (_, command) = target_command(
@@ -286,7 +286,7 @@ fn root_received_target_event_uses_owning_frontend_and_parent_carrier() {
             "method":"Target.receivedMessageFromTarget","params":{"sessionId":session,"message":"{}"},
         }),None, None).unwrap();
         assert_eq!(frontend.frontend_id(), 5);
-        assert_eq!(response.get("sessionId").and_then(Value::as_str), parent);
+        assert_eq!(response.session_id(), parent);
     }
     assert!(routing.route_message(json!({"method":"Target.receivedMessageFromTarget","params":{"sessionId":"SID-missing","message":"{}"}}),None, None).is_none());
 }
@@ -306,7 +306,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
             Some(false),
         )
         .unwrap();
-    assert_eq!(attached["sessionId"], "SID-page-1");
+    assert_eq!(attached.session_id(), Some("SID-page-1"));
     let enable = expect_prepared_command(
         routing.prepare_command(
             5,
@@ -335,18 +335,18 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
                 None,
             )
             .unwrap();
-        assert_eq!(event["sessionId"], "SID-page-1");
+        assert_eq!(event.session_id(), Some("SID-page-1"));
         assert_eq!(
-            unwrap_message(&event, "SID-nonflat"),
+            unwrap_message(event.value(), "SID-nonflat"),
             json!({"method":method,"params":params})
         );
         if method == "Runtime.executionContextCreated" {
             let (_, reply) = routing
                 .route_message(json!({"id":enable.request().id(),"result":{}}), None, None)
                 .unwrap();
-            assert_eq!(reply["sessionId"], "SID-page-1");
+            assert_eq!(reply.session_id(), Some("SID-page-1"));
             assert_eq!(
-                unwrap_message(&reply, "SID-nonflat"),
+                unwrap_message(reply.value(), "SID-nonflat"),
                 json!({"id":80,"result":{}})
             );
         }
@@ -382,8 +382,8 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
             None,
         )
         .unwrap();
-    assert_eq!(reply["sessionId"], "SID-page-1");
-    assert_eq!(unwrap_message(&reply, "SID-nonflat")["id"], 81);
+    assert_eq!(reply.session_id(), Some("SID-page-1"));
+    assert_eq!(unwrap_message(reply.value(), "SID-nonflat")["id"], 81);
 }
 
 #[test]
@@ -401,8 +401,8 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
     let (_, event) = routing.route_message(json!({
         "method":"Runtime.executionContextCreated","sessionId":"SID-inner","params":{"context":{"id":3}},
     }), Some("SID-inner"), None).unwrap();
-    assert!(event.get("sessionId").is_none());
-    let middle = unwrap_message(&event, "SID-outer");
+    assert!(event.session_id().is_none());
+    let middle = unwrap_message(event.value(), "SID-outer");
     assert_eq!(middle["sessionId"], "SID-flat");
     let inner = unwrap_message(&middle, "SID-inner");
     assert!(inner.get("sessionId").is_none());
@@ -415,7 +415,7 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
         )
         .unwrap();
     assert_eq!(
-        unwrap_message(&flat_event, "SID-outer")["sessionId"],
+        unwrap_message(flat_event.value(), "SID-outer")["sessionId"],
         "SID-flat"
     );
     let (_, detached) = routing
@@ -426,7 +426,7 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
         )
         .unwrap();
     assert_eq!(
-        unwrap_message(&detached, "SID-outer")["sessionId"],
+        unwrap_message(detached.value(), "SID-outer")["sessionId"],
         "SID-flat"
     );
     assert!(routing.frontends.session("SID-inner").is_none());
@@ -464,7 +464,7 @@ fn nested_target_commands_share_implicit_session_policy_with_the_adapter() {
         let (_, wrapped) = routing
             .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
             .unwrap();
-        let reply = unwrap_message(&wrapped, "SID-page-1");
+        let reply = unwrap_message(wrapped.value(), "SID-page-1");
         assert_eq!(reply["id"], 42);
         assert_eq!(reply.get("sessionId").and_then(Value::as_str), explicit);
     }

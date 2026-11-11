@@ -5597,7 +5597,7 @@ fn runtime_protocol_response_by_id(
 ) -> Option<&serde_json::Value> {
     messages.iter().find_map(|message| match message {
         RendererRuntimeInspectorMessage::Protocol(value)
-            if value.get("id").and_then(serde_json::Value::as_i64) == Some(response_id) =>
+            if value.payload().id_i64() == Some(response_id) =>
         {
             Some(value.value())
         }

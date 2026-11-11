@@ -126,8 +126,8 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
         )
         .expect("route browser response");
     assert_eq!(browser_frontend.frontend_id, 5);
-    assert_eq!(browser_response["id"], json!(7));
-    assert!(browser_response.get("sessionId").is_none());
+    assert_eq!(browser_response.id_u64(), Some(7));
+    assert!(browser_response.session_id().is_none());
 
     let (page_frontend, page_response) = routing
         .route_message(
@@ -141,8 +141,8 @@ fn browser_and_page_client_command_ids_are_isolated_and_restored() {
         )
         .expect("route page response");
     assert_eq!(page_frontend.frontend_id, 10);
-    assert_eq!(page_response["id"], json!(7));
-    assert!(page_response.get("sessionId").is_none());
+    assert_eq!(page_response.id_u64(), Some(7));
+    assert!(page_response.session_id().is_none());
 }
 
 #[test]
@@ -187,9 +187,9 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
         )
         .expect("route second response");
     assert_eq!(frontend.frontend_id(), 6);
-    assert_eq!(response["id"], json!(7));
-    assert_eq!(response["result"]["product"], json!("second"));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(response.id_u64(), Some(7));
+    assert_eq!(response.value()["result"]["product"], json!("second"));
+    assert!(response.session_id().is_none());
 
     let (frontend, response) = routing
         .route_message(
@@ -203,9 +203,9 @@ fn browser_frontends_with_the_same_client_command_id_route_independently() {
         )
         .expect("route first response");
     assert_eq!(frontend.frontend_id(), 5);
-    assert_eq!(response["id"], json!(7));
-    assert_eq!(response["result"]["product"], json!("first"));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(response.id_u64(), Some(7));
+    assert_eq!(response.value()["result"]["product"], json!("first"));
+    assert!(response.session_id().is_none());
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn browser_base_session_events_are_private_and_frontend_scoped() {
         )
         .expect("route first browser event");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
+    assert!(event.session_id().is_none());
 
     assert!(
         routing
@@ -273,7 +273,7 @@ fn root_detach_with_a_known_child_routes_to_its_exact_frontend() {
         )
         .expect("route owner-qualified root detach");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
+    assert!(event.session_id().is_none());
 
     assert!(matches!(
         routing.prepare_command(
@@ -333,7 +333,7 @@ fn root_detach_restores_visible_parent_for_nested_child() {
             None,
         )
         .expect("route nested root detach");
-    assert_eq!(event["sessionId"], json!("SID-child"));
+    assert_eq!(event.session_id(), Some("SID-child"));
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn unregistering_one_browser_drops_only_its_pending_commands() {
         )
         .expect("second browser response remains routable");
     assert_eq!(frontend.frontend_id(), 6);
-    assert_eq!(response["id"], json!(1));
+    assert_eq!(response.id_u64(), Some(1));
 }
 
 #[test]
@@ -444,7 +444,7 @@ fn browser_child_session_is_preserved_on_browser_frontend() {
             None,
         )
         .expect("route child response");
-    assert_eq!(response["sessionId"], json!("SID-client-child"));
+    assert_eq!(response.session_id(), Some("SID-client-child"));
 }
 
 #[test]
@@ -779,8 +779,8 @@ fn attached_event_registers_child_before_attach_response() {
         )
         .expect("route attached event");
     assert_eq!(frontend.frontend_id(), 5);
-    assert!(event.get("sessionId").is_none());
-    assert_eq!(event["params"]["sessionId"], json!("SID-child"));
+    assert!(event.session_id().is_none());
+    assert_eq!(event.value()["params"]["sessionId"], json!("SID-child"));
 
     let child_command = expect_prepared_command(
         routing.prepare_command(
@@ -813,8 +813,8 @@ fn attached_event_registers_child_before_attach_response() {
             None,
         )
         .expect("route attach response");
-    assert_eq!(response["id"], json!(30));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(response.id_u64(), Some(30));
+    assert!(response.session_id().is_none());
 }
 
 #[test]
@@ -847,8 +847,8 @@ fn browser_frontend_hides_base_session_on_wire() {
             None,
         )
         .expect("route browser response");
-    assert_eq!(response["id"], json!(9));
-    assert!(response.get("sessionId").is_none());
+    assert_eq!(response.id_u64(), Some(9));
+    assert!(response.session_id().is_none());
 }
 
 #[test]
@@ -975,7 +975,10 @@ fn private_page_session_detach_does_not_fall_back_to_browser_frontend() {
         )
         .expect("route browser-owned target detach");
     assert_eq!(frontend.frontend_id, 5);
-    assert_eq!(message["params"]["sessionId"], json!("SID-browser-child"));
+    assert_eq!(
+        message.value()["params"]["sessionId"],
+        json!("SID-browser-child")
+    );
 }
 
 #[test]

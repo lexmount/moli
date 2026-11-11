@@ -13,7 +13,6 @@ use serde_json::{Number, Value, value::RawValue};
 use std::{
     collections::BTreeMap,
     fmt,
-    ops::Deref,
     sync::{Arc, OnceLock},
 };
 
@@ -334,12 +333,6 @@ impl From<&InspectorJson> for InspectorJson {
 impl From<Value> for InspectorJson {
     fn from(value: Value) -> Self {
         Self::Parsed(value)
-    }
-}
-impl Deref for InspectorJson {
-    type Target = Value;
-    fn deref(&self) -> &Value {
-        self.value()
     }
 }
 impl Serialize for InspectorJson {

@@ -103,7 +103,7 @@ fn renderer_inspector_response_succeeded(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return false;
         };
-        message.get("id").and_then(Value::as_u64) == Some(call_id) && message.get("error").is_none()
+        message.payload().id_u64() == Some(call_id) && !message.payload().has_field("error")
     })
 }
 const DOM_STABLE_COMPLETE_BASE_WINDOW: std::time::Duration = std::time::Duration::from_millis(350);
@@ -119,7 +119,7 @@ fn runtime_inspector_response_message(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return None;
         };
-        (message.get("id").and_then(Value::as_u64) == Some(response_id)).then_some(message.value())
+        (message.payload().id_u64() == Some(response_id)).then(|| message.value())
     })
 }
 
@@ -1854,7 +1854,7 @@ impl PageVm {
                 .filter(|message| {
                     message.has_v8_inspector_method()
                         || matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
-                        if message.get("error").is_some())
+                        if message.payload().has_field("error"))
                 })
                 .collect(),
         );
@@ -1873,7 +1873,7 @@ impl PageVm {
         let output = output.map_err(anyhow::Error::msg)?;
         if !output.messages().iter().any(|message| {
             matches!(message, RendererRuntimeInspectorMessage::Protocol(message)
-                if message.get("error").is_some())
+                if message.payload().has_field("error"))
         }) {
             let session_key = DevToolsSessionKey::from_wire_session_id(inspector_session_id);
             let mut session_bindings = self

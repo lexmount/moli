@@ -199,7 +199,7 @@ fn runtime_inspector_frontend_response(
         let RendererRuntimeInspectorMessage::Protocol(message) = message else {
             return None;
         };
-        (message.get("id").and_then(Value::as_u64) == Some(command_id)).then(|| message.value())
+        (message.payload().id_u64() == Some(command_id)).then(|| message.value())
     })
 }
 

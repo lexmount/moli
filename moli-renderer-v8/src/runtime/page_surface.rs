@@ -911,12 +911,7 @@ pub enum RendererRuntimeInspectorMessage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RendererRuntimeInspectorProtocolMessage {
-    renderer_call_id: Option<moli_page_types::RendererCallId>,
-    value: InspectorJson,
-}
-
-pub struct RendererRuntimeInspectorProtocolMessageValueMut<'a> {
-    message: &'a mut RendererRuntimeInspectorProtocolMessage,
+    payload: InspectorJson,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1026,16 +1021,8 @@ impl RendererRuntimeCommandOutput {
     }
 
     pub fn protocol_response(&self, call_id: i32) -> Option<&Value> {
-        self.messages.iter().find_map(|message| match message {
-            RendererRuntimeInspectorMessage::Protocol(message)
-                if message
-                    .renderer_call_id()
-                    .is_some_and(|id| id.get() == call_id) =>
-            {
-                Some(message.value())
-            }
-            _ => None,
-        })
+        self.protocol_response_payload(call_id)
+            .map(InspectorJson::value)
     }
 
     pub fn into_protocol_response(self, call_id: i32) -> Option<Value> {
@@ -1153,70 +1140,38 @@ impl RendererRuntimeInspectorMessage {
 }
 
 impl RendererRuntimeInspectorProtocolMessage {
-    pub fn new(value: impl Into<InspectorJson>) -> Self {
-        let value = value.into();
-        let renderer_call_id = renderer_call_id_from_protocol_message(&value);
+    pub fn new(payload: impl Into<InspectorJson>) -> Self {
         Self {
-            renderer_call_id,
-            value,
+            payload: payload.into(),
         }
     }
 
     pub fn renderer_call_id(&self) -> Option<moli_page_types::RendererCallId> {
-        self.renderer_call_id
+        renderer_call_id_from_protocol_message(&self.payload)
     }
 
     pub fn value(&self) -> &Value {
-        self.value.value()
+        self.payload.value()
     }
 
     pub fn payload(&self) -> &InspectorJson {
-        &self.value
+        &self.payload
     }
 
     pub fn into_payload(self) -> InspectorJson {
-        self.value
+        self.payload
     }
 
     pub fn set_frontend_id(&mut self, id: u64) {
-        self.value.set_id(id);
-        self.renderer_call_id = renderer_call_id_from_protocol_message(&self.value);
+        self.payload.set_id(id);
     }
 
-    pub fn value_mut(&mut self) -> RendererRuntimeInspectorProtocolMessageValueMut<'_> {
-        RendererRuntimeInspectorProtocolMessageValueMut { message: self }
+    pub fn value_mut(&mut self) -> &mut Value {
+        self.payload.value_mut()
     }
 
     pub fn into_value(self) -> Value {
-        self.value.into_value()
-    }
-}
-
-impl std::ops::Deref for RendererRuntimeInspectorProtocolMessageValueMut<'_> {
-    type Target = Value;
-
-    fn deref(&self) -> &Self::Target {
-        self.message.value.value()
-    }
-}
-
-impl std::ops::DerefMut for RendererRuntimeInspectorProtocolMessageValueMut<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.message.value.value_mut()
-    }
-}
-
-impl Drop for RendererRuntimeInspectorProtocolMessageValueMut<'_> {
-    fn drop(&mut self) {
-        self.message.renderer_call_id = renderer_call_id_from_protocol_message(&self.message.value);
-    }
-}
-
-impl std::ops::Deref for RendererRuntimeInspectorProtocolMessage {
-    type Target = Value;
-
-    fn deref(&self) -> &Self::Target {
-        self.value()
+        self.payload.into_value()
     }
 }
 

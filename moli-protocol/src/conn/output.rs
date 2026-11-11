@@ -236,12 +236,12 @@ impl RuntimeInspectorResponseReady {
             Ok(completion) => {
                 let message =
                     runtime_command_output_response_message(&completion.output, completion.call_id)
-                        .cloned()
-                        .unwrap_or_else(|| Value::Null.into());
+                        .map(InspectorJson::value)
+                        .unwrap_or(&Value::Null);
                 let payload = runtime_inspector_mismatched_completion_payload(
                     command_id,
                     completion.call_id,
-                    &message,
+                    message,
                 );
                 (
                     completion.renderer_agent_attachment_id(),
@@ -287,12 +287,12 @@ impl RuntimeInspectorResponseReady {
             Ok(completion) => {
                 let message =
                     runtime_command_output_response_message(&completion.output, completion.call_id)
-                        .cloned()
-                        .unwrap_or_else(|| Value::Null.into());
+                        .map(InspectorJson::value)
+                        .unwrap_or(&Value::Null);
                 runtime_inspector_mismatched_completion_payload(
                     self.frontend_command_id.get(),
                     completion.call_id,
-                    &message,
+                    message,
                 )
             }
             Err(message) => BackgroundCommandResponsePayload::internal_error(message.to_string()),
@@ -3077,10 +3077,10 @@ impl ProtocolDeliveryEnvelope {
     ) -> bool {
         match &self.payload {
             BackgroundProtocolEventPayload::Protocol(event) => {
-                event.message["method"] == json!("Console.messageAdded")
-                    && event.message["params"]["message"]["source"] == json!(source)
-                    && event.message["params"]["message"]["level"] == json!(level)
-                    && event.message["params"]["message"]["text"] == json!(text)
+                event.message.method() == Some("Console.messageAdded")
+                    && event.message.value()["params"]["message"]["source"] == json!(source)
+                    && event.message.value()["params"]["message"]["level"] == json!(level)
+                    && event.message.value()["params"]["message"]["text"] == json!(text)
             }
             BackgroundProtocolEventPayload::ConsoleMessageAdded(event) => {
                 event.source == source && event.level == level && event.text == text
@@ -5960,10 +5960,10 @@ mod tests {
             }});
             assert!(InspectorJson::from_slice(host.to_string().as_bytes()).is_err());
             let wire = BackgroundProtocolEvent::immediate(host).into_cdp_message();
-            assert_eq!(wire["params"]["requestId"], "public-id");
+            assert_eq!(wire.value()["params"]["requestId"], "public-id");
             for key in PRIVATE_PROTOCOL_PARAM_FIELDS {
                 assert_eq!(
-                    wire["params"].get(*key).is_some(),
+                    wire.value()["params"].get(*key).is_some(),
                     method == "Fetch.requestPaused" && *key == "__moliBlockedInterceptors"
                 );
             }
@@ -5974,7 +5974,7 @@ mod tests {
         .unwrap();
         inspector.value_mut()["params"]["__moliFetchRequestId"] = json!("private-id");
         let wire = BackgroundProtocolEvent::immediate(inspector).into_cdp_message();
-        assert!(wire["params"].get("__moliFetchRequestId").is_none());
+        assert!(wire.value()["params"].get("__moliFetchRequestId").is_none());
         let inspector = InspectorJson::from_slice(
             br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":{"__moliFetchRequestId":"\ud800"}}]}}"#,
         )

@@ -52,7 +52,7 @@ fn inspector_protocol_message_has_typed_and_consistent_response_id() {
         Some(moli_page_types::RendererCallId::new(0))
     );
     {
-        let mut value = response.value_mut();
+        let value = response.value_mut();
         value["id"] = json!(-7);
     }
     assert_eq!(
@@ -249,7 +249,7 @@ fn runtime_command_output_only_parks_its_own_response_callback() {
     assert!(matches!(
         &current.messages()[0],
         crate::runtime::RendererRuntimeInspectorMessage::Protocol(message)
-            if message["method"] == json!("Runtime.consoleAPICalled")
+            if message.payload().method() == Some("Runtime.consoleAPICalled")
     ));
     assert_eq!(
         current.protocol_response(8),
@@ -548,4 +548,26 @@ fn inspector_outbound_raw_utf16_and_response_id_validation_keep_call_authority()
         }
         assert_eq!(outbound.response_callback_counts(), (0, 0));
     }
+}
+
+#[test]
+fn inspector_response_id_reads_opaque_metadata_and_tracks_explicit_mutation() {
+    let body = format!("{}0{}", "[".repeat(150), "]".repeat(150));
+    let source =
+        InspectorJson::from_slice(format!(r#"{{"id":7,"result":{body}}}"#).as_bytes()).unwrap();
+    let mut message = crate::runtime::RendererRuntimeInspectorProtocolMessage::new(source.clone());
+    assert_eq!(message.renderer_call_id().map(|id| id.get()), Some(7));
+    message.set_frontend_id(u64::MAX);
+    assert_eq!(message.renderer_call_id(), None);
+    assert_eq!(message.payload().id_u64(), Some(u64::MAX));
+    message.set_frontend_id(9);
+    assert_eq!(message.renderer_call_id().map(|id| id.get()), Some(9));
+    assert!(!source.is_materialized());
+    assert!(!message.payload().is_materialized());
+    message.value_mut()["id"] = json!(-7);
+    assert_eq!(message.renderer_call_id().map(|id| id.get()), Some(-7));
+    message.value_mut().as_object_mut().unwrap().remove("id");
+    assert_eq!(message.renderer_call_id(), None);
+    message.value_mut()["id"] = json!(i64::MAX);
+    assert_eq!(message.renderer_call_id(), None);
 }

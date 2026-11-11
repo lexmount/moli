@@ -942,7 +942,7 @@ mod tests {
             .iter()
             .find_map(|message| match message {
                 RendererRuntimeInspectorMessage::Protocol(message)
-                    if message.value().get("id").and_then(Value::as_i64) == Some(call_id) =>
+                    if message.payload().id_i64() == Some(call_id) =>
                 {
                     Some(message.value().clone())
                 }

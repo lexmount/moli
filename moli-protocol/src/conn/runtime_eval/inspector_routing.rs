@@ -202,7 +202,10 @@ impl CdpConnection {
                     );
                 }
                 if Some(id) == current_cmd_id {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
+                    self.register_runtime_remote_object_ids_from_value_for_owner(
+                        owner,
+                        message.value(),
+                    );
                     if matches!(message, InspectorJson::Raw(_)) {
                         message.set_session_id(current_session_id);
                         response_events.push(BackgroundProtocolEvent::immediate(message));
@@ -226,7 +229,7 @@ impl CdpConnection {
             }
             None => {
                 if message.method() == Some("Page.windowOpen") {
-                    let params = message.get("params").unwrap_or(&Value::Null);
+                    let params = message.value().get("params").unwrap_or(&Value::Null);
                     let Some(url) = params.get("url").and_then(Value::as_str) else {
                         tracing::warn!("dropping Page.windowOpen without a string url");
                         return false;
@@ -282,7 +285,10 @@ impl CdpConnection {
                             | "Runtime.executionContextsCleared"
                     )
                 ) {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
+                    self.register_runtime_remote_object_ids_from_value_for_owner(
+                        owner,
+                        message.value(),
+                    );
                 }
                 if matches!(
                     message.method(),
@@ -712,13 +718,13 @@ impl CdpConnection {
         if let Some(object_group) = response.object_group() {
             self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
                 response.owner(),
-                &response.message,
+                response.message.value(),
                 object_group,
             );
         } else {
             self.register_runtime_remote_object_ids_from_value_for_owner(
                 response.owner(),
-                &response.message,
+                response.message.value(),
             );
         }
         let mut message = response.into_protocol_message();
@@ -767,7 +773,7 @@ impl CdpConnection {
             return BidiChannelListenerRoute::Consumed;
         }
         let listener = residence.listener();
-        let message = &response.message;
+        let message = response.message.value();
         if let Some(error) = message.get("error") {
             tracing::debug!(
                 ?error,
