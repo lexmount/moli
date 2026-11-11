@@ -216,3 +216,18 @@ fn windowless_synthetic_clicks_have_null_views_without_changing_event_realms() {
         "[]"
     );
 }
+
+#[test]
+fn synthetic_clicks_match_pointer_identity_across_realms_and_adoption() {
+    let mut vm = new_storage_test_vm("https://synthetic-click-realms.test/");
+    vm.eval("const root = document.documentElement || document.appendChild(document.createElement('html')); if (!document.body) root.appendChild(document.createElement('body')); document.body.innerHTML='<iframe id=child></iframe>'")
+        .unwrap();
+    assert_eq!(
+        vm.eval(&format!(
+            "({})()",
+            include_str!("synthetic_click_realms.js")
+        ))
+        .unwrap(),
+        "[]"
+    );
+}

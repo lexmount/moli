@@ -4,6 +4,7 @@ mod constructors;
 mod dispatch;
 
 pub(crate) use self::constructors::construct_focus_event;
+pub(super) use self::constructors::{ClickEventSource, construct_click_event};
 pub(crate) use self::constructors::{
     InputEventCoordinates, TextEditInputType, TouchEventPoint, construct_command_event,
     construct_drag_event_with_related_target, construct_drop_input_event, construct_input_event,
@@ -14,9 +15,6 @@ pub(crate) use self::constructors::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
     construct_touch_event_with_points, construct_wheel_event_for_target,
-};
-pub(super) use self::constructors::{
-    construct_click_event, construct_click_event_with_detail_and_modifiers,
 };
 pub(crate) use self::dispatch::{
     NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,

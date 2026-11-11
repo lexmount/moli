@@ -276,6 +276,7 @@ use event_handlers::{
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
+use events::{ClickEventSource, construct_click_event};
 pub(crate) use events::{
     InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
     construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
@@ -288,7 +289,6 @@ pub(crate) use events::{
     construct_touch_event_with_points, construct_wheel_event_for_target, dispatch_beforeinput,
     dispatch_public_event,
 };
-use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
     contenteditable_editing_host, focus_element, focus_live_element_for_inspector,
     perform_access_key_default_action_for_dispatched_event,
