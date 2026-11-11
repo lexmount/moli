@@ -530,6 +530,13 @@ impl DialogCloseRequest {
                         && element.dialog_modal_generation() == self.opening
                 })
     }
+
+    fn is_enabled(&self, runtime: &PageScriptHost) -> bool {
+        !runtime
+            .dom_host()
+            .get_attribute(self.dialog, "closedby")
+            .is_some_and(|value| value.eq_ignore_ascii_case("none"))
+    }
 }
 
 /// Default action for a trusted `keydown` on Escape: run the spec's
@@ -549,13 +556,19 @@ pub(crate) fn perform_dialog_escape_default_action_for_dispatched_event(
     let Some(request) = DialogCloseRequest::new(unsafe { &*runtime_ptr }, document) else {
         return;
     };
+    if !request.is_enabled(unsafe { &*runtime_ptr }) {
+        return;
+    }
     let Some(cancel_event) = construct_simple_event(scope, "cancel", false, true, false) else {
         return;
     };
     let outcome = dispatch_public_event(scope, runtime_ptr, request.dialog, cancel_event);
     // A cancel listener can destroy the original opening and start a new one.
     // That new opening does not belong to this close request.
-    if outcome.allows_default() && request.is_active(unsafe { &*runtime_ptr }) {
+    if outcome.allows_default()
+        && request.is_active(unsafe { &*runtime_ptr })
+        && request.is_enabled(unsafe { &*runtime_ptr })
+    {
         close_dialog_element(scope, runtime_ptr, request.dialog, None);
     }
 }
