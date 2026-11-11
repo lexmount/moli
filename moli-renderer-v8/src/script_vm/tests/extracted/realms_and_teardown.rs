@@ -3113,20 +3113,23 @@ fn inspector_context_created_matches_same_name_child_isolated_world_by_frame_id(
     let root_frame_id = vm.root_frame_id.clone();
     vm.page_isolated_world_contexts
         .record_inspector_context_state(
-            &[serde_json::json!({
-                "method": "Runtime.executionContextCreated",
-                "params": {
-                    "context": {
-                        "id": child_context_id,
-                        "uniqueId": "child-frame-replayed-realm",
-                        "name": "shared-utility",
-                        "auxData": {
-                            "type": "isolated",
-                            "frameId": "child-frame"
+            &crate::protocol_types::RuntimeContextRestoreEvent::from_v8_inspector_message(
+                serde_json::json!({
+                    "method": "Runtime.executionContextCreated",
+                    "params": {
+                        "context": {
+                            "id": child_context_id,
+                            "uniqueId": "child-frame-replayed-realm",
+                            "name": "shared-utility",
+                            "auxData": {
+                                "type": "isolated",
+                                "frameId": "child-frame"
+                            }
                         }
                     }
-                }
-            })],
+                }),
+            )
+            .unwrap(),
             root_frame_id.as_deref(),
         );
 

@@ -1,4 +1,4 @@
-use serde_json::Value;
+use crate::protocol_types::RuntimeContextRestoreEvent;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -211,58 +211,68 @@ impl RuntimeRealmRegistry {
 
     pub(super) fn record_execution_context_state(
         &mut self,
-        messages: &[Value],
+        event: &RuntimeContextRestoreEvent,
         root_frame_id: Option<&str>,
     ) {
-        for message in messages {
-            match message["method"].as_str() {
-                Some("Runtime.executionContextCreated") => {
-                    let context = &message["params"]["context"];
-                    let Some(execution_context_id) = context["id"].as_i64() else {
-                        continue;
-                    };
-                    let is_default = context["auxData"]["isDefault"].as_bool().unwrap_or(false);
-                    let frame_id = context["auxData"]["frameId"].as_str();
-                    let is_root_default = frame_id.is_none() || frame_id == root_frame_id;
-                    let realm = RuntimeRealmIdentity {
-                        execution_context_id,
-                        unique_id: context["uniqueId"].as_str().map(str::to_owned),
-                        frame_id: frame_id.map(str::to_owned),
-                        is_default,
-                    };
-                    self.realms_by_execution_context_id
-                        .insert(execution_context_id, realm.clone());
-                    if is_default && is_root_default {
-                        self.default_realm = Some(realm.clone());
-                        self.initial_default_realm = Some(realm);
-                    }
+        match event {
+            RuntimeContextRestoreEvent::Created(event) => {
+                let Some(execution_context_id) = event.context_id else {
+                    return;
+                };
+                let is_default = event.is_default.unwrap_or(false);
+                let frame_id = event.frame_id.as_deref();
+                let is_root_default = frame_id.is_none() || frame_id == root_frame_id;
+                let realm = RuntimeRealmIdentity {
+                    execution_context_id,
+                    unique_id: event.realm_id.clone(),
+                    frame_id: event.frame_id.clone(),
+                    is_default,
+                };
+                self.realms_by_execution_context_id
+                    .insert(execution_context_id, realm.clone());
+                if is_default && is_root_default {
+                    self.default_realm = Some(realm.clone());
+                    self.initial_default_realm = Some(realm);
                 }
-                Some("Runtime.executionContextDestroyed") => {
-                    let destroyed_id = message["params"]["executionContextId"].as_i64();
-                    let destroyed_unique_id =
-                        message["params"]["executionContextUniqueId"].as_str();
-                    let matches_destroyed = |realm: &RuntimeRealmIdentity| {
-                        destroyed_unique_id.map_or_else(
-                            || destroyed_id == Some(realm.execution_context_id),
-                            |unique_id| Some(unique_id) == realm.unique_id.as_deref(),
-                        )
-                    };
-                    self.realms_by_execution_context_id
-                        .retain(|_, realm| !matches_destroyed(realm));
-                    if self.default_realm.as_ref().is_some_and(matches_destroyed) {
-                        self.default_realm = None;
-                    }
-                    if self
-                        .initial_default_realm
-                        .as_ref()
-                        .is_some_and(matches_destroyed)
-                    {
-                        self.initial_default_realm = None;
-                    }
-                }
-                Some("Runtime.executionContextsCleared") => self.clear(),
-                _ => {}
             }
+            RuntimeContextRestoreEvent::Destroyed(event) => {
+                let destroyed_id = event.context_id;
+                let destroyed_unique_id = event.realm_id.as_deref();
+                let matches_destroyed = |realm: &RuntimeRealmIdentity| {
+                    destroyed_unique_id.map_or_else(
+                        || destroyed_id == Some(realm.execution_context_id),
+                        |unique_id| Some(unique_id) == realm.unique_id.as_deref(),
+                    )
+                };
+                self.realms_by_execution_context_id
+                    .retain(|_, realm| !matches_destroyed(realm));
+                if self.default_realm.as_ref().is_some_and(matches_destroyed) {
+                    self.default_realm = None;
+                }
+                if self
+                    .initial_default_realm
+                    .as_ref()
+                    .is_some_and(matches_destroyed)
+                {
+                    self.initial_default_realm = None;
+                }
+            }
+            RuntimeContextRestoreEvent::Cleared(_) => self.clear(),
+        }
+    }
+
+    #[cfg(test)]
+    fn record_messages_for_test(
+        &mut self,
+        messages: &[serde_json::Value],
+        root_frame_id: Option<&str>,
+    ) {
+        for event in messages
+            .iter()
+            .cloned()
+            .filter_map(RuntimeContextRestoreEvent::from_v8_inspector_message)
+        {
+            self.record_execution_context_state(&event, root_frame_id);
         }
     }
 
@@ -344,7 +354,7 @@ mod tests {
     #[test]
     fn runtime_realm_registry_tracks_default_context_lifetime() {
         let mut realms = RuntimeRealmRegistry::new();
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextCreated",
                 "params": {
@@ -364,7 +374,7 @@ mod tests {
         );
         assert_eq!(realms.initial_default_execution_context_id(), Some(7));
 
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextDestroyed",
                 "params": {
@@ -381,7 +391,7 @@ mod tests {
     #[test]
     fn runtime_realm_registry_ignores_child_default_and_clears_inventory() {
         let mut realms = RuntimeRealmRegistry::new();
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextCreated",
                 "params": {
@@ -397,7 +407,7 @@ mod tests {
             })],
             Some("root-frame"),
         );
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextCreated",
                 "params": {
@@ -417,7 +427,7 @@ mod tests {
         assert_eq!(child.frame_id.as_deref(), Some("child-frame"));
         assert!(child.is_default);
 
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({ "method": "Runtime.executionContextsCleared" })],
             Some("root-frame"),
         );
@@ -428,7 +438,7 @@ mod tests {
     #[test]
     fn runtime_realm_registry_does_not_destroy_reused_numeric_id_with_other_unique_id() {
         let mut realms = RuntimeRealmRegistry::new();
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextCreated",
                 "params": {
@@ -442,7 +452,7 @@ mod tests {
             None,
         );
 
-        realms.record_execution_context_state(
+        realms.record_messages_for_test(
             &[json!({
                 "method": "Runtime.executionContextDestroyed",
                 "params": {

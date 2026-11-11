@@ -505,30 +505,15 @@ impl DocumentInspectorBinding {
         Ok((reported_context, registration_id))
     }
 
-    pub(super) fn record_execution_context_state<T: Clone + Into<InspectorJson>>(
+    pub(super) fn record_execution_context_state(
         &mut self,
-        messages: &[T],
+        event: &crate::protocol_types::RuntimeContextRestoreEvent,
         root_frame_id: Option<&str>,
     ) {
-        let contexts = messages
-            .iter()
-            .map(|message| Into::<InspectorJson>::into(message.clone()))
-            .filter(|message| {
-                matches!(
-                    message.method(),
-                    Some(
-                        "Runtime.executionContextCreated"
-                            | "Runtime.executionContextDestroyed"
-                            | "Runtime.executionContextsCleared"
-                    )
-                )
-            })
-            .map(|message| message.value().clone())
-            .collect::<Vec<_>>();
         self.backend
             .borrow_mut()
             .runtime_realms
-            .record_execution_context_state(&contexts, root_frame_id);
+            .record_execution_context_state(event, root_frame_id);
     }
 
     fn outbound_snapshots(&self) -> HashMap<DevToolsSessionKey, usize> {
@@ -574,7 +559,7 @@ fn reported_execution_context_created(
     let context = messages
         .iter()
         .find(|message| message.method() == Some("Runtime.executionContextCreated"))
-        .map(|message| &message["params"]["context"])?;
+        .map(|message| &message.value()["params"]["context"])?;
     Some(ReportedExecutionContext {
         id: context["id"].as_i64()?,
         unique_id: context["uniqueId"].as_str().map(str::to_owned),
