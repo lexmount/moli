@@ -91,10 +91,13 @@ enum ProtocolWorkExecution {
     AfterCommandOutput(Box<crate::CommandResponseFlushContext>),
 }
 
+/// Frozen protocol output with separate whole-batch dependencies and an
+/// optional position for an independently transported Native publication.
 #[derive(Debug)]
-pub(crate) struct RendererFencedProtocolOutput {
-    pub(crate) events: Vec<BackgroundProtocolEvent>,
-    pub(crate) predecessors: Vec<RendererOutputFence>,
+pub struct RendererFencedProtocolOutput {
+    pub events: Vec<BackgroundProtocolEvent>,
+    pub predecessors: Vec<RendererOutputFence>,
+    pub insertion_boundary: Option<RendererOutputFence>,
     target_id: Option<String>,
 }
 
@@ -217,6 +220,7 @@ impl ProtocolSchedulerWork {
                 RendererFencedProtocolOutput {
                     events,
                     predecessors,
+                    insertion_boundary: None,
                     target_id,
                 },
             ),
@@ -225,15 +229,22 @@ impl ProtocolSchedulerWork {
 
     /// Frozen output from an original projection can remain in that complete
     /// publication instead of escaping into a separately delivered work item.
-    pub fn into_renderer_fenced_output(
-        self,
-    ) -> Result<(Vec<BackgroundProtocolEvent>, Vec<RendererOutputFence>), Box<Self>> {
+    pub fn into_renderer_fenced_output(self) -> Result<RendererFencedProtocolOutput, Box<Self>> {
         match self.payload {
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => {
-                Ok((output.events, output.predecessors))
-            }
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => Ok(output),
             _ => Err(Box::new(self)),
         }
+    }
+
+    pub(crate) fn with_renderer_insertion_boundary(
+        mut self,
+        boundary: RendererOutputFence,
+    ) -> Self {
+        let ProtocolSchedulerWorkPayload::RendererFencedOutput(output) = &mut self.payload else {
+            unreachable!("only materialized output has a Native insertion position");
+        };
+        output.insertion_boundary = Some(boundary);
+        self
     }
 
     /// A materialized observation retains its original concrete renderer

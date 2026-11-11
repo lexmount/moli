@@ -33,7 +33,7 @@ pub use runtime_command_barrier::{
 pub(crate) use scheduler_work::ReadyProtocolSchedulerWork;
 pub use scheduler_work::{
     ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
-    ProtocolWorkPublishSequence,
+    ProtocolWorkPublishSequence, RendererFencedProtocolOutput,
 };
 pub(crate) use subresource::PreparedSubresourceContinueAction;
 pub(in crate::domains) use subresource::prepare_subresource_continue_action_for_renderer_record;

@@ -120,9 +120,12 @@ impl CdpConnection {
             }
             // The insertion also releases independently transported Native
             // observations. Its receipt must survive an empty wire suffix.
-            let mut predecessors = dependencies.into_iter().collect::<Vec<_>>();
-            predecessors.push(boundary);
-            self.publish_renderer_fenced_protocol_output_after(after, predecessors, target_id);
+            self.publish_renderer_inserted_protocol_output(
+                after,
+                dependencies.into_iter().collect(),
+                boundary,
+                target_id,
+            );
         } else {
             events.extend(after);
             if !dependencies.is_empty() && !events.is_empty() {
