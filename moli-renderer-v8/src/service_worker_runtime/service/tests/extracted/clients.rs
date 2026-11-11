@@ -286,6 +286,88 @@ fn local_worker_client_inherits_parent_controller_and_keeps_creation_url() {
         snapshots.clients
     );
 }
+
+#[test]
+fn srcdoc_window_inherits_only_its_parents_controller_in_the_same_partition() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let parent_url = url("https://example.test/app/parent.html");
+    let uncontrolled_parent = register_client_for_test(&service, parent_url.clone());
+    let controlled_parent_url = url("https://example.test/app/controlled.html");
+    let controller = insert_registered_version(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/sw.js"),
+        url("https://example.test/app/"),
+        [controlled_parent_url.clone()],
+    );
+    let controlled_parent = client_id_for_document(&service, &controlled_parent_url);
+    let storage_key = ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&parent_url);
+    let partitioned_key =
+        moli_storage_key::partitioned_storage_key("https://example.test", "https://other.test");
+    let srcdoc_url = url("about:srcdoc");
+    let register_srcdoc = |parent_id, storage_key: String| {
+        let id = service.inner.client_id_allocator.allocate();
+        assert!(service.register_allocated_client_with_storage_key(
+            id,
+            ServiceWorkerWindowClientDocument {
+                url: srcdoc_url.clone(),
+                controller_source: Some(parent_id),
+            },
+            storage_key,
+            ServiceWorkerClientFrameType::Nested,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(
+                id.as_u64()
+            )),
+            test_completion_sender(),
+        ));
+        id
+    };
+    let uncontrolled_srcdoc = register_srcdoc(uncontrolled_parent, storage_key.clone());
+    let partitioned_srcdoc = register_srcdoc(controlled_parent, partitioned_key);
+    assert_eq!(
+        service.matching_controller_for_client(uncontrolled_srcdoc),
+        None
+    );
+    assert_eq!(
+        service.matching_controller_for_client(partitioned_srcdoc),
+        None
+    );
+
+    // Unregistering keeps a controller alive while it still controls its clients.
+    service
+        .inner
+        .state
+        .lock()
+        .registrations
+        .get_mut(&registration_id)
+        .unwrap()
+        .pending_unregistration = true;
+    let srcdoc = register_srcdoc(controlled_parent, storage_key.clone());
+    let nested_srcdoc = register_srcdoc(srcdoc, storage_key);
+    assert_eq!(
+        service.matching_controller_for_client_fetch(nested_srcdoc, &parent_url),
+        Some(controller)
+    );
+    let exposed_id = service.client_exposed_id(nested_srcdoc).unwrap();
+    let result = service.query_clients(&ServiceWorkerClientQuery {
+        request_id: 1,
+        registration_id,
+        version_id,
+        kind: ServiceWorkerClientQueryKind::Get {
+            exposed_client_id: exposed_id,
+        },
+    });
+    assert_eq!(result.clients.len(), 1);
+    assert_eq!(result.clients[0].url, srcdoc_url);
+    assert_eq!(
+        result.clients[0].frame_type,
+        ServiceWorkerClientFrameType::Nested
+    );
+    assert!(result.clients[0].controlled);
+}
 #[test]
 fn clients_claim_is_applied_during_pending_activation() {
     let service = new_service_worker_runtime_service();
@@ -816,7 +898,7 @@ fn bypassed_navigation_client_stays_uncontrolled_until_claimed() {
     assert!(
         service.update_client_document_with_storage_key_and_completion_sender(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             ServiceWorkerClientFrameType::TopLevel,
             Some(crate::native_bridge::WindowDocumentOwner::for_test(1)),

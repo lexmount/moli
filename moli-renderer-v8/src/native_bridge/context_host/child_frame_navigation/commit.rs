@@ -812,8 +812,6 @@ impl JsContextHost {
             self.finish_child_document_parser_stop(scope, action)
                 != crate::frame_owner_model::FrameDocumentLifecycleTaskEffect::NotApplied
         });
-        self.promote_pending_service_worker_child_client(handle);
-        self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         let lifecycle_followup_queued = if parser_stop_queued {

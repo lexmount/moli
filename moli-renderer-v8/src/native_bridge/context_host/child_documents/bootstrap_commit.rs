@@ -266,8 +266,6 @@ impl JsContextHost {
                 false,
                 None,
             )?;
-            self.promote_pending_service_worker_child_client(handle);
-            self.register_or_update_service_worker_child_client(handle);
             self.complete_pending_service_worker_child_client_navigation(handle);
             return Some(ChildDocumentCommitResult::from_install(install));
         }
@@ -328,10 +326,10 @@ impl JsContextHost {
             self.clear_child_window_event_listeners(handle);
             self.replace_child_custom_elements_registry_for_document_commit(scope, handle);
             self.clear_child_browsing_context_current_document(handle);
+            self.promote_pending_service_worker_child_client(handle);
+            self.register_or_update_service_worker_child_client(handle);
             ChildDocumentCommitResult::ready(None)
         };
-        self.promote_pending_service_worker_child_client(handle);
-        self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);
         Some(result)
     }

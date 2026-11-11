@@ -1640,7 +1640,7 @@ mod tests {
         let document_url = Url::parse("https://example.test/").expect("test document url");
         let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let client_id = browser_context_runtime.register_service_worker_client(
-            document_url.clone(),
+            document_url.clone().into(),
             moli_storage_key::MoliStorageKey::first_party_from_url(&document_url, None)
                 .serialized_storage_key(),
             crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,

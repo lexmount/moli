@@ -330,16 +330,8 @@ impl ServiceWorkerRuntimeService {
     ) -> Option<ServiceWorkerControlState> {
         let state = self.inner.state.lock();
         let client = state.live_clients.get(&client_id)?;
-        state
-            .registrations
-            .values()
-            .filter(|registration| registration.active_version_id.is_some())
-            .filter(|registration| registration.controlled_client_ids.contains(&client_id))
-            .filter(|registration| service_worker_registration_matches_client(registration, client))
-            .max_by_key(|registration| registration.scope_url.as_str().len())
-            .and_then(|registration| {
-                service_worker_control_state_from_registration_active_version(&state, registration)
-            })
+        let registration = controller_registration_for_client_locked(&state, client)?;
+        service_worker_control_state_from_registration_active_version(&state, registration)
     }
 
     pub(crate) fn matching_controller_for_client_fetch(
@@ -347,21 +339,7 @@ impl ServiceWorkerRuntimeService {
         client_id: ServiceWorkerClientId,
         _request_url: &Url,
     ) -> Option<ServiceWorkerControlState> {
-        let state = self.inner.state.lock();
-        let client = state.live_clients.get(&client_id)?;
-        let registration_id = state
-            .registrations
-            .values()
-            .filter(|registration| registration.active_version_id.is_some())
-            .filter(|registration| registration.controlled_client_ids.contains(&client_id))
-            .filter(|registration| service_worker_registration_matches_client(registration, client))
-            .max_by_key(|registration| registration.scope_url.as_str().len())
-            .map(|registration| registration.id)?;
-        let registration = state.registrations.get(&registration_id)?;
-        registration.active_version_id?;
-        let control_state =
-            service_worker_control_state_from_registration_active_version(&state, registration)?;
-        Some(control_state)
+        self.matching_controller_for_client(client_id)
     }
 
     #[cfg(test)]
@@ -398,6 +376,19 @@ impl ServiceWorkerRuntimeService {
         }?;
         self.matching_controller_for_client_fetch(client_id, request_url)
     }
+}
+
+pub(super) fn controller_registration_for_client_locked<'a>(
+    state: &'a ServiceWorkerRuntimeState,
+    client: &ServiceWorkerClient,
+) -> Option<&'a ServiceWorkerRegistration> {
+    state
+        .registrations
+        .values()
+        .filter(|registration| registration.active_version_id.is_some())
+        .filter(|registration| registration.controlled_client_ids.contains(&client.id))
+        .filter(|registration| service_worker_registration_matches_client(registration, client))
+        .max_by_key(|registration| registration.scope_url.as_str().len())
 }
 
 fn service_worker_control_state_from_registration_active_version(
@@ -448,15 +439,21 @@ pub(super) fn select_controller_for_new_client_locked(
             service_worker_registration_matches_url(registration, document_url, storage_key)
         })
         .max_by_key(|registration| registration.scope_url.as_str().len())
-        .map(|registration| registration.id);
-    if let Some(registration_id) = registration_id
-        && let Some(registration) = state.registrations.get_mut(&registration_id)
-        && let Some(version_id) = registration.active_version_id
-        && registration.controlled_client_ids.insert(client_id)
-    {
-        return Some(version_id);
-    }
-    None
+        .map(|registration| registration.id)?;
+    attach_controller_to_client_locked(state, registration_id, client_id)
+}
+
+pub(super) fn attach_controller_to_client_locked(
+    state: &mut ServiceWorkerRuntimeState,
+    registration_id: ServiceWorkerRegistrationId,
+    client_id: ServiceWorkerClientId,
+) -> Option<ServiceWorkerVersionId> {
+    let registration = state.registrations.get_mut(&registration_id)?;
+    let version_id = registration.active_version_id?;
+    registration
+        .controlled_client_ids
+        .insert(client_id)
+        .then_some(version_id)
 }
 
 pub(super) fn service_worker_registration_matches_url(

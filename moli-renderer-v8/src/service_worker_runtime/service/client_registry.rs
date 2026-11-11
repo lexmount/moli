@@ -1,3 +1,6 @@
+use super::registration_lookup::{
+    attach_controller_to_client_locked, controller_registration_for_client_locked,
+};
 use super::*;
 
 type WindowClientQueryTarget = (
@@ -50,7 +53,7 @@ impl ServiceWorkerRuntimeService {
         let client_id = self.inner.client_id_allocator.allocate();
         let inserted = self.register_window_client_with_storage_key(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -64,7 +67,7 @@ impl ServiceWorkerRuntimeService {
     pub(crate) fn register_allocated_client_with_storage_key(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
@@ -72,7 +75,7 @@ impl ServiceWorkerRuntimeService {
     ) -> bool {
         if !self.register_window_client_with_storage_key(
             client_id,
-            document_url,
+            document,
             storage_key,
             frame_type,
             document_owner,
@@ -127,7 +130,7 @@ impl ServiceWorkerRuntimeService {
         let client_id = self.inner.client_id_allocator.allocate();
         let inserted = self.register_window_client_with_storage_key(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -351,13 +354,13 @@ impl ServiceWorkerRuntimeService {
     fn register_window_client_with_storage_key(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         endpoint: ServiceWorkerClientEndpoint,
     ) -> bool {
-        let current_document_url = service_worker_current_url_for_creation_url(&document_url);
+        let current_document_url = service_worker_current_url_for_creation_url(&document.url);
         let bypass_service_worker = matches!(
             &endpoint,
             ServiceWorkerClientEndpoint::ReservedPage {
@@ -379,7 +382,7 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerClient {
                     id: client_id,
                     exposed_id: service_worker_exposed_client_id(client_id),
-                    creation_url: document_url.clone(),
+                    creation_url: document.url,
                     document_url: current_document_url.clone(),
                     client_type: ServiceWorkerClientType::Window,
                     frame_type,
@@ -394,11 +397,12 @@ impl ServiceWorkerRuntimeService {
                 },
             );
             if !bypass_service_worker
-                && let Some(version_id) = select_controller_for_new_client_locked(
+                && let Some(version_id) = select_window_client_controller_locked(
                     &mut state,
                     client_id,
                     &current_document_url,
                     &storage_key,
+                    document.controller_source,
                 )
             {
                 state.record_target_version_updated(version_id);
@@ -463,7 +467,7 @@ impl ServiceWorkerRuntimeService {
     ) -> bool {
         self.update_client_document_with_storage_key_internal(
             client_id,
-            document_url,
+            document_url.into(),
             storage_key,
             frame_type,
             document_owner,
@@ -474,7 +478,7 @@ impl ServiceWorkerRuntimeService {
     pub(crate) fn update_client_document_with_storage_key_and_completion_sender(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
@@ -482,7 +486,7 @@ impl ServiceWorkerRuntimeService {
     ) -> bool {
         self.update_client_document_with_storage_key_internal(
             client_id,
-            document_url,
+            document,
             storage_key,
             frame_type,
             document_owner,
@@ -493,13 +497,13 @@ impl ServiceWorkerRuntimeService {
     fn update_client_document_with_storage_key_internal(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: Option<RendererPageServiceWorkerTaskSender>,
     ) -> bool {
-        let current_document_url = service_worker_current_url_for_creation_url(&document_url);
+        let current_document_url = service_worker_current_url_for_creation_url(&document.url);
         let progress = {
             let mut state = self.inner.state.lock();
             if !state.live_clients.contains_key(&client_id) {
@@ -524,10 +528,10 @@ impl ServiceWorkerRuntimeService {
                 registration_ids.iter().copied(),
             );
             if let Some(client) = state.live_clients.get_mut(&client_id) {
-                if !moli_url::same_origin(&client.document_url, &current_document_url) {
+                if !moli_url::same_origin(&client.creation_url, &current_document_url) {
                     client.exposed_id = allocate_service_worker_exposed_client_id();
                 }
-                client.creation_url = document_url.clone();
+                client.creation_url = document.url;
                 client.document_url = current_document_url.clone();
                 client.frame_type = frame_type;
                 client.storage_key = storage_key.clone();
@@ -543,11 +547,12 @@ impl ServiceWorkerRuntimeService {
                 &storage_key,
             );
             if !bypass_service_worker
-                && let Some(version_id) = select_controller_for_new_client_locked(
+                && let Some(version_id) = select_window_client_controller_locked(
                     &mut state,
                     client_id,
                     &current_document_url,
                     &storage_key,
+                    document.controller_source,
                 )
             {
                 state.record_target_version_updated(version_id);
@@ -597,7 +602,7 @@ impl ServiceWorkerRuntimeService {
             .filter(|client| client.client_type == ServiceWorkerClientType::Window)
             .filter(|client| service_worker_client_is_exposed_to_clients_api(client))
             .filter(|client| service_worker_registration_matches_client(registration, client))
-            .map(|client| client.document_url.as_str().to_owned())
+            .map(|client| service_worker_current_url_for_creation_url(&client.creation_url).into())
             .collect::<Vec<_>>();
         urls.sort();
         urls.dedup();
@@ -817,6 +822,38 @@ fn record_target_version_updates_locked(
             state.record_target_version_updated(version_id);
         }
     }
+}
+
+fn select_window_client_controller_locked(
+    state: &mut ServiceWorkerRuntimeState,
+    client_id: ServiceWorkerClientId,
+    document_url: &Url,
+    storage_key: &str,
+    controller_source: Option<ServiceWorkerClientId>,
+) -> Option<ServiceWorkerVersionId> {
+    let Some(source_id) = controller_source else {
+        return select_controller_for_new_client_locked(
+            state,
+            client_id,
+            document_url,
+            storage_key,
+        );
+    };
+    let source = state.live_clients.get(&source_id)?;
+    if source.storage_key != storage_key
+        || moli_storage_key::serialized_storage_key_has_opaque_origin(storage_key)
+        || !source.secure_context
+        || !source.execution_ready
+        || source.discarded_or_frozen
+    {
+        return None;
+    }
+    let registration_id = controller_registration_for_client_locked(state, source)?.id;
+    // The local document keeps its creation URL for Client.url. Its
+    // inherited controller is matched using the parent's effective URL.
+    let scope_match_url = source.document_url.clone();
+    state.live_clients.get_mut(&client_id)?.document_url = scope_match_url;
+    attach_controller_to_client_locked(state, registration_id, client_id)
 }
 
 fn service_worker_client_is_claimable_by_registration(

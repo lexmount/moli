@@ -30,7 +30,8 @@ pub(crate) use clients::{
     ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
     ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
     ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
-    allocate_service_worker_exposed_client_id, service_worker_exposed_client_id,
+    ServiceWorkerWindowClientDocument, allocate_service_worker_exposed_client_id,
+    service_worker_exposed_client_id,
 };
 pub(crate) use errors::{ServiceWorkerRegistrationError, ServiceWorkerRegistrationErrorKind};
 #[cfg(test)]
