@@ -547,23 +547,29 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             );
             return;
         }
-        let loaded = match materialize_nested_worker_script_source(
-            scope,
-            &resolved_url,
-            &nested_context,
-            worker_options.worker_type,
-            worker_options.credentials_mode.0,
-        ) {
-            Ok(source) => source,
+        let loaded = match materialize_nested_worker_local_script(&resolved_url, &nested_context) {
+            Ok(Some(source)) => source,
+            Ok(None) => {
+                start_nested_worker_script_load(
+                    scope,
+                    worker,
+                    nested_context,
+                    resolved_url,
+                    worker_options,
+                );
+                return;
+            }
             Err(message) => {
-                nested_context.worker_context_runtime.emit_diagnostic(|source| {
-                    crate::DiagnosticEvent::script_load_failure(
-                        source,
-                        resolved_url.as_str(),
-                        resolved_url.as_str(),
-                        &message,
-                    )
-                });
+                nested_context
+                    .worker_context_runtime
+                    .emit_diagnostic(|source| {
+                        crate::DiagnosticEvent::script_load_failure(
+                            source,
+                            resolved_url.as_str(),
+                            resolved_url.as_str(),
+                            &message,
+                        )
+                    });
                 queue_nested_worker_script_load_error(
                     scope,
                     worker,
@@ -574,117 +580,31 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 return;
             }
         };
-        let loaded_url = Url::parse(&loaded.script_url).expect("native Worker script URL");
-        if !crate::context_bootstrap::check_dedicated_worker_embedder_policy(
-            scope,
-            nested_context.policy_context,
-            loaded.policy_context.cross_origin_embedder_policy,
-            &nested_context.base_url,
-            &loaded_url,
-        ) {
-            queue_nested_worker_script_load_error(
-                scope,
-                worker,
-                &nested_context,
-                &resolved_url,
-                "Worker script was blocked by Cross-Origin-Embedder-Policy.".to_owned(),
-            );
-            return;
-        }
-        let mut network_policy = nested_context.network_policy.clone();
-        let secure_context = Url::parse(&loaded.script_url)
-            .ok()
-            .is_some_and(|script_url| {
-                nested_context
-                    .network_policy
-                    .secure_context
-                    .resolve(&script_url)
-            });
-        network_policy.secure_context = WorkerSecureContextPolicy::Inherited(secure_context);
-        let reserved_service_worker_client_id =
+        let secure_context = nested_context
+            .network_policy
+            .secure_context
+            .resolve(&resolved_url);
+        let reserved_client =
             reserve_nested_inherited_service_worker_worker_client_for_local_script(
                 &resolved_url,
                 &nested_context,
                 secure_context,
-            );
-        let mut worker_policy_context = loaded.policy_context;
-        if resolved_url.scheme() == "data" {
-            worker_policy_context.cross_origin_isolated = false;
-        }
-        let options = WorkerSpawnOptions::new_with_request_client(
-            loaded.source,
-            loaded.script_url,
-            nested_context.loader.request_client().clone(),
-        )
-        .with_interception_context(nested_context.interception_context.clone())
-        .with_resource_task_runner(nested_context.loader.task_runner())
-        .with_content_security_policy_snapshot(loaded.content_security_policy)
-        .with_referrer_policy(loaded.referrer_policy)
-        .with_script_kind(worker_options.worker_type)
-        .with_module_credentials_mode(worker_options.credentials_mode.0)
-        .with_module_static_import_initiator_url(nested_context.base_url.clone())
-        .with_module_static_import_content_security_policies(
-            nested_context.module_static_import_content_security_policies,
-        )
-        .with_network_policy(network_policy)
-        .with_policy_context(worker_policy_context)
-        .with_shared_memory_agent_cluster(Some(nested_context.shared_memory_agent_cluster.clone()))
-        .with_worker_context_runtime(nested_context.worker_context_runtime.clone())
-        .with_global_kind(WorkerGlobalKind::Dedicated {
-            name: worker_options.name.clone(),
-        })
-        .with_storage_key_top_level_site(Some(nested_context.storage_key_top_level_site.clone()))
-        .with_creator_storage_key(nested_context.creator_storage_key.clone())
-        .with_creator_message_security(Some(nested_context.creator_message_security.clone()))
-        .with_indexed_db_manager(nested_context.indexed_db_manager.clone())
-        .with_storage_bucket_store(nested_context.storage_bucket_store.clone());
-        let options = if let Some(runtime) = nested_context.service_worker_runtime.clone() {
-            options.with_service_worker_runtime(runtime)
-        } else {
-            options
-        };
-        let options = if let Some(client_id) = reserved_service_worker_client_id {
-            options.with_reserved_service_worker_client_id(client_id)
-        } else {
-            options
-        };
-        let mut worker_handle = spawn_worker_with_options(options);
-        if let Some(mut rx) = worker_handle.take_receiver() {
-            let wake_tx = nested_context.wake_tx;
-            let closed_owner_error_tx = nested_context.closed_owner_error_tx;
-            let worker_id = nested_context.worker_id;
-            let _ = std::thread::Builder::new()
-                .name(format!("nested-worker-pump:{worker_id}"))
-                .spawn(move || {
-                    while let Some(message) = rx.blocking_recv() {
-                        if let Err(error) =
-                            wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {
-                                worker_id,
-                                message: Box::new(message),
-                            })
-                            && let Some(parent_tx) = &closed_owner_error_tx
-                        {
-                            crate::worker::forward_nested_worker_error_after_owner_close(
-                                error.0, parent_tx,
-                            );
-                        }
-                    }
-                });
-        }
-        let registered = crate::worker::register_nested_worker_handle(
-            scope,
-            nested_context.worker_id,
-            worker_handle,
-        );
-        debug_assert!(
-            registered,
-            "reserved nested Worker must own its native handle"
-        );
-        set_private_value(
+            )
+            .map(|client_id| ReservedNestedWorkerClient {
+                runtime: nested_context
+                    .service_worker_runtime
+                    .clone()
+                    .expect("reserved client runtime"),
+                client_id: Some(client_id),
+            });
+        spawn_nested_worker_from_loaded_script(
             scope,
             worker,
-            WORKER_ID_SLOT,
-            v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
+            nested_context,
+            resolved_url,
+            worker_options,
+            loaded,
+            reserved_client,
         );
     } else {
         #[cfg(not(test))]
@@ -859,6 +779,321 @@ pub(in crate::context_bootstrap) fn document_query_encoding_override(
         .filter(|encoding| *encoding != encoding_rs::UTF_8)
 }
 
+struct ReservedNestedWorkerClient {
+    runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
+    client_id: Option<ServiceWorkerClientId>,
+}
+
+impl Drop for ReservedNestedWorkerClient {
+    fn drop(&mut self) {
+        if let Some(client_id) = self.client_id.take() {
+            self.runtime.unregister_client(client_id);
+        }
+    }
+}
+
+pub(crate) struct NestedWorkerScriptLoad {
+    context: NestedWorkerContext,
+    script_url: Url,
+    options: WorkerOptionsMembers,
+    reserved_client: Option<ReservedNestedWorkerClient>,
+}
+
+pub(crate) struct NestedWorkerScriptLoadCompletion {
+    worker_id: DedicatedWorkerId,
+    result: Result<LoadedNestedWorkerScript, String>,
+    timing: crate::context_bootstrap::ResourcePerformanceEntry,
+}
+
+impl std::fmt::Debug for NestedWorkerScriptLoadCompletion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NestedWorkerScriptLoadCompletion")
+            .field("worker_id", &self.worker_id)
+            .field("loaded", &self.result.is_ok())
+            .finish_non_exhaustive()
+    }
+}
+
+fn start_nested_worker_script_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker: v8::Local<'_, v8::Object>,
+    context: NestedWorkerContext,
+    script_url: Url,
+    options: WorkerOptionsMembers,
+) {
+    let cancel = moli_fetch::FetchCancelHandle::new();
+    set_private_value(
+        scope,
+        worker,
+        WORKER_ID_SLOT,
+        v8::Number::new(scope, context.worker_id.as_u64() as f64).into(),
+    );
+    let Some(lease) = context.loader.register_load(
+        crate::network::loads::ResourceLoadKind::Script,
+        crate::network::loads::ResourceLoadDisposition::Ordinary,
+        Some(cancel.clone()),
+    ) else {
+        queue_nested_worker_script_load_error(
+            scope,
+            worker,
+            &context,
+            &script_url,
+            "Worker creator is no longer active.".to_owned(),
+        );
+        return;
+    };
+    let secure_context = context.network_policy.secure_context.resolve(&script_url);
+    let reserved_client = context
+        .service_worker_runtime
+        .as_ref()
+        .map(|runtime| ReservedNestedWorkerClient {
+            runtime: runtime.clone(),
+            client_id: Some(runtime.register_reserved_worker_client_with_storage_key(
+                script_url.clone(),
+                context.creator_storage_key.serialized_storage_key(),
+                ServiceWorkerClientType::DedicatedWorker,
+                secure_context,
+            )),
+        })
+        // Network-only loads register their final response URL when the
+        // global starts. Controlled requests need a reserved identity for
+        // FetchEvent.resultingClientId before their script can run.
+        .filter(|client| {
+            client
+                .runtime
+                .matching_controller_for_client(client.client_id.expect("reserved worker client"))
+                .is_some()
+        });
+    let reserved_client_id = reserved_client.as_ref().and_then(|client| client.client_id);
+    let Some(origin) = crate::worker::worker_global_origin(scope) else {
+        lease.finish();
+        queue_nested_worker_script_load_error(
+            scope,
+            worker,
+            &context,
+            &script_url,
+            "Worker creator settings are unavailable.".to_owned(),
+        );
+        return;
+    };
+    let timing = crate::context_bootstrap::FetchResourceTiming::capture_for_initiator_type(
+        scope,
+        &origin,
+        match options.worker_type {
+            WorkerScriptKind::Classic => "other",
+            WorkerScriptKind::Module => "script",
+        },
+    );
+    let script_kind = options.worker_type;
+    let credentials = options.credentials_mode.0;
+    if !crate::worker::begin_nested_worker_script_load(
+        scope,
+        context.worker_id,
+        cancel.clone(),
+        NestedWorkerScriptLoad {
+            context: context.clone(),
+            script_url: script_url.clone(),
+            options,
+            reserved_client,
+        },
+    ) {
+        return;
+    }
+    let runner = lease.task_runner();
+    runner.spawn(async move {
+        let request_client = lease.request_client();
+        let response = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()),
+            result = fetch_nested_worker_main_script(&script_url, &context, &origin, script_kind, credentials, reserved_client_id, cancel.clone(), &request_client) => result,
+        };
+        let completed = std::time::Instant::now();
+        let head = response.as_ref().ok().map(|response| response.head());
+        let entry = timing.complete_worker_script_fetch(
+            &worker_script_resource_url(&script_url), &origin,
+            head.as_ref().zip(response.as_ref().ok().map(|response| response.body_bytes().len())),
+            cancel.response_timing(), completed,
+        );
+        let result = response.and_then(|response| loaded_nested_worker_script_from_response(response, &script_url, &context));
+        lease.finish();
+        let wake_tx = context.wake_tx.clone();
+        let _ = wake_tx.send(crate::worker::WorkerMessage::NestedWorkerScriptLoaded(Box::new(NestedWorkerScriptLoadCompletion {
+            worker_id: context.worker_id, result, timing: entry,
+        })));
+    });
+}
+
+pub(crate) fn complete_nested_worker_script_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    completion: NestedWorkerScriptLoadCompletion,
+) {
+    let NestedWorkerScriptLoadCompletion {
+        worker_id,
+        result,
+        timing,
+    } = completion;
+    let Some(worker) = crate::worker::nested_worker_wrapper(scope, worker_id) else {
+        return;
+    };
+    let Some(NestedWorkerScriptLoad {
+        context,
+        script_url,
+        options,
+        reserved_client,
+    }) = crate::worker::take_nested_worker_script_load(scope, worker_id)
+    else {
+        return;
+    };
+    crate::context_bootstrap::record_resource_performance_entry(scope, timing);
+    match result {
+        Ok(loaded) => spawn_nested_worker_from_loaded_script(
+            scope,
+            worker,
+            context,
+            script_url,
+            options,
+            loaded,
+            reserved_client,
+        ),
+        Err(message) => {
+            queue_nested_worker_script_load_error(scope, worker, &context, &script_url, message)
+        }
+    }
+}
+
+fn spawn_nested_worker_from_loaded_script(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker: v8::Local<'_, v8::Object>,
+    nested_context: NestedWorkerContext,
+    resolved_url: Url,
+    worker_options: WorkerOptionsMembers,
+    loaded: LoadedNestedWorkerScript,
+    mut reserved_client: Option<ReservedNestedWorkerClient>,
+) {
+    let loaded_url = Url::parse(&loaded.script_url).expect("native Worker script URL");
+    if !crate::context_bootstrap::check_dedicated_worker_embedder_policy(
+        scope,
+        nested_context.policy_context,
+        loaded.policy_context.cross_origin_embedder_policy,
+        &nested_context.base_url,
+        &loaded_url,
+    ) {
+        queue_nested_worker_script_load_error(
+            scope,
+            worker,
+            &nested_context,
+            &resolved_url,
+            "Worker script was blocked by Cross-Origin-Embedder-Policy.".to_owned(),
+        );
+        return;
+    }
+    if let Some(client) = reserved_client.as_ref()
+        && !client.runtime.update_reserved_worker_client_creation_url(
+            client.client_id.expect("reserved worker client"),
+            loaded_url.clone(),
+        )
+    {
+        queue_nested_worker_script_load_error(
+            scope,
+            worker,
+            &nested_context,
+            &resolved_url,
+            "Worker client is no longer available.".to_owned(),
+        );
+        return;
+    }
+    let mut network_policy = nested_context.network_policy.clone();
+    let secure_context = nested_context
+        .network_policy
+        .secure_context
+        .resolve(&loaded_url);
+    network_policy.secure_context = WorkerSecureContextPolicy::Inherited(secure_context);
+    let mut worker_policy_context = loaded.policy_context;
+    if resolved_url.scheme() == "data" {
+        worker_policy_context.cross_origin_isolated = false;
+    }
+    let options = WorkerSpawnOptions::new_with_request_client(
+        loaded.source,
+        loaded.script_url,
+        nested_context.loader.request_client().clone(),
+    )
+    .with_interception_context(nested_context.interception_context.clone())
+    .with_resource_task_runner(nested_context.loader.task_runner())
+    .with_content_security_policy_snapshot(loaded.content_security_policy)
+    .with_referrer_policy(loaded.referrer_policy)
+    .with_script_kind(worker_options.worker_type)
+    .with_module_credentials_mode(worker_options.credentials_mode.0)
+    .with_module_static_import_initiator_url(nested_context.base_url.clone())
+    .with_module_static_import_content_security_policies(
+        nested_context.module_static_import_content_security_policies,
+    )
+    .with_network_policy(network_policy)
+    .with_policy_context(worker_policy_context)
+    .with_shared_memory_agent_cluster(Some(nested_context.shared_memory_agent_cluster.clone()))
+    .with_worker_context_runtime(nested_context.worker_context_runtime.clone())
+    .with_global_kind(WorkerGlobalKind::Dedicated {
+        name: worker_options.name.clone(),
+    })
+    .with_storage_key_top_level_site(Some(nested_context.storage_key_top_level_site.clone()))
+    .with_creator_storage_key(nested_context.creator_storage_key.clone())
+    .with_creator_message_security(Some(nested_context.creator_message_security.clone()))
+    .with_indexed_db_manager(nested_context.indexed_db_manager.clone())
+    .with_storage_bucket_store(nested_context.storage_bucket_store.clone());
+    let options = if let Some(runtime) = nested_context.service_worker_runtime.clone() {
+        options.with_service_worker_runtime(runtime)
+    } else {
+        options
+    };
+    let options =
+        if let Some(client_id) = reserved_client.as_ref().and_then(|client| client.client_id) {
+            options.with_reserved_service_worker_client_id(client_id)
+        } else {
+            options
+        };
+    let mut worker_handle = spawn_worker_with_options(options);
+    if let Some(client) = reserved_client.as_mut() {
+        client.client_id = None;
+    }
+    if let Some(mut rx) = worker_handle.take_receiver() {
+        let wake_tx = nested_context.wake_tx.clone();
+        let closed_owner_error_tx = nested_context.closed_owner_error_tx;
+        let worker_id = nested_context.worker_id;
+        let _ = std::thread::Builder::new()
+            .name(format!("nested-worker-pump:{worker_id}"))
+            .spawn(move || {
+                while let Some(message) = rx.blocking_recv() {
+                    if let Err(error) =
+                        wake_tx.send(crate::worker::WorkerMessage::NestedWorkerEvent {
+                            worker_id,
+                            message: Box::new(message),
+                        })
+                        && let Some(parent_tx) = &closed_owner_error_tx
+                    {
+                        crate::worker::forward_nested_worker_error_after_owner_close(
+                            error.0, parent_tx,
+                        );
+                    }
+                }
+            });
+    }
+    let registered = crate::worker::register_nested_worker_handle(
+        scope,
+        nested_context.worker_id,
+        worker_handle,
+    );
+    debug_assert!(
+        registered,
+        "reserved nested Worker must own its native handle"
+    );
+    set_private_value(
+        scope,
+        worker,
+        WORKER_ID_SLOT,
+        v8::Number::new(scope, nested_context.worker_id.as_u64() as f64).into(),
+    );
+}
+
 fn queue_nested_worker_script_load_error(
     scope: &mut v8::PinScope<'_, '_>,
     worker: v8::Local<'_, v8::Object>,
@@ -866,6 +1101,7 @@ fn queue_nested_worker_script_load_error(
     script_url: &Url,
     message: String,
 ) {
+    crate::worker::fail_nested_worker_script_load(scope, context.worker_id);
     let _ = context
         .wake_tx
         .send(crate::worker::WorkerMessage::NestedWorkerEvent {
@@ -948,13 +1184,10 @@ struct LoadedNestedWorkerScript {
     policy_context: crate::types::SubresourcePolicyContext,
 }
 
-fn materialize_nested_worker_script_source(
-    scope: &mut v8::PinScope<'_, '_>,
+fn materialize_nested_worker_local_script(
     script_url: &Url,
     context: &NestedWorkerContext,
-    script_kind: WorkerScriptKind,
-    module_credentials_mode: moli_fetch::RequestCredentialsMode,
-) -> Result<LoadedNestedWorkerScript, String> {
+) -> Result<Option<LoadedNestedWorkerScript>, String> {
     let blob_policy = (script_url.scheme() == "blob")
         .then(|| crate::blob::object_url_policy(script_url.as_str()));
     let blob_access_key = crate::blob::ObjectUrlAccessKey::new(
@@ -971,18 +1204,28 @@ fn materialize_nested_worker_script_source(
                 context.referrer_policy.clone(),
             )
         };
-        return Ok(LoadedNestedWorkerScript {
+        return Ok(Some(LoadedNestedWorkerScript {
             script_url: script_url.to_string(),
             source,
             content_security_policy,
             referrer_policy,
             policy_context: context.policy_context,
-        });
+        }));
     }
-    let loader = context.loader.clone();
+    Ok(None)
+}
+
+async fn fetch_nested_worker_main_script(
+    script_url: &Url,
+    context: &NestedWorkerContext,
+    origin: &moli_url::WebOrigin,
+    script_kind: WorkerScriptKind,
+    module_credentials_mode: moli_fetch::RequestCredentialsMode,
+    reserved_client_id: Option<ServiceWorkerClientId>,
+    cancel: moli_fetch::FetchCancelHandle,
+    request_client: &crate::network::ResourceRequestClient,
+) -> Result<crate::protocol_types::NavigationResponse, String> {
     let resource_url = worker_script_resource_url(script_url);
-    let origin = crate::worker::worker_global_origin(scope)
-        .ok_or_else(|| "Nested Worker creator settings are unavailable".to_owned())?;
     let request = moli_fetch::Request::new("GET", resource_url.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
         .with_request_mode(moli_fetch::RequestMode::SameOrigin)
@@ -999,42 +1242,41 @@ fn materialize_nested_worker_script_source(
             document_referrer_policy: context.referrer_policy.clone(),
             ..Default::default()
         });
-    let timing = crate::context_bootstrap::FetchResourceTiming::capture_for_initiator_type(
-        scope,
-        &origin,
-        match script_kind {
-            WorkerScriptKind::Classic => "other",
-            WorkerScriptKind::Module => "script",
-        },
-    );
-    let cancel = moli_fetch::FetchCancelHandle::new();
-    let response = loader
-        .request_client()
-        .fetch_text_for_worker_blocking_boundary_with_cancel(request, cancel.clone());
-    let completed = std::time::Instant::now();
-    let head = response.as_ref().ok().map(|response| response.head());
-    let entry = timing.complete_worker_script_fetch(
-        &resource_url,
-        &origin,
-        head.as_ref().zip(
-            response
-                .as_ref()
-                .ok()
-                .map(|response| response.body_bytes().len()),
-        ),
-        cancel.response_timing(),
-        completed,
-    );
-    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-    let response = response
-        .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))?;
-    if !loader.request_client().web_security_disabled() {
-        crate::worker::ensure_worker_script_redirect_chain_same_origin(
-            &context.base_url,
-            &response.redirect_chain,
-            &response.final_url,
-        )
-        .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
+    if let (Some(runtime), Some(client_id)) = (&context.service_worker_runtime, reserved_client_id)
+        && let Some(response) = runtime
+            .fetch_main_resource_for_worker_client(
+                client_id,
+                context.service_worker_client_id,
+                &request,
+                request_client,
+                context.loader.task_runner(),
+                crate::service_worker_runtime::ServiceWorkerRequestDestination::Worker,
+                cancel.clone(),
+            )
+            .await?
+    {
+        return Ok(response);
+    }
+    request_client
+        .fetch_text_stream_with_cancel(request, cancel)
+        .await
+        .map(crate::protocol_types::NavigationResponse::from)
+        .map_err(|error| format!("Failed to load worker script `{resource_url}`: {error}"))
+}
+
+fn loaded_nested_worker_script_from_response(
+    response: crate::protocol_types::NavigationResponse,
+    script_url: &Url,
+    context: &NestedWorkerContext,
+) -> Result<LoadedNestedWorkerScript, String> {
+    let head = response.head();
+    if !context.loader.request_client().web_security_disabled() {
+    crate::worker::ensure_worker_script_redirect_chain_same_origin(
+        &context.base_url,
+        &head.redirect_chain,
+        &response.final_url,
+    )
+    .map_err(|message| format!("Failed to construct 'Worker': {message}"))?;
     }
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;
@@ -1043,7 +1285,7 @@ fn materialize_nested_worker_script_source(
         &response.headers,
         response.body_bytes(),
     )?;
-    let (head, body) = response.into_text_parts();
+    let source = response.body_text().to_owned();
     let policy_context = crate::worker::dedicated_worker_policy_context_from_headers(
         &head.headers,
         context.policy_context,
@@ -1070,7 +1312,7 @@ fn materialize_nested_worker_script_source(
     final_url.set_fragment(script_url.fragment());
     Ok(LoadedNestedWorkerScript {
         script_url: final_url.to_string(),
-        source: body,
+        source,
         content_security_policy: policy,
         referrer_policy,
         policy_context,
