@@ -44,6 +44,12 @@ impl Default for TlsWebSocketFixture {
 
 impl TlsWebSocketFixture {
     pub fn new() -> Self {
+        // Preserve the localhost-only identity used by hostname-mismatch probes.
+        Self::with_server_names(vec!["localhost".to_owned()])
+    }
+
+    /// Use explicit server names when a fixture exercises multiple origins.
+    pub fn with_server_names(server_names: Vec<String>) -> Self {
         let ca_key = KeyPair::generate().unwrap();
         let mut ca_params = CertificateParams::new(Vec::new()).unwrap();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -53,8 +59,7 @@ impl TlsWebSocketFixture {
             .push(DnType::CommonName, "Moli WSS test CA");
         let ca = ca_params.self_signed(&ca_key).unwrap();
         let server_key = KeyPair::generate().unwrap();
-        // Only localhost is valid, so the same endpoint can test a hostname mismatch.
-        let mut server_params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+        let mut server_params = CertificateParams::new(server_names).unwrap();
         server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let server_cert = server_params.signed_by(&server_key, &ca, &ca_key).unwrap();
         let client_key = KeyPair::generate().unwrap();

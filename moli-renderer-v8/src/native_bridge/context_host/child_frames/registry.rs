@@ -532,20 +532,6 @@ impl JsContextHost {
                         "The navigation was canceled.".to_owned(),
                     );
                 }
-                let pending_attribute_url =
-                    self.child_browsing_contexts.get(&handle).and_then(|entry| {
-                        entry
-                            .pending_attribute_bootstrap_commit()
-                            .then(|| {
-                                Self::child_browsing_context_navigation_entry_url(
-                                    entry.attribute_bootstrap(),
-                                )
-                            })
-                            .flatten()
-                    });
-                if let Some(url) = pending_attribute_url.as_ref() {
-                    self.register_reserved_service_worker_child_client_for_navigation(handle, url);
-                }
                 if is_new {
                     self.cancel_child_meta_refresh_navigation(handle);
                     self.disconnect_shared_worker_clients_for_child_context(handle);

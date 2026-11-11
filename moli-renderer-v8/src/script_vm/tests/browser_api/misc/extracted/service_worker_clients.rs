@@ -2059,6 +2059,19 @@ async fn navigator_service_worker_clients_query_nested_frame_type() {
         "frame-appended",
     )
     .await;
+    // Navigation clients are reserved with the request's final partition
+    // inputs, rather than during the DOM insertion which queued that request.
+    // Stop immediately after its fetch starts, before applying its completion.
+    for _ in 0..32 {
+        if vm._context_host.borrow().has_pending_child_document_loads() {
+            break;
+        }
+        assert!(
+            drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await,
+            "the child navigation must reach request preparation"
+        );
+    }
+    assert!(vm._context_host.borrow().has_pending_child_document_loads());
     let pending_diagnostics = browser_context_runtime
         .service_worker_runtime()
         .diagnostics_snapshot();

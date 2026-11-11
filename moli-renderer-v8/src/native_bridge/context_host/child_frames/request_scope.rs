@@ -295,12 +295,31 @@ impl JsContextHost {
             current = self.child_browsing_context_parent_handle(handle);
         }
 
-        let mut inherited_scope = self.web_storage_scope_for_top_document_origin(top_origin);
+        let mut inherited_scope = match self.child_browsing_context_root_scope(handle)? {
+            OwnerDispatchScope::Top => self.web_storage_scope_for_top_document_origin(top_origin),
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_bound_web_storage_scope(popup_id)?
+            }
+            OwnerDispatchScope::Child(_) => return None,
+        };
         for handle in ancestry.into_iter().rev() {
             inherited_scope =
                 self.child_browsing_context_web_storage_scope_with_parent(handle, inherited_scope)?;
         }
         Some(inherited_scope)
+    }
+
+    fn child_browsing_context_top_level_storage_site(&self, handle: DomHandle) -> Option<String> {
+        match self.child_browsing_context_root_scope(handle)? {
+            OwnerDispatchScope::Top => Some(self.top_level_storage_site()),
+            OwnerDispatchScope::LightweightPopup(popup_id) => Some(
+                self.lightweight_popup_bound_web_storage_scope(popup_id)?
+                    .storage_key()
+                    .top_level_site()
+                    .to_owned(),
+            ),
+            OwnerDispatchScope::Child(_) => None,
+        }
     }
 
     pub(crate) fn child_browsing_context_network_partition_key(
@@ -314,7 +333,7 @@ impl JsContextHost {
                 .get(&handle)
                 .copied()
         });
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.child_browsing_context_top_level_storage_site(handle)?;
         let origin = self.child_browsing_context_network_partition_origin(handle)?;
         let relation =
             StoragePartitionRelation::from_sites(&site_for_url(&current_url), &top_level_site);
@@ -331,7 +350,7 @@ impl JsContextHost {
         bootstrap: &ChildBrowsingContextBootstrap,
         credentialless_storage_nonce: Option<OpaqueOriginNonce>,
     ) -> Option<String> {
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = self.child_browsing_context_top_level_storage_site(handle)?;
         let origin =
             self.child_browsing_context_navigation_network_partition_origin(handle, bootstrap)?;
         let target_url = Self::child_browsing_context_bootstrap_url(bootstrap)?;
@@ -350,7 +369,10 @@ impl JsContextHost {
     }
 
     fn child_browsing_context_ancestor_chain_is_cross_site(&self, handle: DomHandle) -> bool {
-        let top_level_site = site_for_url(self.document_url());
+        let Some(top_level_site) = self.child_browsing_context_top_level_storage_site(handle)
+        else {
+            return true;
+        };
         let mut current = self.child_browsing_context_parent_handle(handle);
         let mut depth = 0;
         while let Some(parent) = current {
@@ -536,7 +558,7 @@ impl JsContextHost {
         let parent_has_cross_site_ancestor = parent_scope.storage_key().has_cross_site_ancestor();
         if self.child_browsing_context_has_opaque_origin(handle) {
             let url = self.child_browsing_context_current_url(handle)?;
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = parent_scope.storage_key().top_level_site().to_owned();
             let relation = if moli_url::is_about_blank(&url) {
                 StoragePartitionRelation::Unknown
             } else {
@@ -568,7 +590,7 @@ impl JsContextHost {
                     parent_scope.origin(),
                 )
             };
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = parent_scope.storage_key().top_level_site().to_owned();
             let mut storage_key = web_storage_key_for_origin_and_top_level_site_with_nonce(
                 &origin,
                 top_level_site,
@@ -587,7 +609,7 @@ impl JsContextHost {
             &url,
             parent_scope.origin(),
         );
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = parent_scope.storage_key().top_level_site().to_owned();
         let mut storage_key =
             web_storage_key_for_origin_and_top_level_site_with_nonce(&origin, top_level_site, None);
         if parent_has_cross_site_ancestor {
@@ -609,7 +631,7 @@ impl JsContextHost {
             .is_some_and(|sandbox| sandbox_attribute_forces_opaque_origin(&sandbox))
             || url.scheme() == "data"
         {
-            let top_level_site = site_for_url(self.document_url());
+            let top_level_site = parent_scope.storage_key().top_level_site().to_owned();
             let relation = if moli_url::is_about_blank(url) {
                 StoragePartitionRelation::Unknown
             } else {
@@ -633,11 +655,18 @@ impl JsContextHost {
             url,
             parent_scope.origin(),
         );
-        let top_level_site = site_for_url(self.document_url());
+        let top_level_site = parent_scope.storage_key().top_level_site().to_owned();
         WebStorageScope::new(
             origin.clone(),
             web_storage_key_for_origin_and_top_level_site_with_nonce(&origin, top_level_site, None),
         )
+    }
+
+    fn top_level_storage_site(&self) -> String {
+        self.top_level_storage_key
+            .as_ref()
+            .map(|key| key.top_level_site().to_owned())
+            .unwrap_or_else(|| site_for_url(self.document_url()))
     }
 
     fn web_storage_scope_for_top_document_origin(&mut self, origin: &str) -> WebStorageScope {

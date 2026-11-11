@@ -1,5 +1,6 @@
 use super::*;
 use crate::dom::native::Node;
+use crate::native_bridge::context_host::OwnerDispatchScope;
 use std::collections::HashSet;
 
 impl JsContextHost {
@@ -52,6 +53,17 @@ impl JsContextHost {
             .node(handle)
             .and_then(|node| node.owner_document())?;
         self.lightweight_popup_id_for_document_handle(owner_document)
+    }
+
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_root_scope(
+        &self,
+        handle: DomHandle,
+    ) -> Option<OwnerDispatchScope> {
+        let mut owner = self.owner_dispatch_scope_for_node(handle)?;
+        while let OwnerDispatchScope::Child(parent) = owner {
+            owner = self.owner_dispatch_scope_for_node(parent)?;
+        }
+        Some(owner)
     }
 
     fn collect_child_browsing_context_handles_in_document_order_from_document(

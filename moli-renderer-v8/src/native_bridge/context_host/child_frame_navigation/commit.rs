@@ -257,7 +257,6 @@ impl JsContextHost {
         {
             return false;
         }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
@@ -273,7 +272,6 @@ impl JsContextHost {
             handle,
             "The navigation was canceled.".to_owned(),
         );
-        let document_url = request.url.clone();
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
@@ -284,7 +282,6 @@ impl JsContextHost {
         {
             return false;
         }
-        self.register_reserved_service_worker_child_client_for_navigation(handle, &document_url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
