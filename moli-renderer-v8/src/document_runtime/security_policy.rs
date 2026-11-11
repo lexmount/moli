@@ -336,67 +336,6 @@ impl DocumentRequestPolicySnapshot {
             policy.content_security_reporting_endpoints.clone(),
         )
     }
-
-    pub(crate) fn enforce_violation(
-        &self,
-        document_url: &Url,
-        request_url: &Url,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
-        if self.request_metadata.is_some() {
-            return self
-                .check_url(document_url, request_url, redirect_status)
-                .enforced_violations
-                .into_iter()
-                .next();
-        }
-        document_url_policy_violation_from_document_policies(
-            self.enforce_policies.clone(),
-            self.policy_self_url.as_deref().unwrap_or(document_url),
-            request_url,
-            self.resource_kind,
-            redirect_status,
-            ContentSecurityPolicyDisposition::Enforce,
-        )
-        .map(|mut violation| {
-            violation.document_uri =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation.source_file =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation
-        })
-    }
-
-    pub(crate) fn report_only_violation(
-        &self,
-        document_url: &Url,
-        request_url: &Url,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
-        if self.request_metadata.is_some() {
-            return self
-                .check_url(document_url, request_url, redirect_status)
-                .report_only_violations
-                .into_iter()
-                .next();
-        }
-        document_url_policy_violation(
-            &self.report_only_policies,
-            &self.reporting_endpoints,
-            self.policy_self_url.as_deref().unwrap_or(document_url),
-            request_url,
-            self.resource_kind,
-            redirect_status,
-            ContentSecurityPolicyDisposition::Report,
-        )
-        .map(|mut violation| {
-            violation.document_uri =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation.source_file =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation
-        })
-    }
 }
 
 impl DocumentPolicyContainer {

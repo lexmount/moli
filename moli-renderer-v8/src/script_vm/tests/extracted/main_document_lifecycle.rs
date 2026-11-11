@@ -2615,11 +2615,11 @@ async fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document(
             vm.eval("document.open(); document.write('<!doctype html><body>replacement'); document.close()").unwrap();
         }
         vm.eval("globalThis.queuedCspEvents = 0; document.addEventListener('securitypolicyviolation', () => queuedCspEvents++)").unwrap();
-        let mut violation = snapshot.enforce_violation(
+        let mut violation = snapshot.check_url(
             &Url::parse("https://fetch-csp-queued.test/source").unwrap(),
             &Url::parse("https://forbidden.test/private").unwrap(),
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect,
-        ).unwrap();
+        ).into_violations().1.into_iter().next().unwrap();
         violation.blocked_uri = request_url.to_string();
         crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
             .apply_to(&mut violation);

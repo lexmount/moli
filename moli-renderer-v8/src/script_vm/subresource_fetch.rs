@@ -153,12 +153,16 @@ impl WorkerOwnedFetchTarget {
     }
 }
 
-fn document_connect_csp_redirect_failure_message<'s>(
+fn document_connect_csp_response_failure_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context_host: &Rc<RefCell<JsContextHost>>,
     pending: &PendingSubresourceFetchState,
-    final_url: &Url,
+    head: &moli_fetch::ResponseHead,
+    trusted_response: bool,
 ) -> Option<String> {
+    if !trusted_response && head.redirect_chain.is_empty() {
+        return None;
+    }
     if !matches!(
         pending.info.resource_type,
         SubresourceResourceType::EventSource
@@ -169,7 +173,7 @@ fn document_connect_csp_redirect_failure_message<'s>(
     }
 
     let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
-    if redirect_state.was_checked(final_url) {
+    if redirect_state.was_checked(&head.final_url) {
         return None;
     }
     let operation = match pending.info.resource_type {
@@ -179,8 +183,13 @@ fn document_connect_csp_redirect_failure_message<'s>(
     };
     // Synthetic responses still need validation against the accepting Document,
     // while the producer already checked every real redirect before sending it.
+    let redirect_status = if head.redirect_chain.is_empty() {
+        ContentSecurityPolicyRedirectStatus::NoRedirect
+    } else {
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect
+    };
     let (report_only, enforced) = policy
-        .check_redirect(&pending.info.document_url, final_url)
+        .check_url(&pending.info.document_url, &head.final_url, redirect_status)
         .into_violations();
     let mut failure = None;
     for (is_enforced, mut violation) in report_only
@@ -237,19 +246,31 @@ fn report_window_csp_redirect_violation<'s>(
         );
 }
 
-fn detached_window_fetch_csp_redirect_failure_message(
+fn detached_window_fetch_csp_response_failure_message(
     context_host: &Rc<RefCell<JsContextHost>>,
     pending: &PendingSubresourceFetchState,
-    final_url: &Url,
+    head: &moli_fetch::ResponseHead,
+    trusted_response: bool,
 ) -> Option<String> {
-    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
-    if redirect_state.was_checked(final_url) {
+    if !trusted_response && head.redirect_chain.is_empty() {
         return None;
     }
-    let redirect_status = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-    if let Some(mut violation) =
-        policy.report_only_violation(&pending.info.document_url, final_url, redirect_status)
-    {
+    let (policy, redirect_state, report_context) = pending.continuation.csp_request_policy()?;
+    if redirect_state.was_checked(&head.final_url) {
+        return None;
+    }
+    let redirect_status = if head.redirect_chain.is_empty() {
+        ContentSecurityPolicyRedirectStatus::NoRedirect
+    } else {
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect
+    };
+    let (reports, enforced) = policy
+        .check_url(&pending.info.document_url, &head.final_url, redirect_status)
+        .into_violations();
+    let failure = enforced.first().map(|violation| {
+        crate::document_runtime::document_content_security_policy_error_message(violation, "fetch")
+    });
+    for mut violation in reports.into_iter().chain(enforced) {
         violation.blocked_uri =
             crate::content_security_policy::csp_url_for_report(&pending.info.url);
         crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
@@ -260,21 +281,28 @@ fn detached_window_fetch_csp_redirect_failure_message(
             &violation,
         );
     }
-    let mut violation =
-        policy.enforce_violation(&pending.info.document_url, final_url, redirect_status)?;
-    violation.blocked_uri = crate::content_security_policy::csp_url_for_report(&pending.info.url);
-    crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
-        .apply_to(&mut violation);
-    crate::network_host::send_content_security_policy_violation_report_from_window_context(
-        &mut context_host.borrow_mut(),
-        report_context,
-        &violation,
-    );
-    Some(
-        crate::document_runtime::document_content_security_policy_error_message(
-            &violation, "fetch",
-        ),
-    )
+    failure
+}
+
+fn window_subresource_response_filter(
+    pending: &PendingSubresourceFetchState,
+    head: &moli_fetch::ResponseHead,
+    method: &str,
+    supplied: Option<&moli_fetch::FetchResponseFilter>,
+) -> moli_fetch::FetchResponseFilter {
+    supplied.cloned().unwrap_or_else(|| {
+        crate::network_host::FetchResponseRequest {
+            method,
+            mode: pending.request_mode,
+            redirect_mode: pending
+                .continuation
+                .window_fetch()
+                .map_or(moli_fetch::RequestRedirectMode::Follow, |fetch| {
+                    fetch.redirect_mode()
+                }),
+        }
+        .network_response_filter(&pending.request_origin, head, pending.credentials_mode)
+    })
 }
 
 enum MediaSubresourceTerminal<'a> {

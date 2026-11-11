@@ -32,13 +32,12 @@ impl ScriptVm {
                     | PendingSubresourceContinuation::Beacon(_)
             ) {
             result.and_then(|response| {
-                if !response.redirect_chain.is_empty()
-                    && let Some(message) = detached_window_fetch_csp_redirect_failure_message(
-                        &self._context_host,
-                        &pending,
-                        &response.final_url,
-                    )
-                {
+                if let Some(message) = detached_window_fetch_csp_response_failure_message(
+                    &self._context_host,
+                    &pending,
+                    &response.head(),
+                    skip_fetch_security_validation,
+                ) {
                     return Err(message);
                 }
                 if !skip_fetch_security_validation {
@@ -246,16 +245,13 @@ impl ScriptVm {
                         );
                     }
                     Ok(response) => {
-                        let security_error = if !response.redirect_chain.is_empty() {
-                            document_connect_csp_redirect_failure_message(
+                        let security_error = document_connect_csp_response_failure_message(
                                 scope,
                                 &context_host,
                                 &pending,
-                                &response.final_url,
+                                &response.head(),
+                                skip_fetch_security_validation,
                             )
-                        } else {
-                            None
-                        }
                         .or_else(|| {
                             (!skip_fetch_security_validation)
                                 .then(|| {
@@ -592,12 +588,12 @@ impl ScriptVm {
                     }
                 }
 
-                if !response.redirect_chain.is_empty()
-                    && let Some(message) = document_connect_csp_redirect_failure_message(
+                if let Some(message) = document_connect_csp_response_failure_message(
                         scope,
                         &context_host,
                         &pending,
-                        &response.final_url,
+                        &response.head(),
+                        skip_fetch_security_validation,
                     )
                 {
                     return Err(message);
@@ -794,7 +790,6 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Xhr { xhr, timing, .. } => {
                             let body_size = observable_response.body_bytes().len();
                             let (mut head, body) = observable_response.into_body();
-                            let filter_headers = !response_filter.as_ref().is_some_and(|filter| filter.is_readable());
                             let filter = response_filter.unwrap_or_else(|| {
                                 crate::network_host::FetchResponseRequest {
                                     method: &response_request_method,
@@ -817,11 +812,9 @@ impl ScriptVm {
                                     ),
                                 );
                             }
-                            if filter_headers {
-                                head.headers = crate::network_host::filter_cors_exposed_response_headers(
-                                    &pending.request_origin, &head, pending.credentials_mode,
-                                );
-                            }
+                            head.headers = crate::network_host::xhr_response_headers_for_filter(
+                                &head, &filter,
+                            );
                             let xhr = v8::Local::new(scope, &xhr);
                             crate::network_host::apply_xhr_response_body_source_with_status_text(
                                 scope,
