@@ -1139,8 +1139,7 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                 let followup_output = finish_runtime_deferred_reply_completed_command(
                     scheduler,
                     output_release_permit,
-                )
-                .await;
+                );
                 if !followup_output.is_empty() {
                     pending_flush
                         .push_front(RuntimeDeferredReplyFlushItem::Protocol(followup_output));
@@ -1171,7 +1170,7 @@ fn enqueue_runtime_deferred_reply_completion_flush(
     pending_flush.push_front(RuntimeDeferredReplyFlushItem::Protocol(completion_output));
 }
 
-async fn finish_runtime_deferred_reply_completed_command(
+fn finish_runtime_deferred_reply_completed_command(
     scheduler: &mut CdpScheduler,
     output_release_permit: Option<CommandOutputReleasePermit>,
 ) -> ProtocolOutputSequence {
@@ -1302,8 +1301,7 @@ async fn flush_runtime_deferred_reply_advance(
                 return false;
             }
             let followup_output =
-                finish_runtime_deferred_reply_completed_command(scheduler, output_release_permit)
-                    .await;
+                finish_runtime_deferred_reply_completed_command(scheduler, output_release_permit);
             if !followup_output.is_empty() {
                 flush_protocol_output_with_runtime_deferred_reply_routing(
                     frontend_router,
@@ -1412,7 +1410,6 @@ async fn handle_adapter_scheduler_input(
     let advance = adapter_scheduler.advance_input(scheduler, input);
     let (kind, ok) = match advance {
         ProtocolAdapterSchedulerAdvance::Idle => ("idle", true),
-        ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ("client_turn_yielded", true),
         ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output) => {
             let ok = flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,

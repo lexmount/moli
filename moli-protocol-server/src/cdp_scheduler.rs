@@ -1956,8 +1956,8 @@ impl CdpScheduler {
             {
                 return out;
             }
-            if self.queues.front_needs_client_turn_predecessor() {
-                self.queues.satisfy_front_client_turn_predecessor();
+            if self.queues.front_has_open_load_binding_window() {
+                self.queues.close_front_load_binding_window();
                 continue;
             }
             if !self
@@ -2044,7 +2044,7 @@ impl CdpScheduler {
         let mut blocked_target_ids = Vec::new();
         while let Some(mut residence) = snapshot.pop_front() {
             self.queues
-                .satisfy_checked_out_client_turn_predecessor(&mut residence);
+                .close_checked_out_load_binding_window(&mut residence);
             let target_ids = self.protocol_residence_navigation_gate_target_ids(&residence);
             let has_pending_target_predecessor = target_ids
                 .iter()
@@ -2201,7 +2201,7 @@ impl CdpScheduler {
                 continue;
             }
             self.queues
-                .satisfy_checked_out_client_turn_predecessor(&mut residence);
+                .close_checked_out_load_binding_window(&mut residence);
             if !self
                 .state
                 .with_state(|state| {
@@ -3107,21 +3107,22 @@ impl CdpScheduler {
             .expect("live protocol actor state")
     }
 
-    fn satisfy_front_protocol_residence_client_turn_predecessor(&mut self) {
+    fn close_protocol_residence_load_binding_window(&mut self) {
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_runtime",
-                stage = "protocol_residence_client_turn_predecessor_satisfied",
+                stage = "protocol_residence_load_binding_window_closed",
                 protocol_residence_len = self.queues.protocol_residence_len(),
             );
         }
         let Some(index) = self.next_ungated_protocol_residence_index() else {
             return;
         };
-        self.queues.satisfy_client_turn_predecessor_at(index);
+        self.queues.close_load_binding_window_at(index);
     }
 
     pub(crate) fn complete_next_protocol_residence(&mut self) -> ProtocolOutputSequence {
+        self.queues.close_future_load_predecessor_window();
         let Some(index) = self.next_ungated_protocol_residence_index() else {
             return ProtocolOutputSequence::empty();
         };
