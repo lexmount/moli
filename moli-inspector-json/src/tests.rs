@@ -325,3 +325,90 @@ fn surrogate_params_keys_cannot_bypass_reserved_field_validation() {
         }
     }
 }
+
+fn assert_lossy_json(raw: &str, expected: serde_json::Value) {
+    let decoded = decode_lossy_json(raw.as_bytes()).expect("UTF-8 compatibility decoding");
+    assert_eq!(decoded, expected, "input: {raw}");
+}
+
+#[test]
+fn inspector_protocol_lone_surrogates_preserve_pairs_literals_and_structure() {
+    for (escaped, expected) in [
+        (r"\ud800", "�"),
+        (r"\udfff", "�"),
+        (r"\uD800\uD800\uDC00", "�𐀀"),
+        (r"\uDC00\uD800\uDC00", "�𐀀"),
+        (r"\uD83D\uDE00\ud800", "😀�"),
+        (r"\ud800a\udfff", "�a�"),
+        (r"\ud800\u0061", "�a"),
+        (r"\u0000\ud800", "\0�"),
+    ] {
+        assert_lossy_json(
+            &format!(r#"{{"id":7,"result":{{"value":"{escaped}"}}}}"#),
+            json!({"id": 7, "result": {"value": expected}}),
+        );
+    }
+    assert_lossy_json(
+        r#"{"\ud800":["\udfff",{"literal":"\\ud800","paired":"\uD83D\uDE00"}]}"#,
+        json!({"�": ["�", {"literal": r"\ud800", "paired": "😀"}]}),
+    );
+    assert_lossy_json(
+        r#"{"value":"a\"\\\ud800\\udfff"}"#,
+        json!({"value": "a\"\\�\\udfff"}),
+    );
+}
+
+#[test]
+fn inspector_protocol_replaces_every_isolated_surrogate_code_unit() {
+    for unit in 0xd800_u16..=0xdfff {
+        assert_lossy_json(
+            &format!(r#"{{"value":"\u{unit:04x}"}}"#),
+            json!({"value": "�"}),
+        );
+    }
+}
+
+#[test]
+fn inspector_protocol_mixed_escapes_match_standard_utf16_lossy_decoding() {
+    use std::fmt::Write as _;
+    let alphabet = [
+        0xd800, 0xdbff, 0xdc00, 0xdfff, 0x5c, 0x22, 0x41, 0xa, 0, 0xffff, 0xfeff,
+    ];
+    let mut seed = 0xc0de_2026_u64;
+    for _ in 0..256 {
+        let mut units = Vec::new();
+        let mut raw = String::from(r#"{"value":""#);
+        for _ in 0..64 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let unit = if seed & 1 == 0 {
+                alphabet[(seed >> 32) as usize % alphabet.len()]
+            } else {
+                (seed >> 32) as u16
+            };
+            units.push(unit);
+            write!(&mut raw, "\\u{unit:04x}").unwrap();
+        }
+        raw.push_str(r#"","literal":"\\ud800"}"#);
+        assert_lossy_json(
+            &raw,
+            json!({"value": String::from_utf16_lossy(&units), "literal": r"\ud800"}),
+        );
+    }
+}
+
+#[test]
+fn inspector_protocol_surrogate_recovery_keeps_malformed_json_invalid() {
+    for raw in [
+        r#"{"value":"\ud800\q"}"#,
+        r#"{"value":"\ud800","other":}"#,
+        r#"{"value":"\uD80X"}"#,
+        r#"{"value":"\uD800\uDE0X"}"#,
+        r#"{"value":"\ud800"} trailing"#,
+        r#"{"value":\ud800}"#,
+        "{\"value\":\"\\ud800\n\"}",
+    ] {
+        assert!(decode_lossy_json(raw.as_bytes()).is_err(), "{raw}");
+    }
+}
