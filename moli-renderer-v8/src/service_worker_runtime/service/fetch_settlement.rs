@@ -2098,7 +2098,7 @@ mod tests {
             moli_fetch::RequestCacheMode::Validate
         );
         assert_eq!(fallback.network_partition_key(), Some("partition"));
-        assert!(!fallback.infers_referrer_from_initiator());
+        assert!(fallback.referrer_header_value(&fallback.url).is_none());
         assert_eq!(
             fallback.priority_hints.fetch_priority,
             Some(moli_fetch::FetchPriorityHint::High)
