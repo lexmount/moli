@@ -2,6 +2,8 @@ use moli_protocol::{BackgroundProtocolEvent, RendererOutputDependencies};
 
 use super::{CommandOutputReleasePermit, ProtocolOutputSequence};
 
+/// Reply output and its explicit release authority. Published work is already
+/// owned by the scheduler and cannot be stranded inside this reply.
 pub(crate) struct CommandTurnOutput {
     protocol_output: ProtocolOutputSequence,
     post_renderer_output: ProtocolOutputSequence,
@@ -81,10 +83,9 @@ impl CommandTurnOutput {
     /// Place output projected from the command's exact renderer cause before
     /// the command response carried by this turn.
     ///
-    /// The frozen sequence has already been split by its domain-declared
-    /// `BeforeResponse`/`AfterResponse` order. Only the former reaches this
-    /// method; the latter remains in the command barrier until the response
-    /// flush consumes its single-use permit.
+    /// Only explicitly post-response Inspector messages remain in the exact
+    /// command barrier until response delivery consumes its single-use permit.
+    /// Owner work has already been transferred to the scheduler.
     pub(crate) fn prepend_protocol_output(&mut self, output: ProtocolOutputSequence) {
         if output.is_empty() {
             return;

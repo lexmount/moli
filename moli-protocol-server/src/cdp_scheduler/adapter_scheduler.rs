@@ -7,7 +7,7 @@ use super::{CdpScheduler, ProtocolOutputSequence, protocol_residence::ProtocolSc
 ///
 /// The protocol scheduler owns concrete output and browser-owner work. This
 /// driver owns only the asynchronous adapter boundary needed to select that
-/// work in a later client turn:
+/// work in a later adapter turn:
 ///
 /// - one coalesced self-turn signal.
 ///
@@ -31,7 +31,6 @@ pub(crate) enum ProtocolAdapterSchedulerInput {
 ///
 pub(crate) enum ProtocolAdapterSchedulerAdvance {
     Idle,
-    ClientTurnYielded,
     ProtocolResidenceCompleted(ProtocolOutputSequence),
 }
 
@@ -49,9 +48,8 @@ impl Default for ProtocolAdapterScheduler {
 impl ProtocolAdapterScheduler {
     /// Coalesces scheduler readiness into one later adapter turn.
     ///
-    /// Sending through a local channel is intentional: satisfying a
-    /// `ClientTurnPredecessor` must happen after control returns to the adapter
-    /// loop, not recursively in the producer or command-completion stack.
+    /// Sending through a local channel returns control to the adapter loop;
+    /// work never executes recursively inside its producer.
     pub(crate) fn schedule_turn_if_needed(
         &mut self,
         scheduler: &CdpScheduler,
@@ -116,10 +114,12 @@ impl ProtocolAdapterScheduler {
     }
 
     fn advance_turn(&mut self, scheduler: &mut CdpScheduler) -> ProtocolAdapterSchedulerAdvance {
+        if self.next_scheduler_step(scheduler) == ProtocolSchedulerStep::CloseLoadBindingWindow {
+            scheduler.close_protocol_residence_load_binding_window();
+        }
         match self.next_scheduler_step(scheduler) {
-            ProtocolSchedulerStep::SatisfyClientTurnPredecessor => {
-                scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
-                ProtocolAdapterSchedulerAdvance::ClientTurnYielded
+            ProtocolSchedulerStep::CloseLoadBindingWindow => {
+                unreachable!("the adapter closed the selected window")
             }
             ProtocolSchedulerStep::CompleteReadyResidence => {
                 ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(
@@ -184,10 +184,10 @@ mod tests {
 
         assert_eq!(
             adapter.next_scheduler_step(&scheduler),
-            ProtocolSchedulerStep::SatisfyClientTurnPredecessor,
-            "an exact load observation must not block an independent client-turn boundary"
+            ProtocolSchedulerStep::CompleteReadyResidence,
+            "an exact load observation must not block independent queued work"
         );
-        scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+        scheduler.close_protocol_residence_load_binding_window();
         assert_eq!(
             adapter.next_scheduler_step(&scheduler),
             ProtocolSchedulerStep::CompleteReadyResidence,
@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn self_turn_is_coalesced_and_preserves_the_client_turn_boundary() {
+    async fn self_turn_is_coalesced_and_executes_ready_work_without_an_extra_turn() {
         LocalSet::new()
             .run_until(async {
                 let (mut scheduler, _protocol_completions) =
@@ -260,20 +260,16 @@ mod tests {
                 assert!(matches!(first, ProtocolAdapterSchedulerInput::Turn));
                 assert!(matches!(
                     adapter.advance_input(&mut scheduler, first),
-                    ProtocolAdapterSchedulerAdvance::ClientTurnYielded
+                    ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(_)
                 ));
                 assert!(
                     adapter.turn_rx.try_recv().is_err(),
                     "coalescing must not leave a duplicate adapter turn queued"
                 );
 
+                assert_eq!(scheduler.queues.protocol_residence_len(), 0);
                 adapter.schedule_turn_if_needed(&scheduler, false);
-                let second = adapter.recv_input().await;
-                assert!(matches!(second, ProtocolAdapterSchedulerInput::Turn));
-                assert!(matches!(
-                    adapter.advance_input(&mut scheduler, second),
-                    ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(_)
-                ));
+                assert!(!adapter.turn_scheduled);
             })
             .await;
     }

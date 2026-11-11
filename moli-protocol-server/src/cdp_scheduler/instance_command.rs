@@ -31,7 +31,7 @@ pub(super) async fn handle_instance_command(
     ) {
         control.request(instance_command);
     } else {
-        // A failed acknowledgment retires this frontend, not the instance or
+        // A failed writer flush retires this frontend, not the instance or
         // the actor serving other connections.
         sink.close();
     }

@@ -560,12 +560,12 @@ fn delayed_command_wake_cannot_hold_or_reorder_published_work() {
     assert_eq!(context.state(), CommandResponseFlushState::Pending);
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor,
+        ProtocolSchedulerStep::CompleteReadyResidence,
         "ordinary work has no blanket command-output dependency"
     );
 
     for _ in 0..2 {
-        scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+        scheduler.close_protocol_residence_load_binding_window();
         assert_eq!(
             scheduler.next_protocol_scheduler_step(),
             ProtocolSchedulerStep::CompleteReadyResidence
@@ -616,7 +616,7 @@ fn lifecycle_work_observes_only_its_existing_command_output_permit() {
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::Wait
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::Wait
@@ -632,7 +632,7 @@ fn lifecycle_work_observes_only_its_existing_command_output_permit() {
         Some(1),
         "an independent target need not wait for an earlier command"
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     let _ = scheduler.complete_next_protocol_residence();
     assert_eq!(scheduler.queues.protocol_residence_len(), 1);
     assert_eq!(
@@ -646,9 +646,9 @@ fn lifecycle_work_observes_only_its_existing_command_output_permit() {
     assert_eq!(first.state(), CommandResponseFlushState::Flushed);
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CompleteReadyResidence
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     let _ = scheduler.complete_next_protocol_residence();
     assert_eq!(scheduler.queues.protocol_residence_len(), 0);
 }
@@ -683,9 +683,9 @@ async fn abandoned_command_output_wakes_lifecycle_work_without_reporting_a_flush
     assert_eq!(context.state(), CommandResponseFlushState::Cancelled);
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CompleteReadyResidence
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     let _ = scheduler.complete_next_protocol_residence();
     assert_eq!(
         scheduler.queues.protocol_residence_len(),
@@ -729,7 +729,7 @@ fn command_dependent_retirement_does_not_block_its_targets_output() {
             let pending = std::mem::take(&mut scheduler.queues.protocol_residences);
             let _ = scheduler.complete_protocol_residence_snapshot(pending);
         } else {
-            scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+            scheduler.close_protocol_residence_load_binding_window();
             let _ = scheduler.complete_next_protocol_residence();
         }
         assert_eq!(
@@ -743,7 +743,7 @@ fn command_dependent_retirement_does_not_block_its_targets_output() {
         let _ = scheduler.finish_command_dispatch_output_flush(Some(
             super::CommandOutputReleasePermit::new(permit, None),
         ));
-        scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+        scheduler.close_protocol_residence_load_binding_window();
         let _ = scheduler.complete_next_protocol_residence();
         assert_eq!(scheduler.queues.protocol_residence_len(), 0);
     }
@@ -814,7 +814,7 @@ fn renderer_output_publication_waits_for_its_exact_load_predecessors() {
         None,
     );
 
-    queues.satisfy_front_client_turn_predecessor();
+    queues.close_front_load_binding_window();
     let owner = moli_protocol::ProtocolStateOwner::new(CdpConnection::new());
     assert!(
         !owner
@@ -850,7 +850,7 @@ fn pending_renderer_projection_keeps_its_load_window_while_peer_work_advances() 
     scheduler
         .apply_protocol_work_publications(vec![root_frame_stopped_loading_work(1, "FRAME-peer")]);
     assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     let snapshot = scheduler.queues.take_external_load_wait_snapshot();
     assert_eq!(snapshot.len(), 1, "peer work may leave the queue");
     assert_eq!(
@@ -869,9 +869,9 @@ fn pending_renderer_projection_keeps_its_load_window_while_peer_work_advances() 
     );
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CloseLoadBindingWindow
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
@@ -922,7 +922,7 @@ fn renderer_owner_work_waits_for_its_original_projection_and_exact_load() {
     );
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CompleteReadyResidence
     );
 }
 
@@ -1063,7 +1063,7 @@ async fn source_publication_keeps_native_insertion_before_its_child_delivery() {
             for gate in [
                 NativeInsertionGate::Ready,
                 NativeInsertionGate::Load,
-                NativeInsertionGate::ClientTurn,
+                NativeInsertionGate::LoadBindingWindow,
             ] {
                 for after_event in [false, true] {
                     for complete_source_first in [false, true] {
@@ -1086,7 +1086,7 @@ async fn source_publication_keeps_native_insertion_before_its_child_delivery() {
 enum NativeInsertionGate {
     Ready,
     Load,
-    ClientTurn,
+    LoadBindingWindow,
 }
 
 async fn assert_source_insertion_delivery(
@@ -1203,7 +1203,7 @@ async fn assert_source_insertion_delivery(
         } else {
             Vec::new()
         },
-        (gate == NativeInsertionGate::ClientTurn)
+        (gate == NativeInsertionGate::LoadBindingWindow)
             .then(|| future_load_candidate(&native_publication)),
     );
     assert!(
@@ -1354,8 +1354,8 @@ async fn assert_source_insertion_delivery(
     }
     while scheduler.queues.protocol_residence_len() != 0 {
         match scheduler.next_protocol_scheduler_step() {
-            ProtocolSchedulerStep::SatisfyClientTurnPredecessor => {
-                scheduler.satisfy_front_protocol_residence_client_turn_predecessor()
+            ProtocolSchedulerStep::CloseLoadBindingWindow => {
+                scheduler.close_protocol_residence_load_binding_window()
             }
             ProtocolSchedulerStep::CompleteReadyResidence => {
                 output.append(scheduler.complete_next_protocol_residence())
@@ -1410,21 +1410,27 @@ async fn assert_source_insertion_delivery(
     }
 }
 
+fn observable_protocol_work(sequence: u64) -> ProtocolSchedulerWork {
+    moli_protocol::test_support::renderer_fenced_output_work(
+        sequence,
+        vec![BackgroundProtocolEvent::immediate(
+            json!({"method":"Moli.workCompleted", "params":{"sequence":sequence}}),
+        )],
+        Vec::new(),
+    )
+}
+
 #[test]
 fn command_output_keeps_its_response_while_admitting_shared_publications() {
     use moli_protocol::test_support::publish_protocol_work;
     let mut conn = CdpConnection::new();
-    publish_protocol_work(&mut conn, |sequence| {
-        root_frame_stopped_loading_work(sequence, "FRAME-source")
-    });
+    publish_protocol_work(&mut conn, observable_protocol_work);
     let response = json!({"id":41,"result":{}});
     let complete = moli_protocol::test_support::command_completion_with_scheduler_events(
         vec![BackgroundProtocolEvent::immediate(response.clone())],
         conn.take_scheduler_events(),
     );
-    publish_protocol_work(&mut conn, |sequence| {
-        root_frame_stopped_loading_work(sequence, "FRAME-peer")
-    });
+    publish_protocol_work(&mut conn, observable_protocol_work);
     let later_wake = conn.take_scheduler_events();
     let (mut scheduler, _tasks) = CdpScheduler::new(conn);
     let super::CommandTaskStep::Complete(output) =
@@ -1446,6 +1452,15 @@ fn command_output_keeps_its_response_while_admitting_shared_publications() {
         2,
         "the command's later wake must not duplicate work"
     );
+    for sequence in [1, 2] {
+        let messages = scheduler.complete_next_protocol_residence().into_messages();
+        assert_eq!(
+            messages,
+            [json!({"method":"Moli.workCompleted", "params":{"sequence":sequence}})],
+            "coalesced wakes must retain publication order and execute each payload once"
+        );
+    }
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
 }
 
 #[test]
@@ -1528,7 +1543,7 @@ fn protocol_work_published_by_held_ingress_inherits_exact_load_predecessor() {
 
     // Even an explicit client-turn yield cannot release work inherited from
     // this still-held source; the exact load observation remains necessary.
-    scheduler.queues.satisfy_client_turn_predecessor_at(1);
+    scheduler.queues.close_load_binding_window_at(1);
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::Wait,
@@ -1666,7 +1681,7 @@ fn old_document_timer_output_does_not_wait_behind_replacement_document_load() {
 }
 
 #[test]
-fn client_turn_yield_closes_the_provisional_load_binding_window() {
+fn scheduler_turn_closes_the_provisional_load_binding_window() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
     let candidate = future_load_candidate(&publication);
@@ -1686,7 +1701,7 @@ fn client_turn_yield_closes_the_provisional_load_binding_window() {
         ),
     );
 
-    queues.satisfy_front_client_turn_predecessor();
+    queues.close_front_load_binding_window();
 
     assert_eq!(
         queues.bind_main_document_load_predecessor(unrelated_later_load, &interest),
@@ -1708,14 +1723,14 @@ fn client_turn_yield_closes_the_provisional_load_binding_window() {
 }
 
 #[test]
-fn client_turn_yield_closes_candidate_behind_an_unrelated_front_residence() {
+fn executing_ordinary_work_closes_a_later_provisional_load_binding_window() {
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
     let candidate = future_load_candidate(&publication);
     let interest = load_interest_for_publication(&publication);
     let unrelated_later_load = deferred_main_document_load_observation_id(1);
     let mut queues = SchedulerQueues::default();
-    queues.enqueue_protocol_work(root_frame_stopped_loading_work(1, "FRAME-1"));
+    queues.enqueue_protocol_work(observable_protocol_work(1));
     queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -1723,15 +1738,22 @@ fn client_turn_yield_closes_candidate_behind_an_unrelated_front_residence() {
         Some(candidate),
     );
 
-    queues.satisfy_front_client_turn_predecessor();
+    let (mut scheduler, _completions) = CdpScheduler::new(CdpConnection::new());
+    scheduler.queues = queues;
+    let messages = scheduler.complete_next_protocol_residence().into_messages();
+    assert_eq!(
+        messages,
+        [json!({"method":"Moli.workCompleted", "params":{"sequence":1}})]
+    );
+    let queues = &mut scheduler.queues;
 
     assert_eq!(
         queues.bind_main_document_load_predecessor(unrelated_later_load, &interest),
         queues.protocol_residence_len(),
-        "yielding for an older front residence must also close every candidate admitted before that client turn"
+        "executing independent queued work closes earlier candidates without a permission-only turn"
     );
     assert!(matches!(
-        queues.protocol_residences.get(1),
+        queues.protocol_residences.front(),
         Some(ProtocolSchedulerResidence::RendererOutputPublication(work))
             if work.load_predecessors.is_empty()
     ));
@@ -2070,7 +2092,7 @@ fn scheduler_holds_concrete_renderer_output_until_its_exact_load_predecessor_fin
         None,
     );
 
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::Wait,
@@ -2138,15 +2160,15 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
 }
 
 #[test]
-fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
+fn ordinary_protocol_work_is_ready_without_a_permission_turn() {
     let (mut scheduler, _protocol_completions) = CdpScheduler::new(CdpConnection::new());
     scheduler.apply_protocol_work_publications(vec![root_frame_stopped_loading_work(1, "FRAME-1")]);
 
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CompleteReadyResidence
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
@@ -2215,9 +2237,9 @@ async fn pending_navigation_does_not_suspend_projected_renderer_notifications() 
 
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor
+        ProtocolSchedulerStep::CloseLoadBindingWindow
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
@@ -2310,10 +2332,10 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
 
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
-        ProtocolSchedulerStep::SatisfyClientTurnPredecessor,
+        ProtocolSchedulerStep::CompleteReadyResidence,
         "the independent target must advance around target A's navigation"
     );
-    scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+    scheduler.close_protocol_residence_load_binding_window();
     assert_eq!(
         scheduler.next_protocol_scheduler_step(),
         ProtocolSchedulerStep::CompleteReadyResidence
@@ -2467,7 +2489,7 @@ async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_
                     .is_empty()
             );
         } else {
-            scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+            scheduler.close_protocol_residence_load_binding_window();
             assert!(scheduler.complete_next_protocol_residence().is_empty());
         }
         assert_eq!(
@@ -2828,4 +2850,45 @@ fn foreground_load_wait_network_barrier_drains_subresources_if_document_response
     assert!(script_output.is_empty());
 
     assert_eq!(output_request_ids(barrier.finish()), ["REQ-script"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn adapter_closes_provisional_load_window_and_delivers_in_the_same_turn() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
+            let cursor = publication_cursor(&publication);
+            let (mut scheduler, _completions) = CdpScheduler::new(CdpConnection::new());
+            let message =
+                json!({"method":"Runtime.consoleAPICalled", "params":{"marker":"single-turn"}});
+            scheduler.queues.enqueue_renderer_output_publication(
+                cursor,
+                ProtocolOutputSequence::from_messages(vec![message.clone()]),
+                Vec::new(),
+                Some(future_load_candidate(&publication)),
+            );
+            assert_eq!(
+                scheduler.next_protocol_scheduler_step(),
+                ProtocolSchedulerStep::CloseLoadBindingWindow
+            );
+            let mut adapter = super::ProtocolAdapterScheduler::default();
+            adapter.schedule_turn_if_needed(&scheduler, false);
+            let input = adapter.recv_input().await;
+            let super::ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output) =
+                adapter.advance_input(&mut scheduler, input)
+            else {
+                panic!("one adapter turn closes the binding window and delivers ready output")
+            };
+            assert_eq!(output.into_messages(), [message]);
+            assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+            assert_eq!(
+                scheduler.queues.bind_main_document_load_predecessor(
+                    deferred_main_document_load_observation_id(1),
+                    &load_interest_for_publication(&publication)
+                ),
+                0,
+                "a later unrelated load cannot recover the closed candidate"
+            );
+        })
+        .await;
 }
