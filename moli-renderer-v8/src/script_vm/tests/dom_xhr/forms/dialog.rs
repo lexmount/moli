@@ -1,5 +1,19 @@
 use super::*;
 
+// Match the real-input Chromium probe: Escape itself does not grant history
+// activation, so establish it with an ordinary trusted key first.
+fn press_dialog_escape(vm: &mut ScriptVm) {
+    for (event, key, code) in [
+        ("keydown", "a", "KeyA"),
+        ("keyup", "a", "KeyA"),
+        ("keydown", "Escape", "Escape"),
+        ("keyup", "Escape", "Escape"),
+    ] {
+        vm.dispatch_key_event(event, key, code, "", 0, false, false)
+            .unwrap();
+    }
+}
+
 #[test]
 fn dialog_show_methods_enforce_requested_state_and_active_document() {
     let mut vm = new_storage_test_vm("https://dialog-requested-state.test/");
@@ -244,8 +258,7 @@ fn dialog_escape_keydown_light_dismisses_modal_dialog() {
     )
     .expect("modal dialog setup should evaluate");
 
-    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
-        .expect("Escape keydown should dispatch");
+    press_dialog_escape(&mut vm);
 
     let result = vm
         .eval(
@@ -306,8 +319,7 @@ fn dialog_escape_keydown_respects_prevent_default() {
     // A keydown preventDefault suppresses the whole light-dismiss.
     vm.eval("window.__blockEscape = true; window.__make('kd', false);")
         .expect("blocked dialog");
-    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
-        .expect("blocked Escape keydown should dispatch");
+    press_dialog_escape(&mut vm);
     let blocked = vm
         .eval(
             r#"(JSON.stringify({ open: document.getElementById('kd').open, cancels: window.__cancels }))"#,
@@ -321,8 +333,7 @@ fn dialog_escape_keydown_respects_prevent_default() {
     // A cancel preventDefault fires cancel but keeps the dialog open.
     vm.eval("window.__blockEscape = false; window.__make('cc', true);")
         .expect("cancel-catch dialog");
-    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
-        .expect("cancel-caught Escape keydown should dispatch");
+    press_dialog_escape(&mut vm);
     let cancel_caught = vm
         .eval(
             r#"(JSON.stringify({ open: document.getElementById('cc').open, cancels: window.__cancels }))"#,
@@ -353,8 +364,7 @@ fn dialog_escape_keydown_does_not_close_non_modal_dialog() {
     )
     .expect("non-modal dialog setup should evaluate");
 
-    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
-        .expect("Escape keydown should dispatch");
+    press_dialog_escape(&mut vm);
 
     let result = vm
         .eval(
@@ -364,5 +374,148 @@ fn dialog_escape_keydown_does_not_close_non_modal_dialog() {
     assert_eq!(
         result, r#"{"open":true,"cancels":0}"#,
         "Escape must not light-dismiss a non-modal dialog"
+    );
+}
+
+#[test]
+fn dialog_escape_follows_modal_open_order() {
+    for (options, expected) in [
+        (r#"{}"#, r#"{"open":[true,false],"cancels":["second"]}"#),
+        (
+            r#"{"openOrder":["second","first"]}"#,
+            r#"{"open":[false,true],"cancels":["first"]}"#,
+        ),
+        (
+            r#"{"creationOrder":["second","first"]}"#,
+            r#"{"open":[true,false],"cancels":["second"]}"#,
+        ),
+        (
+            r#"{"creationOrder":["second","first"],"openOrder":["second","first"]}"#,
+            r#"{"open":[false,true],"cancels":["first"]}"#,
+        ),
+        (
+            r#"{"reopen":"first"}"#,
+            r#"{"open":[false,true],"cancels":["first"]}"#,
+        ),
+        (
+            r#"{"creationOrder":["second","first"],"openOrder":["second","first"],"reopen":"second"}"#,
+            r#"{"open":[true,false],"cancels":["second"]}"#,
+        ),
+        (
+            r#"{"repeat":"first"}"#,
+            r#"{"open":[true,false],"cancels":["second"]}"#,
+        ),
+        (
+            r#"{"openOrder":["second","first"],"repeat":"second"}"#,
+            r#"{"open":[false,true],"cancels":["first"]}"#,
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://dialog-modal-order.test/");
+        vm.eval(&format!(
+            "globalThis.dialogProbe = ({})({options})",
+            include_str!("dialog_escape_order.js")
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+            expected,
+            "options {options}"
+        );
+    }
+}
+
+#[test]
+fn dialog_escape_cancellation_preserves_modal_order() {
+    let mut vm = new_storage_test_vm("https://dialog-cancel-modal-order.test/");
+    vm.eval(&format!(
+        "globalThis.dialogProbe = ({})({{openOrder:['second','first'], blockKeydown:true}})",
+        include_str!("dialog_escape_order.js")
+    ))
+    .unwrap();
+    for (prepare, expected) in [
+        ("", r#"{"open":[true,true],"cancels":[]}"#),
+        (
+            "dialogProbe.blockKeydown=false;dialogProbe.blockCancel=true",
+            r#"{"open":[true,true],"cancels":["first"]}"#,
+        ),
+        (
+            "dialogProbe.blockCancel=false",
+            r#"{"open":[false,true],"cancels":["first","first"]}"#,
+        ),
+        (
+            "",
+            r#"{"open":[false,false],"cancels":["first","first","second"]}"#,
+        ),
+    ] {
+        vm.eval(prepare).unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn dialog_escape_is_scoped_to_keyboard_dispatch_document() {
+    for owner in 0..2 {
+        let mut vm = new_storage_test_vm("https://dialog-escape-documents.test/");
+        vm.eval(
+            r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+if (!document.body) root.appendChild(document.createElement('body'));
+document.body.innerHTML = '<dialog id=parent><button type=button>Continue</button><iframe id=child></iframe></dialog>';
+const realms = [window, document.getElementById('child').contentWindow];
+globalThis.dialogs = [];
+globalThis.cancels = [];
+for (let i = 0; i < realms.length; i++) {
+  const dialog = i === 0 ? document.getElementById('parent')
+    : realms[i].document.createElement('dialog');
+  if (i !== 0) {
+    dialog.innerHTML = '<button type=button>Continue</button>';
+    realms[i].document.body.appendChild(dialog);
+  }
+  dialog.addEventListener('cancel', () => cancels.push(i));
+  dialog.showModal();
+  dialogs.push(dialog);
+}
+"#,
+        )
+        .unwrap();
+        vm.eval(&format!("dialogs[{owner}].querySelector('button').focus()"))
+            .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify([dialogs.map(dialog => dialog.open), cancels])")
+                .unwrap(),
+            if owner == 0 {
+                "[[false,true],[0]]"
+            } else {
+                "[[true,false],[1]]"
+            }
+        );
+    }
+}
+
+#[test]
+fn dialog_escape_untrusted_keydown_keeps_modal_order() {
+    let mut vm = new_storage_test_vm("https://dialog-untrusted-escape.test/");
+    vm.eval(&format!(
+        "globalThis.dialogProbe = ({})({{openOrder:['second','first']}})",
+        include_str!("dialog_escape_order.js")
+    ))
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            "dialogProbe.dialogs.first.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', bubbles:true, cancelable:true})); JSON.stringify(dialogProbe.state())"
+        )
+        .unwrap(),
+        r#"{"open":[true,true],"cancels":[]}"#
+    );
+    press_dialog_escape(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+        r#"{"open":[false,true],"cancels":["first"]}"#
     );
 }

@@ -1427,7 +1427,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     let event_type = normalize_public_event_record(scope, event, target_object.into())?;
     // Keyboard input belongs to its dispatch document even if a listener adopts
     // the target into another document before the default action runs.
-    let access_key_document = if event_type == "keydown" {
+    let keyboard_dispatch_document = if event_type == "keydown" {
         let host = unsafe { &*host_ptr };
         match dispatch_target {
             EventTargetHandle::Node(handle) => host.dom_host().owner_document_handle(handle),
@@ -1827,14 +1827,14 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
         crate::native_bridge::element::perform_tab_focus_default_action_for_dispatched_event(
             scope, host_ptr, event,
         );
-        if let Some(document) = access_key_document {
+        if let Some(document) = keyboard_dispatch_document {
             crate::native_bridge::element::perform_access_key_default_action_for_dispatched_event(
                 scope, host_ptr, event, document,
             );
+            crate::native_bridge::element::perform_dialog_escape_default_action_for_dispatched_event(
+                scope, host_ptr, event, document,
+            );
         }
-        crate::native_bridge::element::perform_dialog_escape_default_action_for_dispatched_event(
-            scope, host_ptr, event,
-        );
     }
     set_event_phase(scope, event, 0);
     set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);

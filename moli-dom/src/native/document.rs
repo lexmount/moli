@@ -87,6 +87,8 @@ struct DocumentArenaState {
     is_inert_template_document: bool,
     associated_inert_template_document: Option<NativeNodeId>,
     css_target: Option<NativeNodeId>,
+    // Modal entries in top-layer insertion order, independent of DOM order.
+    modal_dialogs: Vec<NativeNodeId>,
 }
 
 impl Document {
@@ -181,6 +183,19 @@ impl Document {
 
     pub fn css_target(&self) -> Option<NativeNodeId> {
         self.arena_state.css_target
+    }
+
+    pub(super) fn modal_dialogs(&self) -> &[NativeNodeId] {
+        &self.arena_state.modal_dialogs
+    }
+
+    pub(super) fn update_modal_dialog(&mut self, dialog: NativeNodeId, modal: bool) {
+        self.arena_state
+            .modal_dialogs
+            .retain(|entry| *entry != dialog);
+        if modal {
+            self.arena_state.modal_dialogs.push(dialog);
+        }
     }
 
     pub fn ready_state(&self) -> DocumentReadyState {
