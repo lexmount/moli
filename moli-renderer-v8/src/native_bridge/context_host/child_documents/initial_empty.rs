@@ -35,6 +35,10 @@ impl JsContextHost {
                     .get(&parent)
                     .map(|entry| entry.document_policy_container_snapshot())
             })
+            .or_else(|| {
+                self.child_browsing_context_popup_owner_id(handle)
+                    .and_then(|popup_id| self.lightweight_popup_policy_container(popup_id).cloned())
+            })
             .unwrap_or_else(|| self.document_policy_container().clone());
         if let Some(parent_document) = self
             .dom_host()
@@ -62,7 +66,7 @@ impl JsContextHost {
         let inherited_origin = if policy_container.sandbox.forces_opaque_origin {
             "null".to_owned()
         } else {
-            self.child_browsing_context_creator_network_partition_origin(handle)
+            self.child_browsing_context_creator_origin(handle)
         };
         ChildInitialEmptyDocumentInit {
             creator_base_url: self.document_base_url_for_child_context(handle),

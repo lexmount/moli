@@ -4,6 +4,208 @@ mod split30_websocket_native_receivers;
 use super::*;
 use moli_webapi_declare::WebApiObject;
 
+use moli_websocket::test_support::{header_value, spawn_tls_header_capture_websocket_server};
+
+#[tokio::test]
+async fn websocket_cross_origin_popup_child_initial_blank_uses_popup_handshake_origin() {
+    assert_websocket_cross_origin_popup_child_handshake_origin(false).await;
+}
+
+#[tokio::test]
+async fn websocket_cross_origin_popup_child_srcdoc_uses_popup_handshake_origin() {
+    assert_websocket_cross_origin_popup_child_handshake_origin(true).await;
+}
+
+async fn assert_websocket_cross_origin_popup_child_handshake_origin(srcdoc: bool) {
+    for constructor in ["WebSocket", "WebSocketStream"] {
+        for nested in [false, true] {
+            for sandboxed in [false, true] {
+                if sandboxed && !srcdoc {
+                    continue;
+                }
+                let (socket_url, headers_rx, server) =
+                    spawn_tls_header_capture_websocket_server().await;
+                let mut opener_url =
+                    moli_websocket::websocket_cookie_url(&url::Url::parse(&socket_url).unwrap());
+                opener_url.set_path("/frame.html");
+                let popup_origin = moli_url::origin_ascii_serialization(&opener_url);
+                let host_url = "https://websocket-host.test/";
+                let host_origin =
+                    moli_url::origin_ascii_serialization(&url::Url::parse(host_url).unwrap());
+                assert_ne!(popup_origin, host_origin);
+                let mut config = moli_fetch::FetchConfig::default();
+                config.set_tls_verify_host(false);
+                let loader = ResourceRequestClient::new(&config).unwrap();
+                let mut vm = new_page_task_executor_test_vm_with_loader(host_url, &loader);
+                // The popup must retain B's policy as well as B's origin;
+                // accidentally inheriting the host's policy would block it.
+                vm.set_main_navigation_policy_container(
+                    crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                        &[("Content-Security-Policy".to_owned(), b"connect-src 'none'".to_vec())],
+                        &url::Url::parse(host_url).unwrap(),
+                    ),
+                );
+                // Fulfill only the cross-origin opener Document. WebSocket
+                // handshakes must reach the actual TLS server.
+                vm.set_fetch_subresource_interception(
+                    true,
+                    Some(crate::types::SubresourceResourceType::Document),
+                );
+                let opener_literal = serde_json::to_string(opener_url.as_str()).unwrap();
+                vm.eval(&format!(
+                    r#"
+                    globalThis.__popupChildOriginResult = null;
+                    globalThis.__popupChildOriginViolations = [];
+                    addEventListener('message', event => {{
+                        if (event.data.kind === 'popup-child-origin') {{
+                            __popupChildOriginResult = event.data;
+                        }} else if (event.data.kind === 'popup-child-origin-csp') {{
+                            __popupChildOriginViolations.push(event.data.policy);
+                        }}
+                    }});
+                    const frame = document.createElement('iframe');
+                    frame.src = {opener_literal};
+                    document.body.appendChild(frame);
+                    "#,
+                ))
+                .unwrap();
+                vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                    .await
+                    .unwrap();
+                let pending = vm.take_pending_subresource_fetch_infos();
+                assert_eq!(pending.len(), 1);
+                assert_eq!(pending[0].url, opener_url);
+                assert_eq!(
+                    pending[0].resource_type,
+                    crate::types::SubresourceResourceType::Document
+                );
+                let socket_literal = serde_json::to_string(&socket_url).unwrap();
+                let probe = format!(
+                    r#"
+                    const reportWindow = top.opener.parent;
+                    const report = result => reportWindow.postMessage({{
+                        kind: 'popup-child-origin', documentURL: document.URL, result
+                    }}, '*');
+                    addEventListener('securitypolicyviolation', event => {{
+                        reportWindow.postMessage({{
+                            kind: 'popup-child-origin-csp', policy: event.originalPolicy
+                        }}, '*');
+                    }});
+                    try {{
+                        const socket = new {constructor}({socket_literal});
+                        if (socket.opened) {{
+                            socket.opened.then(() => report('opened'), error => report(error.name));
+                        }} else {{
+                            socket.onopen = () => report('opened');
+                            socket.onerror = () => report('error');
+                        }}
+                    }} catch (error) {{ report(error.name); }}
+                    void 0;
+                    "#,
+                );
+                let probe_literal = serde_json::to_string(&probe).unwrap();
+                let markup_literal = serde_json::to_string(&format!("<script>{probe}</script>"))
+                    .unwrap()
+                    .replace('<', "\\u003c");
+                let frame_script = format!(
+                    r#"
+                    const frame = document.createElement('iframe');
+                    if ({sandboxed}) frame.sandbox = 'allow-scripts';
+                    if ({srcdoc}) {{
+                        frame.srcdoc = {markup_literal};
+                        document.body.appendChild(frame);
+                    }} else {{
+                        document.body.appendChild(frame);
+                        frame.src = 'javascript:' + encodeURIComponent({probe_literal});
+                    }}
+                    void 0;
+                    "#,
+                );
+                let popup_script = if nested {
+                    let outer_markup = serde_json::to_string(&format!(
+                        "<!doctype html><body><script>{frame_script}</script>",
+                    ))
+                    .unwrap();
+                    format!(
+                        "const outer = document.createElement('iframe');\
+                        outer.srcdoc = {outer_markup}; document.body.appendChild(outer); void 0;"
+                    )
+                } else {
+                    frame_script
+                };
+                let popup_literal = serde_json::to_string(&popup_script)
+                    .unwrap()
+                    .replace('<', "\\u003c");
+                let opener_html = format!(
+                    "<script>const popup = open('about:blank');\
+                     popup.location.href = 'javascript:' + encodeURIComponent({popup_literal});</script>",
+                );
+                vm.fulfill_pending_subresource_fetch(
+                    pending[0].internal_id,
+                    200,
+                    vec![
+                        (
+                            "Content-Type".to_owned(),
+                            b"text/html; charset=utf-8".to_vec(),
+                        ),
+                        (
+                            "Content-Security-Policy".to_owned(),
+                            b"connect-src 'self'".to_vec(),
+                        ),
+                    ],
+                    crate::runtime::RendererSyntheticResponseBody::from_bytes(
+                        opener_html.into_bytes(),
+                    ),
+                )
+                .unwrap();
+                let context = format!(
+                    "{constructor}, srcdoc={srcdoc}, nested={nested}, sandboxed={sandboxed}"
+                );
+                advance_page_task_executor_until_eval_equals(
+                    &mut vm,
+                    &loader,
+                    "String(__popupChildOriginResult !== null)",
+                    "true",
+                    &context,
+                )
+                .await;
+                let result: serde_json::Value = serde_json::from_str(
+                    &vm.eval("JSON.stringify(__popupChildOriginResult)").unwrap(),
+                )
+                .unwrap();
+                if result["result"] != "opened" {
+                    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                        .await
+                        .unwrap();
+                }
+                assert_eq!(
+                    result,
+                    serde_json::json!({
+                        "kind": "popup-child-origin",
+                        "documentURL": if srcdoc { "about:srcdoc" } else { "about:blank" },
+                        "result": "opened",
+                    }),
+                    "{context}; CSP violations={}",
+                    vm.eval("JSON.stringify(__popupChildOriginViolations)")
+                        .unwrap(),
+                );
+                let headers = tokio::time::timeout(std::time::Duration::from_secs(3), headers_rx)
+                    .await
+                    .expect("popup child handshake should arrive")
+                    .expect("popup child header capture channel should stay open");
+                server.await.expect("popup child TLS server should finish");
+                let origin = header_value(&headers, "origin");
+                assert_ne!(origin.as_deref(), Some(host_origin.as_str()), "{context}");
+                assert_eq!(
+                    origin.as_deref(),
+                    Some(if sandboxed { "null" } else { &popup_origin }),
+                    "{context}"
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn websocket_popup_child_frames_inherit_secure_popup_with_http_host() {
     assert_websocket_popup_child_frames_security(

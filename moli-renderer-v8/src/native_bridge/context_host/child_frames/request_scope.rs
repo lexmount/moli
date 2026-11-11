@@ -366,9 +366,9 @@ impl JsContextHost {
             return Some("null".to_owned());
         }
         if bootstrap.security_origin_inherited() {
-            return Some(self.child_browsing_context_creator_network_partition_origin(handle));
+            return Some(self.child_browsing_context_creator_origin(handle));
         }
-        let parent_origin = self.child_browsing_context_creator_network_partition_origin(handle);
+        let parent_origin = self.child_browsing_context_creator_origin(handle);
         let url = Self::child_browsing_context_bootstrap_url(bootstrap)?;
         Some(
             moli_url::origin_ascii_serialization_with_about_blank_inheritance(&url, &parent_origin),
@@ -393,19 +393,28 @@ impl JsContextHost {
             return Some("null".to_owned());
         }
         if entry.security_origin_inherited() {
-            return Some(self.child_browsing_context_creator_network_partition_origin(handle));
+            return Some(self.child_browsing_context_creator_origin(handle));
         }
-        let parent_origin = self.child_browsing_context_creator_network_partition_origin(handle);
+        let parent_origin = self.child_browsing_context_creator_origin(handle);
         Some(moli_url::origin_ascii_serialization_with_about_blank_inheritance(url, &parent_origin))
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_creator_network_partition_origin(
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_creator_origin(
         &self,
         handle: DomHandle,
     ) -> String {
-        self.child_browsing_context_parent_handle(handle)
-            .and_then(|parent| self.child_browsing_context_network_partition_origin(parent))
-            .unwrap_or_else(|| moli_url::origin_ascii_serialization(self.document_url()))
+        // The creator is the iframe element's owning Document, which may be
+        // a popup root. Read its committed native origin rather than a URL or
+        // the host page's identity; about documents can inherit either a
+        // tuple origin or an opaque origin.
+        self.dom_host()
+            .node(handle)
+            .and_then(crate::dom::native::Node::owner_document)
+            .map(|document| {
+                self.document_security_origin(document)
+                    .ascii_serialization()
+            })
+            .unwrap_or_else(|| "null".to_owned())
     }
 
     pub(crate) fn active_storage_context(

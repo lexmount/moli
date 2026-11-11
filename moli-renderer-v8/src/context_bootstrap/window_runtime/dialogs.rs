@@ -233,7 +233,7 @@ pub(crate) fn window_open_callback<'s>(
     let suppress_opener = parsed_features.suppresses_opener();
     let mut creator_policy_container = {
         let host = unsafe { &*host_ptr };
-        window_open_entered_policy_container(scope, host)
+        window_open_entered_policy_container(scope, host, entered_window)
     };
     creator_policy_container.referrer_policy =
         crate::context_bootstrap::current_document_referrer_policy(scope, entered_window)
@@ -547,17 +547,23 @@ fn window_open_entered_document_url(
         .unwrap_or_else(|| host.document_url().clone())
 }
 
-fn window_open_entered_policy_container(
-    scope: &mut v8::PinScope<'_, '_>,
+fn window_open_entered_policy_container<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     host: &crate::native_bridge::JsContextHost,
+    entered_window: v8::Local<'s, v8::Object>,
 ) -> DocumentPolicyContainer {
-    if let Some(handle) = entered_child_window_handle(scope)
+    // Use the same creator Window that supplies the opener and its origin;
+    // ambient child markers can be absent in a child Document's native realm.
+    if let Some(handle) = window_receiver_child_handle(scope, entered_window)
         && let Some(policy_container) =
             host.child_browsing_context_policy_container_snapshot(handle)
     {
         return policy_container;
     }
-    if let Some(policy_container) = host.active_lightweight_popup_policy_container(scope) {
+    if let Some(popup_id) =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, entered_window)
+        && let Some(policy_container) = host.lightweight_popup_policy_container(popup_id)
+    {
         return policy_container.clone();
     }
     host.document_policy_container().clone()
