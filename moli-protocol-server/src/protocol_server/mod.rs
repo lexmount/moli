@@ -32,6 +32,7 @@ pub mod browser_runtime;
 mod cdp;
 mod cdp_agent_host;
 mod cdp_owner;
+mod cdp_schema;
 mod cdp_socket;
 mod instance_control;
 mod instance_shutdown;

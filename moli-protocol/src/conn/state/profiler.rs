@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use super::inspector::InspectorCommandDispatch;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
 pub(crate) enum ProfilerAction {
     Enable,

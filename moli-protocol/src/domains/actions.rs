@@ -487,8 +487,8 @@ pub(crate) enum WebMcpAction {
 }
 
 /// Domain -> command names the dispatcher accepts, generated from the action
-/// enums above (they are what `EnumString` parses incoming methods against,
-/// so this list cannot drift from the implementation).
+/// enums (they are what `EnumString` parses incoming methods against).
+/// Debugger commands are forwarded to V8; Browser.close is handled by the server.
 ///
 /// `/json/protocol` used to serve only V8's `js_protocol` (Runtime, Debugger,
 /// Profiler, HeapProfiler, Console, Schema), so clients that gate calls on the
@@ -516,6 +516,7 @@ pub fn implemented_cdp_commands() -> Vec<(&'static str, &'static [&'static str])
         ("Network", NetworkAction::VARIANTS),
         ("Page", PageAction::VARIANTS),
         ("Performance", PerformanceAction::VARIANTS),
+        ("Profiler", crate::conn::ProfilerAction::VARIANTS),
         ("Runtime", RuntimeAction::VARIANTS),
         ("Security", SecurityAction::VARIANTS),
         ("ServiceWorker", ServiceWorkerAction::VARIANTS),
@@ -545,6 +546,7 @@ mod implemented_commands_tests {
         assert!(get("Accessibility").contains(&"getFullAXTree"));
         assert!(get("DOMStorage").contains(&"getDOMStorageItems"));
         assert!(get("Page").contains(&"navigate"));
-        assert_eq!(all.len(), 29);
+        assert!(get("Profiler").contains(&"startPreciseCoverage"));
+        assert_eq!(all.len(), 30);
     }
 }
