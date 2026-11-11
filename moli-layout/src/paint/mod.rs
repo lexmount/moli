@@ -26,7 +26,9 @@ use mask::{CssMaskPlan, inspect_css_mask, project_css_mask};
 use scrollbar::project_scrollbars;
 use style::values::generics::image::GenericImage;
 use table::project_collapsed_table_borders;
-use text::{InlineTextPaint, TextClipMaskScope, project_text, project_text_clip_mask};
+use text::{
+    InlineTextPaint, TextClipMaskScope, project_selection, project_text, project_text_clip_mask,
+};
 
 use crate::{
     LayoutBox, LayoutBoxId, LayoutClipChainId, LayoutElementCategory, LayoutFormControlKind,
@@ -442,6 +444,23 @@ where
                     &mut snapshot,
                 );
                 project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
+            }
+            PaintOrderEvent::BoxCaret(id) => {
+                active_clips.transition_to(
+                    projection,
+                    projection.content_clips[id.index()],
+                    &mut snapshot,
+                );
+                let space = &projection.coordinate_spaces[id.index() + 1];
+                project_selection(
+                    &projection.world.boxes[id.index()],
+                    space
+                        .paint_space(snapshot.viewport_to_surface)
+                        .local_transform(),
+                    current_cull.local_rect(space.paint.local_transform()),
+                    &mut snapshot,
+                    None,
+                );
             }
             PaintOrderEvent::InlineBox { owner, fragment } => {
                 active_clips.transition_to(

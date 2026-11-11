@@ -105,16 +105,7 @@ fn project_text_phase<N>(
     let origin_y = layout.border.top + layout.padding.top;
 
     if phase == TextPaintPhase::Foreground {
-        project_selection(
-            context,
-            text_layout,
-            origin_x,
-            origin_y,
-            transform,
-            local_cull,
-            snapshot,
-            None,
-        );
+        project_selection(layout_box, transform, local_cull, snapshot, None);
     }
 
     let text: Option<std::sync::Arc<str>> = (snapshot.retain_text_semantics
@@ -398,7 +389,9 @@ impl<'a> InlineTextPaint<'a> {
                     let PositionedLayoutItem::GlyphRun(glyphs) = item else {
                         return Vec::new();
                     };
-                    if self.text.is_none() && context.selection.is_none() {
+                    if self.text.is_none()
+                        && !matches!(context.selection, Some(InlineSelection::Range(_)))
+                    {
                         return Vec::new();
                     }
                     if mapped_run != Some(glyphs.run().index()) {
@@ -420,22 +413,13 @@ impl<'a> InlineTextPaint<'a> {
             return;
         }
         let clusters = std::mem::take(&mut line.clusters[item_index]);
-        if context.selection.is_some()
+        if matches!(context.selection, Some(InlineSelection::Range(_)))
             && let Some(range) = clusters
                 .iter()
                 .cloned()
                 .reduce(|range, cluster| range.start.min(cluster.start)..range.end.max(cluster.end))
         {
-            project_selection(
-                context,
-                text_layout,
-                origin_x,
-                origin_y,
-                transform,
-                local_cull,
-                snapshot,
-                Some(&range),
-            );
+            project_selection(layout_box, transform, local_cull, snapshot, Some(&range));
         }
         let paint = TextRunPaint {
             origin_x,
@@ -485,20 +469,24 @@ fn glyph_cluster_ranges(
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn project_selection(
-    context: &InlineFormattingContext,
-    text_layout: &parley::Layout<crate::stylo_to_parley::TextBrush>,
-    origin_x: f32,
-    origin_y: f32,
+pub(super) fn project_selection<N>(
+    layout_box: &LayoutBox<N>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
     text_range: Option<&std::ops::Range<usize>>,
 ) {
+    let Some(context) = layout_box.inline_layout.as_ref() else {
+        return;
+    };
+    let Some(text_layout) = context.laid_out.as_ref() else {
+        return;
+    };
     let Some(selection) = context.selection.as_ref() else {
         return;
     };
+    let origin_x = layout_box.final_layout.border.left + layout_box.final_layout.padding.left;
+    let origin_y = layout_box.final_layout.border.top + layout_box.final_layout.padding.top;
     match selection {
         InlineSelection::Range(range) => {
             let range = text_range.map_or_else(
@@ -534,34 +522,11 @@ fn project_selection(
                 }
             });
         }
-        InlineSelection::Caret { offset, color } => {
-            if text_range.is_some_and(|range| {
-                !(range.contains(offset) || *offset == context.text.len() && range.end == *offset)
-            }) {
+        InlineSelection::Caret { color, .. } => {
+            let Some(rect) = caret_rect(layout_box) else {
                 return;
-            }
-            let cursor = Cursor::from_byte_index(text_layout, *offset, Affinity::Downstream);
-            let rect = cursor.geometry(text_layout, 1.5);
-            let line_index = text_layout
-                .lines()
-                .enumerate()
-                .find(|(_, line)| line.text_range().contains(offset))
-                .map(|(index, _)| index)
-                .unwrap_or_else(|| text_layout.lines().count().saturating_sub(1));
-            let rect = selection_rect(
-                context,
-                line_index,
-                origin_x,
-                origin_y,
-                rect.x0 as f32,
-                rect.y0 as f32,
-                (rect.x1 - rect.x0).max(1.5) as f32,
-                (rect.y1 - rect.y0).max(0.0) as f32,
-            );
-            if rect.height > 0.0
-                && color.alpha > 0.0
-                && local_cull.is_none_or(|cull| rects_intersect(rect, cull))
-            {
+            };
+            if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
                 snapshot.push_fragment(PaintFragment::Fill {
                     fill_rule: crate::PaintFillRule::NonZero,
                     shape: PaintShape::Rect(rect),
@@ -571,6 +536,41 @@ fn project_selection(
             }
         }
     }
+}
+
+/// Use the same caret ink for event culling and painting, independently of
+/// glyph runs and the containing box's border bounds.
+pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
+    if !layout_box.style.is_visible() {
+        return None;
+    }
+    let context = layout_box.inline_layout.as_ref()?;
+    let text_layout = context.laid_out.as_ref()?;
+    let InlineSelection::Caret { offset, color } = context.selection.as_ref()? else {
+        return None;
+    };
+    if color.alpha <= 0.0 {
+        return None;
+    }
+    let cursor = Cursor::from_byte_index(text_layout, *offset, Affinity::Downstream);
+    let rect = cursor.geometry(text_layout, 1.5);
+    let line_index = text_layout
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.text_range().contains(offset))
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| text_layout.lines().count().saturating_sub(1));
+    let rect = selection_rect(
+        context,
+        line_index,
+        layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
+        layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
+        rect.x0 as f32,
+        rect.y0 as f32,
+        (rect.x1 - rect.x0).max(1.5) as f32,
+        (rect.y1 - rect.y0).max(0.0) as f32,
+    );
+    (rect.height > 0.0).then_some(rect)
 }
 
 #[allow(clippy::too_many_arguments)]

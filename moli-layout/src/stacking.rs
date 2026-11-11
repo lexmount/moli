@@ -2,7 +2,10 @@ use std::{fmt::Debug, hash::Hash};
 
 use parley::PositionedLayoutItem;
 
-use crate::{LayoutBoxId, LayoutPosition, LayoutWorld, inline::InlineObjectRole};
+use crate::{
+    LayoutBoxId, LayoutPosition, LayoutWorld,
+    inline::{InlineObjectRole, InlineSelection},
+};
 
 /// One order shared by pixels and hit geometry. Inline events select individual
 /// fragments/runs so an atomic child can be interleaved with its IFC's contents.
@@ -17,6 +20,8 @@ pub(crate) enum PaintOrderEvent {
     /// Bulk text for an IFC without atomic items. Mixed IFCs instead emit
     /// individual InlineText events at their place in each line.
     BoxText(LayoutBoxId),
+    /// A mixed IFC's caret paints after its contents, including glyphless lines.
+    BoxCaret(LayoutBoxId),
     InlineBox {
         owner: LayoutBoxId,
         fragment: usize,
@@ -328,6 +333,19 @@ fn collect_contents<N>(
         let mut text = PaintEntry::event(PaintOrderEvent::BoxText(id), tree_order);
         text.order.3 = 2;
         flow.inline_contents.push(text);
+    }
+    if inline.split[id.index()]
+        && layout_box
+            .inline_layout
+            .as_ref()
+            .is_some_and(|context| matches!(context.selection, Some(InlineSelection::Caret { .. })))
+    {
+        // Like Blink's bar caret foreground pass, paint once after the IFC's
+        // in-flow contents. A caret does not require a drawable glyph run.
+        flow.inline_contents.push(PaintEntry {
+            order: (tree_order, usize::MAX, usize::MAX, 0),
+            kind: PaintEntryKind::Event(PaintOrderEvent::BoxCaret(id)),
+        });
     }
     for event in &inline.entries[id.index()] {
         let (owner, line, item) = match *event {
