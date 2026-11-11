@@ -2389,7 +2389,7 @@ impl TestContext {
                     for publication in &publications {
                         if let Some(output) = publication.command_output_dependency() {
                             let ready = self.state.scheduler_events_ready();
-                            output.defer_until_response_flush(move || ready.notify_one());
+                            output.defer_until_response_settled(move || ready.notify_one());
                         }
                     }
                     self.pending_protocol_scheduler_work.extend(publications);

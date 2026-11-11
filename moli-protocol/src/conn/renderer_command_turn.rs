@@ -55,7 +55,7 @@ impl CommandDispatchContext {
         }
         if let Some(continuation) = completion.take_post_response_continuation() {
             self.response_flush()
-                .defer_until_response_flush(move || continuation.release());
+                .defer_until_response_settled(move || continuation.release());
         }
         completion
     }
