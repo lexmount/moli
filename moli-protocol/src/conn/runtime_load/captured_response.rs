@@ -68,6 +68,7 @@ impl PreparedCapturedNavigationResponse {
                     self.request_headers,
                     RawResponse::from_head_and_body(self.head, body),
                     self.network_observation_journal,
+                    &self.body_progress_source,
                 ),
             ));
         }

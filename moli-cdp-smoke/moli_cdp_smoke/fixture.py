@@ -1573,8 +1573,11 @@ class FixtureServer:
                         })
                         observed = json.dumps(observations)
                     if route == "/navigation-hop/final":
+                        headers = {"X-Navigation-Requests": observed}
+                        if query.get("attachment") == ["1"]:
+                            headers["Content-Disposition"] = 'attachment; filename="redirect.html"'
                         self._send_html("<!doctype html><main>redirect final</main>",
-                                        headers={"X-Navigation-Requests": observed})
+                                        headers=headers)
                     else:
                         next_route = "middle" if route.endswith("/start") else "final"
                         self._send_common(

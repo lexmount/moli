@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::conn::{
-    CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
+    CapturedBody, CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
     FetchAuthChallenge, NavigationDispatchState, PendingFetchNavigation,
     PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
     PendingSubresourceFetchOwnerKind, decode_data_url_response,
@@ -146,35 +146,18 @@ pub(super) fn pause_streaming_response_stage_navigation_into_buffer(
     mut pending: PendingFetchNavigation,
     response: NetworkFetchResult<StreamingRawResponse>,
 ) {
-    let response_head = response.response();
+    let response_head = response.response().head();
     let response_status = response_head.status;
     let final_url = response_head.final_url.clone();
     let response_headers = response_head.headers.clone();
     let request_cookie_report = response_head.request_cookie_report.clone();
-    let network_observation_journal = response.observation_journal();
-    let network_extra_info_available = !network_observation_journal.is_empty();
-    let body_progress_source = network::response_stage_main_document_navigation_network_progress(
+    let body_progress_source = prepare_response_stage_navigation_progress(
         conn,
-        &pending.navigation,
-        pending.request_cookie_report.as_ref(),
+        out,
+        &mut pending,
+        &response_head,
+        response.observation_journal(),
     );
-    update_navigation_request_for_response(
-        &mut pending.navigation,
-        &final_url,
-        &response_head.redirect_chain,
-    );
-    let mut response_extra_info_events = Vec::new();
-    body_progress_source.emit_response_extra_info_before_pause(
-        &mut response_extra_info_events,
-        request_cookie_report.as_ref(),
-        &response_head.redirect_chain,
-        response_status,
-        &response_headers,
-        &response_head.cookie_set_reports,
-        network_observation_journal,
-        network_extra_info_available,
-    );
-    out.extend_background_events_after_messages(response_extra_info_events);
     // Keep only the response until the client accepts it. Preparing a renderer
     // here would wait on the old document's debugger pause before we could even
     // publish Fetch.requestPaused. Continue/fulfill owns document replacement.
@@ -254,16 +237,22 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
     mut pending: PendingFetchNavigation,
     response: NetworkFetchResult<RawResponse>,
 ) {
-    let response_status = response.response().status;
-    let final_url = response.response().final_url.clone();
-    let response_headers = response.response().headers.clone();
-    let request_cookie_report = response.response().request_cookie_report.clone();
-    update_navigation_request_for_response(
-        &mut pending.navigation,
-        &final_url,
-        &response.response().redirect_chain,
-    );
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
+    let (head, body) = response.into_body();
+    let body = body
+        .try_into_materialized_bytes()
+        .expect("RawResponse body must remain materialized at the response pause boundary");
+    let response_status = head.status;
+    let final_url = head.final_url.clone();
+    let response_headers = head.headers.clone();
+    let request_cookie_report = head.request_cookie_report.clone();
+    let body_progress_source = prepare_response_stage_navigation_progress(
+        conn,
+        out,
+        &mut pending,
+        &head,
+        &network_observation_journal,
+    );
     conn.register_pending_fetch_response_transfer_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
@@ -271,12 +260,14 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
             pending.fetch_request_id.clone(),
             pending.document_navigation_token.clone(),
             pending.navigation.clone(),
-            DocumentBodySource::BufferedRaw {
+            DocumentBodySource::CapturedRaw {
                 requested_url: pending.navigation.requested_url.clone(),
                 request_method: pending.navigation.request_method.clone(),
                 request_headers: pending.navigation.request_headers.clone(),
-                response,
+                head,
+                body: CapturedBody::from_bytes(body),
                 network_observation_journal,
+                body_progress_source,
             },
         )
         .with_service_worker_client(pending.reserved_service_worker_client.take()),
@@ -290,6 +281,40 @@ pub(super) fn pause_buffered_raw_response_stage_navigation_into_buffer(
         response_status,
         &response_headers,
     )]);
+}
+
+fn prepare_response_stage_navigation_progress(
+    conn: &CdpConnection,
+    out: &mut CommandOutputBuffer,
+    pending: &mut PendingFetchNavigation,
+    head: &ResponseHead,
+    journal: &NetworkObservationJournal,
+) -> network::MainDocumentBodyProgressSource {
+    // Capture the starting request before advancing navigation to the final
+    // response. Both streaming and captured bodies publish each redirect here.
+    let progress = network::response_stage_main_document_navigation_network_progress(
+        conn,
+        &pending.navigation,
+        pending.request_cookie_report.as_ref(),
+    );
+    update_navigation_request_for_response(
+        &mut pending.navigation,
+        &head.final_url,
+        &head.redirect_chain,
+    );
+    let mut events = Vec::new();
+    progress.emit_response_extra_info_before_pause(
+        &mut events,
+        head.request_cookie_report.as_ref(),
+        &head.redirect_chain,
+        head.status,
+        &head.headers,
+        &head.cookie_set_reports,
+        journal,
+        !journal.is_empty(),
+    );
+    out.extend_background_events_after_messages(events);
+    progress
 }
 
 pub(super) fn merge_network_observations(
