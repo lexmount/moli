@@ -762,7 +762,64 @@ target.addEventListener('{event}', () => dialog.{action});
 }
 
 #[test]
+fn dialog_escape_closedby_ignores_namespaced_attributes() {
+    for (on_cancel, policy, expected_open) in [
+        (
+            false,
+            "dialog.setAttributeNS('urn:probe', 'closedby', 'none');",
+            false,
+        ),
+        (
+            false,
+            "dialog.setAttributeNS('urn:probe', 'closedby', 'any');
+             dialog.setAttributeNS(null, 'closedby', 'none');",
+            true,
+        ),
+        (
+            false,
+            "dialog.setAttributeNS(null, 'closedby', 'none');
+             dialog.setAttributeNS('urn:probe', 'closedby', 'any');",
+            true,
+        ),
+        (
+            true,
+            "dialog.setAttributeNS('urn:probe', 'closedby', 'none');",
+            false,
+        ),
+        (
+            true,
+            "dialog.setAttributeNS('urn:probe', 'closedby', 'any');
+             dialog.setAttributeNS(null, 'closedby', 'none');",
+            true,
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://dialog-escape-closedby-namespace.test/");
+        vm.eval(&format!(
+            r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+const dialog = dialogProbe.dialogs.first;
+const setPolicy = () => {{ {policy} }};
+if ({on_cancel}) dialog.addEventListener('cancel', setPolicy);
+else setPolicy();
+"#,
+            fixture = include_str!("dialog_escape_order.js"),
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        let expected_cancels = u8::from(on_cancel || !expected_open);
+        assert_eq!(
+            vm.eval("JSON.stringify([dialogProbe.dialogs.first.open, dialogProbe.state().cancels.length])").unwrap(),
+            format!("[{expected_open},{expected_cancels}]"),
+            "on_cancel={on_cancel}: {policy}"
+        );
+    }
+}
+
+#[test]
 fn dialog_escape_does_not_bypass_top_modal_closedby_none() {
+    // This covers the current modal-only close-request selection. Chromium can
+    // skip a disabled watcher and reach another enabled watcher in the same
+    // group; CloseWatcher registration order and grouping remain follow-ups.
     let mut vm = new_storage_test_vm("https://dialog-escape-disabled-top.test/");
     vm.eval(&format!(
         r#"
