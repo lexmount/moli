@@ -623,7 +623,11 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
         request_client: load.request_client(),
         resource_task_runner: load.task_runner(),
         cancel_handle,
-        direct_completion_tx: Some(direct_completion_tx),
+        direct_completion_tx: Some(
+            crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                direct_completion_tx,
+            ),
+        ),
     };
 
     if !runtime.dispatch_controlled_fetch(dispatch) {
@@ -643,7 +647,10 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     let task_runner = load.task_runner();
     task_runner.spawn(async move {
         match direct_completion_rx.await {
-            Ok(ServiceWorkerDirectFetchResult::Stream(_)) => {
+            Ok(
+                ServiceWorkerDirectFetchResult::Stream(_)
+                | ServiceWorkerDirectFetchResult::NetworkFallback { .. },
+            ) => {
                 load.finish();
                 send_worker_content_security_policy_report_failure(
                     parent_tx,

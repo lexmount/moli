@@ -553,6 +553,210 @@ async fn service_worker_intercepts_synchronous_xhr_with_native_document_and_work
 }
 
 #[tokio::test]
+async fn service_worker_intercepts_asynchronous_worker_xhr_with_native_clients_and_response_filters()
+ {
+    run_page_vm_async_test(async move {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let origin = format!("http://{address}");
+        let cross_origin = format!("http://localhost:{}", address.port());
+        let server_origin = origin.clone();
+        let (requests, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let worker_source = format!(r#"
+            function take(url) {{
+                return new Promise(resolve => {{
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", url, true);
+                    xhr.withCredentials = true;
+                    xhr.setRequestHeader("X-Fixture", "body-marker");
+                    let returned = false;
+                    xhr.onloadend = () => resolve({{
+                        returned, status: xhr.status, text: xhr.responseText,
+                        visible: xhr.getResponseHeader("X-Visible"),
+                        hidden: xhr.getResponseHeader("X-Hidden"),
+                        cookie: xhr.getResponseHeader("Set-Cookie")
+                    }});
+                    xhr.send("payload");
+                    returned = true;
+                }});
+            }}
+            async function run() {{
+                const violations = [];
+                self.addEventListener("securitypolicyviolation", event => violations.push({{
+                    directive: event.effectiveDirective, disposition: event.disposition,
+                    blocked: event.blockedURI
+                }}));
+                const echo = await take("{cross_origin}/sw-echo");
+                const data = JSON.parse(echo.text);
+                data.paddingLength = data.padding.length;
+                delete data.padding;
+                delete echo.text;
+                const cors = await take("/app/cors-proxy");
+                await new Promise(resolve => setTimeout(resolve, 50));
+                return {{echo, data, cors, violations,
+                    resourceNames: performance.getEntriesByType("resource").map(entry => entry.name)}};
+            }}
+            self.onmessage = () => run().then(value => self.postMessage(value)).catch(error => self.postMessage({{error: String(error)}}));
+            self.onconnect = event => {{
+                const port = event.ports[0];
+                port.onmessage = () => run().then(value => port.postMessage(value))
+                    .catch(error => port.postMessage({{error: String(error)}}));
+            }};
+        "#);
+        let server = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async move {
+                let listener = TcpListener::from_std(listener).unwrap();
+                for index in 0..6 {
+                    let wait = if index < 5 { Duration::from_secs(5) } else { Duration::from_millis(500) };
+                    let Ok(accepted) = tokio::time::timeout(wait, listener.accept()).await else { break };
+                    let (mut stream, _) = accepted.unwrap();
+                    let request = read_http_request_head(&mut stream).await.unwrap();
+                    let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                    requests.send(path.to_owned()).unwrap();
+                    let body = match path {
+                        "/app/sw.js" => r#"
+                            self.oninstall = event => event.waitUntil(self.skipWaiting());
+                            self.onfetch = event => {
+                                const path = new URL(event.request.url).pathname;
+                                if (path === "/app/cors-proxy") {
+                                    const target = new URL("/cors-source", event.request.url);
+                                    target.hostname = "localhost";
+                                    event.respondWith(fetch(target, {credentials: "include"}));
+                                } else if (path === "/sw-echo") {
+                                    event.respondWith((async () => {
+                                        const client = await self.clients.get(event.clientId);
+                                        const text = JSON.stringify({
+                                            method: event.request.method, mode: event.request.mode,
+                                            credentials: event.request.credentials,
+                                            destination: event.request.destination,
+                                            clientId: event.clientId, resultingClientId: event.resultingClientId,
+                                            clientType: client.type, clientUrl: client.url,
+                                            referrer: event.request.referrer,
+                                            header: event.request.headers.get("X-Fixture"),
+                                            body: await event.request.text(), padding: "x".repeat(1024 * 1024)
+                                        });
+                                        const bytes = new TextEncoder().encode(text);
+                                        return new Response(new ReadableStream({start(controller) {
+                                            let offset = 0;
+                                            function push() {
+                                                if (offset === bytes.length) { controller.close(); return; }
+                                                const next = Math.min(offset + 65536, bytes.length);
+                                                controller.enqueue(bytes.slice(offset, next));
+                                                offset = next;
+                                                setTimeout(push, 0);
+                                            }
+                                            push();
+                                        }}), {headers: {
+                                            "Content-Type": "application/json", "X-Visible": "visible",
+                                            "X-Hidden": "basic-visible", "Set-Cookie": "secret=value"
+                                        }});
+                                    })());
+                                }
+                            };
+                        "#,
+                        "/app/actor.js" => &worker_source,
+                        "/cors-source" => "cors response",
+                        _ => "unexpected network request",
+                    };
+                    let policy = if path == "/app/actor.js" { "Content-Security-Policy-Report-Only: connect-src 'self'\r\n" } else { "" };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nCache-Control: no-store\r\n{policy}Access-Control-Allow-Origin: {server_origin}\r\nAccess-Control-Allow-Credentials: true\r\nAccess-Control-Expose-Headers: X-Visible\r\nX-Visible: visible\r\nX-Hidden: network-hidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+        });
+        let loader_owner = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        hooks.resource_task_runner = Some(loader_owner.browser_resource_runtime().resource_task_runner());
+        let mut page_vm = test_page_vm_with_loader_document_url_and_hooks(
+            &loader_owner, Vec::new(), Url::parse(&format!("{origin}/page.html")).unwrap(), hooks,
+        );
+        page_vm.retain_standalone_request_client_owner_for_test(loader_owner);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().eval(r#"
+                globalThis.asyncXhrResults = null;
+                globalThis.asyncXhrError = null;
+                (async () => {
+                    const registration = await navigator.serviceWorker.register("/app/sw.js", {scope: "/app/actor.js"});
+                    const active = registration.installing || registration.active;
+                    if (active.state !== "activated") await new Promise(resolve => active.addEventListener("statechange", () => {
+                        if (active.state === "activated") resolve();
+                    }));
+                    globalThis.asyncXhrDedicated = new Worker("/app/actor.js");
+                    const dedicated = new Promise((resolve, reject) => {
+                        asyncXhrDedicated.onmessage = event => resolve(event.data);
+                        asyncXhrDedicated.onerror = event => reject(event.message);
+                    });
+                    asyncXhrDedicated.postMessage("run");
+                    globalThis.asyncXhrShared = new SharedWorker("/app/actor.js");
+                    const shared = new Promise((resolve, reject) => {
+                        asyncXhrShared.port.onmessage = event => resolve(event.data);
+                        asyncXhrShared.onerror = event => reject(event.message);
+                    });
+                    asyncXhrShared.port.postMessage("run");
+                    asyncXhrResults = {dedicated: await dedicated, shared: await shared};
+                })().catch(error => asyncXhrError = String(error));
+            "#)?;
+            drive_service_worker_and_shared_worker_page_vm_until_done(
+                &mut page_vm, "String(asyncXhrResults !== null || asyncXhrError !== null)",
+                "native Worker clients should intercept asynchronous XHR without a controlled creator",
+            ).await?;
+            assert_eq!(page_vm.vm_mut().eval("String(asyncXhrError)")?, "null");
+            assert_eq!(page_vm.vm_mut().eval("String(navigator.serviceWorker.controller)")?, "null");
+            let results: serde_json::Value = serde_json::from_str(&page_vm.vm_mut().eval("JSON.stringify(asyncXhrResults)")?)?;
+            assert_ne!(results["dedicated"]["data"]["clientId"], results["shared"]["data"]["clientId"]);
+            for (kind, expected_type) in [("dedicated", "worker"), ("shared", "sharedworker")] {
+                let result = &results[kind];
+                assert!(result.get("error").is_none(), "{result}");
+                assert_eq!(result["echo"]["returned"], true);
+                assert_eq!(result["echo"]["status"], 200);
+                assert_eq!(result["echo"]["visible"], "visible");
+                assert_eq!(result["echo"]["hidden"], "basic-visible");
+                assert!(result["echo"]["cookie"].is_null());
+                let data = &result["data"];
+                assert!(!data["clientId"].as_str().unwrap().is_empty());
+                assert_eq!(data["clientType"], expected_type);
+                assert_eq!(data["clientUrl"], format!("{origin}/app/actor.js"));
+                assert_eq!(data["resultingClientId"], "");
+                assert_eq!(data["destination"], "");
+                assert_eq!(data["method"], "POST");
+                assert_eq!(data["mode"], "cors");
+                assert_eq!(data["credentials"], "include");
+                assert_eq!(data["referrer"], format!("{origin}/"));
+                assert_eq!(data["body"], "payload");
+                assert_eq!(data["header"], "body-marker");
+                assert_eq!(data["paddingLength"], 1024 * 1024);
+                assert_eq!(result["cors"]["returned"], true);
+                assert_eq!(result["cors"]["status"], 200);
+                assert_eq!(result["cors"]["text"], "cors response");
+                assert_eq!(result["cors"]["visible"], "visible");
+                assert!(result["cors"]["hidden"].is_null());
+                assert!(result["cors"]["cookie"].is_null());
+                let violations = result["violations"].as_array().unwrap();
+                assert_eq!(violations.len(), 3, "{kind}: {violations:?}");
+                assert_eq!(violations.iter().filter(|v| v["blocked"] == format!("{cross_origin}/sw-echo")).count(), 2);
+                assert_eq!(violations.iter().filter(|v| v["blocked"] == format!("{origin}/app/cors-proxy")).count(), 1);
+                assert!(violations.iter().all(|v| v["directive"] == "connect-src" && v["disposition"] == "report"));
+                let names = result["resourceNames"].as_array().unwrap();
+                assert!(names.contains(&serde_json::json!(format!("{cross_origin}/sw-echo"))));
+                assert!(names.contains(&serde_json::json!(format!("{origin}/app/cors-proxy"))));
+                assert!(!names.contains(&serde_json::json!(format!("{cross_origin}/cors-source"))));
+            }
+            anyhow::Ok(())
+        }).await.unwrap();
+        server.join().unwrap();
+        let mut paths = Vec::new();
+        while let Some(path) = received.recv().await { paths.push(path); }
+        paths.sort();
+        assert_eq!(paths, ["/app/actor.js", "/app/actor.js", "/app/sw.js", "/cors-source", "/cors-source"]);
+    }).await;
+}
+
+#[tokio::test]
 async fn service_worker_blob_shared_worker_inherits_parent_controller_for_fetch() {
     run_page_vm_async_test(async move {
         let (base_url, sample_request_rx, server) =

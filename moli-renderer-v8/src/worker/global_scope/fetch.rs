@@ -606,7 +606,11 @@ pub(super) fn spawn_worker_fetch_service_worker(
         request_client: load.request_client(),
         resource_task_runner: load.task_runner(),
         cancel_handle: cancel_handle.clone(),
-        direct_completion_tx: Some(direct_completion_tx),
+        direct_completion_tx: Some(
+            crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::streaming(
+                direct_completion_tx,
+            ),
+        ),
     };
 
     if !runtime.dispatch_controlled_fetch(dispatch) {
@@ -732,6 +736,20 @@ pub(super) fn spawn_worker_fetch_service_worker(
                     },
                 )));
             }
+            Ok(ServiceWorkerDirectFetchResult::NetworkFallback { .. }) => {
+                let _ =
+                    completion_tx.send(WorkerFetchEvent::Completion(Box::new(
+                        WorkerFetchCompletion {
+                            response_filter: None,
+                            skip_fetch_security_validation: false,
+                            fetch_id,
+                            network_request_headers: None,
+                            result: Err(
+                                "unexpected service worker network fallback handoff".to_owned()
+                            ),
+                        },
+                    )));
+            }
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
                     WorkerFetchCompletion {
@@ -779,6 +797,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
     redirect_check: Option<moli_fetch::RequestRedirectCheck>,
+    service_worker: Option<super::xhr_service_worker::WorkerXhrServiceWorkerController>,
 ) {
     timing.begin_transport(cancel_handle.clone());
     let redirect_owner = RedirectOwner::Worker(WorkerRedirectOwner::xhr(
@@ -797,6 +816,8 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
         )
         .map(|request| {
             let mut request = request
+                .with_page_network_policy()
+                .with_request_mode(RequestMode::Cors)
                 .with_redirect_headers(redirect_headers)
                 .with_redirect_chain(redirect_chain)
                 .with_initiator_url(&document_url)
@@ -828,26 +849,31 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             request
         });
 
-        let (result, network_request_headers) = match request {
+        let completion = match request {
             Ok(request) => {
-                load_worker_xhr_response(
+                super::xhr_service_worker::load_response(
                     &load,
                     request,
                     cancel_handle,
                     cors_preflight_request_headers,
+                    &document_url,
                     &timing,
-                    Some(&redirect_owner),
+                    &redirect_owner,
+                    service_worker,
+                    xhr_id,
                 )
                 .await
             }
-            Err(error) => (Err(format!("xhr: failed to build request: {error}")), None),
+            Err(error) => WorkerXhrCompletion {
+                xhr_id,
+                network_request_headers: None,
+                response_filter: None,
+                skip_fetch_security_validation: false,
+                result: Err(format!("xhr: failed to build request: {error}")),
+            },
         };
         timing.complete();
-        let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
-            xhr_id,
-            network_request_headers,
-            result,
-        })));
+        let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(completion)));
         let _ = completion_tx.send(WorkerXhrEvent::ResourceTiming {
             xhr_id: Some(xhr_id),
             timing,
@@ -1369,6 +1395,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         )
     };
 
+    let service_worker = super::xhr_service_worker::take_controller(state, xhr_id, &resolved_url);
     spawn_worker_xhr_network(
         load,
         completion_tx,
@@ -1388,6 +1415,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         redirect_headers,
         redirect_chain,
         worker_xhr_redirect_check(&state.borrow(), xhr_id),
+        service_worker,
     );
 }
 
@@ -1421,6 +1449,8 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1446,6 +1476,8 @@ pub(in crate::worker) fn fail_pending_worker_xhr_auth(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1489,6 +1521,8 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
     let _ = completion
         .0
         .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             xhr_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
@@ -1530,6 +1564,8 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
     let _ = completion
         .0
         .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            response_filter: completion.1.response_filter,
+            skip_fetch_security_validation: completion.1.skip_fetch_security_validation,
             xhr_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerXhrResponse::Streamed {
@@ -1561,6 +1597,8 @@ pub(in crate::worker) fn fail_pending_worker_xhr_response(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+        response_filter: None,
+        skip_fetch_security_validation: false,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1595,6 +1633,8 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
     let _ = completion
         .0
         .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+            response_filter: None,
+            skip_fetch_security_validation: false,
             xhr_id: completion.2,
             network_request_headers: None,
             result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),

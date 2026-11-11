@@ -394,7 +394,11 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         ))
     } else if worker_url_blocked(&blocked_url_patterns, &prepared.resolved_url) {
         Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
-    } else if async_request && network_offline {
+    } else if async_request
+        && network_offline
+        && super::fetch::worker_service_worker_controller(&state.borrow(), &prepared.resolved_url)
+            .is_none()
+    {
         Some("Network emulation offline".to_owned())
     } else {
         None
@@ -494,6 +498,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 use_cors_preflight: prepared.use_cors_preflight,
                 load: load.clone(),
                 request_paused: intercept_request_stage,
+                service_worker_checked: false,
                 request_url: prepared.resolved_url.clone(),
                 request_method: prepared.method.clone(),
                 request_headers: prepared.request_headers.clone(),
@@ -517,6 +522,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                 let _ = state
                     .xhr_completion_tx
                     .send(WorkerXhrEvent::Completion(Box::new(WorkerXhrCompletion {
+                        response_filter: None,
+                        skip_fetch_security_validation: false,
                         xhr_id,
                         network_request_headers: None,
                         result: Ok(WorkerXhrResponse::Materialized(Box::new(response))),
@@ -564,6 +571,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         return true;
     }
 
+    let service_worker =
+        super::xhr_service_worker::take_controller(&state, xhr_id, &prepared.resolved_url);
     let completion_tx = state.borrow().xhr_completion_tx.clone();
     spawn_worker_xhr_network(
         load,
@@ -584,6 +593,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         None,
         Vec::new(),
         super::fetch::worker_xhr_redirect_check(&state.borrow(), xhr_id),
+        service_worker,
     );
 
     true
@@ -1191,8 +1201,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
         } else {
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
         };
-        if !redirect_csp_checked && redirect_status
-            == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
+        if !redirect_csp_checked && (completion.skip_fetch_security_validation
+            || redirect_status == crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect)
         {
             let (document_url, request_url) = {
                 let state_ref = state.borrow();
@@ -1254,7 +1264,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
             };
             let response_head = response.head();
             pending.network_record.clone().and_then(|mut record| {
-                if record.handle_auth_requests
+                if !completion.skip_fetch_security_validation
+                    && record.handle_auth_requests
                     && matches!(response_head.status, 401 | 407)
                     && let Some(challenge) =
                         extract_subresource_auth_challenge(&response_head.headers)
@@ -1262,8 +1273,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                     record.follow_redirects(&response_head);
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
-                        response_filter: None,
-                        skip_fetch_security_validation: false,
+                        response_filter: completion.response_filter.clone(),
+                        skip_fetch_security_validation: completion.skip_fetch_security_validation,
                         head: response_head.clone(),
                         body: response_body.clone(),
                     });
@@ -1329,8 +1340,8 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                         preload_state: response_head.preload_state.clone(),
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
-                        response_filter: None,
-                        skip_fetch_security_validation: false,
+                        response_filter: completion.response_filter.clone(),
+                        skip_fetch_security_validation: completion.skip_fetch_security_validation,
                         head: response_head,
                         body: response_body,
                     });
@@ -1359,26 +1370,45 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
     match completion.result {
         Ok(response) => {
             let response_head = response.head();
-            match crate::network_host::validate_cors_response_chain(
-                pending.timing.origin(),
-                &response_head,
-                pending.credentials_mode,
-            ) {
+            let cors_result = if completion.skip_fetch_security_validation {
+                if completion
+                    .response_filter
+                    .as_ref()
+                    .is_some_and(|filter| !filter.is_readable())
+                {
+                    Err("Service Worker returned an unreadable XHR response".to_owned())
+                } else {
+                    Ok(())
+                }
+            } else {
+                crate::network_host::validate_cors_response_chain(
+                    pending.timing.origin(),
+                    &response_head,
+                    pending.credentials_mode,
+                )
+            };
+            match cors_result {
                 Ok(()) => {
+                    let filter = completion
+                        .response_filter
+                        .filter(|_| completion.skip_fetch_security_validation)
+                        .unwrap_or_else(|| {
+                            crate::network_host::FetchResponseRequest {
+                                method: &pending.request_method,
+                                mode: RequestMode::Cors,
+                                redirect_mode: RequestRedirectMode::Follow,
+                            }
+                            .network_response_filter(
+                                pending.timing.origin(),
+                                &response_head,
+                                pending.credentials_mode,
+                            )
+                        });
                     pending.timing.select_response(
                         &response_head,
-                        crate::network_host::FetchResponseRequest {
-                            method: &pending.request_method,
-                            mode: RequestMode::Cors,
-                            redirect_mode: RequestRedirectMode::Follow,
-                        }
-                        .network_response_filter(
-                            pending.timing.origin(),
-                            &response_head,
-                            pending.credentials_mode,
-                        ),
+                        filter.clone(),
                         response.subresource_response_body().len(),
-                        false,
+                        completion.skip_fetch_security_validation,
                     );
                     let response_body = pending
                         .network_record
@@ -1408,11 +1438,11 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                                     },
                                 ));
                             }
-                            response_head.headers = filter_cors_exposed_response_headers(
-                                pending.timing.origin(),
-                                &response_head,
-                                pending.credentials_mode,
-                            );
+                            response_head.headers =
+                                crate::network_host::xhr_response_headers_for_filter(
+                                    &response_head,
+                                    &filter,
+                                );
                             pending.timing.publish(scope);
                             apply_xhr_response_body_source(scope, xhr, response_head, body);
                         }

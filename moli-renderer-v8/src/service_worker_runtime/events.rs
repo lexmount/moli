@@ -755,9 +755,54 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
 }
 
 #[derive(Debug)]
+pub(crate) struct ServiceWorkerDirectFetchCompletion {
+    sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    pub(super) stream_response: bool,
+    pub(super) defer_network_fallback: bool,
+}
+
+impl ServiceWorkerDirectFetchCompletion {
+    pub(crate) fn buffered(
+        sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    ) -> Self {
+        Self {
+            sender,
+            stream_response: false,
+            defer_network_fallback: false,
+        }
+    }
+
+    pub(crate) fn streaming(
+        sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    ) -> Self {
+        Self {
+            stream_response: true,
+            ..Self::buffered(sender)
+        }
+    }
+
+    pub(crate) fn streaming_with_network_fallback(
+        sender: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+    ) -> Self {
+        Self {
+            defer_network_fallback: true,
+            ..Self::streaming(sender)
+        }
+    }
+
+    pub(super) fn send(self, result: ServiceWorkerDirectFetchResult) -> bool {
+        self.sender.send(result).is_ok()
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum ServiceWorkerDirectFetchResult {
     Fallback,
     FallbackStream(moli_fetch::UploadBody),
+    NetworkFallback {
+        request: Box<moli_fetch::Request>,
+        preflight_headers: Vec<(String, String)>,
+    },
     Response(ServiceWorkerDirectFetchResponse),
     Stream(Box<ServiceWorkerDirectFetchStream>),
     Failure(String),
@@ -805,8 +850,7 @@ pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) request_client: ResourceRequestClient,
     pub(crate) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(crate) cancel_handle: moli_fetch::FetchCancelHandle,
-    pub(crate) direct_completion_tx:
-        Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
+    pub(crate) direct_completion_tx: Option<ServiceWorkerDirectFetchCompletion>,
 }
 
 #[cfg(test)]

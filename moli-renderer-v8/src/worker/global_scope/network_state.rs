@@ -242,6 +242,7 @@ pub(in crate::worker) struct PendingWorkerXhr {
     pub(in crate::worker) use_cors_preflight: bool,
     pub(in crate::worker) load: ResourceLoadLease,
     pub(in crate::worker) request_paused: bool,
+    pub(in crate::worker) service_worker_checked: bool,
     pub(in crate::worker) request_url: Url,
     pub(in crate::worker) request_method: String,
     pub(in crate::worker) request_headers: moli_fetch::RequestHeaders,
@@ -271,6 +272,9 @@ pub(in crate::worker) struct PausedWorkerSubresourceResponse {
 }
 
 pub(in crate::worker) struct WorkerXhrCompletion {
+    pub(in crate::worker) response_filter:
+        Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(in crate::worker) skip_fetch_security_validation: bool,
     pub(in crate::worker) xhr_id: u32,
     pub(in crate::worker) network_request_headers: Option<Vec<(String, String)>>,
     pub(in crate::worker) result: Result<WorkerXhrResponse, String>,

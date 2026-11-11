@@ -68,10 +68,10 @@ use crate::network_host::{
     begin_xhr_send, capture_xhr_upload_listener_flag, close_pending_network_body_stream,
     convert_xhr_send_body_from_args, dispatch_xhr_loadstart, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
-    filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
-    parse_fetch_init, request_headers_guard_for_mode, request_object_credentials_mode,
-    resolve_context_url, set_xhr_state_number, throw_synchronous_xhr_failure,
-    validate_fetch_response_headers, validate_fetch_response_security_policy,
+    filter_headers_for_guard, is_cors_policy_failure_message, parse_fetch_init,
+    request_headers_guard_for_mode, request_object_credentials_mode, resolve_context_url,
+    set_xhr_state_number, throw_synchronous_xhr_failure, validate_fetch_response_headers,
+    validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
     xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
     xhr_state_string_property,
@@ -139,6 +139,7 @@ mod service_worker_results;
 mod state;
 mod timers;
 mod xhr;
+mod xhr_service_worker;
 
 pub(crate) use redirect_owner::WorkerRedirectOwner;
 

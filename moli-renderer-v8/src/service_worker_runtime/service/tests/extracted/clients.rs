@@ -3540,7 +3540,11 @@ async fn controlled_fetch_from_worker_client_dispatches_to_active_worker() {
             request_client: test_request_client(&service),
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
-            direct_completion_tx: Some(direct_completion_tx),
+            direct_completion_tx: Some(
+                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                    direct_completion_tx
+                )
+            ),
         }),
         "controlled worker client fetch should dispatch to the active worker"
     );

@@ -3621,6 +3621,8 @@ async fn worker_main(
                     &state,
                     WorkerXhrEvent::Completion(Box::new(
                         super::global_scope::WorkerXhrCompletion {
+                            response_filter: None,
+                            skip_fetch_security_validation: false,
                             xhr_id,
                             network_request_headers: None,
                             result: Err(error_text),
