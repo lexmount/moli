@@ -3411,7 +3411,7 @@ impl RendererRuntimeInspectorResponseDestination {
                                     |renderer_call_id| renderer_call_id.get() == completion.call_id,
                                 ) =>
                             {
-                                Some(response.value())
+                                Some(response.payload())
                             }
                             _ => None,
                         });
@@ -3421,7 +3421,8 @@ impl RendererRuntimeInspectorResponseDestination {
                 if responses.next().is_some() {
                     return Err(completion);
                 }
-                let response_succeeded = response.get("error").is_none();
+                // The business view can synthesize an error without changing the wire.
+                let response_succeeded = !response.has_field("error");
                 let fence = host.publish(completion)?;
                 let settlement = RendererRuntimeInspectorSessionResponseSettlement::new(
                     fence,
@@ -3705,6 +3706,108 @@ mod renderer_runtime_inspector_response_channel_tests {
             vec![record],
         )
         .into()
+    }
+
+    fn assert_raw_session_sink_settlement(raw: &str, expected_success: bool) {
+        let payload = InspectorJson::from_slice(raw.as_bytes()).unwrap();
+        assert!(!payload.is_materialized());
+        let page_id = PageId::new_for_testing(31);
+        let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
+        let (transport, mut transport_rx) = crate::runtime::renderer_output_transport_channel();
+        let journal = RendererTurnOutputJournal::new_with_transport(stream, transport);
+        assert!(matches!(
+            transport_rx.try_recv(),
+            Ok(RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Opened { stream: opened }
+            )) if opened == stream
+        ));
+        let attachment = RendererAgentAttachmentId::allocate();
+        let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
+        );
+        assert!(receiver.is_none());
+        let sender = channel
+            .activate_sender(7, Some(attachment))
+            .route_to_devtools_session_output(RendererDevToolsSessionOutputHost::new(
+                RendererDevToolsAgentToken::allocate(),
+                DevToolsSessionKey::Attached("SID-raw-settlement".to_owned()),
+                attachment,
+                journal,
+            ));
+        let mut settlement_rx = sender
+            .take_session_response_settlement_receiver()
+            .expect("session output retains its terminal settlement waiter");
+        let output = RendererRuntimeCommandOutput::from_inspector_message(
+            RendererRuntimeInspectorMessage::protocol(payload.clone()),
+        );
+        let (remaining, publication) = sender.finalize_output(output).into_parts();
+        assert!(remaining.is_empty());
+        let (fence, succeeded) = publication
+            .expect("the owner must commit the parked response")
+            .commit(None)
+            .expect("the matching session must accept its response")
+            .expect("session delivery returns a settlement")
+            .into_parts();
+        assert_eq!(succeeded, expected_success);
+        let (notified_fence, notified_success) = settlement_rx
+            .try_recv()
+            .expect("publication must settle the frontend call")
+            .into_parts();
+        assert_eq!(notified_success, expected_success);
+        assert_eq!(notified_fence.cursor(), fence.cursor());
+        assert!(!payload.is_materialized());
+
+        let RendererOutputTransportMessage::Publication(publication) =
+            transport_rx.try_recv().expect("one terminal publication")
+        else {
+            panic!("expected the session response publication");
+        };
+        assert_eq!(publication.cursor(), fence.cursor());
+        let [record] = publication.records() else {
+            panic!("the response must remain one atomic record");
+        };
+        let RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch)) =
+            record.item()
+        else {
+            panic!("the response must use the Runtime Inspector stream");
+        };
+        assert_eq!(batch.renderer_agent_attachment_id(), Some(attachment));
+        let [RendererRuntimeInspectorMessage::Protocol(response)] = batch.messages.as_slice()
+        else {
+            panic!("the session must publish exactly one protocol response");
+        };
+        assert!(!response.payload().is_materialized());
+        assert_eq!(response.payload().to_string(), raw);
+    }
+
+    #[test]
+    fn raw_session_sink_large_success_stays_opaque() {
+        let raw = format!(
+            r#"{{"id":7,"result":{{"result":{{"type":"string","value":"{}"}}}}}}"#,
+            "x".repeat(1024 * 1024)
+        );
+        assert_raw_session_sink_settlement(&raw, true);
+    }
+
+    #[test]
+    fn raw_session_sink_deep_success_uses_wire_status() {
+        let raw = format!(
+            r#"{{"id":7,"result":{{"result":{{"type":"object","value":{}0{}}}}}}}"#,
+            "[".repeat(150),
+            "]".repeat(150)
+        );
+        let business_view = InspectorJson::from_slice(raw.as_bytes()).unwrap();
+        assert_eq!(business_view.value()["error"]["code"], -32603);
+        assert!(!business_view.has_field("error"));
+        assert_raw_session_sink_settlement(&raw, true);
+    }
+
+    #[test]
+    fn raw_session_sink_error_stays_opaque() {
+        assert_raw_session_sink_settlement(
+            r#"{"id":7,"error":{"code":-32000,"message":"\ud800","data":{"detail":"\udfff"}}}"#,
+            false,
+        );
     }
 
     #[tokio::test]
