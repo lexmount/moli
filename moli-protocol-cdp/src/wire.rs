@@ -434,6 +434,20 @@ impl ParsedCdpCommand {
         self.renderer_policy
     }
 
+    /// Whether dispatch joins an already pending initial Page build. This is
+    /// distinct from renderer thread access: Page.enable also needs installed
+    /// agents, while dialog handling, close, and cancellation remain available.
+    pub fn requires_initial_document_adoption(&self) -> bool {
+        match self.method().split_once('.') {
+            Some(("Runtime", action)) => !matches!(action, "terminateExecution" | "disable"),
+            Some(("Page", action)) => matches!(
+                action,
+                "enable" | "navigate" | "getFrameTree" | "getResourceTree" | "createIsolatedWorld"
+            ),
+            _ => false,
+        }
+    }
+
     pub fn renderer_access(&self) -> CdpRendererCommandAccess {
         self.renderer_policy.access()
     }
@@ -727,6 +741,61 @@ mod tests {
             command.renderer_access(),
             CdpRendererCommandAccess::MainThread
         );
+    }
+
+    #[test]
+    fn initial_document_adoption_is_required_for_agent_queries() {
+        for method in [
+            "Runtime.enable",
+            "Runtime.evaluate",
+            "Runtime.awaitPromise",
+            "Runtime.getIsolateId",
+            "Page.enable",
+            "Page.navigate",
+            "Page.getFrameTree",
+            "Page.getResourceTree",
+            "Page.createIsolatedWorld",
+        ] {
+            let command =
+                ParsedCdpCommand::parse_value(serde_json::json!({"id": 1, "method": method}))
+                    .unwrap();
+            assert!(command.requires_initial_document_adoption(), "{method}");
+            let rewritten = command
+                .rewrite_frontend_route(2, Some("SID-adoption"))
+                .unwrap();
+            assert!(
+                rewritten.requires_initial_document_adoption(),
+                "routing must preserve {method} policy"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_close_and_execution_controls_do_not_wait_for_initial_document_adoption() {
+        for method in [
+            "Page.handleJavaScriptDialog",
+            "Page.close",
+            "Target.closeTarget",
+            "Target.disposeBrowserContext",
+            "Browser.close",
+            "Page.stopLoading",
+            "Runtime.terminateExecution",
+            "Runtime.disable",
+            "Debugger.resume",
+            "Debugger.disable",
+            "Fetch.continueRequest",
+            "Fetch.continueResponse",
+            "IO.close",
+            "HeapProfiler.moliDiagnostics",
+        ] {
+            let command =
+                ParsedCdpCommand::parse_value(serde_json::json!({"id": 1, "method": method}))
+                    .unwrap();
+            assert!(
+                !command.requires_initial_document_adoption(),
+                "{method} must remain available before adoption"
+            );
+        }
     }
 
     #[test]
