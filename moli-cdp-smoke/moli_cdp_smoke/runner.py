@@ -73,6 +73,7 @@ from .groups.protocol_regressions import (
 )
 from .groups.proxy_auth import run_proxy_auth_group
 from .groups.puppeteer import run_puppeteer_group
+from .groups.protocol_schema import run_protocol_schema_group
 from .groups.stagehand import run_stagehand_group
 from .groups.svg_rect import run_svg_rect_group
 from .groups.target_semantics import run_target_semantics_group
@@ -472,6 +473,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 MANAGED_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "protocol-schema",
+        "Generate client methods and event subscriptions from the live /json/protocol schema.",
+        "external",
+        run_protocol_schema_group,
+    ),
     SmokeGroup(
         "puppeteer",
         "Puppeteer over CDP workflows using the smoke project's pinned puppeteer-core module.",

@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "chrome-remote-interface": "0.34.0",
     "puppeteer-core": "24.30.0"
   }
 }
