@@ -419,7 +419,8 @@ pub(crate) use self::message_ports::{
     message_port_transfer_from_object, new_disconnected_message_port_object,
 };
 pub(crate) use self::microtask_checkpoint::{
-    install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
+    MicrotaskCheckpointKind, install_agent_microtask_checkpoint_tasks,
+    run_callback_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
 pub(crate) use self::navigation_bootstrap::{
     install_window_location_history_navigation_runtime_state,

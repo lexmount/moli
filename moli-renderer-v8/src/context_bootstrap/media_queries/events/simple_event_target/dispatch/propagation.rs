@@ -11,6 +11,7 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
     ancestors: &[v8::Local<'s, v8::Object>],
+    callback_checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
 ) -> SimpleEventDispatchResult {
     let Some(target) = resolve_event_target(scope, target) else {
         return SimpleEventDispatchResult {
@@ -95,7 +96,10 @@ pub(crate) fn dispatch_simple_event_target_event_with_ancestors<'s>(
                     registry,
                     event_type,
                     event,
-                    Some(capture),
+                    ListenerDispatchOptions {
+                        capture: Some(capture),
+                        callback_checkpoint,
+                    },
                     None,
                 );
                 result.dispatched |= invoked.dispatched;

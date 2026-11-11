@@ -346,7 +346,7 @@ fn indexed_db_internal_slots_are_not_object_own_properties() {
 }
 
 #[test]
-fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
+fn indexed_db_request_attributes_and_prototype_handlers_have_expected_descriptors() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-request-enumerable.test/");
 
@@ -413,7 +413,7 @@ fn indexed_db_request_declared_properties_preserve_own_enumerable_surface() {
 
     assert_eq!(
         result,
-        r#"{"openKeys":["onblocked","onerror","onsuccess","onupgradeneeded"],"openHandlers":[true,true],"databaseKeys":["onabort","onclose","onerror","onversionchange"],"databaseHandlers":[true,true,true,true],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames","onabort","oncomplete","onerror"],"transactionHandlers":[true,true,true],"transactionMode":"readonly","transactionStores":true,"requestKeys":["onerror","onsuccess"],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
+        r#"{"openKeys":[],"openHandlers":[false,false],"databaseKeys":[],"databaseHandlers":[false,false,false,false],"databaseVersion":1,"databaseStores":true,"transactionKeys":["objectStoreNames"],"transactionHandlers":[false,false,false],"transactionMode":"readonly","transactionStores":true,"requestKeys":[],"requestHandlers":[false,false],"openSourceIsNull":true,"openTransactionIsNull":true,"initialReadyState":"pending"}"#
     );
 }
 
