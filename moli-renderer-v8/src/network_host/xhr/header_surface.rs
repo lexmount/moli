@@ -2,6 +2,27 @@ use super::*;
 use crate::webidl;
 use http::HeaderName;
 
+pub(crate) fn xhr_response_headers_for_filter(
+    head: &moli_fetch::ResponseHead,
+    filter: &moli_fetch::FetchResponseFilter,
+) -> Vec<(String, Vec<u8>)> {
+    match filter {
+        moli_fetch::FetchResponseFilter::Basic => head.headers.clone(),
+        moli_fetch::FetchResponseFilter::Cors(names) => head
+            .headers
+            .iter()
+            .filter(|(name, _)| {
+                names
+                    .iter()
+                    .any(|exposed| exposed.eq_ignore_ascii_case(name))
+            })
+            .cloned()
+            .collect(),
+        moli_fetch::FetchResponseFilter::Opaque
+        | moli_fetch::FetchResponseFilter::OpaqueRedirect => Vec::new(),
+    }
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XMLHttpRequest header")]
 struct XhrHeaderNameArgs {

@@ -60,6 +60,41 @@ impl WindowCspRequestContext {
             completion_tx,
         )
     }
+
+    pub(crate) fn check_xhr_response(
+        &self,
+        document_url: &Url,
+        request_url: &Url,
+        head: &moli_fetch::ResponseHead,
+        completion_tx: RendererResourceCompletionSender,
+    ) -> Result<(), String> {
+        if &head.final_url == request_url || self.redirect_state.was_checked(&head.final_url) {
+            return Ok(());
+        }
+        let status = if head.redirect_chain.is_empty() {
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
+        } else {
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
+        };
+        let (reports, enforced) = self
+            .policy
+            .check_url(document_url, &head.final_url, status)
+            .into_violations();
+        let failure = enforced.first().map(|violation| {
+            document_content_security_policy_error_message(violation, "XMLHttpRequest")
+        });
+        for mut violation in reports.into_iter().chain(enforced) {
+            violation.blocked_uri = csp_url_for_report(request_url);
+            ContentSecurityPolicySourceLocation::default().apply_to(&mut violation);
+            let _ = completion_tx.send_async_subresource_event(
+                crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                    report_context: Box::new(self.report_context.clone()),
+                    violation: Box::new(violation),
+                },
+            );
+        }
+        failure.map_or(Ok(()), Err)
+    }
 }
 
 pub(crate) fn window_csp_redirect_check(

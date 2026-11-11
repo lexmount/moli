@@ -221,18 +221,8 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if host.network_offline() {
-        if async_request {
-            record_offline_xhr_failure(scope, host, xhr, prepared);
-        } else {
-            record_synchronous_xhr_failure(
-                scope,
-                host,
-                xhr,
-                prepared,
-                "Network emulation offline".to_owned(),
-            );
-        }
+    if async_request && host.network_offline() {
+        record_offline_xhr_failure(scope, host, xhr, prepared);
         return;
     }
 
@@ -315,6 +305,7 @@ fn send_synchronous_network_xhr(
         prepared.request_headers.clone(),
     )
     .expect("xhr request url was already resolved")
+    .with_page_network_policy()
     .with_initiator_url(&prepared.document_url)
     .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
         document_referrer_policy: prepared.document_referrer_policy.clone(),
@@ -374,6 +365,20 @@ fn send_synchronous_network_xhr(
         return;
     }
 
+    let client_id = host.service_worker_client_id_for_subresource_owner(prepared.owner);
+    let service_worker = host
+        .browser_context_runtime()
+        .service_worker_runtime_if_initialized()
+        .filter(|runtime| {
+            runtime
+                .matching_controller_for_client_fetch(client_id, &prepared.resolved_url)
+                .is_some()
+        })
+        .map(|runtime| (runtime, client_id));
+    let service_worker_document_url = prepared.document_url.clone();
+    let policy_context = prepared.policy_context;
+    let resource_task_runner = prepared.resource_loader.task_runner();
+
     let spawn_result = thread::Builder::new()
         .name("lm-sync-xhr-fetch".to_owned())
         .spawn(move || {
@@ -382,12 +387,40 @@ fn send_synchronous_network_xhr(
                 .build()
                 .map_err(|error| format!("failed to build sync XHR fetch runtime: {error}"));
             let result = match runtime_result {
-                Ok(runtime) => runtime.block_on(fetch_browser_subresource_with_preflight_headers(
-                    loader,
-                    request,
-                    Some(worker_cancel_handle),
-                    preflight_headers,
-                )),
+                Ok(runtime) => runtime.block_on(async move {
+                    if let Some((service, client_id)) = service_worker {
+                        let fetch = service.fetch_subresource_for_client(
+                            client_id,
+                            service_worker_document_url,
+                            &request,
+                            &loader,
+                            resource_task_runner,
+                            crate::service_worker_runtime::ServiceWorkerRequestDestination::Empty,
+                            SubresourceResourceType::Xhr,
+                            policy_context,
+                            preflight_headers.clone(),
+                            worker_cancel_handle.clone(),
+                        );
+                        if let Some(response) = service
+                            .await_synchronous_fetch(fetch, worker_cancel_handle.clone())
+                            .await?
+                        {
+                            return Ok((
+                                (*response.response).into(),
+                                response.response_filter,
+                                !response.from_network_fallback,
+                            ));
+                        }
+                    }
+                    fetch_browser_subresource_with_preflight_headers(
+                        loader,
+                        request,
+                        Some(worker_cancel_handle),
+                        preflight_headers,
+                    )
+                    .await
+                    .map(|response| (response, None, false))
+                }),
                 Err(error) => Err(error),
             };
             let _ = response_tx.send(result);
@@ -464,32 +497,48 @@ fn send_synchronous_network_xhr(
         Err(error) => Err(format!("failed to spawn sync XHR fetch thread: {error}")),
     };
 
-    let result = result.and_then(|response| {
-        crate::network_host::validate_fetch_response_security_policy_with_body(
-            &prepared.request_origin,
+    let result = result.and_then(|(response, filter, from_service_worker)| {
+        if from_service_worker {
+            if filter.as_ref().is_some_and(|filter| !filter.is_readable()) {
+                return Err("Service Worker returned an unreadable XHR response".to_owned());
+            }
+        } else {
+            crate::network_host::validate_fetch_response_security_policy_with_body(
+                &prepared.request_origin,
+                &response.head(),
+                response.body_bytes(),
+                RequestMode::Cors,
+                prepared.credentials_mode,
+                prepared.policy_context,
+            )?;
+        }
+        csp.check_xhr_response(
+            &prepared.document_url,
+            &prepared.resolved_url,
             &response.head(),
-            response.body_bytes(),
-            RequestMode::Cors,
-            prepared.credentials_mode,
-            prepared.policy_context,
+            host.resource_completion_sender(),
         )?;
-        Ok(response)
+        Ok((response, filter, from_service_worker))
     });
 
     match result {
-        Ok(response) => {
+        Ok((response, response_filter, from_service_worker)) => {
             timing.observe_native_timing(cancel_handle.response_timing());
             let head = response.head();
-            let filter = crate::network_host::FetchResponseRequest {
-                method: &prepared.method,
-                mode: RequestMode::Cors,
-                redirect_mode: moli_fetch::RequestRedirectMode::Follow,
-            }
-            .network_response_filter(
-                &prepared.request_origin,
-                &head,
-                prepared.credentials_mode,
-            );
+            let filter = response_filter
+                .filter(|_| from_service_worker)
+                .unwrap_or_else(|| {
+                    crate::network_host::FetchResponseRequest {
+                        method: &prepared.method,
+                        mode: RequestMode::Cors,
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                    }
+                    .network_response_filter(
+                        &prepared.request_origin,
+                        &head,
+                        prepared.credentials_mode,
+                    )
+                });
             crate::context_bootstrap::record_resource_performance_entry(
                 scope,
                 timing.response(
@@ -500,11 +549,7 @@ fn send_synchronous_network_xhr(
                     response.body_bytes().len(),
                 ),
             );
-            let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
-                &prepared.request_origin,
-                &response.head(),
-                prepared.credentials_mode,
-            );
+            let observable_headers = xhr_response_headers_for_filter(&head, &filter);
             host.record_subresource_network(
                 SubresourceNetworkRecord::success_with_body(
                     prepared.frame_id,

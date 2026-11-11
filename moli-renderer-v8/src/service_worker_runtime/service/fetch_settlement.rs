@@ -214,6 +214,7 @@ impl ServiceWorkerRuntimeService {
         destination: ServiceWorkerRequestDestination,
         resource_type: crate::types::SubresourceResourceType,
         policy_context: crate::types::SubresourcePolicyContext,
+        cors_preflight_request_headers: Vec<(String, String)>,
         cancel_handle: moli_fetch::FetchCancelHandle,
     ) -> Result<Option<ServiceWorkerDirectFetchResponse>, String> {
         if !matches!(request.url.scheme(), "http" | "https")
@@ -247,7 +248,7 @@ impl ServiceWorkerRuntimeService {
                 is_reload: false,
                 metadata: service_worker_fetch_request_metadata(request),
             },
-            cors_preflight_request_headers: Vec::new(),
+            cors_preflight_request_headers,
             request_cookie_report: None,
             network_context: crate::types::AsyncSubresourceNetworkContext {
                 frame_id: None,
@@ -278,6 +279,33 @@ impl ServiceWorkerRuntimeService {
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(response)),
             Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(message),
             Err(_) => Err("service worker subresource fetch completion channel closed".to_owned()),
+        }
+    }
+
+    pub(crate) async fn await_synchronous_fetch(
+        &self,
+        fetch: impl std::future::Future<
+            Output = Result<Option<ServiceWorkerDirectFetchResponse>, String>,
+        >,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) -> Result<Option<ServiceWorkerDirectFetchResponse>, String> {
+        let (wake_tx, mut wake_rx) =
+            crate::service_worker_runtime::service_worker_owner_wake_channel();
+        self.add_owner_wake_sender(wake_tx);
+        tokio::pin!(fetch);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_handle.cancelled() => {
+                    return Err(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned());
+                }
+                result = &mut fetch => return result,
+                Some(crate::service_worker_runtime::ServiceWorkerRuntimeOwnerWake::ServiceLane) = wake_rx.recv() => {
+                    // The requesting realm is blocked. Process native Service
+                    // Worker replies without entering that realm's task queue.
+                    self.drain_service_lane();
+                }
+            }
         }
     }
 
@@ -427,14 +455,15 @@ impl ServiceWorkerRuntimeService {
         let request_mode = job.request.request_mode;
         let credentials_mode = job.request.credentials_mode;
         let redirect_mode = job.request.redirect_mode();
+        let preflight_headers = job.cors_preflight_request_headers;
         job.resource_task_runner.spawn(async move {
-            let result = match request_client
-                .fetch_raw_stream_with_cancel(request, cancel_handle)
-                .await
-            {
-                Ok(response) => response.into_materialized_raw_response().await,
-                Err(error) => Err(error),
-            };
+            let result = crate::network_host::fetch_browser_subresource_with_preflight_headers(
+                request_client,
+                request,
+                Some(cancel_handle),
+                preflight_headers,
+            )
+            .await;
             let result = match result {
                 Ok(response) => {
                     let head = response.head();
@@ -472,7 +501,7 @@ impl ServiceWorkerRuntimeService {
                         from_network_fallback: true,
                     })
                 }
-                Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
+                Err(error) => ServiceWorkerDirectFetchResult::Failure(error),
             };
             let _ = completion_tx.send(result);
         });

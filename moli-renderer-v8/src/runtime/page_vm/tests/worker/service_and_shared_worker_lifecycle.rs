@@ -333,6 +333,226 @@ async fn service_worker_intercepts_worker_module_imports_with_worker_client_meta
 }
 
 #[tokio::test]
+async fn service_worker_intercepts_synchronous_xhr_with_native_document_and_worker_clients() {
+    run_page_vm_async_test(async move {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let origin = format!("http://{address}");
+        let cross_origin = format!("http://localhost:{}", address.port());
+        let server_origin = origin.clone();
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+        let worker_source = format!(r#"
+                try {{
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", "{cross_origin}/sw-echo", false);
+                    xhr.withCredentials = true;
+                    xhr.setRequestHeader("X-Fixture", "body-marker");
+                    xhr.send("payload");
+                    postMessage({{
+                        data: JSON.parse(xhr.responseText),
+                        status: xhr.status, marker: xhr.getResponseHeader("X-Marker"),
+                        cookie: xhr.getResponseHeader("Set-Cookie")
+                    }});
+                }} catch (error) {{ postMessage({{error: String(error)}}); }}
+        "#);
+        let server = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+            let listener = TcpListener::from_std(listener).unwrap();
+            for index in 0..6 {
+                let wait = if index < 5 {
+                    Duration::from_secs(5)
+                } else {
+                    Duration::from_millis(500)
+                };
+                let accepted = tokio::time::timeout(wait, listener.accept()).await.ok();
+                let Some(accepted) = accepted else { break };
+                let (mut stream, _) = accepted.unwrap();
+                let request = read_http_request_head(&mut stream).await.unwrap();
+                let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                request_tx.send(request.lines().next().unwrap().to_owned()).unwrap();
+                if request.starts_with("OPTIONS ") {
+                    assert!(request.to_ascii_lowercase().contains("access-control-request-headers: x-fixture"));
+                }
+                let body = match path {
+                    "/app/sw.js" => r#"
+                        const knownClients = new Map();
+                        self.oninstall = event => event.waitUntil(self.skipWaiting());
+                        self.onactivate = event => event.waitUntil(self.clients.claim());
+                        self.onmessage = event => {
+                            knownClients.set(event.source.id, event.source);
+                            event.ports[0].postMessage(event.source.id);
+                        };
+                        self.onfetch = event => {
+                            const path = new URL(event.request.url).pathname;
+                            if (path === "/app/redirect") {
+                                const target = new URL("/redirect-target", event.request.url);
+                                target.hostname = "localhost";
+                                event.respondWith(Response.redirect(target, 307));
+                                return;
+                            }
+                            if (path === "/app/cors-proxy") {
+                                const target = new URL("/cors-source", event.request.url);
+                                target.hostname = "localhost";
+                                event.respondWith(fetch(target));
+                                return;
+                            }
+                            if (path !== "/sw-echo") return;
+                            event.respondWith((async () => {
+                                const client = knownClients.get(event.clientId) || await self.clients.get(event.clientId);
+                                const text = JSON.stringify({
+                                    method: event.request.method, destination: event.request.destination,
+                                    mode: event.request.mode, credentials: event.request.credentials,
+                                    clientId: event.clientId, resultingClientId: event.resultingClientId,
+                                    clientType: client.type, clientUrl: client.url,
+                                    referrer: event.request.referrer, body: await event.request.text(),
+                                    header: event.request.headers.get("X-Fixture")
+                                });
+                                const bytes = new TextEncoder().encode(text);
+                                return new Response(new ReadableStream({start(controller) {
+                                    controller.enqueue(bytes.slice(0, 8));
+                                    setTimeout(() => {
+                                        controller.enqueue(bytes.slice(8));
+                                        controller.close();
+                                    }, 5);
+                                }}), {headers: {
+                                    "Content-Type": "application/json", "X-Marker": "visible",
+                                    "Set-Cookie": "secret=value"
+                                }});
+                            })());
+                        };
+                    "#,
+                    "/app/worker.js" => &worker_source,
+                    "/redirect-target" => "redirect response",
+                    "/cors-source" => "cross-origin response",
+                    _ => "unexpected network request",
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nAccess-Control-Allow-Origin: {server_origin}\r\nAccess-Control-Allow-Credentials: true\r\nAccess-Control-Allow-Headers: x-fixture\r\nAccess-Control-Allow-Methods: POST\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+                });
+        });
+        let loader_owner = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
+        // Synchronous XHR blocks the test's JavaScript executor just as it
+        // blocks a real renderer. Resource work needs the browser executor.
+        hooks.resource_task_runner = Some(loader_owner.browser_resource_runtime().resource_task_runner());
+        let mut page_vm = test_page_vm_with_loader_document_url_and_hooks(
+            &loader_owner,
+            Vec::new(),
+            Url::parse(&format!("{origin}/app/page.html")).unwrap(),
+            hooks,
+        );
+        page_vm.retain_standalone_request_client_owner_for_test(loader_owner);
+        let local_executor = page_vm.local_executor.clone();
+        local_executor.run(async move {
+            page_vm.vm_mut().eval(&format!(r#"
+                globalThis.syncXhrResults = null;
+                globalThis.syncXhrError = null;
+                (async () => {{
+                    await navigator.serviceWorker.register("/app/sw.js", {{scope: "/app/"}});
+                    await navigator.serviceWorker.ready;
+                    if (!navigator.serviceWorker.controller) await new Promise(resolve =>
+                        navigator.serviceWorker.addEventListener("controllerchange", resolve, {{once:true}}));
+                    const channel = new MessageChannel();
+                    const identity = new Promise(resolve => channel.port1.onmessage = event => resolve(event.data));
+                    navigator.serviceWorker.controller.postMessage("identity", [channel.port2]);
+                    const clientId = await identity;
+                    const events = [];
+                    Promise.resolve().then(() => events.push("microtask"));
+                    setTimeout(() => events.push("timer"), 0);
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", "{cross_origin}/sw-echo", false);
+                    xhr.withCredentials = true;
+                    xhr.setRequestHeader("X-Fixture", "body-marker");
+                    xhr.send("payload");
+                    const window = {{clientId, data: JSON.parse(xhr.responseText),
+                        status: xhr.status, marker: xhr.getResponseHeader("X-Marker"),
+                        cookie: xhr.getResponseHeader("Set-Cookie"), callbacksDuringSend: events.length}};
+                    const redirected = new XMLHttpRequest();
+                    redirected.open("POST", "/app/redirect", false);
+                    redirected.withCredentials = true;
+                    redirected.setRequestHeader("X-Fixture", "body-marker");
+                    redirected.send("payload");
+                    window.redirectStatus = redirected.status;
+                    window.redirectBody = redirected.responseText;
+                    globalThis.syncXhrWorker = new Worker("/app/worker.js");
+                    syncXhrWorker.onmessage = event => syncXhrResults = {{window, worker: event.data}};
+                    syncXhrWorker.onerror = event => syncXhrError = event.message;
+                }})().catch(error => syncXhrError = String(error));
+            "#))?;
+            drive_service_worker_page_vm_until_done(
+                &mut page_vm,
+                "String(syncXhrResults !== null || syncXhrError !== null)",
+                "native controllers should serve synchronous Document and Worker XHR",
+            ).await?;
+            assert_eq!(page_vm.vm_mut().eval("String(syncXhrError)")?, "null");
+            let results: serde_json::Value = serde_json::from_str(
+                &page_vm.vm_mut().eval("JSON.stringify(syncXhrResults)")?
+            )?;
+            assert_eq!(results["window"]["callbacksDuringSend"], 0);
+            assert_eq!(results["window"]["redirectStatus"], 200);
+            assert_eq!(results["window"]["redirectBody"], "redirect response");
+            assert_ne!(results["window"]["data"]["clientId"], results["worker"]["data"]["clientId"]);
+            for kind in ["window", "worker"] {
+                let result = &results[kind];
+                assert_eq!(result["status"], 200);
+                assert_eq!(result["marker"], "visible");
+                assert!(result["cookie"].is_null());
+                let data = &result["data"];
+                if kind == "window" {
+                    assert_eq!(data["clientId"], result["clientId"]);
+                }
+                assert!(!data["clientId"].as_str().unwrap().is_empty());
+                assert_eq!(data["clientType"], kind);
+                assert_eq!(data["clientUrl"], format!("{origin}/app/{}", if kind == "window" { "page.html" } else { "worker.js" }));
+                assert_eq!(data["resultingClientId"], "");
+                assert_eq!(data["method"], "POST");
+                assert_eq!(data["mode"], "cors");
+                assert_eq!(data["credentials"], "include");
+                assert_eq!(data["destination"], "");
+                assert_eq!(data["referrer"], format!("{origin}/"));
+                assert_eq!(data["body"], "payload");
+                assert_eq!(data["header"], "body-marker");
+            }
+            let csp_result = page_vm.vm_mut().eval(r#"
+                (() => {
+                    globalThis.syncCspEvents = [];
+                    document.addEventListener("securitypolicyviolation", event =>
+                        syncCspEvents.push(event.effectiveDirective));
+                    const meta = document.createElement("meta");
+                    meta.httpEquiv = "Content-Security-Policy";
+                    meta.content = "connect-src 'self'";
+                    document.head.append(meta);
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("GET", "/app/cors-proxy", false);
+                    try { xhr.send(); return "allowed"; }
+                    catch (error) { return error.name + ":" + syncCspEvents.length; }
+                })()
+            "#)?;
+            assert_eq!(csp_result, "NetworkError:0");
+            run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+            assert_eq!(page_vm.vm_mut().eval("JSON.stringify(syncCspEvents)")?, r#"["connect-src"]"#);
+            anyhow::Ok(())
+        }).await.unwrap();
+        server.join().unwrap();
+        assert_eq!(request_rx.recv().await.as_deref(), Some("GET /app/sw.js HTTP/1.1"));
+        assert_eq!(request_rx.recv().await.as_deref(), Some("OPTIONS /redirect-target HTTP/1.1"));
+        assert_eq!(request_rx.recv().await.as_deref(), Some("POST /redirect-target HTTP/1.1"));
+        assert_eq!(request_rx.recv().await.as_deref(), Some("GET /app/worker.js HTTP/1.1"));
+        assert_eq!(request_rx.recv().await.as_deref(), Some("GET /cors-source HTTP/1.1"));
+        assert!(request_rx.recv().await.is_none());
+    }).await;
+}
+
+#[tokio::test]
 async fn service_worker_blob_shared_worker_inherits_parent_controller_for_fetch() {
     run_page_vm_async_test(async move {
         let (base_url, sample_request_rx, server) =

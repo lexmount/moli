@@ -1010,7 +1010,7 @@ fn start_worker_module_graph_fetch(
                     && let Some(response) = runtime.fetch_subresource_for_client(
                         client_id, document_url, &fetch_request, &request_client, runner,
                         destination, crate::types::SubresourceResourceType::Script,
-                        policy_context, cancel.clone(),
+                        policy_context, Vec::new(), cancel.clone(),
                     ).await.map_err(anyhow::Error::msg)?
                 {
                     return Ok((*response.response, response.response_filter, !response.from_network_fallback));

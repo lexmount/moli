@@ -394,7 +394,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         ))
     } else if worker_url_blocked(&blocked_url_patterns, &prepared.resolved_url) {
         Some(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
-    } else if network_offline {
+    } else if async_request && network_offline {
         Some("Network emulation offline".to_owned())
     } else {
         None
@@ -668,6 +668,10 @@ fn send_synchronous_worker_xhr(
     let timeout_request_method = request_method.clone();
     let timeout_request_headers = request_headers.clone();
     let timeout_request_body = request_body.clone();
+    let service_worker =
+        super::fetch::worker_service_worker_controller(&state.borrow(), &prepared.resolved_url);
+    let service_worker_document_url = prepared.document_url.clone();
+    let policy_context = state.borrow().policy_context;
 
     let cancel_handle = FetchCancelHandle::new();
     let Some(load) = loader.register_load(
@@ -697,16 +701,50 @@ fn send_synchronous_worker_xhr(
                 .build()
                 .map_err(|error| format!("failed to build worker sync XHR fetch runtime: {error}"))
                 .and_then(|runtime| {
-                    runtime
-                        .block_on(super::fetch::load_worker_xhr_response(
+                    runtime.block_on(async {
+                        if let Some((service, client_id)) = service_worker {
+                            let request_client = worker_load.request_client();
+                            let fetch = service.fetch_subresource_for_client(
+                                client_id,
+                                service_worker_document_url,
+                                &request,
+                                &request_client,
+                                worker_load.task_runner(),
+                                crate::service_worker_runtime::ServiceWorkerRequestDestination::Empty,
+                                SubresourceResourceType::Xhr,
+                                policy_context,
+                                preflight_headers.clone(),
+                                worker_cancel_handle.clone(),
+                            );
+                            if let Some(response) = service
+                                .await_synchronous_fetch(fetch, worker_cancel_handle.clone())
+                                .await?
+                            {
+                                let from_service_worker = !response.from_network_fallback;
+                                if from_service_worker {
+                                    worker_timing.begin_synthetic_response();
+                                }
+                                return Ok((
+                                    WorkerXhrResponse::Materialized(Box::new(
+                                        (*response.response).into(),
+                                    )),
+                                    response.response_filter,
+                                    from_service_worker,
+                                ));
+                            }
+                        }
+                        super::fetch::load_worker_xhr_response(
                             &worker_load,
                             request,
                             worker_cancel_handle,
                             preflight_headers,
                             &worker_timing,
                             None,
-                        ))
+                        )
+                        .await
                         .0
+                        .map(|response| (response, None, false))
+                    })
                 });
             worker_timing.complete();
             let _ = response_tx.send(result);
@@ -763,7 +801,7 @@ fn send_synchronous_worker_xhr(
     };
 
     match result {
-        Ok(response) => {
+        Ok((response, response_filter, from_service_worker)) => {
             let response_head = response.head();
             let redirect_csp_checked = redirect_csp_state.was_checked(&response_head.final_url);
             let redirect_status = if response_head.redirect_chain.is_empty() {
@@ -820,11 +858,23 @@ fn send_synchronous_worker_xhr(
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
                 return;
             }
-            if let Err(message) = crate::network_host::validate_cors_response_chain(
-                timing.origin(),
-                &response_head,
-                prepared.credentials_mode,
-            ) {
+            let cors_result = if from_service_worker {
+                if response_filter
+                    .as_ref()
+                    .is_some_and(|filter| !filter.is_readable())
+                {
+                    Err("Service Worker returned an unreadable XHR response".to_owned())
+                } else {
+                    Ok(())
+                }
+            } else {
+                crate::network_host::validate_cors_response_chain(
+                    timing.origin(),
+                    &response_head,
+                    prepared.credentials_mode,
+                )
+            };
+            if let Err(message) = cors_result {
                 timing.reject(scope);
                 record_worker_subresource_failure(
                     &state.borrow(),
@@ -839,11 +889,28 @@ fn send_synchronous_worker_xhr(
                 throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "NetworkError");
                 return;
             }
-            let observable_headers = filter_cors_exposed_response_headers(
-                timing.origin(),
+            let filter = response_filter
+                .filter(|_| from_service_worker)
+                .unwrap_or_else(|| {
+                    crate::network_host::FetchResponseRequest {
+                        method: &prepared.method,
+                        mode: RequestMode::Cors,
+                        redirect_mode: RequestRedirectMode::Follow,
+                    }
+                    .network_response_filter(
+                        timing.origin(),
+                        &response_head,
+                        prepared.credentials_mode,
+                    )
+                });
+            timing.select_response(
                 &response_head,
-                prepared.credentials_mode,
+                filter.clone(),
+                response.subresource_response_body().len(),
+                from_service_worker,
             );
+            let observable_headers =
+                crate::network_host::xhr_response_headers_for_filter(&response_head, &filter);
             record_worker_subresource_success(
                 &state.borrow(),
                 prepared.document_url,
