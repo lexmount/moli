@@ -27,8 +27,11 @@ projection policy.
 
 The structured view has the Value parser's depth limit. If a valid raw payload
 exceeds it, `value()` returns a synthetic `-32603` error view; CDP still serializes
-the original raw response. This compatibility API is not a fallible, lossless
-JSON accessor. The raw fields and cached Value coexist until their owners drop.
+the original raw response. SessionSink settlement checks the raw `error` field,
+and completion matching reads the raw call ID without requesting a business
+view. A synthetic view error cannot turn a successful session response into a
+failed settlement. This compatibility API is not a fallible, lossless JSON
+accessor. The raw fields and cached Value coexist until their owners drop.
 
 This is validated raw-field transport, not zero-copy or zero-scan forwarding.
 Remote-object ownership, lifecycle handling, debugger state, and automation

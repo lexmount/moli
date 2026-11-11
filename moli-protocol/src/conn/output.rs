@@ -206,7 +206,7 @@ impl RuntimeInspectorResponseReady {
                     .is_some_and(|call_id| call_id.get() == completion.call_id)
                     && completion
                         .output
-                        .protocol_response(completion.call_id)
+                        .protocol_response_payload(completion.call_id)
                         .is_some() =>
             {
                 let attachment_id = completion.renderer_agent_attachment_id();
@@ -4887,6 +4887,58 @@ mod tests {
 
         assert_eq!(message["id"], json!(frontend_command_id));
         assert_eq!(message["result"]["result"]["value"], json!(42));
+    }
+
+    #[test]
+    fn runtime_inspector_command_output_routes_raw_responses_without_materializing() {
+        let frontend_command_id = u64::MAX;
+        for body in [
+            format!(
+                r#""result":{{"result":{{"type":"string","value":"{}"}}}}"#,
+                "x".repeat(1024 * 1024)
+            ),
+            format!(
+                r#""result":{{"result":{{"type":"object","value":{}0{}}}}}"#,
+                "[".repeat(150),
+                "]".repeat(150)
+            ),
+            r#""error":{"code":-32000,"message":"\ud800"}"#.to_owned(),
+        ] {
+            let payload = moli_inspector_json::InspectorJson::from_slice(
+                format!(r#"{{"id":11,{body}}}"#).as_bytes(),
+            )
+            .unwrap();
+            let response = RuntimeInspectorResponseReady::new_correlated(
+                frontend_command_id,
+                Some("SID-raw-completion"),
+                RendererCallId::new(11),
+                Ok(
+                    RendererRuntimeInspectorAsyncCompletion::from_command_output(
+                        11,
+                        RendererRuntimeCommandOutput::from_inspector_message(
+                            RendererRuntimeInspectorMessage::protocol(payload.clone()),
+                        ),
+                    ),
+                ),
+            );
+
+            let (command_id, output, predecessor) = response.into_renderer_command_output();
+
+            assert_eq!(command_id, frontend_command_id);
+            assert_eq!(predecessor, None);
+            // ID rewriting detaches a shared carrier and clears its view. Keep
+            // the input clone to detect materialization before that rewrite.
+            assert!(!payload.is_materialized());
+            let [RendererRuntimeInspectorMessage::Protocol(message)] = output.messages() else {
+                panic!("completion must preserve its single protocol response");
+            };
+            assert_eq!(message.payload().id_u64(), Some(frontend_command_id));
+            assert!(!message.payload().is_materialized());
+            assert_eq!(
+                message.payload().to_string(),
+                format!(r#"{{"id":{frontend_command_id},{body}}}"#)
+            );
+        }
     }
 
     #[test]
