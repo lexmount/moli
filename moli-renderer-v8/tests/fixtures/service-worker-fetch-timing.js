@@ -7,7 +7,13 @@ async function serviceWorkerFetchTiming(base) {
     ['cross-stream', new URL('/synthetic?stream=1', cross)],
     ['forward-same', new URL('/forward?target=' + encodeURIComponent(new URL('/raw', base)), base)],
     ['forward-cors', new URL('/forward?target=' + encodeURIComponent(new URL('/raw', cross)), base)],
-    ['forward-tao', new URL('/forward?target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)]
+    ['forward-tao', new URL('/forward?target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)],
+    ['cache-same', new URL('/cache?target=' + encodeURIComponent(new URL('/raw', base)), base)],
+    ['cache-cors', new URL('/cache?target=' + encodeURIComponent(new URL('/raw', cross)), base)],
+    ['cache-tao', new URL('/cache?target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)],
+    ['cache-again-cors', new URL('/cache?rounds=2&target=' + encodeURIComponent(new URL('/raw', cross)), base)],
+    ['cache-again-tao', new URL('/cache?rounds=2&target=' + encodeURIComponent(new URL('/raw?tao=1', cross)), base)],
+    ['cache-synthetic', new URL('/cache?synthetic=1', base)]
   ];
   const rows = [];
   for (const [name, url] of cases) {
@@ -22,7 +28,8 @@ async function serviceWorkerFetchTiming(base) {
     const body = await response.text();
     const entry = await timing;
     rows.push({name, body, type:response.type, status:entry.responseStatus,
-      encoded:entry.encodedBodySize, decoded:entry.decodedBodySize, transfer:entry.transferSize});
+      encoded:entry.encodedBodySize, decoded:entry.decodedBodySize, transfer:entry.transferSize,
+      urlMatchesSource:response.url === (url.searchParams.get('target') || url.href)});
   }
   return rows;
 }

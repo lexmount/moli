@@ -59,12 +59,18 @@ async fn fetch_resource_timing_service_worker_distinguishes_synthetic_and_forwar
         ("forward-same", "basic", 4),
         ("forward-cors", "cors", 0),
         ("forward-tao", "cors", 4),
+        ("cache-same", "basic", 4),
+        ("cache-cors", "cors", 0),
+        ("cache-tao", "cors", 4),
+        ("cache-again-cors", "cors", 0),
+        ("cache-again-tao", "cors", 4),
+        ("cache-synthetic", "basic", 4),
     ]
     .into_iter()
     .map(|(name, response_type, size)| {
         serde_json::json!({
             "name":name, "body":"body", "type":response_type, "status":200,
-            "encoded":size, "decoded":size, "transfer":0,
+            "encoded":size, "decoded":size, "transfer":0, "urlMatchesSource":true,
         })
     })
     .collect();
@@ -110,6 +116,21 @@ async fn serve_service_worker_timing_request(
                 event.respondWith(new Response(body,{headers:{'Content-Type':'text/plain'}}));
             } else if(url.pathname==='/forward') {
                 event.respondWith(fetch(url.searchParams.get('target')).then(response=>response.clone()));
+            } else if(url.pathname==='/cache') {
+                event.respondWith((async()=>{
+                    const cache=await caches.open('timing');
+                    let response=url.searchParams.has('synthetic')
+                        ? new Response('body',{headers:{'Content-Type':'text/plain'}})
+                        : await fetch(url.searchParams.get('target'));
+                    const key=new URL('/cached-entry',location.href);
+                    key.search=url.search;
+                    const rounds=Number(url.searchParams.get('rounds')||1);
+                    for(let i=0;i<rounds;i++) {
+                        await cache.put(key,response);
+                        response=await cache.match(key);
+                    }
+                    return response;
+                })());
             }
         });
         "#.to_owned()),

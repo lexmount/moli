@@ -142,6 +142,8 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageBucketCachedResponse {
     pub response_type: String,
+    /// Fetch's established timing authorization, before response header filtering.
+    pub timing_allow_passed: bool,
     pub url: String,
     pub redirected: bool,
     pub status: u16,
@@ -410,6 +412,8 @@ struct StorageBucketCacheJsonEntry {
         skip_serializing_if = "is_default_cached_response_type"
     )]
     response_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timing_allow_passed: Option<bool>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     url: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2170,6 +2174,11 @@ fn load_storage_bucket_cache_file(
         .into_iter()
         .enumerate()
         .map(|(index, (request_key, entry))| {
+            // Older records have no timing flag. Preserve the same conservative
+            // response-type defaults used when materializing an unmarked Response.
+            let timing_allow_passed = entry
+                .timing_allow_passed
+                .unwrap_or(matches!(entry.response_type.as_str(), "default" | "basic"));
             let body = BASE64_STANDARD
                 .decode(entry.body_base64.as_bytes())
                 .with_context(|| {
@@ -2188,6 +2197,7 @@ fn load_storage_bucket_cache_file(
                     },
                     response: StorageBucketCachedResponse {
                         response_type: entry.response_type,
+                        timing_allow_passed,
                         url: entry.url,
                         redirected: entry.redirected,
                         status: entry.status,
@@ -2223,6 +2233,7 @@ fn save_storage_bucket_cache_file(
                         request_headers: entry.request.headers.clone(),
                         insertion_order: entry.insertion_order,
                         response_type: entry.response.response_type.clone(),
+                        timing_allow_passed: Some(entry.response.timing_allow_passed),
                         url: entry.response.url.clone(),
                         redirected: entry.response.redirected,
                         status: entry.response.status,
@@ -2932,6 +2943,7 @@ mod tests {
                 "request",
                 StorageBucketCachedResponse {
                     response_type: "default".to_owned(),
+                    timing_allow_passed: true,
                     url: "https://quota.test/resource".to_owned(),
                     redirected: false,
                     status: 200,
@@ -3009,6 +3021,7 @@ mod tests {
                 "request",
                 StorageBucketCachedResponse {
                     response_type: "default".to_owned(),
+                    timing_allow_passed: true,
                     url: "https://default-quota.test/resource".to_owned(),
                     redirected: false,
                     status: 200,
@@ -3244,6 +3257,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 201,
@@ -3289,6 +3303,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let first_response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -3345,6 +3360,7 @@ mod tests {
 
         let replacement_response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 201,
@@ -3399,6 +3415,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -3491,6 +3508,7 @@ mod tests {
             .expect("bucket should remain current");
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -3555,6 +3573,7 @@ mod tests {
         assert!(store.open_cache_for_identity(&identity, "cache")?);
         let original = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -3564,6 +3583,7 @@ mod tests {
         };
         let oversized = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -3634,6 +3654,83 @@ mod tests {
     }
 
     #[test]
+    fn cache_file_preserves_timing_authorization_without_tao_headers() -> Result<()> {
+        let temp = TempStorePath::new("cache-timing");
+        let entries: BTreeMap<_, _> = [
+            ("default", true),
+            ("basic", false),
+            ("cors", true),
+            ("cors", false),
+            ("opaque", true),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (response_type, timing_allow_passed))| {
+            (
+                format!("https://cross.test/{index}"),
+                StorageBucketCacheEntry {
+                    usage_bytes: 4,
+                    request: StorageBucketCachedRequest::default(),
+                    response: StorageBucketCachedResponse {
+                        response_type: response_type.to_owned(),
+                        timing_allow_passed,
+                        url: format!("https://cross.test/{index}"),
+                        redirected: false,
+                        status: if response_type == "opaque" { 0 } else { 200 },
+                        status_text: String::new(),
+                        headers: Vec::new(),
+                        body: b"body".to_vec(),
+                    },
+                    insertion_order: index as u64 + 1,
+                },
+            )
+        })
+        .collect();
+        save_storage_bucket_cache_file(&temp.path, &entries)?;
+        let reopened = super::load_storage_bucket_cache_file(&temp.path)?;
+        for (key, expected) in entries {
+            assert_eq!(reopened[&key].response, expected.response, "{key}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cache_file_without_timing_flag_preserves_response_type_defaults() -> Result<()> {
+        let temp = TempStorePath::new("cache-unmarked-timing");
+        let entries: serde_json::Map<_, _> = ["default", "basic", "cors", "opaque"]
+            .into_iter()
+            .map(|response_type| {
+                (
+                    response_type.to_owned(),
+                    serde_json::json!({
+                        "usageBytes":4, "responseType":response_type,
+                        "status":200, "statusText":"", "headers":[], "bodyBase64":"Ym9keQ=="
+                    }),
+                )
+            })
+            .collect();
+        fs::write(
+            &temp.path,
+            serde_json::to_vec(&serde_json::json!({
+                "version":super::STORAGE_BUCKET_CACHE_JSON_VERSION, "entries":entries
+            }))?,
+        )?;
+        let reopened = super::load_storage_bucket_cache_file(&temp.path)?;
+        for (response_type, allowed) in [
+            ("default", true),
+            ("basic", true),
+            ("cors", false),
+            ("opaque", false),
+        ] {
+            assert_eq!(
+                reopened[response_type].response.timing_allow_passed, allowed,
+                "{response_type}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn json_storage_bucket_store_persists_names_by_origin() -> Result<()> {
         let temp = TempStorePath::new("persist");
         let bucket_a_id;
@@ -3673,6 +3770,7 @@ mod tests {
                     "/entry",
                     StorageBucketCachedResponse {
                         response_type: "default".to_owned(),
+                        timing_allow_passed: true,
                         url: "https://a.test/entry".to_owned(),
                         redirected: false,
                         status: 200,
@@ -3911,6 +4009,7 @@ mod tests {
                         "/cached.txt",
                         StorageBucketCachedResponse {
                             response_type: "default".to_owned(),
+                            timing_allow_passed: true,
                             url: String::new(),
                             redirected: false,
                             status: 200,
@@ -4003,6 +4102,7 @@ mod tests {
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 202,
@@ -4080,6 +4180,7 @@ mod tests {
     fn json_storage_bucket_cache_crash_points_recover_one_committed_root() -> Result<()> {
         let old_response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -4089,6 +4190,7 @@ mod tests {
         };
         let new_response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 201,
@@ -4173,6 +4275,7 @@ mod tests {
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 206,
@@ -4225,6 +4328,7 @@ mod tests {
         let cache_root = temp.cache_root();
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -4280,6 +4384,7 @@ mod tests {
         let storage_service = StorageService::on_disk(temp.opfs_root())?;
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: String::new(),
             redirected: false,
             status: 200,
@@ -4639,6 +4744,7 @@ mod tests {
         let bucket_id = StorageBucketId::new(17).unwrap();
         let response = StorageBucketCachedResponse {
             response_type: "default".to_owned(),
+            timing_allow_passed: true,
             url: "https://a.test/cached".to_owned(),
             redirected: false,
             status: 200,
