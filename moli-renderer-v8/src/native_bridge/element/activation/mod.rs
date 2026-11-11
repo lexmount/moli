@@ -3,6 +3,7 @@ mod default_action;
 mod targets;
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
+pub(super) use default_action::dispatch_click_event;
 pub(in crate::native_bridge) use default_action::navigate_form_target_browsing_context;
 pub(crate) use default_action::{
     accepts_drop_default_action, activate_default_submit_button_via_keyboard,

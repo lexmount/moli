@@ -10,7 +10,7 @@ use super::forms::{
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
 use super::styles::{StyleMode, style_property_value};
 use super::{
-    construct_click_event, construct_focus_event, construct_interest_event,
+    ClickEventSource, InputEventCoordinates, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
     resolved_reflected_element_attribute_handle,
 };
@@ -590,10 +590,17 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     let Some(target) = access_key_target(unsafe { &*runtime_ptr }, &key) else {
         return;
     };
-    let Some(click) = construct_click_event(scope, 0.0, 0.0, 0, 0) else {
-        return;
-    };
-    let _ = dispatch_public_event(scope, runtime_ptr, target, click);
+    let _ = super::activation::dispatch_click_event(
+        scope,
+        runtime_ptr,
+        target,
+        InputEventCoordinates::default(),
+        0,
+        0,
+        0,
+        0,
+        ClickEventSource::UserAgent,
+    );
 }
 
 pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
