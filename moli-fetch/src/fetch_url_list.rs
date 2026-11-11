@@ -28,6 +28,17 @@ impl<'a> FetchUrlList<'a> {
             .chain(std::iter::once(self.current_url))
     }
 
+    /// An owned response URL list, with one URL per hop. The destination of one
+    /// record is the next record's source; actual redirects to the same URL
+    /// must still retain both visits.
+    pub fn to_vec(self) -> Vec<Url> {
+        self.redirects
+            .iter()
+            .map(|redirect| redirect.from_url.clone())
+            .chain(std::iter::once(self.current_url.clone()))
+            .collect()
+    }
+
     /// Returning to the initiating origin cannot restore basic response tainting.
     pub fn has_cross_origin_url(self, origin: &WebOrigin) -> bool {
         self.urls().any(|url| !origin.same_origin(&url.into()))

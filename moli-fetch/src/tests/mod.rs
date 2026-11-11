@@ -11,6 +11,7 @@ mod mixed_transport;
 mod redirect_auth;
 mod redirect_policy;
 mod request_security;
+mod response_metadata;
 mod response_progress;
 mod response_timing;
 mod support;

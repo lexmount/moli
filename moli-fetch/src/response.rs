@@ -71,6 +71,58 @@ impl ResponseHead {
     pub fn url_list(&self) -> crate::FetchUrlList<'_> {
         crate::FetchUrlList::new(&self.final_url, &self.redirect_chain)
     }
+
+    /// Capture Fetch's response state before CORS/opaque header filtering.
+    /// Consumers of an existing Response must carry this result, not repeat
+    /// these checks against a filtered header list or just the final URL.
+    pub fn fetch_metadata(
+        &self,
+        origin: &moli_url::WebOrigin,
+        mode: crate::RequestMode,
+    ) -> crate::FetchResponseMetadata {
+        crate::FetchResponseMetadata {
+            response_type: self.fetch_response_type(origin, mode),
+            url_list: self.url_list().to_vec(),
+            timing_allow_passed: self.timing_allow_passed(origin),
+            redirected: self.redirected,
+        }
+    }
+
+    pub fn fetch_response_type(
+        &self,
+        origin: &moli_url::WebOrigin,
+        mode: crate::RequestMode,
+    ) -> crate::FetchResponseType {
+        use crate::FetchResponseType;
+        if matches!(self.status, 301 | 302 | 303 | 307 | 308) {
+            FetchResponseType::OpaqueRedirect
+        } else if self.final_url.scheme() == "data" || !self.url_list().has_cross_origin_url(origin)
+        {
+            FetchResponseType::Basic
+        } else if mode == crate::RequestMode::NoCors {
+            FetchResponseType::Opaque
+        } else {
+            FetchResponseType::Cors
+        }
+    }
+
+    /// A failed redirect TAO check is sticky, including redirects back to the
+    /// initiating origin. This is independent of CORS response readability.
+    pub fn timing_allow_passed(&self, origin: &moli_url::WebOrigin) -> bool {
+        let mut cross_origin = false;
+        for (index, redirect) in self.redirect_chain.iter().enumerate() {
+            cross_origin |= !origin.same_origin_url(&redirect.from_url);
+            let urls = crate::FetchUrlList::new(&redirect.from_url, &self.redirect_chain[..index]);
+            if cross_origin
+                && !headers_allow_timing(&redirect.headers, &urls.serialized_origin(origin))
+            {
+                return false;
+            }
+        }
+        cross_origin |= !origin.same_origin_url(&self.final_url);
+        !cross_origin
+            || headers_allow_timing(&self.headers, &self.url_list().serialized_origin(origin))
+    }
     pub fn status_text(&self) -> &str {
         self.status_text.as_deref().unwrap_or_else(|| {
             if matches!(
@@ -86,6 +138,16 @@ impl ResponseHead {
             }
         })
     }
+}
+
+fn headers_allow_timing(headers: &[(String, Vec<u8>)], origin: &str) -> bool {
+    headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("timing-allow-origin"))
+        .filter_map(|(_, value)| std::str::from_utf8(value).ok())
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim_matches(|ch: char| ch.is_ascii_whitespace()))
+        .any(|value| value == "*" || value == origin)
 }
 
 pub(crate) struct HttpResponseStatusLine {
