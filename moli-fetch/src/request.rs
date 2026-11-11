@@ -5,11 +5,6 @@ use moli_cookie_jar::{
     BrowserCookieFacadeContext, NetworkCookieRequestContext, NetworkStorageAccessStatus,
     advance_cookie_request_context,
 };
-#[cfg(any(test, feature = "test-support"))]
-use moli_cookie_jar::{
-    NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata, redirect_types_for_request,
-    site_context_downgrade_type,
-};
 use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
@@ -1331,11 +1326,7 @@ impl Request {
                 .as_ref()
                 .is_none_or(|url| !same_origin(url, &origin_url))
             {
-                // Keep the embedding page's site-for-cookies/partition.
-                let browser_context = context.browser_context.clone();
-                context = context.with_initiator_url(&self.url, &origin_url);
-                context.browser_context = browser_context;
-                context = context.recompute_site_context_for_request(&self.url);
+                context = context.with_cookie_initiator_origin(&self.url, &origin_url);
             }
         }
         context
@@ -1408,8 +1399,7 @@ impl Request {
     }
 
     pub fn with_subframe_navigation_cookie_context(mut self) -> Self {
-        self.cookie_context.request_type =
-            NetworkCookieRequestContext::subresource(&self.method).request_type;
+        self.cookie_context.set_subresource_request_type();
         self.cookie_context.set_request_method(&self.method);
         self.request_mode = RequestMode::Navigate;
         self.priority_hints.subframe_context = true;
@@ -1425,10 +1415,7 @@ impl Request {
     }
 
     pub(crate) fn is_top_level_navigation_request(&self) -> bool {
-        std::mem::discriminant(&self.cookie_context.request_type)
-            == std::mem::discriminant(
-                &NetworkCookieRequestContext::top_level_navigation(&self.method).request_type,
-            )
+        self.cookie_context.is_top_level_navigation()
     }
 
     pub fn with_initiator_url(mut self, initiator_url: &Url) -> Self {
@@ -1460,72 +1447,6 @@ impl Request {
             .cookie_context
             .with_storage_access_status(storage_access_status);
         self
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn effective_cookie_context(&self, request_url: &Url) -> NetworkCookieRequestContext {
-        let recomputed = self
-            .cookie_context
-            .clone()
-            .recompute_site_context_for_request(request_url);
-        let redirect_types = redirect_types_for_request(
-            &self.url,
-            request_url,
-            self.cookie_context.initiator_url.as_ref(),
-            &self.cookie_context.browser_context,
-            self.cookie_context.request_type,
-            self.cookie_context.is_method_safe,
-        );
-        let context_downgrade_type = site_context_downgrade_type(
-            self.cookie_context.site_context.context,
-            recomputed.site_context.context,
-        )
-        .or(self
-            .cookie_context
-            .site_context_metadata
-            .context
-            .downgrade_type);
-        let schemeful_context_downgrade_type = site_context_downgrade_type(
-            self.cookie_context.site_context.schemeful_context,
-            recomputed.site_context.schemeful_context,
-        )
-        .or(self
-            .cookie_context
-            .site_context_metadata
-            .schemeful_context
-            .downgrade_type);
-        recomputed.with_site_context_metadata(NetworkSiteContextMetadata::new(
-            NetworkSiteContextTrackMetadata::new(
-                self.cookie_context
-                    .site_context_metadata
-                    .context
-                    .downgraded_by_cross_site_redirect
-                    || context_downgrade_type.is_some(),
-                context_downgrade_type,
-            )
-            .with_http_method(
-                self.cookie_context
-                    .site_context_metadata
-                    .context
-                    .http_method,
-            )
-            .with_redirect_type(redirect_types.context.redirect_type),
-            NetworkSiteContextTrackMetadata::new(
-                self.cookie_context
-                    .site_context_metadata
-                    .schemeful_context
-                    .downgraded_by_cross_site_redirect
-                    || schemeful_context_downgrade_type.is_some(),
-                schemeful_context_downgrade_type,
-            )
-            .with_http_method(
-                self.cookie_context
-                    .site_context_metadata
-                    .schemeful_context
-                    .http_method,
-            )
-            .with_redirect_type(redirect_types.schemeful_context.redirect_type),
-        ))
     }
 }
 
