@@ -1175,6 +1175,7 @@ impl Request {
             self.network_cookie_context(),
             self.initial_url(),
             &redirect.to_url,
+            &self.method,
         );
         self.url = redirect.to_url.clone();
         self.record_redirect(redirect);
