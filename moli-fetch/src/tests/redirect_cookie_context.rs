@@ -55,7 +55,7 @@ fn caller_followed_redirect_keeps_referrer_separate_from_cookie_origin() -> Resu
         assert_eq!(request.cookie_context.initiator_url.as_ref(), Some(&origin));
         assert_eq!(request.referrer_header_value(to), None);
         assert_eq!(
-            request.network_cookie_context().site_context,
+            request.network_cookie_context().site_context(),
             moli_cookie_jar::test_support::NetworkSiteContext::same_site()
         );
     }
@@ -242,19 +242,19 @@ fn caller_followed_redirect_updates_method_without_restoring_strict_context() ->
             } else {
                 NetworkSiteContext::new(post_context, SameSiteLaxMethodUnsafe)
             };
-            assert_eq!(request.cookie_context.site_context, expected);
+            assert_eq!(request.cookie_context.site_context(), expected);
             request.follow_redirect(redirect(&middle, &end, 302))?;
             assert_eq!(request.method, "GET");
-            assert!(request.cookie_context.is_method_safe);
+            assert!(request.cookie_context.is_method_safe());
             let expected = if force_cross_site {
                 NetworkSiteContext::cross_site()
             } else {
                 NetworkSiteContext::new(get_context, SameSiteLax)
             };
-            assert_eq!(request.cookie_context.site_context, expected);
+            assert_eq!(request.cookie_context.site_context(), expected);
             let get_metadata =
-                NetworkCookieRequestContext::top_level_navigation("GET").site_context_metadata;
-            let metadata = request.cookie_context.site_context_metadata;
+                NetworkCookieRequestContext::top_level_navigation("GET").site_context_metadata();
+            let metadata = request.cookie_context.site_context_metadata();
             assert_eq!(
                 metadata.context.http_method,
                 get_metadata.context.http_method
@@ -302,7 +302,7 @@ fn assert_browser_redirect_cookie_context(force_cross_site: bool) -> Result<()> 
             NetworkSameSiteContext::SameSiteLaxMethodUnsafe,
         )
     };
-    assert_eq!(request.network_cookie_context().site_context, expected);
+    assert_eq!(request.network_cookie_context().site_context(), expected);
     request.follow_redirect(redirect(&middle, &end, 302))?;
     let expected = if force_cross_site {
         NetworkSiteContext::cross_site()
@@ -312,8 +312,8 @@ fn assert_browser_redirect_cookie_context(force_cross_site: bool) -> Result<()> 
             NetworkSameSiteContext::SameSiteLax,
         )
     };
-    assert_eq!(request.network_cookie_context().site_context, expected);
-    assert_eq!(request.cookie_context.site_context, expected);
+    assert_eq!(request.network_cookie_context().site_context(), expected);
+    assert_eq!(request.cookie_context.site_context(), expected);
     Ok(())
 }
 
@@ -350,25 +350,28 @@ fn network_cookie_context_uses_the_current_overridden_request_method() -> Result
         .with_top_level_navigation_cookie_context()
         .with_initiator_url(&origin);
         assert_eq!(
-            request.cookie_context.site_context,
+            request.cookie_context.site_context(),
             NetworkSiteContext::new(initial_context, initial_context),
             "the context must already be computed before the method override"
         );
         request.method = method.to_owned();
         let actual = request.network_cookie_context();
         let expected = NetworkCookieRequestContext::top_level_navigation(method);
-        assert_eq!(actual.is_method_safe, expected.is_method_safe);
+        assert_eq!(actual.is_method_safe(), expected.is_method_safe());
         assert_eq!(
-            actual.site_context,
+            actual.site_context(),
             NetworkSiteContext::new(expected_context, expected_context)
         );
         assert_eq!(
-            actual.site_context_metadata.context.http_method,
-            expected.site_context_metadata.context.http_method
+            actual.site_context_metadata().context.http_method,
+            expected.site_context_metadata().context.http_method
         );
         assert_eq!(
-            actual.site_context_metadata.schemeful_context.http_method,
-            expected.site_context_metadata.schemeful_context.http_method
+            actual.site_context_metadata().schemeful_context.http_method,
+            expected
+                .site_context_metadata()
+                .schemeful_context
+                .http_method
         );
     }
     Ok(())
@@ -401,7 +404,7 @@ async fn overridden_navigation_method_controls_cookie_headers_in_all_transports(
             .with_initiator_url(&initiator)
             .with_credentials_mode(RequestCredentialsMode::Include);
             assert_eq!(
-                request.cookie_context.is_method_safe,
+                request.cookie_context.is_method_safe(),
                 initial_method == "GET"
             );
             request.method = method.to_owned();
@@ -440,9 +443,9 @@ fn browser_origin_rebinding_recomputes_provisional_cross_site_context() -> Resul
             .with_site_for_cookies_url(&origin)
             .with_top_frame_origin_url(&origin),
     );
-    assert!(request.cookie_context.site_context.is_cross_site());
+    assert!(request.cookie_context.site_context().is_cross_site());
     assert_eq!(
-        request.network_cookie_context().site_context,
+        request.network_cookie_context().site_context(),
         NetworkSiteContext::same_site()
     );
     Ok(())
@@ -471,7 +474,7 @@ fn browser_scope_refresh_keeps_followed_redirect_limits() -> Result<()> {
             .with_top_frame_origin_url(&start),
     );
     assert_eq!(
-        request.network_cookie_context().site_context,
+        request.network_cookie_context().site_context(),
         NetworkSiteContext::new(SameSiteLax, SameSiteLax)
     );
     Ok(())
@@ -492,7 +495,7 @@ fn subframe_navigation_preserves_explicit_cookie_constraints() -> Result<()> {
     assert!(
         request
             .network_cookie_context()
-            .site_context
+            .site_context()
             .is_cross_site()
     );
     Ok(())

@@ -605,7 +605,7 @@ pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptText
             .request_origin()
             .map(|origin| origin.ascii_serialization().to_owned()),
         request_mode: request.request_mode.as_ref().to_owned(),
-        site_context: format!("{:?}", request.cookie_context.site_context),
+        site_context: format!("{:?}", request.cookie_context.site_context()),
         site_for_cookies_origin: script_cache_partition_url_component(
             browser_context.site_for_cookies_url.as_ref(),
             &request.url,

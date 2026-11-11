@@ -76,7 +76,7 @@ fn browser_site_context_overlay_downgrades_but_never_relaxes_same_site_context()
         .with_request_origin(moli_url::WebOrigin::from_url(&child_url))
         .with_browser_site_context(browser_context.clone());
     assert!(
-        computed.cookie_context.site_context.is_cross_site(),
+        computed.cookie_context.site_context().is_cross_site(),
         "the inherited top-frame site must downgrade a same-origin child request"
     );
 
@@ -92,7 +92,7 @@ fn browser_site_context_overlay_downgrades_but_never_relaxes_same_site_context()
     assert!(
         explicitly_cross_site
             .cookie_context
-            .site_context
+            .site_context()
             .is_cross_site(),
         "a worker sameSiteCookies=none restriction must survive context propagation"
     );
@@ -149,11 +149,11 @@ fn explicit_same_site_override_sets_both_site_context_tracks() {
         .with_same_site_context(NetworkSameSiteContext::CrossSite);
 
     assert_eq!(
-        context.site_context.context,
+        context.site_context().context,
         NetworkSameSiteContext::CrossSite
     );
     assert_eq!(
-        context.site_context.schemeful_context,
+        context.site_context().schemeful_context,
         NetworkSameSiteContext::CrossSite
     );
 }
@@ -323,11 +323,11 @@ fn request_with_initiator_url_treats_same_scheme_sibling_subdomains_as_same_site
     }
 
     assert_eq!(
-        request.cookie_context.site_context.context,
+        request.cookie_context.site_context().context,
         NetworkSameSiteContext::SameSiteStrict
     );
     assert_eq!(
-        request.cookie_context.site_context.schemeful_context,
+        request.cookie_context.site_context().schemeful_context,
         NetworkSameSiteContext::SameSiteStrict
     );
     assert_eq!(
@@ -365,11 +365,11 @@ fn request_with_initiator_url_respects_public_suffix_boundaries() {
     }
 
     assert_eq!(
-        request.cookie_context.site_context.context,
+        request.cookie_context.site_context().context,
         NetworkSameSiteContext::CrossSite
     );
     assert_eq!(
-        request.cookie_context.site_context.schemeful_context,
+        request.cookie_context.site_context().schemeful_context,
         NetworkSameSiteContext::CrossSite
     );
     assert_eq!(
@@ -401,7 +401,7 @@ fn request_with_initiator_url_treats_multi_label_registrable_domains_as_same_sit
     }
 
     assert_eq!(
-        request.cookie_context.site_context.context,
+        request.cookie_context.site_context().context,
         NetworkSameSiteContext::SameSiteStrict
     );
     assert_eq!(
@@ -420,11 +420,11 @@ fn request_with_initiator_url_tracks_schemeless_and_schemeful_site_context_separ
         ));
 
     assert_eq!(
-        request.cookie_context.site_context.context,
+        request.cookie_context.site_context().context,
         NetworkSameSiteContext::SameSiteStrict
     );
     assert_eq!(
-        request.cookie_context.site_context.schemeful_context,
+        request.cookie_context.site_context().schemeful_context,
         NetworkSameSiteContext::CrossSite
     );
 }
@@ -699,34 +699,34 @@ fn request_cookie_context_records_strict_to_lax_redirect_downgrade() {
 
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .schemeful_context
             .redirect_type,
         NetworkSameSiteRedirectType::CrossSiteRedirect
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .context
             .redirect_type,
         NetworkSameSiteRedirectType::CrossSiteRedirect
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .schemeful_context
             .downgrade_type,
         Some(NetworkSameSiteContextDowngradeType::StrictToLax)
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .context
             .downgrade_type,
         Some(NetworkSameSiteContextDowngradeType::StrictToLax)
     );
     assert_eq!(
-        redirected_context.site_context.schemeful_context,
+        redirected_context.site_context().schemeful_context,
         NetworkSameSiteContext::SameSiteLax
     );
 }
@@ -745,37 +745,37 @@ fn request_cookie_context_tracks_schemeful_only_redirect_downgrade() {
     let redirected_context = request.network_cookie_context();
 
     assert_eq!(
-        redirected_context.site_context.context,
+        redirected_context.site_context().context,
         NetworkSameSiteContext::SameSiteStrict
     );
     assert_eq!(
-        redirected_context.site_context.schemeful_context,
+        redirected_context.site_context().schemeful_context,
         NetworkSameSiteContext::SameSiteLax
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .context
             .downgrade_type,
         None
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .schemeful_context
             .downgrade_type,
         Some(NetworkSameSiteContextDowngradeType::StrictToLax)
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .context
             .redirect_type,
         NetworkSameSiteRedirectType::AllSameSiteRedirect
     );
     assert_eq!(
         redirected_context
-            .site_context_metadata
+            .site_context_metadata()
             .schemeful_context
             .redirect_type,
         NetworkSameSiteRedirectType::CrossSiteRedirect
@@ -886,7 +886,7 @@ fn top_level_post_with_initiator_url_uses_lax_method_unsafe_context() {
     let effective_context = request.network_cookie_context();
 
     assert_eq!(
-        effective_context.site_context.schemeful_context,
+        effective_context.site_context().schemeful_context,
         NetworkSameSiteContext::SameSiteLaxMethodUnsafe
     );
 }

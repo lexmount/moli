@@ -20,12 +20,10 @@ use moli_site::{public_suffix_list, same_site_urls};
 use url::Url;
 
 use super::model::{
-    BrowserCookieFacadeContext, CookieSource, NetworkCookieRequestContext,
-    NetworkCookieRequestType, NetworkSameSiteContext, NetworkSameSiteHttpMethod,
-    NetworkSameSiteRedirectType, StoredCookie, StoredCookieDomainMatch,
-    StoredCookiePartitionFilter, StoredCookieQueryReport, StoredCookieSameSite,
-    StoredCookieSetRejectionReason, StoredCookieSetReport, StoredCookieSetStatus,
-    StoredCookieSourceScheme, core_browser_site_context_from_facade,
+    BrowserCookieFacadeContext, CookieSource, NetworkCookieRequestContext, NetworkSameSiteContext,
+    StoredCookie, StoredCookieDomainMatch, StoredCookiePartitionFilter, StoredCookieQueryReport,
+    StoredCookieSameSite, StoredCookieSetRejectionReason, StoredCookieSetReport,
+    StoredCookieSetStatus, StoredCookieSourceScheme, core_browser_site_context_from_facade,
     core_cookie_partition_key_for_url, core_partition_key_from_stored,
     core_same_site_context_metadata_from_stored, core_source_scheme_from_stored,
     has_invalid_cookie_octets, stored_query_report_from_core, stored_set_report_from_core,
@@ -652,9 +650,10 @@ pub(super) fn network_query_context<'a>(
     request_context: NetworkCookieRequestContext,
 ) -> QueryContext<'a> {
     let mut context = QueryContext::http(url);
+    let site_context = request_context.site_context();
     context.same_site_context = SameSiteContext::new(
-        core_same_site_request_context(request_context.site_context.context),
-        core_same_site_request_context(request_context.site_context.schemeful_context),
+        core_same_site_request_context(site_context.context),
+        core_same_site_request_context(site_context.schemeful_context),
     );
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);
@@ -663,44 +662,16 @@ pub(super) fn network_query_context<'a>(
         url,
     ));
     context.same_site_context_metadata =
-        core_same_site_context_metadata_from_stored(request_context.site_context_metadata);
-    // Method/redirect shape now rides inside the track metadata so richer
-    // query diagnostics can stay attached to the same schemeless/schemeful
-    // structure as downgrade information. Use the wrapper-provided request
-    // shape directly instead of trying to reconstruct it from URL/source here.
-    context.http_method = match request_context.site_context_metadata.context.http_method {
-        NetworkSameSiteHttpMethod::Unset => cookie_store::SameSiteContextHttpMethod::Unset,
-        NetworkSameSiteHttpMethod::Unknown => cookie_store::SameSiteContextHttpMethod::Unknown,
-        NetworkSameSiteHttpMethod::Get => cookie_store::SameSiteContextHttpMethod::Get,
-        NetworkSameSiteHttpMethod::Head => cookie_store::SameSiteContextHttpMethod::Head,
-        NetworkSameSiteHttpMethod::Post => cookie_store::SameSiteContextHttpMethod::Post,
-        NetworkSameSiteHttpMethod::Put => cookie_store::SameSiteContextHttpMethod::Put,
-        NetworkSameSiteHttpMethod::Delete => cookie_store::SameSiteContextHttpMethod::Delete,
-        NetworkSameSiteHttpMethod::Connect => cookie_store::SameSiteContextHttpMethod::Connect,
-        NetworkSameSiteHttpMethod::Options => cookie_store::SameSiteContextHttpMethod::Options,
-        NetworkSameSiteHttpMethod::Trace => cookie_store::SameSiteContextHttpMethod::Trace,
-        NetworkSameSiteHttpMethod::Patch => cookie_store::SameSiteContextHttpMethod::Patch,
+        core_same_site_context_metadata_from_stored(request_context.site_context_metadata());
+    // Keep query fields aligned with the converted track metadata.
+    context.http_method = context.same_site_context_metadata.context.http_method;
+    context.redirect_type = context.same_site_context_metadata.context.redirect_type;
+    context.request_type = if request_context.is_top_level_navigation() {
+        HttpRequestType::TopLevelNavigation
+    } else {
+        HttpRequestType::Subresource
     };
-    context.redirect_type = match request_context.site_context_metadata.context.redirect_type {
-        NetworkSameSiteRedirectType::Unset => cookie_store::SameSiteContextRedirectType::Unset,
-        NetworkSameSiteRedirectType::NoRedirect => {
-            cookie_store::SameSiteContextRedirectType::NoRedirect
-        }
-        NetworkSameSiteRedirectType::CrossSiteRedirect => {
-            cookie_store::SameSiteContextRedirectType::CrossSiteRedirect
-        }
-        NetworkSameSiteRedirectType::PartialSameSiteRedirect => {
-            cookie_store::SameSiteContextRedirectType::PartialSameSiteRedirect
-        }
-        NetworkSameSiteRedirectType::AllSameSiteRedirect => {
-            cookie_store::SameSiteContextRedirectType::AllSameSiteRedirect
-        }
-    };
-    context.request_type = match request_context.request_type {
-        NetworkCookieRequestType::Subresource => HttpRequestType::Subresource,
-        NetworkCookieRequestType::TopLevelNavigation => HttpRequestType::TopLevelNavigation,
-    };
-    context.is_method_safe = request_context.is_method_safe;
+    context.is_method_safe = request_context.is_method_safe();
     context
 }
 
@@ -766,13 +737,15 @@ fn network_insert_context<'a>(
     request_context: &NetworkCookieRequestContext,
 ) -> InsertContext<'a> {
     let mut context = InsertContext::http(url);
+    let site_context = request_context.site_context();
     context.same_site_context = SameSiteContext::new(
-        core_same_site_request_context(request_context.site_context.context),
-        core_same_site_request_context(request_context.site_context.schemeful_context),
+        core_same_site_request_context(site_context.context),
+        core_same_site_request_context(site_context.schemeful_context),
     );
-    context.request_type = match request_context.request_type {
-        NetworkCookieRequestType::Subresource => HttpRequestType::Subresource,
-        NetworkCookieRequestType::TopLevelNavigation => HttpRequestType::TopLevelNavigation,
+    context.request_type = if request_context.is_top_level_navigation() {
+        HttpRequestType::TopLevelNavigation
+    } else {
+        HttpRequestType::Subresource
     };
     context.browser_context =
         core_browser_site_context_from_facade(&request_context.browser_context);

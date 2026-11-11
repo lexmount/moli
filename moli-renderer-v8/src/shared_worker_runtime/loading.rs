@@ -721,7 +721,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(request.cookie_context.site_context.is_cross_site());
+        assert!(request.cookie_context.site_context().is_cross_site());
     }
 
     #[test]
