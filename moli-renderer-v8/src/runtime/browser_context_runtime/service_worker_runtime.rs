@@ -12,7 +12,7 @@ use crate::page_task_queue::RendererPageServiceWorkerTaskSender;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 use crate::service_worker_runtime::{
     ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerRuntimeOwnerWake,
-    ServiceWorkerRuntimeOwnerWakeSender,
+    ServiceWorkerRuntimeOwnerWakeSender, ServiceWorkerWindowClientDocument,
 };
 #[cfg(feature = "devtools")]
 use crate::service_worker_runtime::{ServiceWorkerRegistrationId, ServiceWorkerVersionId};
@@ -138,7 +138,7 @@ impl LazyServiceWorkerRuntime {
         for (client_id, client) in window_clients {
             let inserted = service.register_allocated_client_with_storage_key(
                 client_id,
-                client.document_url,
+                client.document_url.into(),
                 client.storage_key,
                 client.frame_type,
                 client.document_owner,
@@ -185,7 +185,7 @@ impl LazyServiceWorkerRuntime {
     pub(super) fn register_window_client(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<WindowDocumentOwner>,
@@ -195,8 +195,9 @@ impl LazyServiceWorkerRuntime {
             let mut state = self.state.lock();
             match &mut *state {
                 LazyServiceWorkerRuntimeState::Deferred { window_clients, .. } => {
+                    // A deferred runtime has no active controller to inherit.
                     let client = DeferredServiceWorkerWindowClient {
-                        document_url,
+                        document_url: document.url,
                         storage_key,
                         frame_type,
                         document_owner,
@@ -215,7 +216,7 @@ impl LazyServiceWorkerRuntime {
         };
         service.register_allocated_client_with_storage_key(
             client_id,
-            document_url,
+            document,
             storage_key,
             frame_type,
             document_owner,
@@ -226,7 +227,7 @@ impl LazyServiceWorkerRuntime {
     pub(super) fn update_window_client(
         &self,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
+        document: ServiceWorkerWindowClientDocument,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<WindowDocumentOwner>,
@@ -239,7 +240,7 @@ impl LazyServiceWorkerRuntime {
                     let Some(client) = window_clients.get_mut(&client_id) else {
                         return false;
                     };
-                    client.document_url = document_url;
+                    client.document_url = document.url;
                     client.storage_key = storage_key;
                     client.frame_type = frame_type;
                     client.document_owner = document_owner;
@@ -254,7 +255,7 @@ impl LazyServiceWorkerRuntime {
         if let Some(completion_tx) = completion_tx {
             service.update_client_document_with_storage_key_and_completion_sender(
                 client_id,
-                document_url,
+                document,
                 storage_key,
                 frame_type,
                 document_owner,
@@ -263,7 +264,7 @@ impl LazyServiceWorkerRuntime {
         } else {
             service.update_client_document_with_storage_key(
                 client_id,
-                document_url,
+                document.url,
                 storage_key,
                 frame_type,
                 document_owner,

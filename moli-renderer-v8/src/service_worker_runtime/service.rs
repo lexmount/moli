@@ -32,7 +32,7 @@ use crate::{
 use super::clients::{
     ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
     ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
-    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
+    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState, ServiceWorkerWindowClientDocument,
     allocate_service_worker_exposed_client_id, service_worker_current_url_for_creation_url,
     service_worker_exposed_client_id,
 };

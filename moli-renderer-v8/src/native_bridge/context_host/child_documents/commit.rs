@@ -269,6 +269,9 @@ impl PageScriptHost {
             owner_local_window_id,
             owner_document_id,
         );
+        // Parser-discovered subresources use the committed Document's client.
+        self.promote_pending_service_worker_child_client(handle);
+        self.register_or_update_service_worker_child_client(handle);
         // Parsing can attach descendant Frames. Their client identities must
         // belong to this committed Document, rather than the one it replaces.
         self.publish_child_frame_navigation_commit(handle, document_network);

@@ -6,6 +6,21 @@ use super::ids::{ServiceWorkerClientId, ServiceWorkerRegistrationId, ServiceWork
 
 static NEXT_SERVICE_WORKER_EXPOSED_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerWindowClientDocument {
+    pub(crate) url: Url,
+    pub(crate) controller_source: Option<ServiceWorkerClientId>,
+}
+
+impl From<Url> for ServiceWorkerWindowClientDocument {
+    fn from(url: Url) -> Self {
+        Self {
+            url,
+            controller_source: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ServiceWorkerClientSnapshot {
     pub(crate) id: ServiceWorkerClientId,
