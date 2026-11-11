@@ -43,9 +43,6 @@ pub(super) fn object_store_write_callback<'s>(
     else {
         return;
     };
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        return;
-    };
     if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
         && transaction_handle_from_value(scope, transaction.into()).is_none()
@@ -62,7 +59,6 @@ pub(super) fn object_store_write_callback<'s>(
         transaction,
         store,
         request,
-        &store_name,
         IndexedDbTransactionOperation::ObjectStoreWrite { prepared, add_only },
     );
     rv.set(request.into());

@@ -17,7 +17,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_delete_callback<'s>(
         target.transaction,
         target.store,
         request,
-        &target.store_name,
         IndexedDbTransactionOperation::CursorDelete {
             key: target.primary_key,
         },

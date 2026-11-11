@@ -41,9 +41,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         scope.throw_exception(error);
         return;
     };
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        return;
-    };
     if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
         let error = dom_exception_value(scope, "The transaction is readonly.", "ReadOnlyError");
         scope.throw_exception(error);
@@ -74,7 +71,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         transaction,
         store,
         request,
-        &store_name,
         IndexedDbTransactionOperation::ObjectStoreDelete { query },
     );
     rv.set(request.into());
@@ -94,9 +90,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
         scope.throw_exception(error);
         return;
     }
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        return;
-    };
     let Some(context) = store.get_creation_context(scope) else {
         return;
     };
@@ -110,7 +103,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
         transaction,
         store,
         request,
-        &store_name,
         IndexedDbTransactionOperation::ObjectStoreClear,
     );
     rv.set(request.into());

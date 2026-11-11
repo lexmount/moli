@@ -58,7 +58,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_update_callback<'s>(
         target.transaction,
         target.store,
         request,
-        &target.store_name,
         IndexedDbTransactionOperation::ObjectStoreWrite {
             prepared,
             add_only: false,

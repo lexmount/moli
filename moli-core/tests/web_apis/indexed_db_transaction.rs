@@ -606,6 +606,9 @@ async fn assert_schema_rename(scenarios: &[&str]) -> Result<()> {
             assert_eq!(result["state"], "pass", "{case}: {result}");
             let expected = match *scenario {
                 "validation" => 53,
+                "conversion-store" => 131,
+                "conversion-index" => 90,
+                "conversion-index-store" => 98,
                 "cursor-store" | "cursor-index" => 76,
                 "rollback-explicit" | "rollback-constraint" => 32,
                 _ => unreachable!("unknown schema rename scenario"),
@@ -630,6 +633,16 @@ async fn indexed_db_schema_rename_validates_native_name_attributes() -> Result<(
 async fn indexed_db_schema_rename_keeps_cursors_and_admitted_operations_on_original_sources()
 -> Result<()> {
     assert_schema_rename(&["cursor-store", "cursor-index"]).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_rename_during_key_conversion_keeps_original_stores() -> Result<()> {
+    assert_schema_rename(&["conversion-store"]).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn indexed_db_schema_rename_during_query_conversion_keeps_original_indexes() -> Result<()> {
+    assert_schema_rename(&["conversion-index", "conversion-index-store"]).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

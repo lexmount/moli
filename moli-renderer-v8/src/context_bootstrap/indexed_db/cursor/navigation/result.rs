@@ -8,8 +8,7 @@ pub(super) fn enqueue_cursor_iteration<'s>(
 ) -> Option<()> {
     let (request, transaction) = cursor_request_and_transaction(scope, cursor)?;
     cursor_active_transaction(scope, cursor)?;
-    let store = cursor_effective_object_store(scope, cursor)?;
-    let name = indexed_db_object_store_name(scope, store)?;
+    cursor_effective_object_store(scope, cursor)?;
     begin_indexed_db_cursor_iteration(scope, cursor)?;
     queue_transaction_request(scope, transaction, request);
     prepare_cursor_request(scope, request);
@@ -17,7 +16,7 @@ pub(super) fn enqueue_cursor_iteration<'s>(
         cursor: v8::Global::new(scope, cursor),
         movement,
     };
-    schedule_transaction_operation(scope, transaction, cursor, request, &name, kind);
+    schedule_transaction_operation(scope, transaction, cursor, request, kind);
     Some(())
 }
 

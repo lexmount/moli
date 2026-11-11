@@ -128,9 +128,6 @@ pub(super) fn collection_callback<'s>(
         direction: options.direction,
         kind,
     };
-    let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        return;
-    };
     let Some(context) = transaction.get_creation_context(scope) else {
         return;
     };
@@ -143,7 +140,7 @@ pub(super) fn collection_callback<'s>(
     } else {
         IndexedDbTransactionOperation::ObjectStoreGetAll(collection)
     };
-    schedule_transaction_operation(scope, transaction, source, request, &store_name, operation);
+    schedule_transaction_operation(scope, transaction, source, request, operation);
     rv.set(request.into());
 }
 
