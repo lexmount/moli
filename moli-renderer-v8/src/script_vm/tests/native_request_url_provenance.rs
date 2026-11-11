@@ -20,7 +20,7 @@ async fn cache_keys_preserves_native_credential_urls_without_author_constructors
             let source = ServiceWorkerFetchRequest {
                 body_stream: None,
 
-                client_id: ServiceWorkerClientId::from_u64_for_test(7),
+                client_id: Some(ServiceWorkerClientId::from_u64_for_test(7)),
                 resulting_client_id: None,
                 url: Url::parse(url).unwrap(),
                 method: "GET".to_owned(),
@@ -116,7 +116,7 @@ async fn window_fetch_retains_native_request_urls_and_rejects_converted_credenti
     let request = ServiceWorkerFetchRequest {
         body_stream: None,
 
-        client_id: ServiceWorkerClientId::from_u64_for_test(7),
+        client_id: Some(ServiceWorkerClientId::from_u64_for_test(7)),
         resulting_client_id: None,
         url: native_url.clone(),
         method: "GET".to_owned(),

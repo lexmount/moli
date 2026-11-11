@@ -3578,6 +3578,8 @@ async fn worker_main(
                             csp_violations: Vec::new(),
                             local_request: Some(local_request),
 
+                            response_filter: None,
+
                             xhr_id,
                             result: Err(error_text),
                         },

@@ -10,6 +10,7 @@ pub(crate) struct WorkerServiceWorkerFetch {
     pub(crate) runtime: ServiceWorkerRuntimeService,
     pub(crate) client_id: ServiceWorkerClientId,
     pub(crate) metadata: ServiceWorkerFetchRequestMetadata,
+    policy_context: crate::types::SubresourcePolicyContext,
     body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>,
     request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>,
 }
@@ -25,10 +26,15 @@ impl ControlledResourceLoad {
                 runtime,
                 client_id,
                 metadata,
+                policy_context: match self.response_policy { ResourceResponsePolicy::Fetch(policy) => policy, ResourceResponsePolicy::Xhr => Default::default() },
                 body_stream: None,
                 request_body_owner: None,
             });
         }
+        self
+    }
+    pub(crate) fn with_service_worker_policy(mut self, policy: crate::types::SubresourcePolicyContext) -> Self {
+        if let Some(source) = &mut self.service_worker { source.policy_context = policy; }
         self
     }
     pub(crate) fn with_service_worker_request_body(mut self, body_stream: Option<crate::context_bootstrap::ReadableStreamClonePayload>, request_body_owner: Option<crate::context_bootstrap::RequestBodyOwner>) -> Self {
@@ -51,9 +57,7 @@ impl ControlledResourceLoad {
             return Ok(None);
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let ResourceResponsePolicy::Fetch(policy_context) = self.response_policy else {
-            return Ok(None);
-        };
+        let policy_context = source.policy_context;
         let dispatch = ServiceWorkerFetchDispatch {
             redirect_check: None,
             request_body_owner: source.request_body_owner,
@@ -95,7 +99,7 @@ impl ControlledResourceLoad {
             request_client: self.load.request_client(),
             resource_task_runner: self.load.task_runner(),
             cancel_handle: self.cancel.clone(),
-            direct_completion_tx: Some(tx),
+            direct_completion_tx: Some(crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::streaming(tx)),
         };
         if !source
             .runtime
@@ -110,6 +114,11 @@ impl ControlledResourceLoad {
         };
         match result {
             ServiceWorkerDirectFetchResult::Fallback => Ok(None),
+            ServiceWorkerDirectFetchResult::NetworkFallback { request, preflight_headers } => {
+                self.request = *request;
+                self.preflight_headers = preflight_headers;
+                Ok(None)
+            }
             ServiceWorkerDirectFetchResult::FallbackStream(body) => {
                 self.request = self.request.clone().with_upload_body(body);
                 Ok(None)

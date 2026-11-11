@@ -3,6 +3,7 @@ mod delivery;
 mod encoding;
 mod events;
 mod header_surface;
+pub(crate) use self::header_surface::xhr_response_headers_for_filter;
 mod instance_state;
 mod lifecycle;
 mod request_state;

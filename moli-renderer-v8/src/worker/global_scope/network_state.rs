@@ -149,12 +149,15 @@ pub(in crate::worker) struct PendingWorkerXhr {
     pub(in crate::worker) xhr: v8::Global<v8::Object>,
     pub(in crate::worker) credentials_mode: RequestCredentialsMode,
 
+
     pub(in crate::worker) load: ResourceLoadLease,
 }
 
 pub(in crate::worker) struct WorkerXhrCompletion {
+    pub(in crate::worker) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
     pub(in crate::worker) csp_violations:
         Vec<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+
     pub(in crate::worker) xhr_id: u32,
     // Rejections admitted before a native load use the Worker networking task.
     // Aborting or reopening before that task runs suppresses their delivery.

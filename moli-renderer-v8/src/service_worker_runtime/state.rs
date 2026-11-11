@@ -35,9 +35,9 @@ use super::{
     diagnostics::ServiceWorkerMainScriptUpdateCheckDiagnostics,
     errors::ServiceWorkerRegistrationError,
     events::{
-        ServiceWorkerDirectFetchResult, ServiceWorkerFetchCompletion,
-        ServiceWorkerFetchRequestMetadata, ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent,
-        ServiceWorkerNotificationEvent, ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
+        ServiceWorkerFetchCompletion, ServiceWorkerFetchRequestMetadata,
+        ServiceWorkerLifecycleEvent, ServiceWorkerMessageEvent, ServiceWorkerNotificationEvent,
+        ServiceWorkerPeriodicSyncEvent, ServiceWorkerPushEvent,
         ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerRequestDestination,
         ServiceWorkerSyncEvent,
     },
@@ -835,8 +835,7 @@ pub(super) struct ServiceWorkerFetchJob {
     pub(super) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(super) navigation_preload_cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     pub(super) streaming_body_source_id: Option<crate::types::NetworkBodySourceId>,
-    pub(super) direct_completion_tx:
-        Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
+    pub(super) direct_completion_tx: Option<super::events::ServiceWorkerDirectFetchCompletion>,
 }
 
 impl ServiceWorkerFetchJob {

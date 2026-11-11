@@ -153,25 +153,26 @@ fn service_worker_fetch_can_forward_stream(
         final_url,
         &response_head.headers,
     )?;
-    Ok(
-        (job.direct_completion_tx.is_none() || job.request_body_owner.is_some())
-            && job.metadata.integrity.is_empty()
-            && !matches!(
-                job.network_context.resource_type,
-                crate::types::SubresourceResourceType::Audio
-                    | crate::types::SubresourceResourceType::Font
-                    | crate::types::SubresourceResourceType::Image
-                    | crate::types::SubresourceResourceType::Media
-                    | crate::types::SubresourceResourceType::TextTrack
-                    | crate::types::SubresourceResourceType::Video
-            )
-            && !is_redirect_status(response_head.status)
-            && matches!(
-                response_head.metadata.response_type.as_str(),
-                "default" | "basic"
-            )
-            && !service_worker_fetch_response_requires_body_security_policy(job),
-    )
+    Ok(job
+        .direct_completion_tx
+        .as_ref()
+        .is_none_or(|completion| completion.stream_response)
+        && job.metadata.integrity.is_empty()
+        && !matches!(
+            job.network_context.resource_type,
+            crate::types::SubresourceResourceType::Audio
+                | crate::types::SubresourceResourceType::Font
+                | crate::types::SubresourceResourceType::Image
+                | crate::types::SubresourceResourceType::Media
+                | crate::types::SubresourceResourceType::TextTrack
+                | crate::types::SubresourceResourceType::Video
+        )
+        && !is_redirect_status(response_head.status)
+        && matches!(
+            response_head.metadata.response_type.as_str(),
+            "default" | "basic" | "cors"
+        )
+        && !service_worker_fetch_response_requires_body_security_policy(job))
 }
 
 fn apply_service_worker_synthetic_redirect(
@@ -279,7 +280,11 @@ impl ServiceWorkerRuntimeService {
             request_client: request_client.clone(),
             resource_task_runner,
             cancel_handle,
-            direct_completion_tx: Some(direct_completion_tx),
+            direct_completion_tx: Some(
+                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                    direct_completion_tx,
+                ),
+            ),
         };
         if !self.dispatch_controlled_fetch(dispatch) {
             return Ok(None);
@@ -287,6 +292,7 @@ impl ServiceWorkerRuntimeService {
         match direct_completion_rx.await {
             Ok(
                 ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::NetworkFallback { .. }
                 | ServiceWorkerDirectFetchResult::Stream(_),
             ) => Err("native subresource requests cannot contain an author stream".to_owned()),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
@@ -354,7 +360,11 @@ impl ServiceWorkerRuntimeService {
             request_client: request_client.clone(),
             resource_task_runner,
             cancel_handle,
-            direct_completion_tx: Some(direct_completion_tx),
+            direct_completion_tx: Some(
+                crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                    direct_completion_tx,
+                ),
+            ),
         };
 
         if !self.dispatch_controlled_fetch(dispatch) {
@@ -364,6 +374,7 @@ impl ServiceWorkerRuntimeService {
         match direct_completion_rx.await {
             Ok(
                 ServiceWorkerDirectFetchResult::FallbackStream(_)
+                | ServiceWorkerDirectFetchResult::NetworkFallback { .. }
                 | ServiceWorkerDirectFetchResult::Stream(_),
             ) => Err("worker script requests cannot contain an author stream".to_owned()),
             Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
@@ -394,6 +405,14 @@ impl ServiceWorkerRuntimeService {
         }
         if let Some(completion_tx) = job.direct_completion_tx.take() {
             if job.request.redirect_count() > job.initial_redirect_count {
+                if completion_tx.defer_network_fallback {
+                    let request = service_worker_network_fallback_request_for_job(&job);
+                    let _ = completion_tx.send(ServiceWorkerDirectFetchResult::NetworkFallback {
+                        request: Box::new(request),
+                        preflight_headers: job.cors_preflight_request_headers,
+                    });
+                    return;
+                }
                 self.dispatch_direct_fetch_network_fallback(job, completion_tx);
                 return;
             }
@@ -426,7 +445,7 @@ impl ServiceWorkerRuntimeService {
     fn dispatch_direct_fetch_network_fallback(
         &self,
         job: ServiceWorkerFetchJob,
-        completion_tx: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
+        completion_tx: crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion,
     ) {
         let request_client = job.request_client.clone();
         let request = service_worker_network_fallback_request_for_job(&job);
@@ -4294,7 +4313,11 @@ mod tests {
             .pending_fetch_jobs
             .get_mut(&event_id)
             .expect("active fetch job")
-            .direct_completion_tx = Some(direct_completion_tx);
+            .direct_completion_tx = Some(
+            crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                direct_completion_tx,
+            ),
+        );
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
@@ -4369,7 +4392,11 @@ mod tests {
             from_cache: false,
             negotiated_http_version: None,
         });
-        job.direct_completion_tx = Some(direct_completion_tx);
+        job.direct_completion_tx = Some(
+            crate::service_worker_runtime::ServiceWorkerDirectFetchCompletion::buffered(
+                direct_completion_tx,
+            ),
+        );
 
         // This test intentionally calls from a plain test thread. The
         // fallback must use the runner captured by the original resource
