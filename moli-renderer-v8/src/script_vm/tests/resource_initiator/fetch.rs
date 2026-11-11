@@ -1,6 +1,7 @@
 use super::*;
 
 mod cancellation;
+mod orb;
 
 fn finish_fetch(
     vm: &mut ScriptVm,
@@ -251,7 +252,16 @@ fn fetch_resource_timing_separates_cors_attribution_from_timing_allow_origin() {
             );
             let request = vm.take_pending_subresource_fetch_infos().pop().unwrap();
             let mut headers = vec![
-                ("Content-Type".to_owned(), b"text/plain".to_vec()),
+                (
+                    "Content-Type".to_owned(),
+                    // Keep the opaque control ORB-safelisted: blocked responses
+                    // have separate coverage and must suppress even TAO sizes.
+                    if mode == "no-cors" {
+                        b"application/javascript".to_vec()
+                    } else {
+                        b"text/plain".to_vec()
+                    },
+                ),
                 ("Access-Control-Allow-Origin".to_owned(), b"*".to_vec()),
             ];
             if let Some(tao) = tao {

@@ -3035,18 +3035,19 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     },
                 ));
             }
-            crate::context_bootstrap::record_resource_performance_entry(
-                scope,
+            let entry = if opaque_response_blocked {
+                pending.resource_timing.failed(&pending.request_url)
+            } else {
                 pending.resource_timing.completed(
                     &pending.request_url,
                     &(&pending.document_url).into(),
                     pending.request_mode,
                     &response_head,
                     response.subresource_response_body().len(),
-                    opaque_response_blocked
-                        .then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
-                ),
-            );
+                    None,
+                )
+            };
+            crate::context_bootstrap::record_resource_performance_entry(scope, entry);
             let filtered_headers = filter_cors_exposed_response_headers(
                 &pending.document_url,
                 &response_head,
