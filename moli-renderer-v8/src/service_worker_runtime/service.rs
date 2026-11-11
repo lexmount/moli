@@ -34,8 +34,9 @@ use super::{
         ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
         ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult,
         ServiceWorkerClientQueryType, ServiceWorkerClientSnapshot, ServiceWorkerClientType,
-        ServiceWorkerClientVisibilityState, allocate_service_worker_exposed_client_id,
-        service_worker_current_url_for_creation_url, service_worker_exposed_client_id,
+        ServiceWorkerClientVisibilityState, ServiceWorkerWindowClientDocument,
+        allocate_service_worker_exposed_client_id, service_worker_current_url_for_creation_url,
+        service_worker_exposed_client_id,
     },
     diagnostics::{
         ServiceWorkerMainScriptUpdateCheckDiagnostics, ServiceWorkerRegistrationDiagnostics,

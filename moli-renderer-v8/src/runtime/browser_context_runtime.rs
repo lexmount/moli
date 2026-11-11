@@ -1200,7 +1200,7 @@ mod tests {
         let document_url = url::Url::parse("https://deferred-client.test/").unwrap();
         let client_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         runtime.register_service_worker_client(
-            document_url.clone(),
+            document_url.clone().into(),
             moli_storage_key::MoliStorageKey::first_party_from_url(&document_url, None)
                 .serialized_storage_key(),
             crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,

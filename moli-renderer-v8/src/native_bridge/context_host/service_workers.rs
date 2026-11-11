@@ -9,6 +9,7 @@ use crate::service_worker_runtime::{
     ServiceWorkerNavigationPreloadStateError, ServiceWorkerPushSubscriptionSnapshot,
     ServiceWorkerRegistrationSnapshot, ServiceWorkerRequestDestination,
     ServiceWorkerUnregisterStart, ServiceWorkerUpdateViaCache, ServiceWorkerVersionId,
+    ServiceWorkerWindowClientDocument,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::worker::{WorkerNetworkPolicy, WorkerScriptKind, WorkerSecureContextPolicy};
@@ -115,7 +116,7 @@ impl JsContextHost {
             .filter(|client_id| {
                 browser_context_runtime.update_service_worker_client_document_and_page_endpoint(
                     *client_id,
-                    document_url.clone(),
+                    document_url.clone().into(),
                     storage_key.clone(),
                     ServiceWorkerClientFrameType::TopLevel,
                     Some(WindowDocumentOwner::Frame(document_owner)),
@@ -124,7 +125,7 @@ impl JsContextHost {
             })
             .unwrap_or_else(|| {
                 browser_context_runtime.register_service_worker_client(
-                    document_url,
+                    document_url.into(),
                     storage_key,
                     ServiceWorkerClientFrameType::TopLevel,
                     Some(WindowDocumentOwner::Frame(document_owner)),
@@ -1207,7 +1208,7 @@ impl JsContextHost {
             return Some(client_id);
         }
         let client_id = self.browser_context_runtime.register_service_worker_client(
-            document_url,
+            document_url.into(),
             storage_key,
             ServiceWorkerClientFrameType::TopLevel,
             Some(WindowDocumentOwner::LightweightPopup(document_owner)),
@@ -1248,10 +1249,23 @@ impl JsContextHost {
         handle: crate::document_runtime::DomHandle,
     ) -> Option<ServiceWorkerClientId> {
         let document_url = self.child_browsing_context_current_url(handle)?;
-        let storage_key = self
-            .storage_context_for_child_browsing_context(handle)?
-            .storage_key()
-            .serialized_storage_key();
+        let storage_context = self.storage_context_for_child_browsing_context(handle)?;
+        let storage_key = storage_context.storage_key().serialized_storage_key();
+        let controller_source = if moli_url::is_about_srcdoc(&document_url)
+            && storage_context.origin() != "null"
+            && self
+                .child_browsing_context_secure_context_url(handle)
+                .is_some_and(|url| moli_url::is_potentially_trustworthy_url(&url))
+        {
+            self.owner_dispatch_scope_for_node(handle)
+                .and_then(|owner| self.service_worker_client_id_for_window_owner(owner))
+        } else {
+            None
+        };
+        let document = ServiceWorkerWindowClientDocument {
+            url: document_url,
+            controller_source,
+        };
         let document_owner = self
             .frame_owner_store
             .current_child_document_task_owner(handle)
@@ -1265,7 +1279,7 @@ impl JsContextHost {
                 .browser_context_runtime
                 .update_service_worker_client_document_and_page_endpoint(
                     client_id,
-                    document_url.clone(),
+                    document.clone(),
                     storage_key.clone(),
                     ServiceWorkerClientFrameType::Nested,
                     Some(document_owner),
@@ -1277,7 +1291,7 @@ impl JsContextHost {
         }
 
         let client_id = self.browser_context_runtime.register_service_worker_client(
-            document_url,
+            document,
             storage_key,
             ServiceWorkerClientFrameType::Nested,
             Some(document_owner),
@@ -1519,16 +1533,22 @@ impl JsContextHost {
         &self,
         owner: OwnerDispatchScope,
     ) -> ServiceWorkerClientId {
+        self.service_worker_client_id_for_window_owner(owner)
+            .unwrap_or(self.service_worker_client_id)
+    }
+
+    fn service_worker_client_id_for_window_owner(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<ServiceWorkerClientId> {
         match owner {
-            OwnerDispatchScope::Top => self.service_worker_client_id,
-            OwnerDispatchScope::Child(handle) => self
-                .frame_owner_service_worker_client_id_for_child(handle)
-                .unwrap_or(self.service_worker_client_id),
-            OwnerDispatchScope::LightweightPopup(popup_id) => self
-                .service_worker_popup_clients
-                .get(&popup_id)
-                .copied()
-                .unwrap_or(self.service_worker_client_id),
+            OwnerDispatchScope::Top => Some(self.service_worker_client_id),
+            OwnerDispatchScope::Child(handle) => {
+                self.frame_owner_service_worker_client_id_for_child(handle)
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.service_worker_popup_clients.get(&popup_id).copied()
+            }
         }
     }
 
