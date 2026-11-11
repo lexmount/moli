@@ -2945,22 +2945,12 @@ fn page_resource_namespace_rejects_real_page_vm_replacement_owner_collisions() {
     run_page_vm_large_stack_async_test(
         "page-resource-real-replacement-owner-collision",
         || async move {
-            let replacement_markup =
-                "<!doctype html><html><head></head><body></body></html>".to_owned();
-            let (base_url, server) = spawn_path_response_http_server(vec![
-                (
-                    "/replacement.html",
-                    "HTTP/1.1 200 OK",
-                    replacement_markup,
-                    Duration::ZERO,
-                ),
-                (
-                    "/replacement-child-pending.html",
-                    "HTTP/1.1 200 OK",
-                    "<!doctype html><p>replacement child response</p>".to_owned(),
-                    Duration::from_millis(100),
-                ),
-            ])
+            let (base_url, server) = spawn_path_response_http_server(vec![(
+                "/replacement-child-pending.html",
+                "HTTP/1.1 200 OK",
+                "<!doctype html><p>replacement child response</p>".to_owned(),
+                Duration::from_millis(100),
+            )])
             .await;
             let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
                 .expect("loader");
@@ -2973,7 +2963,10 @@ fn page_resource_namespace_rejects_real_page_vm_replacement_owner_collisions() {
                 runtime_hooks,
             );
             let local_executor = page_vm.local_executor.clone();
-            let replacement_url = format!("{base_url}/replacement.html");
+            // The root replacement needs complete parser input in one standalone
+            // turn. Keep the real HTTP child request below for stale-terminal checks.
+            let replacement_url =
+                "data:text/html,<!doctype html><html><head></head><body></body></html>";
             let replacement_child_url = format!("{base_url}/replacement-child-pending.html");
 
             local_executor

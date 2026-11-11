@@ -586,16 +586,9 @@ fn rendering_update_rejects_a_real_page_vm_replacement_id_collision() {
     run_page_vm_large_stack_async_test(
         "rendering-update-page-vm-replacement-id-collision",
         || async move {
-            let (base_url, server) = spawn_path_response_http_server(vec![(
-                "/replacement.html",
-                "HTTP/1.1 200 OK",
-                "<!doctype html><body>replacement</body>".to_owned(),
-                Duration::ZERO,
-            )])
-            .await;
             let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
                 .expect("loader");
-            let document_url = Url::parse(&format!("{base_url}/initial.html")).unwrap();
+            let document_url = Url::parse("https://example.com/initial.html").unwrap();
             let (page_vm, _resource_source, _owner_wake_rx) =
                 page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
             let local_executor = page_vm.local_executor.clone();
@@ -606,7 +599,11 @@ fn rendering_update_rejects_a_real_page_vm_replacement_id_collision() {
                     page_vm.vm_mut().eval("scrollTo(0, 10); 'queued-retired'")?;
                     let retired_root = page_vm.document_lifecycle.identity().document;
 
-                    let replacement_url = format!("{base_url}/replacement.html");
+                    // Exercise a real PageVm replacement with all parser input
+                    // resident for the standalone fixture's single turn. HTTP
+                    // EOF can instead leave an owner-owned phase one pending.
+                    let replacement_url =
+                        "data:text/html,<!doctype html><body>replacement</body>";
                     page_vm
                         .vm_mut()
                         .eval(&format!("location.href = {replacement_url:?}; 'navigating'"))?;
@@ -687,9 +684,6 @@ scrollTo(0, 20);
                 })
                 .await
                 .expect("rendering update replacement should use exact root arbitration");
-            server
-                .await
-                .expect("rendering update replacement server should finish");
         },
     );
 }
