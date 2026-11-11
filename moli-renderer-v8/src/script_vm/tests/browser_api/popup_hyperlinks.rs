@@ -231,3 +231,69 @@ fn synthetic_clicks_match_pointer_identity_across_realms_and_adoption() {
         "[]"
     );
 }
+
+#[test]
+fn accesskey_clicks_use_the_focused_document_and_synthetic_pointer_identity() {
+    let mut vm = new_storage_test_vm("https://accesskey-click-realms.test/");
+    vm.eval(
+        r#"
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+if (!document.body) root.appendChild(document.createElement('body'));
+document.body.innerHTML = '<button id=main accesskey=g>main</button><iframe id=child></iframe>';
+const realms = [window, document.getElementById('child').contentWindow];
+realms[1].document.body.innerHTML = '<button id=frame accesskey=g>frame</button>';
+globalThis.accesskeyClicks = [];
+for (let index = 0; index < realms.length; index++) {
+  const w = realms[index];
+  w.document.querySelector('button').addEventListener('click', event => {
+    accesskeyClicks.push([
+      index, event.view === w, Object.getPrototypeOf(event) === w.PointerEvent.prototype,
+      event.pointerId, event.pointerType, event.isPrimary, event.isTrusted, event.detail,
+      event.altKey, event.ctrlKey, event.shiftKey, event.metaKey
+    ]);
+  });
+}
+"#,
+    )
+    .unwrap();
+
+    for owner in 0..2 {
+        for modifiers in [1, 9, 3] {
+            vm.eval(&format!(
+                "accesskeyClicks=[];realms[{owner}].document.querySelector('button').focus()"
+            ))
+            .unwrap();
+            vm.dispatch_key_event("keydown", "g", "KeyG", "", modifiers, false, false)
+                .unwrap();
+            let matches_platform = if cfg!(target_os = "macos") {
+                modifiers == 3
+            } else {
+                modifiers != 3
+            };
+            let expected = if matches_platform {
+                format!("[[{owner},true,true,-1,\"\",false,true,0,false,false,false,false]]")
+            } else {
+                "[]".to_owned()
+            };
+            assert_eq!(
+                vm.eval("JSON.stringify(accesskeyClicks)").unwrap(),
+                expected,
+                "owner {owner}, modifiers {modifiers}"
+            );
+        }
+    }
+
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+  accesskeyClicks = [];
+  for (const w of realms) w.document.querySelector('button').dispatchEvent(
+    new KeyboardEvent('keydown', {key: 'g', altKey: true, ctrlKey: true, shiftKey: true, bubbles: true})
+  );
+  return JSON.stringify(accesskeyClicks);
+})()"#
+        )
+        .unwrap(),
+        "[]"
+    );
+}

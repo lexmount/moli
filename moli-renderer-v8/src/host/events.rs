@@ -1814,7 +1814,10 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
             scope, host_ptr, event,
         );
         crate::native_bridge::element::perform_access_key_default_action_for_dispatched_event(
-            scope, host_ptr, event,
+            scope,
+            host_ptr,
+            event,
+            dispatch_target,
         );
     }
     set_event_phase(scope, event, 0);
