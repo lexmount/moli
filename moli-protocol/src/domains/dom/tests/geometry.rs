@@ -1432,6 +1432,68 @@ async fn get_node_for_location_hits_atomic_input_in_front_of_wrapping_label() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn get_node_for_location_preserves_atomic_inline_descendants_and_border_hits() {
+    let mut ctx = TestContext::new();
+    load_bc(&mut ctx, "BID-A");
+    navigate_to_data_html_async(&mut ctx, 1, include_str!("atomic_inline_hit_test.html")).await;
+
+    let mut command_id = 2;
+    let mut backend_ids = std::collections::HashMap::new();
+    for id in [
+        "input",
+        "atomic",
+        "inner",
+        "outer-atomic",
+        "inner-atomic",
+        "nested-inner",
+    ] {
+        let backend_id = renderer_backend_node_id_for_live_expression(
+            &mut ctx,
+            command_id,
+            command_id + 1,
+            &format!("document.getElementById({})", json!(id)),
+        )
+        .await;
+        backend_ids.insert(id, backend_id);
+        command_id += 2;
+    }
+
+    ctx.process_async(json!({
+        "id": command_id,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": format!("({})()", include_str!("atomic_inline_hit_test.js")),
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let response = take_response_by_id(&mut ctx, command_id);
+    let samples = response["result"]["result"]["value"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the hit-test fixture must return samples: {response}"));
+    assert_eq!(samples.len(), 51);
+
+    for sample in samples {
+        command_id += 1;
+        let expected = sample["expected"].as_str().unwrap();
+        ctx.process_async(json!({
+            "id": command_id,
+            "method": "DOM.getNodeForLocation",
+            "params": { "x": sample["x"], "y": sample["y"] }
+        }))
+        .await;
+        let hit = take_response_by_id(&mut ctx, command_id);
+        assert_eq!(
+            hit["result"]["backendNodeId"],
+            json!(backend_ids[expected]),
+            "CDP must hit the descendant or atomic border at {sample}: {hit}"
+        );
+        assert_eq!(sample["elementFromPoint"], expected, "{sample}");
+        assert_eq!(sample["elementsFromPoint"], expected, "{sample}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_node_for_location_mock_policy_uses_compatibility_geometry() {
     let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Mock);
     load_bc(&mut ctx, "BID-A");
