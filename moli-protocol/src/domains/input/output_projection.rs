@@ -58,7 +58,7 @@ impl PreparedInputOutputProjection {
             Self::Downloads(deliveries) => {
                 for delivery in deliveries {
                     match delivery {
-                        Ok(delivery) => delivery.run(&mut events, context.context_mut()).await,
+                        Ok(delivery) => delivery.run(&mut events).await,
                         Err(error) => {
                             tracing::warn!(%error, "pending download activation failed during protocol output projection");
                         }

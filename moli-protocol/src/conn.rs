@@ -438,6 +438,7 @@ impl CommandResponseFlushContext {
         self.receiver.is_some()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
         self.receiver.clone()
     }

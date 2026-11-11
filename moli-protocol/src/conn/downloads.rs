@@ -20,8 +20,8 @@ use url::Url;
 
 use super::{
     BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CapturedBody, CdpConnection,
-    CommandDispatchContext, CommandOwnerScope, CompletedDownloadBody,
-    CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
+    CommandOwnerScope, CompletedDownloadBody, CompletedDownloadBodyArtifact,
+    NavigationDispatchState, output::BackgroundEventSender,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -250,19 +250,12 @@ enum PreparedDownloadDeliveryKind {
 }
 
 impl PreparedDownloadActivationDelivery {
-    pub(crate) async fn run(
-        self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        command_context: &mut CommandDispatchContext,
-    ) {
+    /// An accepted download owns its progress independently of command output.
+    pub(crate) async fn run(self, out: &mut Vec<BackgroundProtocolEvent>) {
         match self.kind {
             PreparedDownloadDeliveryKind::Events(events) => {
                 if let Some(sender) = self.sender {
-                    if command_context.response_flush().is_active() {
-                        command_context.extend_post_response_events(events);
-                    } else {
-                        send_background_download_events(&sender, events);
-                    }
+                    send_background_download_events(&sender, events);
                 } else {
                     out.extend(events);
                 }
@@ -270,11 +263,7 @@ impl PreparedDownloadActivationDelivery {
             PreparedDownloadDeliveryKind::Prefetched(prepared) => {
                 let prepared = *prepared;
                 if let Some(sender) = self.sender {
-                    let response_flush = command_context.response_flush().receiver();
                     tokio::spawn(async move {
-                        if !wait_for_command_response_flush(response_flush).await {
-                            return;
-                        }
                         for event in complete_navigation_download_async(prepared).await {
                             let _ = sender.send(event);
                         }
@@ -290,19 +279,10 @@ impl PreparedDownloadActivationDelivery {
                     .insert_active(prepared.guid.clone(), prepared.cancel_handle.clone());
                 if let Some(sender) = self.sender {
                     let emit_early_start = can_emit_early_download_start(&prepared);
-                    let response_flush = command_context.response_flush().receiver();
                     if emit_early_start {
-                        let events = start_download_events(&prepared);
-                        if response_flush.is_some() {
-                            command_context.extend_post_response_events(events);
-                        } else {
-                            send_background_download_events(&sender, events);
-                        }
+                        send_background_download_events(&sender, start_download_events(&prepared));
                     }
                     tokio::spawn(async move {
-                        if !wait_for_command_response_flush(response_flush).await {
-                            return;
-                        }
                         let start_events = if emit_early_start {
                             DownloadActivationStartEvents::AlreadyEmitted(sender.clone())
                         } else {
@@ -861,20 +841,6 @@ fn send_background_download_events(
     for event in events {
         let _ = sender.send(event);
     }
-}
-
-async fn wait_for_command_response_flush(
-    mut receiver: Option<tokio::sync::watch::Receiver<bool>>,
-) -> bool {
-    let Some(receiver) = receiver.as_mut() else {
-        return true;
-    };
-    while !*receiver.borrow() {
-        if receiver.changed().await.is_err() {
-            return false;
-        }
-    }
-    true
 }
 
 async fn complete_navigation_download_async(
@@ -1555,6 +1521,189 @@ mod tests {
 
         assert!(!DownloadBehavior::Allow.names_artifact_by_guid());
         assert!(DownloadBehavior::AllowAndName.names_artifact_by_guid());
+    }
+
+    mod command_output_independence {
+        use super::super::{
+            PreparedDownloadActivation, PreparedDownloadActivationDelivery,
+            PreparedDownloadDeliveryKind, PreparedNavigationDownload,
+        };
+        use super::*;
+        use crate::conn::{CommandResponseFlushState, CompletedDownloadBody};
+        use axum::{Router, routing::get};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::time::Duration;
+
+        #[tokio::test]
+        async fn fetch_download_does_not_wait_for_command_output() {
+            for abandoned in [false, true] {
+                assert_download_completes(false, abandoned).await;
+            }
+        }
+
+        #[tokio::test]
+        async fn prefetched_download_does_not_wait_for_command_output() {
+            for abandoned in [false, true] {
+                assert_download_completes(true, abandoned).await;
+            }
+        }
+
+        async fn assert_download_completes(prefetched: bool, abandoned: bool) {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let request_count = requests.clone();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/download.txt", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().route(
+                        "/download.txt",
+                        get(move || {
+                            request_count.fetch_add(1, Ordering::SeqCst);
+                            async { "independent-download" }
+                        }),
+                    ),
+                )
+                .await
+                .unwrap();
+            });
+            let mut conn = CdpConnection::new();
+            let guid = generate_download_guid().unwrap();
+            let root = std::env::temp_dir().join(format!("moli-download-output-{guid}"));
+            let registry = SharedDownloadRegistry::default();
+            let route = DownloadEventRoute {
+                browser_observers: vec![BrowserDownloadObserver {
+                    session_id: None,
+                    subscription_generation: 1,
+                }],
+                automation_events_enabled: false,
+                page_observers: Vec::new(),
+            };
+            let kind = if prefetched {
+                PreparedDownloadDeliveryKind::Prefetched(Box::new(PreparedNavigationDownload {
+                    frame_id: "download-frame".into(),
+                    response_url: url.parse().unwrap(),
+                    response_headers: Vec::new(),
+                    response_body: CompletedDownloadBody::Buffered(
+                        b"independent-download".to_vec(),
+                    ),
+                    download_root: root.to_string_lossy().into_owned(),
+                    guid: guid.clone(),
+                    behavior: "allowAndName".into(),
+                    event_route: route,
+                    registry: registry.clone(),
+                }))
+            } else {
+                PreparedDownloadDeliveryKind::Fetch(Box::new(PreparedDownloadActivation {
+                    frame_id: "download-frame".into(),
+                    request: moli_fetch::Request::get(&url)
+                        .unwrap()
+                        .with_page_network_policy()
+                        .with_request_origin(moli_url::WebOrigin::Opaque),
+                    loader: conn.ensure_resource_request_client().unwrap(),
+                    download_root: root.to_string_lossy().into_owned(),
+                    guid: guid.clone(),
+                    behavior: "allowAndName".into(),
+                    event_route: route,
+                    suggested_filename_hint: Some("download.txt".into()),
+                    cancel_handle: FetchCancelHandle::new(),
+                    registry: registry.clone(),
+                }))
+            };
+            let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+            let delivery = PreparedDownloadActivationDelivery {
+                kind,
+                sender: Some(sender),
+            };
+            let (permit, flush) = conn.begin_command_response_flush_permit();
+            let permit = (!abandoned).then_some(permit);
+            let mut inline = Vec::new();
+            delivery.run(&mut inline).await;
+            assert!(inline.is_empty());
+            let mut states = Vec::new();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let event = events
+                        .recv()
+                        .await
+                        .expect("accepted download retains its output task");
+                    let (message, _) = event.into_parts();
+                    assert_eq!(message["params"]["guid"], guid);
+                    if message["method"] == "Browser.downloadWillBegin" {
+                        assert!(states.is_empty());
+                        assert_eq!(message["params"]["frameId"], "download-frame");
+                        states.push("begin".to_owned());
+                    } else if let Some(state) = message["params"]["state"].as_str() {
+                        assert!(!states.is_empty(), "progress follows its creation fact");
+                        states.push(state.to_owned());
+                        if state == "completed" {
+                            break;
+                        }
+                        assert_ne!(
+                            state,
+                            "canceled",
+                            "prefetched={prefetched}, abandoned={abandoned}, requests={}",
+                            requests.load(Ordering::SeqCst)
+                        );
+                    }
+                }
+            })
+            .await
+            .expect("download completes while command output is pending or abandoned");
+            assert_eq!(
+                flush.state(),
+                if abandoned {
+                    CommandResponseFlushState::Cancelled
+                } else {
+                    CommandResponseFlushState::Pending
+                }
+            );
+            let OpenDownloadArtifactOutcome::Ready(path) = registry.open_artifact(&guid) else {
+                panic!("completed download is readable independently of its command");
+            };
+            assert_eq!(std::fs::read(&path).unwrap(), b"independent-download");
+            assert_eq!(requests.load(Ordering::SeqCst), usize::from(!prefetched));
+            drop(permit);
+            std::fs::remove_dir_all(root).unwrap();
+            server.abort();
+        }
+
+        #[tokio::test]
+        async fn denied_download_does_not_wait_for_command_output() {
+            for abandoned in [false, true] {
+                let mut conn = CdpConnection::new();
+                let (permit, flush) = conn.begin_command_response_flush_permit();
+                let permit = (!abandoned).then_some(permit);
+                let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+                let delivery = PreparedDownloadActivationDelivery {
+                    kind: PreparedDownloadDeliveryKind::Events(vec![download_progress_event(
+                        None, None, "denied", "canceled", 0, 0, None,
+                    )]),
+                    sender: Some(sender),
+                };
+                delivery.run(&mut Vec::new()).await;
+                assert_eq!(
+                    events
+                        .try_recv()
+                        .expect("denial is a fact independent of command output")
+                        .into_parts()
+                        .0["params"]["state"],
+                    "canceled"
+                );
+                assert_eq!(
+                    flush.state(),
+                    if abandoned {
+                        CommandResponseFlushState::Cancelled
+                    } else {
+                        CommandResponseFlushState::Pending
+                    }
+                );
+                drop(permit);
+            }
+        }
     }
 
     #[test]

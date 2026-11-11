@@ -364,7 +364,7 @@ impl CdpConnection {
                     };
                     if let Some(pending) = pending {
                         let mut events = Vec::new();
-                        pending.run(&mut events, context.context_mut()).await;
+                        pending.run(&mut events).await;
                         context.context_mut().protocol_events_mut().extend(events);
                     }
                     context.complete(crate::domains::command_output::CommandOutputPlan::default())

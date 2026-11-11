@@ -1667,7 +1667,7 @@ async fn handle_input_dispatch_outcome(
         })??;
         let mut events = Vec::new();
         if let Some(prepared) = prepared {
-            prepared.run(&mut events, command_context).await;
+            prepared.run(&mut events).await;
         }
         out.extend_protocol_events(command_context, events);
         // Keep accepted side effects with the command while a later renderer
