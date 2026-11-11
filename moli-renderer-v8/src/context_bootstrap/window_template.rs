@@ -203,6 +203,7 @@ struct WindowIdentityAccessorsDeclaration {
     frames: (),
 
     #[webapi(accessor_property, getter = window_frame_element_getter)]
+    #[webapi(receiver_access_check = false)]
     frame_element: (),
 
     #[webapi(
