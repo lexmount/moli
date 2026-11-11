@@ -2446,3 +2446,5 @@ mod fetch_referrer;
 mod sqlite_web_storage;
 
 mod dynamic_inline_scripts;
+
+mod cross_origin_window_names;
