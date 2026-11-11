@@ -280,10 +280,8 @@ impl DocumentRuntime {
     /// Whether a parser-owned script must still wait for one of the blocking
     /// stylesheet operations captured before it.
     ///
-    /// The script entry point publishes admitted completions before this
-    /// read. Resource and `@import` completion release the gate. The later
-    /// `<link>` load/error task remains observable and keeps its Document-load
-    /// delay, but does not block parser-owned script execution.
+    /// Resource and `@import` completion publish the element event. The client
+    /// remains script-blocking until that event's dispatch finishes.
     pub(crate) fn has_pending_parser_script_blocking_stylesheet_signatures(
         &self,
         signatures: &HashSet<DocumentBlockingStylesheetSignature>,
@@ -299,7 +297,7 @@ impl DocumentRuntime {
                 .owner_states
                 .link_states()
                 .any(|(owner, state)| {
-                    state.is_pending()
+                    state.blocks_parser_scripts()
                         && self
                             .stylesheet_lifecycle
                             .fetches
@@ -355,7 +353,7 @@ impl DocumentRuntime {
             .owner_states
             .link_states()
             .any(|(owner, state)| {
-                state.is_pending()
+                state.blocks_parser_scripts()
                     && self.stylesheet_lifecycle.fetches.owns_blocking_link_fetch(
                         NodeId::new(owner.index()),
                         state.active_load().fetch(),
@@ -369,17 +367,14 @@ impl DocumentRuntime {
         }
     }
 
-    /// Finish one atomic stylesheet-state transition in Blink's lifecycle
-    /// order: release script execution first, then enqueue independent element
-    /// events. All clients of one shared physical fetch are published as one
-    /// batch, so iteration order cannot put one of their events ahead of the
-    /// parser continuation.
+    /// Publish terminal element events before a parser continuation can run.
+    /// Parser-blocking clients retain their membership through event dispatch,
+    /// including when several links share the same physical fetch.
     pub(super) fn publish_stylesheet_link_settlements(
         &mut self,
         had_pending_blocker: bool,
         settlements: impl IntoIterator<Item = super::LinkStyleSettlement>,
     ) {
-        self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
         for settlement in settlements {
             if let Some((load, successful)) = settlement.into_ready_event() {
                 self.push_ready_connected_style_load(
@@ -387,6 +382,7 @@ impl DocumentRuntime {
                 );
             }
         }
+        self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
     }
 
     pub(in crate::document_runtime) fn take_ready_stylesheet_network_results(
