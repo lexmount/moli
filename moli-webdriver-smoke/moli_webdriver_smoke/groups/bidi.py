@@ -224,7 +224,7 @@ async def _run_bidi_user_prompt_smoke(
                     while not prompt_events("browsingContext.userPromptOpened"):
                         seen.append(await _recv(websocket))
                     assert_equal(response(evaluate_id), None, "ignored prompt keeps JavaScript waiting")
-                    params: dict[str, Any] = {"context": context, "accept": True}
+                    params: dict[str, Any] = {"context": context, "accept": prompt_type != "alert"}
                     if prompt_type == "prompt":
                         params["userText"] = "typed BiDi reply"
                     await _send(websocket, handle_id, "browsingContext.handleUserPrompt", params)
@@ -261,7 +261,8 @@ async def _run_bidi_user_prompt_smoke(
         assert_equal(len(closed), 1, f"one BiDi {prompt_type} closing notification")
         assert_equal(opened[0]["params"]["message"], text, f"BiDi {prompt_type} opening message")
         assert_equal(opened[0]["params"]["handler"], handler, f"BiDi {prompt_type} handler policy")
-        assert_equal(closed[0]["params"]["accepted"], accepted, f"BiDi {prompt_type} accepted")
+        assert_equal(closed[0]["params"]["accepted"], prompt_type == "alert" or accepted,
+                     f"BiDi {prompt_type} acknowledged or accepted")
         if prompt_type == "prompt":
             assert_equal(opened[0]["params"]["defaultValue"], "initial value", "BiDi prompt default")
             if handler == "ignore":
