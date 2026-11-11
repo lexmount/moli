@@ -442,10 +442,10 @@ impl CommandResponseFlushContext {
         self.receiver.clone()
     }
 
-    /// Releases owner work when the boundary finishes or is abandoned.
+    /// Releases owner work when the response boundary is flushed or cancelled.
     /// This is also suitable for waking readiness observers. It is not a
     /// success notification; use `state()` to distinguish flush and cancel.
-    pub fn defer_until_response_flush(&self, release: impl FnOnce() + Send + 'static) {
+    pub fn defer_until_response_settled(&self, release: impl FnOnce() + Send + 'static) {
         let release = CommandResponseFlushRelease::new(release);
         let immediate = match &self.deferred_releases {
             Some(deferred_releases) => {

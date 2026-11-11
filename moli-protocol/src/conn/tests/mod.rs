@@ -489,7 +489,7 @@ fn command_response_flush_permit_runs_deferred_release_exactly_once() {
     let (permit, context) = conn.begin_command_response_flush_permit();
     let releases = Arc::new(AtomicUsize::new(0));
     let release_counter = releases.clone();
-    context.defer_until_response_flush(move || {
+    context.defer_until_response_settled(move || {
         release_counter.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -508,7 +508,7 @@ fn abandoned_command_response_flush_permit_releases_fail_open() {
     let (permit, context) = conn.begin_command_response_flush_permit();
     let releases = Arc::new(AtomicUsize::new(0));
     let release_counter = releases.clone();
-    context.defer_until_response_flush(move || {
+    context.defer_until_response_settled(move || {
         release_counter.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -531,7 +531,7 @@ fn missing_command_response_flush_context_releases_immediately() {
     );
     let releases = Arc::new(AtomicUsize::new(0));
     let release_counter = releases.clone();
-    context.defer_until_response_flush(move || {
+    context.defer_until_response_settled(move || {
         release_counter.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -545,7 +545,7 @@ fn command_output_release_callbacks_already_observe_the_terminal_state() {
         let (permit, context) = conn.begin_command_response_flush_permit();
         let observed = context.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
-        context.defer_until_response_flush(move || sender.send(observed.state()).unwrap());
+        context.defer_until_response_settled(move || sender.send(observed.state()).unwrap());
         std::thread::spawn(move || {
             if flush {
                 permit.finish();
@@ -563,7 +563,7 @@ fn command_output_release_callbacks_already_observe_the_terminal_state() {
         assert_eq!(receiver.recv().unwrap(), expected);
         // Observers registered after release see the same settled boundary.
         let observed = context.clone();
-        context.defer_until_response_flush(move || assert_eq!(observed.state(), expected));
+        context.defer_until_response_settled(move || assert_eq!(observed.state(), expected));
     }
 }
 

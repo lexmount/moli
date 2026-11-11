@@ -928,11 +928,9 @@ async fn flush_background_completion_input(
 
 enum RuntimeDeferredReplyFlushItem {
     Protocol(ProtocolOutputSequence),
-    FinishCommand(RuntimeDeferredReplyCompletedCommand),
-}
-
-struct RuntimeDeferredReplyCompletedCommand {
-    output_release_permit: Option<CommandOutputReleasePermit>,
+    FinishCommand {
+        output_release_permit: Option<CommandOutputReleasePermit>,
+    },
 }
 
 struct RuntimeDeferredReplyCompletion {
@@ -988,7 +986,7 @@ impl RuntimeDeferredReplyCompletion {
     ) -> (
         ProtocolOutputSequence,
         Vec<BackgroundProtocolEvent>,
-        RuntimeDeferredReplyCompletedCommand,
+        Option<CommandOutputReleasePermit>,
     ) {
         let (
             completion_output,
@@ -1009,9 +1007,7 @@ impl RuntimeDeferredReplyCompletion {
         (
             completion_output,
             post_response_events,
-            RuntimeDeferredReplyCompletedCommand {
-                output_release_permit,
-            },
+            output_release_permit,
         )
     }
 }
@@ -1137,9 +1133,14 @@ async fn flush_protocol_output_with_runtime_deferred_reply_routing(
                     }
                 }
             },
-            RuntimeDeferredReplyFlushItem::FinishCommand(completed) => {
-                let followup_output =
-                    finish_runtime_deferred_reply_completed_command(scheduler, completed).await;
+            RuntimeDeferredReplyFlushItem::FinishCommand {
+                output_release_permit,
+            } => {
+                let followup_output = finish_runtime_deferred_reply_completed_command(
+                    scheduler,
+                    output_release_permit,
+                )
+                .await;
                 if !followup_output.is_empty() {
                     pending_flush
                         .push_front(RuntimeDeferredReplyFlushItem::Protocol(followup_output));
@@ -1155,11 +1156,13 @@ fn enqueue_runtime_deferred_reply_completion_flush(
     completion: RuntimeDeferredReplyCompletion,
     remaining_output: ProtocolOutputSequence,
 ) {
-    let (completion_output, post_response_events, completed) = completion.into_parts();
+    let (completion_output, post_response_events, output_release_permit) = completion.into_parts();
     if !remaining_output.is_empty() {
         pending_flush.push_front(RuntimeDeferredReplyFlushItem::Protocol(remaining_output));
     }
-    pending_flush.push_front(RuntimeDeferredReplyFlushItem::FinishCommand(completed));
+    pending_flush.push_front(RuntimeDeferredReplyFlushItem::FinishCommand {
+        output_release_permit,
+    });
     if !post_response_events.is_empty() {
         pending_flush.push_front(RuntimeDeferredReplyFlushItem::Protocol(
             ProtocolOutputSequence::from_background_events(post_response_events),
@@ -1170,10 +1173,9 @@ fn enqueue_runtime_deferred_reply_completion_flush(
 
 async fn finish_runtime_deferred_reply_completed_command(
     scheduler: &mut CdpScheduler,
-    completed: RuntimeDeferredReplyCompletedCommand,
+    output_release_permit: Option<CommandOutputReleasePermit>,
 ) -> ProtocolOutputSequence {
-    let mut followup_output =
-        scheduler.finish_command_dispatch_output_flush(completed.output_release_permit);
+    let mut followup_output = scheduler.finish_command_dispatch_output_flush(output_release_permit);
     followup_output.append(scheduler.complete_ready_protocol_residences_after_command());
     followup_output
 }
@@ -1285,7 +1287,8 @@ async fn flush_runtime_deferred_reply_advance(
             let completion = (*completion)
                 .settle_exact_outputs_before_response(scheduler)
                 .await;
-            let (completion_output, post_response_events, completed) = completion.into_parts();
+            let (completion_output, post_response_events, output_release_permit) =
+                completion.into_parts();
             frontend_router.enqueue_protocol_output_sequence(completion_output);
             if !post_response_events.is_empty()
                 && !flush_protocol_output_with_runtime_deferred_reply_routing(
@@ -1299,7 +1302,8 @@ async fn flush_runtime_deferred_reply_advance(
                 return false;
             }
             let followup_output =
-                finish_runtime_deferred_reply_completed_command(scheduler, completed).await;
+                finish_runtime_deferred_reply_completed_command(scheduler, output_release_permit)
+                    .await;
             if !followup_output.is_empty() {
                 flush_protocol_output_with_runtime_deferred_reply_routing(
                     frontend_router,

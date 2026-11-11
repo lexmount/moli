@@ -2709,7 +2709,7 @@ impl CdpScheduler {
         for work in publications {
             if let Some(output) = work.command_output_dependency() {
                 let ready = self.state.scheduler_events_ready();
-                output.defer_until_response_flush(move || ready.notify_one());
+                output.defer_until_response_settled(move || ready.notify_one());
             }
             // An already-admitted owner continuation declares its own turn.
             // Neither command output handling nor the adapter infers this from

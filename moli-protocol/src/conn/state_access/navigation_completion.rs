@@ -76,7 +76,7 @@ impl ProtocolWorkflowState<'_> {
         if let Some(continuation) = continuation {
             context
                 .response_flush()
-                .defer_until_response_flush(move || continuation.release());
+                .defer_until_response_settled(move || continuation.release());
         }
         if binding.as_ref().is_some_and(SessionDisposalWait::is_closed)
             || !conn.accepts_pending_document_navigation_for_owner(&owner, &token)
