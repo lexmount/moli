@@ -1,6 +1,26 @@
 use std::sync::Arc;
 use url::Url;
 
+/// Permission-controlled features whose effective state can be gated by the
+/// `Permissions-Policy` response header. Feature names here are the header
+/// directive names, which are not always identical to the `permissions.query`
+/// name they gate (for example `camera` gates the `camera` query while
+/// `geolocation` gates `geolocation`).
+pub(crate) fn permission_feature_for_query_name(name: &str) -> Option<&'static str> {
+    match name {
+        "camera" => Some("camera"),
+        "microphone" => Some("microphone"),
+        "geolocation" => Some("geolocation"),
+        "midi" => Some("midi"),
+        "notifications" => Some("notifications"),
+        "persistent-storage" => Some("persistent-storage"),
+        "background-sync" => Some("background-sync"),
+        "periodic-background-sync" => Some("periodic-background-sync"),
+        "idle-detection" | "idleDetection" => Some("idle-detection"),
+        _ => None,
+    }
+}
+
 /// Policy-controlled features that currently have observable renderer behavior.
 ///
 /// Keep the declared tools allowlist alongside effective permissions: a
@@ -10,6 +30,7 @@ pub(crate) struct DocumentPermissionsPolicy {
     gamepad: bool,
     tools: bool,
     tools_allowlist: Option<ToolsAllowlist>,
+    features: Arc<[(Arc<str>, bool)]>,
 }
 
 impl Default for DocumentPermissionsPolicy {
@@ -18,6 +39,7 @@ impl Default for DocumentPermissionsPolicy {
             gamepad: true,
             tools: true,
             tools_allowlist: None,
+            features: Arc::from([]),
         }
     }
 }
@@ -31,11 +53,34 @@ impl DocumentPermissionsPolicy {
         self.tools
     }
 
+    /// Whether a permission-controlled feature is enabled for this document.
+    ///
+    /// A feature with no directive in the response header defaults to enabled,
+    /// matching the header's default allowlist (`*`).
+    pub(crate) fn feature_enabled(&self, feature: &str) -> bool {
+        self.features
+            .iter()
+            .rev()
+            .find(|(name, _)| name.as_ref().eq_ignore_ascii_case(feature))
+            .is_none_or(|(_, enabled)| *enabled)
+    }
+
     pub(crate) fn intersect(&self, other: &Self) -> Self {
+        let mut features: Vec<(Arc<str>, bool)> = self.features.iter().cloned().collect();
+        for (name, enabled) in other.features.iter() {
+            match features
+                .iter_mut()
+                .find(|(existing, _)| existing.as_ref().eq_ignore_ascii_case(name))
+            {
+                Some((_, existing)) => *existing = *existing && *enabled,
+                None => features.push((name.clone(), *enabled)),
+            }
+        }
         Self {
             gamepad: self.gamepad && other.gamepad,
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
+            features: features.into(),
         }
     }
 
@@ -44,6 +89,7 @@ impl DocumentPermissionsPolicy {
         document_url: &Url,
     ) -> Self {
         let mut policy = Self::default();
+        let mut features: Vec<(Arc<str>, bool)> = Vec::new();
         for (_, value) in headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("permissions-policy"))
@@ -52,16 +98,22 @@ impl DocumentPermissionsPolicy {
                 let Some((feature, allowlist)) = directive.split_once('=') else {
                     continue;
                 };
-                if feature.trim().eq_ignore_ascii_case("gamepad") {
+                let feature = feature.trim();
+                if feature.eq_ignore_ascii_case("gamepad") {
                     policy.gamepad = response_allowlist_allows_document(allowlist, document_url);
                 }
-                if feature.trim().eq_ignore_ascii_case("tools") {
+                if feature.eq_ignore_ascii_case("tools") {
                     policy.tools_allowlist = response_tools_allowlist(allowlist);
                     policy.tools =
                         policy.tools_allows_origin(&document_url.origin(), &document_url.origin());
                 }
+                if permission_feature_for_query_name(feature).is_some() {
+                    let enabled = response_allowlist_allows_document(allowlist, document_url);
+                    features.push((Arc::from(feature), enabled));
+                }
             }
         }
+        policy.features = features.into();
         policy
     }
 
@@ -89,6 +141,23 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(same_origin);
+        // Inherited feature gates persist; the container `allow` attribute can
+        // only further restrict a feature that its parent already gates.
+        let features: Vec<(Arc<str>, bool)> = self
+            .features
+            .iter()
+            .map(|(name, enabled)| {
+                let delegated = iframe_allow_feature(
+                    allow_attribute,
+                    name,
+                    parent_origin,
+                    child_origin,
+                    source_origin,
+                )
+                .unwrap_or(true);
+                (name.clone(), *enabled && delegated)
+            })
+            .collect();
         Self {
             gamepad: self.gamepad && gamepad,
             tools: self.tools
@@ -96,6 +165,7 @@ impl DocumentPermissionsPolicy {
                 && self.tools_allows_origin(child_origin, parent_origin)
                 && tools,
             tools_allowlist: None,
+            features: features.into(),
         }
     }
 
@@ -442,5 +512,64 @@ mod tests {
             Some("gamepad *"),
         );
         assert!(!delegated.gamepad_enabled());
+    }
+
+    #[test]
+    fn query_name_feature_gates_default_to_enabled_and_track_response_header() {
+        let document = url("https://policy.test/document");
+        let defaults = DocumentPermissionsPolicy::default();
+        for name in [
+            "camera",
+            "microphone",
+            "geolocation",
+            "persistent-storage",
+            "notifications",
+        ] {
+            let feature = permission_feature_for_query_name(name).expect("known feature");
+            assert!(defaults.feature_enabled(feature), "{name} defaults enabled");
+        }
+        assert!(permission_feature_for_query_name("unknown").is_none());
+
+        let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[(
+                "Permissions-Policy".to_owned(),
+                b"camera=(), microphone=(self), geolocation=*".to_vec(),
+            )],
+            &document,
+        );
+        assert!(!policy.feature_enabled("camera"));
+        assert!(policy.feature_enabled("microphone"));
+        assert!(policy.feature_enabled("geolocation"));
+        assert!(policy.feature_enabled("notifications"));
+    }
+
+    #[test]
+    fn delegated_query_feature_gates_are_intersected_with_the_allow_attribute() {
+        let parent = url("https://parent.test/page");
+        let child = url("https://child.test/page");
+        let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".to_owned(), b"camera=*".to_vec())],
+            &parent,
+        );
+        assert!(
+            policy
+                .delegated_to_child_urls(&parent, &child, false, Some("camera *"))
+                .feature_enabled("camera")
+        );
+        assert!(
+            !policy
+                .delegated_to_child_urls(&parent, &child, false, Some("camera 'none'"))
+                .feature_enabled("camera")
+        );
+        // A container cannot re-enable a feature its parent gated off.
+        let denied_parent = DocumentPermissionsPolicy::from_navigation_response_headers(
+            &[("Permissions-Policy".to_owned(), b"camera=()".to_vec())],
+            &parent,
+        );
+        assert!(
+            !denied_parent
+                .delegated_to_child_urls(&parent, &child, false, Some("camera *"))
+                .feature_enabled("camera")
+        );
     }
 }
