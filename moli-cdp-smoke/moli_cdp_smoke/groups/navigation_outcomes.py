@@ -7,6 +7,7 @@ import json
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from ..config import is_moli_browser
@@ -185,6 +186,15 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
             )
             for action in ("fail", "continue", "fulfill")
         ),
+        *(
+            NavigationOutcomeContract(
+                f"navigate_mixed_redirect_attachment_{action}",
+                "A buffered attachment preserves each redirect's request metadata "
+                "through failure or download completion without duplicate events.",
+                partial(_mixed_redirect_request_metadata, action=action, attachment=True),
+            )
+            for action in ("fail", "continue")
+        ),
     )
 
 
@@ -198,6 +208,7 @@ async def _new_probe(state: SmokeState) -> AsyncIterator[NavigationProbe]:
             "Network.requestWillBeSent",
             "Network.requestWillBeSentExtraInfo",
             "Network.responseReceived",
+            "Network.responseReceivedExtraInfo",
             "Network.loadingFailed",
             "Network.loadingFinished",
             "Page.loadEventFired",
@@ -651,9 +662,12 @@ async def _fail_request(
         }
 
 
-async def _mixed_redirect_request_metadata(state: SmokeState, *, action: str) -> dict[str, Any]:
+async def _mixed_redirect_request_metadata(
+    state: SmokeState, *, action: str, attachment: bool = False,
+) -> dict[str, Any]:
     async with _new_probe(state) as probe:
-        urls = [f"{state.fixture}/navigation-hop/{hop}?case={action}"
+        query = f"case={action}-attachment&attachment=1" if attachment else f"case={action}"
+        urls = [f"{state.fixture}/navigation-hop/{hop}?{query}"
                 for hop in ("start", "middle", "final")]
         paused = asyncio.get_running_loop().create_future()
         probe.cdp.once("Fetch.requestPaused", lambda params: paused.set_result(params))
@@ -685,8 +699,15 @@ async def _mixed_redirect_request_metadata(state: SmokeState, *, action: str) ->
                 return [event["params"]["headers"] for event in probe.events
                         if event["method"] == "Network.requestWillBeSentExtraInfo"
                         and event["params"].get("requestId") == request_id]
+            def response_extra_info() -> list[int]:
+                return [event["params"]["statusCode"] for event in probe.events
+                        if event["method"] == "Network.responseReceivedExtraInfo"
+                        and event["params"].get("requestId") == request_id]
             await wait_until(lambda: len(request_extra_info()) == len(observed),
                              "mixed redirect request ExtraInfo")
+            await wait_until(lambda: len(response_extra_info()) == len(observed),
+                             "mixed redirect response ExtraInfo")
+            assert_equal(response_extra_info(), [307, 303, 200], "mixed redirect wire response statuses")
             for wire_headers, actual in zip(request_extra_info(), observed, strict=True):
                 wire_headers = {name.lower(): value for name, value in wire_headers.items()}
                 assert_equal(wire_headers.get("content-type", ""), actual["contentType"],
@@ -710,26 +731,44 @@ async def _mixed_redirect_request_metadata(state: SmokeState, *, action: str) ->
             if action == "fail":
                 await probe.cdp.send("Fetch.failRequest", {**params, "errorReason": "BlockedByClient"})
             elif action == "continue":
-                await probe.cdp.send("Fetch.continueResponse", params)
+                if attachment:
+                    async with probe.page.expect_download(timeout=10_000) as download_info:
+                        await probe.cdp.send("Fetch.continueResponse", params)
+                    download = await download_info.value
+                    assert_equal(download.suggested_filename, "redirect.html", "redirect download filename")
+                    download_path = await download.path()
+                    assert_equal(Path(download_path).read_bytes(),
+                                 b"<!doctype html><main>redirect final</main>", "redirect download body")
+                else:
+                    await probe.cdp.send("Fetch.continueResponse", params)
             else:
                 await probe.cdp.send("Fetch.fulfillRequest", {**params, "responseCode": 200,
                     "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
                     "body": base64.b64encode(b"<!doctype html><main>fulfilled</main>").decode()})
-        await wait_until(lambda: any(event["method"] == "Page.loadEventFired" for event in probe.events),
-                         "mixed redirect Document load")
+        if attachment and action == "continue":
+            response_event = await _wait_for_document_response(probe, urls[-1])
+            _assert_no_navigation_dcl(probe.events, response_event)
+            _assert_retained_document(await _active_document_snapshot(probe.cdp))
+        else:
+            await wait_until(lambda: any(event["method"] == "Page.loadEventFired" for event in probe.events),
+                             "mixed redirect Document load")
         frame = (await probe.cdp.send("Page.getFrameTree"))["frameTree"]["frame"]
         if action == "fail":
             assert_equal(frame.get("unreachableUrl"), urls[-1], "mixed redirect unreachable URL")
             history = await probe.cdp.send("Page.getNavigationHistory")
             assert_equal(history["entries"][history["currentIndex"]]["url"], urls[-1],
                          "mixed redirect failed history URL")
-        else:
+        elif not attachment:
             assert_equal(frame["url"], urls[-1], "mixed redirect committed URL")
             assert_equal(await _evaluate_value(probe.cdp, "document.body.textContent.trim()"),
                          "fulfilled" if action == "fulfill" else "redirect final",
                          "mixed redirect Document content")
         assert_equal(await _evaluate_value(probe.cdp, "6 * 7"), 42, "mixed redirect responsive Document")
-        return {"action": action, "requests": observed, "finalUrl": urls[-1]}
+        assert_equal([_request_url(event) for event in _document_request_events(probe.events)],
+                     urls, "mixed redirect requests after completion")
+        assert_equal(len(request_extra_info()), len(observed), "mixed redirect ExtraInfo after completion")
+        assert_equal(response_extra_info(), [307, 303, 200], "mixed redirect response ExtraInfo after completion")
+        return {"action": action, "attachment": attachment, "requests": observed, "finalUrl": urls[-1]}
 
 
 async def _wait_for_document_response(

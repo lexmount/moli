@@ -1552,7 +1552,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             final_url,
             progress_transfer: CompletedDownloadProgressTransfer::new_streaming(
                 response,
-                network_events,
+                body_progress_source.completed_body_network_events(network_events),
             ),
         }));
     }
@@ -3442,6 +3442,7 @@ impl CdpConnection {
         request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
         network_observation_journal: NetworkObservationJournal,
+        body_progress_source: &MainDocumentBodyProgressSource,
     ) -> DownloadNavigation {
         let network_extra_info_available = !network_observation_journal.is_empty();
         let (head, body) = response.into_body();
@@ -3466,7 +3467,10 @@ impl CdpConnection {
         .with_network_observation_journal(network_observation_journal);
         DownloadNavigation {
             final_url,
-            progress_transfer: CompletedDownloadProgressTransfer::new(body, network_events),
+            progress_transfer: CompletedDownloadProgressTransfer::new(
+                body,
+                body_progress_source.completed_body_network_events(network_events),
+            ),
         }
     }
 
