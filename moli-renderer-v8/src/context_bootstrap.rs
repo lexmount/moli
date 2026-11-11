@@ -637,6 +637,7 @@ pub(crate) use self::window_lazy_surface::{
 use self::window_runtime::global_caches_getter_callback;
 pub(crate) use self::window_template::install_window_own_template_bindings;
 pub(crate) use self::worker_host::{
+    NestedWorkerScriptLoad, NestedWorkerScriptLoadCompletion, complete_nested_worker_script_load,
     dispatch_worker_error_event_with_kind, dispatch_worker_event,
     flush_pending_worker_messages_for_listener, worker_has_message_delivery_listener,
 };

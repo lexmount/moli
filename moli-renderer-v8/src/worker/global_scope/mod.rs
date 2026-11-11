@@ -215,8 +215,10 @@ pub(crate) use messaging::{
     worker_message_port_wake_sender, worker_message_port_wrapper,
 };
 pub(crate) use nested_workers::{
-    NestedWorkerContext, check_and_queue_nested_worker_constructor_csp, queue_nested_worker_task,
-    register_nested_worker_handle, reserve_nested_worker_context, terminate_nested_worker,
+    NestedWorkerContext, begin_nested_worker_script_load,
+    check_and_queue_nested_worker_constructor_csp, fail_nested_worker_script_load,
+    nested_worker_wrapper, queue_nested_worker_task, register_nested_worker_handle,
+    reserve_nested_worker_context, take_nested_worker_script_load, terminate_nested_worker,
 };
 pub(super) use nested_workers::{dispatch_nested_worker_event, retire_nested_workers};
 pub(super) use network_state::{

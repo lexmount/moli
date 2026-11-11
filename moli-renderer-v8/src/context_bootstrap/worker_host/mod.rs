@@ -28,6 +28,10 @@ mod constructor;
 mod dispatch;
 mod methods;
 
+pub(crate) use constructor::{
+    NestedWorkerScriptLoad, NestedWorkerScriptLoadCompletion, complete_nested_worker_script_load,
+};
+
 pub(in crate::context_bootstrap) use constructor::{
     WorkerOptionsMembers, document_query_encoding_override, is_cross_origin_http_worker_script,
     materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,

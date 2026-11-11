@@ -197,6 +197,8 @@ pub(crate) enum WorkerMessage {
         worker_id: DedicatedWorkerId,
         message: Box<WorkerToParentMessage>,
     },
+    /// Finish a nested main-script fetch on its creator's event loop.
+    NestedWorkerScriptLoaded(Box<crate::context_bootstrap::NestedWorkerScriptLoadCompletion>),
     /// Owner-thread dispatch or fallback for one queued Inspector task.
     RunInspectorTask(WorkerInspectorTaskMode),
     /// One coalesced fallback wake for the isolate's environment mailbox.

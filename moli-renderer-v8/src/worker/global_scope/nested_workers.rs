@@ -7,8 +7,20 @@ use super::*;
 pub(in crate::worker) struct NestedWorker {
     wrapper: v8::Global<v8::Object>,
     handle: Option<crate::worker::WorkerHandle>,
+    script_load_cancel: Option<moli_fetch::FetchCancelHandle>,
+    script_load: Option<crate::context_bootstrap::NestedWorkerScriptLoad>,
+    pending_tasks: std::collections::VecDeque<crate::worker::WorkerMessage>,
 }
 
+impl Drop for NestedWorker {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.script_load_cancel.take() {
+            cancel.cancel();
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct NestedWorkerContext {
     pub(crate) worker_id: DedicatedWorkerId,
     pub(crate) base_url: Url,
@@ -51,6 +63,9 @@ pub(crate) fn reserve_nested_worker_context(
         NestedWorker {
             wrapper: v8::Global::new(scope, worker),
             handle: None,
+            script_load_cancel: None,
+            script_load: None,
+            pending_tasks: Default::default(),
         },
     );
     Some(NestedWorkerContext {
@@ -117,8 +132,74 @@ pub(crate) fn register_nested_worker_handle(
     if worker.handle.is_some() {
         return false;
     }
+    worker.script_load_cancel = None;
+    for task in worker.pending_tasks.drain(..) {
+        handle.queue_task(task);
+    }
     worker.handle = Some(handle);
     true
+}
+
+pub(crate) fn begin_nested_worker_script_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    cancel: moli_fetch::FetchCancelHandle,
+    load: crate::context_bootstrap::NestedWorkerScriptLoad,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_workers.get_mut(&worker_id) else {
+        return false;
+    };
+    worker.script_load_cancel = Some(cancel);
+    worker.script_load = Some(load);
+    true
+}
+
+pub(crate) fn take_nested_worker_script_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+) -> Option<crate::context_bootstrap::NestedWorkerScriptLoad> {
+    let state = get_worker_state(scope)?;
+    state
+        .borrow_mut()
+        .nested_workers
+        .get_mut(&worker_id)?
+        .script_load
+        .take()
+}
+
+pub(crate) fn nested_worker_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    worker_id: DedicatedWorkerId,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
+    let worker = state.nested_workers.get(&worker_id)?;
+    Some(v8::Local::new(scope, &worker.wrapper))
+}
+
+pub(crate) fn fail_nested_worker_script_load(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+) {
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_workers.get_mut(&worker_id) else {
+        return;
+    };
+    if let Some(cancel) = worker.script_load_cancel.take() {
+        cancel.cancel();
+    }
+    let tasks = std::mem::take(&mut worker.pending_tasks);
+    let load = worker.script_load.take();
+    drop(state);
+    drop(tasks);
+    drop(load);
 }
 
 pub(crate) fn queue_nested_worker_task(
@@ -129,15 +210,17 @@ pub(crate) fn queue_nested_worker_task(
     let Some(state) = get_worker_state(scope) else {
         return false;
     };
-    let state = state.borrow();
-    let Some(handle) = state
-        .nested_workers
-        .get(&worker_id)
-        .and_then(|worker| worker.handle.as_ref())
-    else {
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_workers.get_mut(&worker_id) else {
         return false;
     };
-    handle.queue_task(task);
+    if let Some(handle) = worker.handle.as_ref() {
+        handle.queue_task(task);
+    } else if worker.script_load_cancel.is_some() {
+        worker.pending_tasks.push_back(task);
+    } else {
+        return false;
+    }
     true
 }
 

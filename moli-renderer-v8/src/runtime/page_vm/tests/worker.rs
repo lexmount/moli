@@ -864,6 +864,23 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
     page_vm: &mut PageVm,
     done_expression: &str,
     context: &str,
+    admit_additional_producer_work: impl FnMut(&PageVm),
+) -> anyhow::Result<()> {
+    drive_service_worker_page_vm_until_done_with_poll_interval(
+        page_vm,
+        done_expression,
+        context,
+        Duration::from_secs(1),
+        admit_additional_producer_work,
+    )
+    .await
+}
+
+async fn drive_service_worker_page_vm_until_done_with_poll_interval(
+    page_vm: &mut PageVm,
+    done_expression: &str,
+    context: &str,
+    poll_interval: Duration,
     mut admit_additional_producer_work: impl FnMut(&PageVm),
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -902,7 +919,7 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
             return Ok(());
         }
         let _ = tokio::time::timeout(
-            Duration::from_secs(1),
+            poll_interval,
             page_vm.wait_for_page_work_arrival_without_timeout(false),
         )
         .await;
@@ -2533,6 +2550,7 @@ async fn write_script_response(
 mod audio_worklet_and_message_ports;
 mod blob_storage_key;
 mod message_port_transfer_semantics;
+mod nested_worker_main_script;
 mod service_and_shared_worker_lifecycle;
 mod window_request_referrer;
 mod window_service_worker_response_policy;
