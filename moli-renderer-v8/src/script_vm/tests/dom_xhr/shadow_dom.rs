@@ -3091,6 +3091,11 @@ fn child_document_caret_position_uses_srcdoc_geometry() {
 #[test]
 fn accesskey_default_action_finds_shadow_tree_buttons() {
     let mut vm = new_storage_test_vm("https://shadow-accesskey.test/");
+    vm.eval(&format!(
+        "globalThis.accesskeyUsesControl = {}",
+        cfg!(target_os = "macos")
+    ))
+    .unwrap();
 
     let result = vm
         .eval(
@@ -3110,7 +3115,7 @@ fn accesskey_default_action_finds_shadow_tree_buttons() {
   let openClicks = 0;
   openRoot.querySelector('button').addEventListener('click', () => ++openClicks);
 
-  __moliDispatchTrustedKey('keydown', 'g', 'KeyG', true, false, false, true);
+  __moliDispatchTrustedKey('keydown', 'g', 'KeyG', true, accesskeyUsesControl, false, !accesskeyUsesControl);
   openHost.remove();
 
   const closedHost = document.createElement('div');
@@ -3120,7 +3125,7 @@ fn accesskey_default_action_finds_shadow_tree_buttons() {
   let closedClicks = 0;
   closedRoot.querySelector('button').addEventListener('click', () => ++closedClicks);
 
-  __moliDispatchTrustedKey('keydown', 'g', 'KeyG', true, false, false, true);
+  __moliDispatchTrustedKey('keydown', 'g', 'KeyG', true, accesskeyUsesControl, false, !accesskeyUsesControl);
 
   return `${openClicks}|${closedClicks}`;
 })()

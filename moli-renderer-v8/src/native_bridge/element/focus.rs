@@ -574,10 +574,11 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     event: v8::Local<'_, v8::Object>,
+    target: EventTargetHandle,
 ) {
     if !event_boolean_property(scope, event, "altKey")
-        || !event_boolean_property(scope, event, "shiftKey")
-            && !event_boolean_property(scope, event, "ctrlKey")
+        || event_boolean_property(scope, event, "ctrlKey") != cfg!(target_os = "macos")
+        || event_boolean_property(scope, event, "metaKey")
     {
         return;
     }
@@ -587,7 +588,18 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     if key.chars().count() != 1 {
         return;
     }
-    let Some(target) = access_key_target(unsafe { &*runtime_ptr }, &key) else {
+    let runtime = unsafe { &*runtime_ptr };
+    let document = match target {
+        EventTargetHandle::Node(handle) => runtime.dom_host().owner_document_handle(handle),
+        EventTargetHandle::Window => Some(runtime.document_handle()),
+        EventTargetHandle::ChildWindow(window) => {
+            runtime.child_browsing_context_document_handle(window.child_handle())
+        }
+    };
+    let Some(document) = document else {
+        return;
+    };
+    let Some(target) = access_key_target(runtime, document, &key) else {
         return;
     };
     let _ = super::activation::dispatch_click_event(
@@ -1123,11 +1135,11 @@ fn focusable_adjacent_to_negative_shadow_host(
     None
 }
 
-fn access_key_target(runtime: &JsContextHost, key: &str) -> Option<DomHandle> {
+fn access_key_target(runtime: &JsContextHost, document: DomHandle, key: &str) -> Option<DomHandle> {
     let needle = key.to_ascii_lowercase();
     let mut stack = runtime
         .dom_host()
-        .child_handles(runtime.document_handle())
+        .child_handles(document)
         .collect::<Vec<_>>();
     stack.reverse();
     while let Some(handle) = stack.pop() {
