@@ -1697,12 +1697,14 @@ impl RuntimeOwner {
                 from_cache: response.from_cache,
                 negotiated_http_version: response.negotiated_http_version,
             });
+            job.request.apply_redirect_status(response.status);
+            job.current_cookie_context
+                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
             );
-            job.request.apply_redirect_status(response.status);
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
             job.redirect_count += 1;
@@ -2001,12 +2003,14 @@ impl RuntimeOwner {
                 from_cache: false,
                 negotiated_http_version,
             });
+            job.request.apply_redirect_status(status);
+            job.current_cookie_context
+                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
             );
-            job.request.apply_redirect_status(status);
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
             job.redirect_count += 1;
@@ -2397,12 +2401,14 @@ impl RuntimeOwner {
                     from_cache: false,
                     negotiated_http_version,
                 });
+                job.request.apply_redirect_status(status);
+                job.current_cookie_context
+                    .set_request_method(&job.request.method);
                 job.current_cookie_context = advance_cookie_request_context(
                     job.current_cookie_context,
                     &job.request.url,
                     &next_url,
                 );
-                job.request.apply_redirect_status(status);
                 job.current_url = next_url;
                 job.origin_key = origin_key_for_url(&job.current_url);
                 job.redirect_count += 1;
@@ -2533,12 +2539,14 @@ impl RuntimeOwner {
                 from_cache: true,
                 negotiated_http_version: None,
             });
+            job.request.apply_redirect_status(cached.status);
+            job.current_cookie_context
+                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
             );
-            job.request.apply_redirect_status(cached.status);
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
             job.redirect_count += 1;
@@ -2597,12 +2605,14 @@ impl RuntimeOwner {
                 from_cache: true,
                 negotiated_http_version: None,
             });
+            job.request.apply_redirect_status(cached.status);
+            job.current_cookie_context
+                .set_request_method(&job.request.method);
             job.current_cookie_context = advance_cookie_request_context(
                 job.current_cookie_context,
                 &job.request.url,
                 &next_url,
             );
-            job.request.apply_redirect_status(cached.status);
             job.current_url = next_url;
             job.origin_key = origin_key_for_url(&job.current_url);
             job.redirect_count += 1;

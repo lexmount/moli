@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{
     BrowserCookieFacadeContext, NetworkCookieRequestContext, NetworkStorageAccessStatus,
+    advance_cookie_request_context,
 };
 #[cfg(any(test, feature = "test-support"))]
 use moli_cookie_jar::{
@@ -1107,6 +1108,7 @@ impl Request {
             self.request_headers
                 .retain(|(name, _)| !is_request_body_header_name(name));
         }
+        self.cookie_context.set_request_method(&self.method);
     }
 
     pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
@@ -1166,6 +1168,11 @@ impl Request {
         self.validate_request_mode_for_url(&redirect.to_url)?;
         self.check_redirect_policy(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
+        self.cookie_context = advance_cookie_request_context(
+            self.network_cookie_context(),
+            self.initial_url(),
+            &redirect.to_url,
+        );
         self.url = redirect.to_url.clone();
         self.record_redirect(redirect);
         Ok(())
@@ -1311,6 +1318,7 @@ impl Request {
     /// initiator API without replacing the request's referrer context.
     pub fn network_cookie_context(&self) -> NetworkCookieRequestContext {
         let mut context = self.cookie_context.clone();
+        context.set_request_method(&self.method);
         if let Some(WebOrigin::Tuple(origin)) = self.request_origin() {
             let origin_url =
                 Url::parse(origin.ascii_serialization()).expect("a tuple origin is a valid URL");
@@ -1375,14 +1383,10 @@ impl Request {
         mut self,
         browser_context: BrowserCookieFacadeContext,
     ) -> Self {
-        let preserve_explicit_cross_site = self.cookie_context.site_context.is_cross_site();
         self.cookie_context.browser_context = browser_context;
         self.cookie_context = self
             .cookie_context
             .recompute_site_context_for_request(&self.url);
-        if preserve_explicit_cross_site {
-            self.cookie_context = self.cookie_context.with_cross_site_context();
-        }
         self
     }
 
@@ -1400,13 +1404,9 @@ impl Request {
     }
 
     pub fn with_subframe_navigation_cookie_context(mut self) -> Self {
-        let previous = self.cookie_context;
-        let mut cookie_context = NetworkCookieRequestContext::subresource(&self.method);
-        cookie_context.site_context = previous.site_context;
-        cookie_context.site_context_metadata = previous.site_context_metadata;
-        cookie_context.initiator_url = previous.initiator_url;
-        cookie_context.browser_context = previous.browser_context;
-        self.cookie_context = cookie_context;
+        self.cookie_context.request_type =
+            NetworkCookieRequestContext::subresource(&self.method).request_type;
+        self.cookie_context.set_request_method(&self.method);
         self.request_mode = RequestMode::Navigate;
         self.priority_hints.subframe_context = true;
         self
