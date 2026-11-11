@@ -31,6 +31,37 @@ fn redirect(from: &Url, to: &Url, status: u16) -> RedirectInfo {
     }
 }
 
+#[test]
+fn caller_followed_redirect_keeps_referrer_separate_from_cookie_origin() -> Result<()> {
+    let origin = Url::parse("https://example.test/")?;
+    let blank = Url::parse("about:blank")?;
+    let start = origin.join("/start")?;
+    let middle = origin.join("/middle")?;
+    let end = origin.join("/end")?;
+    let mut request = Request::new_browser("GET", start.clone(), None, vec![], (&origin).into())
+        .with_initiator_url(&blank)
+        .with_browser_site_context(
+            moli_cookie_jar::BrowserCookieFacadeContext::default()
+                .with_site_for_cookies_url(&origin)
+                .with_top_frame_origin_url(&origin),
+        );
+    assert_eq!(request.referrer_header_value(&start), None);
+    for (from, to) in [(&start, &middle), (&middle, &end)] {
+        let mut redirect = redirect(from, to, 302);
+        redirect
+            .headers
+            .push(("Referrer-Policy".to_owned(), b"unsafe-url".to_vec()));
+        request.follow_redirect(redirect)?;
+        assert_eq!(request.cookie_context.initiator_url.as_ref(), Some(&origin));
+        assert_eq!(request.referrer_header_value(to), None);
+        assert_eq!(
+            request.network_cookie_context().site_context,
+            moli_cookie_jar::test_support::NetworkSiteContext::same_site()
+        );
+    }
+    Ok(())
+}
+
 fn seed_redirect_cookies(
     cookies: &moli_cookie_jar::SharedBrowserCookieStore,
     url: &Url,

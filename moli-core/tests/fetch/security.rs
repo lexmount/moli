@@ -17,6 +17,7 @@ struct IncomingRequest {
     path: String,
     origin: Option<String>,
     cookie: Option<String>,
+    referrer: Option<String>,
 }
 
 struct SecurityServers {
@@ -66,9 +67,12 @@ impl SecurityServers {
                                 let cookie = text.lines().filter_map(|line| line.split_once(':'))
                                     .find(|(key, _)| key.eq_ignore_ascii_case("Cookie"))
                                     .map(|(_, value)| value.trim().to_owned());
+                                let referrer = text.lines().filter_map(|line| line.split_once(':'))
+                                    .find(|(key, _)| key.eq_ignore_ascii_case("Referer"))
+                                    .map(|(_, value)| value.trim().to_owned());
                                 let authority = text.lines().filter_map(|line| line.split_once(':'))
                                     .find(|(key, _)| key.eq_ignore_ascii_case("Host")).unwrap().1.trim().to_owned();
-                                let request = IncomingRequest { method, authority, path, origin, cookie };
+                                let request = IncomingRequest { method, authority, path, origin, cookie, referrer };
                                 let (status, headers, body) = fixture_response(&request);
                                 requests.lock().push(request);
                                 let response = format!("HTTP/1.1 {status} Fixture\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
@@ -619,6 +623,92 @@ async fn srcdoc_fetch_uses_inherited_or_opaque_origin_independently_of_base_url(
                 Some(expected_origin),
                 "{request:?}"
             );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inherited_origin_iframe_redirects_keep_same_site_cookies() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let expression = format!(
+        "({})({})",
+        include_str!("fixtures/inherited-origin-redirects.js"),
+        json!(server.cross)
+    );
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(&expression, true)
+            .await?,
+    )?;
+    let requests = server.requests.lock();
+    for kind in ["blank", "srcdoc", "srcdoc-base"] {
+        let document_url = if kind == "blank" {
+            "about:blank"
+        } else {
+            "about:srcdoc"
+        };
+        assert_eq!(observed[kind]["documentURL"], document_url, "{observed}");
+        for api in ["fetch", "xhr", "sync-xhr"] {
+            assert_eq!(observed[kind][api], "ok", "{observed}");
+            for path in ["/redirect-allowed?", "/same-origin-target?"] {
+                let matching: Vec<_> = requests
+                    .iter()
+                    .filter(|request| {
+                        request.path.starts_with(path)
+                            && request.path.contains(&format!("kind={kind}&api={api}"))
+                    })
+                    .collect();
+                assert_eq!(matching.len(), 1, "{kind}/{api}: {requests:?}");
+                let request = matching[0];
+                assert_eq!(request.method, "GET", "{request:?}");
+                let mut cookies: Vec<_> = request
+                    .cookie
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split("; ")
+                    .collect();
+                cookies.sort_unstable();
+                assert_eq!(
+                    cookies,
+                    ["default=1", "lax=1", "originSession=present", "strict=1"],
+                    "{kind}/{api}: {request:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_blank_iframe_redirects_do_not_invent_a_referrer() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let mut page = browser.fetch(&format!("{}/page", server.origin)).await?;
+    let expression = format!(
+        "({})({}, ['blank'])",
+        include_str!("fixtures/inherited-origin-redirects.js"),
+        json!(server.cross)
+    );
+    let observed = results(
+        page.evaluate_runtime_expression_with_await_async(&expression, true)
+            .await?,
+    )?;
+    assert_eq!(observed["blank"]["documentURL"], "about:blank");
+    let requests = server.requests.lock();
+    for api in ["fetch", "xhr", "sync-xhr"] {
+        assert_eq!(observed["blank"][api], "ok", "{observed}");
+        for path in ["/redirect-allowed?", "/same-origin-target?"] {
+            let matching: Vec<_> = requests
+                .iter()
+                .filter(|request| {
+                    request.path.starts_with(path)
+                        && request.path.contains(&format!("kind=blank&api={api}"))
+                })
+                .collect();
+            assert_eq!(matching.len(), 1, "{api}: {requests:?}");
+            assert_eq!(matching[0].referrer, None, "{api}: {:?}", matching[0]);
         }
     }
     Ok(())

@@ -1167,6 +1167,9 @@ impl Request {
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
         self.validate_request_mode_for_url(&redirect.to_url)?;
         self.check_redirect_policy(&redirect.to_url)?;
+        // Cookie origin adaptation must not become a new referrer source,
+        // including when this hop selected no referrer at all.
+        self.update_referrer_for_redirect(&redirect.from_url, &redirect.headers);
         self.apply_redirect_status(redirect.status);
         self.cookie_context = advance_cookie_request_context(
             self.network_cookie_context(),
