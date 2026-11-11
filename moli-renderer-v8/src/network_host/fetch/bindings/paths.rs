@@ -10,7 +10,7 @@ pub(super) fn record_intercepted_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) {
+) -> u64 {
     let cache_mode = prepared.cache_mode();
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -47,7 +47,7 @@ pub(super) fn record_intercepted_fetch(
             resource_type: SubresourceResourceType::Fetch,
             request_cookie_report,
         },
-    );
+    )
 }
 
 pub(super) fn reject_offline_fetch(

@@ -2415,29 +2415,25 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal<'s>(
         let mut rejected = Vec::with_capacity(fetch_ids.len());
         for fetch_id in fetch_ids {
             if let Some(pending) = state.pending_fetches.remove(&fetch_id) {
-                rejected.push((
-                    fetch_id,
-                    pending.resolver,
-                    pending.load,
-                    pending.document_url,
-                    pending.network_record,
-                    pending.network_request_handle,
-                    pending.streaming_body_source_id,
-                ));
+                rejected.push((fetch_id, pending));
             }
         }
         rejected
     };
-    for (
-        fetch_id,
-        resolver,
-        load,
-        document_url,
-        network_record,
-        network_request_handle,
-        body_source_id,
-    ) in rejected
-    {
+    for (fetch_id, pending) in rejected {
+        crate::context_bootstrap::record_resource_performance_entry(
+            scope,
+            pending.resource_timing.failed(&pending.request_url),
+        );
+        let PendingWorkerFetch {
+            resolver,
+            load,
+            document_url,
+            network_record,
+            network_request_handle,
+            streaming_body_source_id: body_source_id,
+            ..
+        } = pending;
         load.cancel();
         if let Some(runtime) = state.borrow().service_worker_runtime.clone() {
             runtime.abort_controlled_fetch(u64::from(fetch_id));

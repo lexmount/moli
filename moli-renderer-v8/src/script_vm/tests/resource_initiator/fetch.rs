@@ -1,5 +1,7 @@
 use super::*;
 
+mod cancellation;
+
 fn finish_fetch(
     vm: &mut ScriptVm,
     request: &crate::types::PendingSubresourceFetchInfo,
