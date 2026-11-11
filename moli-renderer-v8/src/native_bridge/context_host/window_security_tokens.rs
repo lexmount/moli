@@ -467,20 +467,43 @@ impl JsContextHost {
     pub(crate) fn window_is_secure_context(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        owner: OwnerDispatchScope,
+        mut owner: OwnerDispatchScope,
     ) -> Option<bool> {
-        match owner {
-            OwnerDispatchScope::Top => {
-                let global = scope.get_current_context().global(scope);
-                Some(crate::context_bootstrap::window_realm_secure_context_available(scope, global))
-            }
-            OwnerDispatchScope::Child(handle) => self
-                .child_browsing_context_secure_context_url(handle)
-                .map(|url| moli_url::is_potentially_trustworthy_url(&url)),
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                self.lightweight_popup_secure_context(popup_id)
+        for _ in 0..=self.child_browsing_contexts.len() {
+            match owner {
+                OwnerDispatchScope::Top => {
+                    let context = self.page_default_context(scope)?;
+                    let scope = &mut v8::ContextScope::new(scope, context);
+                    let global = context.global(scope);
+                    return Some(
+                        crate::context_bootstrap::window_realm_secure_context_available(
+                            scope, global,
+                        ),
+                    );
+                }
+                OwnerDispatchScope::Child(handle) => {
+                    let entry = self.child_browsing_contexts.get(&handle)?;
+                    if !entry.security_origin_inherited() {
+                        return entry
+                            .current_document_url()
+                            .map(|url| moli_url::is_potentially_trustworthy_url(&url));
+                    }
+                    // Empty Documents inherit within their actual frame tree.
+                    // A popup is its root; the opener is not an ancestor.
+                    owner = match self.child_browsing_context_parent_handle(handle) {
+                        Some(parent) => OwnerDispatchScope::Child(parent),
+                        None => self.child_browsing_context_popup_owner_id(handle).map_or(
+                            OwnerDispatchScope::Top,
+                            OwnerDispatchScope::LightweightPopup,
+                        ),
+                    };
+                }
+                OwnerDispatchScope::LightweightPopup(popup_id) => {
+                    return self.lightweight_popup_secure_context(popup_id);
+                }
             }
         }
+        None
     }
 
     pub(crate) fn window_document_origin(&self, scope: OwnerDispatchScope) -> Option<String> {

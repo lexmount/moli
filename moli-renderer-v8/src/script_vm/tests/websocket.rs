@@ -5,6 +5,151 @@ use super::*;
 use moli_webapi_declare::WebApiObject;
 
 #[tokio::test]
+async fn websocket_popup_child_frames_inherit_secure_popup_with_http_host() {
+    assert_websocket_popup_child_frames_security(
+        "http://websocket-host.test/",
+        "https://websocket-opener.test/frame.html",
+        "SecurityError",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn websocket_popup_child_frames_do_not_inherit_https_host_security() {
+    assert_websocket_popup_child_frames_security(
+        "https://websocket-host.test/",
+        "http://websocket-opener.test/frame.html",
+        "allowed",
+    )
+    .await;
+}
+
+async fn assert_websocket_popup_child_frames_security(
+    host_url: &str,
+    opener_url: &str,
+    expected: &str,
+) {
+    for srcdoc in [false, true] {
+        for nested in [false, true] {
+            let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+            let mut vm = new_page_task_executor_test_vm_with_loader(host_url, &loader);
+            // Supply the opener's response without external networking, and
+            // hold any allowed WebSocket handshake at the request boundary.
+            vm.set_fetch_subresource_interception(true, None);
+            vm.eval(&format!(
+                r#"
+                globalThis.__popupChildWebSocketResult = null;
+                addEventListener('message', event => {{
+                    if (event.data.kind === 'popup-child-websocket') {{
+                        __popupChildWebSocketResult = event.data;
+                    }}
+                }});
+                const frame = document.createElement('iframe');
+                frame.src = {opener_url:?};
+                document.body.appendChild(frame);
+                "#,
+            ))
+            .unwrap();
+            vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+                .await
+                .unwrap();
+            let pending = vm.take_pending_subresource_fetch_infos();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(
+                pending[0].resource_type,
+                crate::types::SubresourceResourceType::Document
+            );
+            assert_eq!(pending[0].url.as_str(), opener_url);
+
+            // Both branches run the constructor in the innermost iframe's
+            // script, rather than borrowing it through a cross-origin Window.
+            let probe = r#"
+                let result;
+                try {
+                    new WebSocket('ws://insecure.invalid/socket');
+                    result = 'allowed';
+                } catch (error) {
+                    result = error.name;
+                }
+                top.opener.parent.postMessage({
+                    kind: 'popup-child-websocket', documentURL: document.URL, result
+                }, '*');
+                void 0;
+            "#;
+            let probe_literal = serde_json::to_string(probe).unwrap();
+            let markup_literal = serde_json::to_string(&format!("<script>{probe}</script>"))
+                .unwrap()
+                .replace('<', "\\u003c");
+            let frame_script = format!(
+                r#"
+                const frame = document.createElement('iframe');
+                if ({srcdoc}) {{
+                    frame.srcdoc = {markup_literal};
+                    document.body.appendChild(frame);
+                }} else {{
+                    document.body.appendChild(frame);
+                    frame.src = 'javascript:' + encodeURIComponent({probe_literal});
+                }}
+                void 0;
+                "#,
+            );
+            let popup_script = if nested {
+                let outer_html = serde_json::to_string(&format!(
+                    "<!doctype html><body><script>{frame_script}</script>"
+                ))
+                .unwrap();
+                format!(
+                    "const outer = document.createElement('iframe');\
+                     outer.srcdoc = {outer_html}; document.body.appendChild(outer); void 0;"
+                )
+            } else {
+                frame_script
+            };
+            let script_literal = serde_json::to_string(&popup_script)
+                .unwrap()
+                .replace('<', "\\u003c");
+            let opener_html = format!(
+                "<script>const popup = open('about:blank');\
+                 popup.location.href = 'javascript:' + encodeURIComponent({script_literal});</script>"
+            );
+            // Child Document fulfillment queues its response; the production
+            // Page task executor below runs the commit and the frame scripts.
+            vm.fulfill_pending_subresource_fetch(
+                pending[0].internal_id,
+                200,
+                vec![(
+                    "Content-Type".to_owned(),
+                    b"text/html; charset=utf-8".to_vec(),
+                )],
+                crate::runtime::RendererSyntheticResponseBody::from_bytes(opener_html.into_bytes()),
+            )
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(__popupChildWebSocketResult !== null)",
+                "true",
+                &format!("popup child WebSocket: {host_url}, {opener_url}, srcdoc={srcdoc}, nested={nested}"),
+            )
+            .await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    &vm.eval("JSON.stringify(__popupChildWebSocketResult)")
+                        .unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({
+                    "kind": "popup-child-websocket",
+                    "documentURL": if srcdoc { "about:srcdoc" } else { "about:blank" },
+                    "result": expected,
+                }),
+                "{host_url}, {opener_url}, srcdoc={srcdoc}, nested={nested}",
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn websocket_popup_http_base_does_not_bypass_mixed_content() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_test_vm_with_loader("https://websocket-popup.test/", &loader);
