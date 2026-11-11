@@ -296,7 +296,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
 
@@ -388,7 +388,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
         host.enqueue_loading_completion(params, Err("boom".to_owned()));
@@ -468,7 +468,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
         host.enqueue_loading_completion(
@@ -542,7 +542,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
         host.enqueue_loading_completion(
@@ -629,7 +629,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
         let host = test_support::stored_loading_host(&runtime_service, instance_id)
@@ -692,7 +692,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
         let event = SharedWorkerRuntimeCompletion::script_load_finished(
@@ -758,7 +758,7 @@ mod tests {
             client_owner_id: runtime_service.next_client_owner_id(),
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         };
 

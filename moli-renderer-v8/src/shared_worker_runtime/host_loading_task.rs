@@ -54,6 +54,7 @@ pub(super) fn spawn_shared_worker_loading_task(
                 .service_worker_runtime
                 .clone(),
             params.reserved_service_worker_client_id,
+            params.creator_service_worker_client_id,
             cancel_handle,
         )
         .await;

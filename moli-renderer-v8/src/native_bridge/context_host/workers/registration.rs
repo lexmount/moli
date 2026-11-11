@@ -316,6 +316,8 @@ impl PageScriptHost {
         else {
             return false;
         };
+        let creator_service_worker_client_id =
+            self.service_worker_client_id_for_subresource_owner(creator.dispatch_scope());
         let request_origin = loader.fetch_context().request_origin();
         let timing = crate::context_bootstrap::FetchResourceTiming::capture_for_initiator_type(
             scope,
@@ -349,6 +351,7 @@ impl PageScriptHost {
                 document_referrer_policy,
                 browser_context_runtime,
                 reserved_service_worker_client_id,
+                creator_service_worker_client_id,
             )
             .await;
             let completed = std::time::Instant::now();
@@ -1262,6 +1265,7 @@ async fn fetch_worker_script_source(
     document_referrer_policy: Option<String>,
     browser_context_runtime: RendererBrowserContextRuntime,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+    creator_service_worker_client_id: ServiceWorkerClientId,
 ) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
     let mut request_url = script_url.clone();
     request_url.set_fragment(None);
@@ -1287,6 +1291,7 @@ async fn fetch_worker_script_source(
         && let Some(response) = browser_context_runtime
             .fetch_service_worker_main_resource_for_worker(
                 client_id,
+                Some(creator_service_worker_client_id),
                 &request,
                 request_client,
                 resource_task_runner,

@@ -241,7 +241,7 @@ mod tests {
             client_owner_id: owner_id,
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
-            parent_service_worker_client_id: None,
+            creator_service_worker_client_id: None,
             reserved_service_worker_client_id: None,
         }
     }

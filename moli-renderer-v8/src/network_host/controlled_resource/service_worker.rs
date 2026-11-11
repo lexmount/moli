@@ -64,7 +64,7 @@ impl ControlledResourceLoad {
             internal_id: self.info.internal_id,
             request: ServiceWorkerFetchRequest {
                 body_stream: self.service_worker.as_mut().and_then(|source| source.body_stream.take()),
-                client_id: source.client_id,
+                client_id: Some(source.client_id),
                 resulting_client_id: None,
                 url: self.request.url.clone(),
                 method: self.request.method.clone(),
