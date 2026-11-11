@@ -91,22 +91,22 @@ impl ContentSecurityPolicy {
         self
     }
 
-    /// Supply the receiver origin for a local policy that has no delivery
-    /// identity. Never replace an inherited policy's captured self-origin.
-    pub fn with_fallback_self_origin(self, source_url: &Url) -> Self {
-        if self.0.self_origin.is_some() {
-            self
-        } else {
-            self.with_self_origin(source_url)
-        }
-    }
-
     pub(crate) fn report_uri_endpoints(&self) -> Option<&[String]> {
         self.0.report_uri_endpoints.as_deref()
     }
 
-    pub(crate) fn self_origin<'a>(&'a self, protected_url: &'a Url) -> &'a Url {
-        self.0.self_origin.as_ref().unwrap_or(protected_url)
+    /// A local policy can borrow its receiver's origin without changing the
+    /// shared policy. A delivered policy always keeps its captured identity.
+    pub(crate) fn effective_self_origin<'a>(
+        &'a self,
+        fallback_origin: Option<&'a Url>,
+        protected_url: &'a Url,
+    ) -> &'a Url {
+        self.0
+            .self_origin
+            .as_ref()
+            .or(fallback_origin)
+            .unwrap_or(protected_url)
     }
 
     pub fn as_str(&self) -> &str {

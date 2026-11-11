@@ -42,6 +42,76 @@ fn inherited_policy_self_origin_is_independent_of_document_url() {
 }
 
 #[test]
+fn url_checks_choose_captured_origin_before_native_and_document_fallbacks() {
+    let document = request_url("https://document.test/app/page.html");
+    let native_origin = request_url("https://native.test/");
+    let local_policy = ContentSecurityPolicy::from_meta("connect-src 'self'".to_owned());
+    let delivered_policy = ContentSecurityPolicy::from("connect-src 'self'")
+        .with_delivery_url(&request_url("https://policy.test/app/page.html"));
+    for (policy, fallback, allowed_host) in [
+        (&delivered_policy, Some(&native_origin), "policy.test"),
+        (&local_policy, Some(&native_origin), "native.test"),
+        (&local_policy, None, "document.test"),
+    ] {
+        for host in ["policy.test", "native.test", "document.test"] {
+            let target = request_url(&format!("wss://{host}/socket"));
+            let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+                std::slice::from_ref(policy),
+                &document,
+                fallback,
+                &target,
+                &target,
+                ContentSecurityPolicyResourceKind::DocumentConnect,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+                ContentSecurityPolicyDisposition::Enforce,
+                &ContentSecurityPolicyReportingEndpoints::default(),
+                ContentSecurityPolicyUrlRequest::Standard,
+            );
+            assert_eq!(
+                violation.is_none(),
+                host == allowed_host,
+                "{allowed_host}: {host}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unbound_self_origin_fallback_does_not_change_report_context() {
+    let document = request_url("https://document.test/app/page.html");
+    let fallback_origin = request_url("https://native.test/");
+    let target = request_url("wss://blocked.test/socket");
+    for disposition in [
+        ContentSecurityPolicyDisposition::Enforce,
+        ContentSecurityPolicyDisposition::Report,
+    ] {
+        let policy = ContentSecurityPolicy::from_header(
+            "connect-src 'self'; report-uri csp-report".to_owned(),
+            disposition,
+        );
+        let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+            std::slice::from_ref(&policy),
+            &document,
+            Some(&fallback_origin),
+            &target,
+            &target,
+            ContentSecurityPolicyResourceKind::DocumentConnect,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            disposition,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+            ContentSecurityPolicyUrlRequest::Standard,
+        ).expect("foreign target must violate the fallback self-origin");
+        assert_eq!(violation.document_uri, document.as_str());
+        assert_eq!(violation.source_file, document.as_str());
+        assert_eq!(
+            violation.report_uri_endpoints,
+            ["https://document.test/app/csp-report"]
+        );
+        assert_eq!(violation.disposition, disposition);
+    }
+}
+
+#[test]
 fn cloned_policies_keep_independent_self_origins() {
     let policy =
         ContentSecurityPolicy::from("connect-src 'self'").with_self_origin(&protected_url());
@@ -957,7 +1027,7 @@ fn redirected_typed_url_checks_preserve_nonce_and_report_original_url() {
                 })
             };
             let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
-                &[format!("{directive} 'nonce-trusted'").into()], &protected_url(), &target_url, &original_url,
+                &[format!("{directive} 'nonce-trusted'").into()], &protected_url(), None, &target_url, &original_url,
                 kind, ContentSecurityPolicyRedirectStatus::FollowedRedirect, ContentSecurityPolicyDisposition::Enforce,
                 &ContentSecurityPolicyReportingEndpoints::default(), request,
             );
@@ -2037,12 +2107,6 @@ fn cloned_policies_keep_independent_report_delivery_paths() {
     assert_eq!(
         content_security_policy_report_uri_endpoints(&other, &document),
         ["https://app.test/other/csp-report"]
-    );
-    assert_eq!(
-        policy
-            .clone()
-            .with_fallback_self_origin(&request_url("https://other.test/")),
-        policy
     );
 }
 
