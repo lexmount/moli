@@ -12,12 +12,46 @@ pub enum CdpSchedulerEvent {
     RendererOutputProjectionPrepared {
         pending: super::PendingProtocolSchedulerWork,
     },
+    RendererOutputPrefixPublished {
+        prefix: RendererOutputProjectionPrefix,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
     PageScreencastStarted {
         registration: crate::domains::page::PageScreencastRegistration,
     },
+}
+
+/// A materialized prefix of a still-pending renderer publication. Its Native
+/// cursor, rather than a post-command work sequence, owns its output order.
+#[derive(Debug)]
+pub struct RendererOutputProjectionPrefix {
+    pub(crate) source: moli_core::RendererOutputCursor,
+    pub(crate) events: Vec<BackgroundProtocolEvent>,
+    pub(crate) predecessors: Vec<moli_core::RendererOutputFence>,
+    pub(crate) target_id: Option<String>,
+}
+
+impl RendererOutputProjectionPrefix {
+    pub fn source(&self) -> moli_core::RendererOutputCursor {
+        self.source
+    }
+
+    pub fn predecessors(&self) -> &[moli_core::RendererOutputFence] {
+        &self.predecessors
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        moli_core::RendererOutputCursor,
+        Vec<BackgroundProtocolEvent>,
+        Vec<moli_core::RendererOutputFence>,
+        Option<String>,
+    ) {
+        (self.source, self.events, self.predecessors, self.target_id)
+    }
 }
 
 #[derive(Debug)]

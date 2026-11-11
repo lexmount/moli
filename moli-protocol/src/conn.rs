@@ -690,7 +690,9 @@ pub(crate) use runtime_load::{
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;
-pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTurnOutcome};
+pub use scheduler_state::{
+    CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTurnOutcome, RendererOutputProjectionPrefix,
+};
 #[cfg(test)]
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,

@@ -75,6 +75,7 @@ pub(super) struct RendererOutputPublicationWork {
     /// projection is pending. Releasing them never rescans the renderer.
     pub(super) output: ProtocolOutputSequence,
     projection_pending: bool,
+    prefix_boundary: Option<RendererOutputPrefixBoundary>,
     /// The first scheduler turn after ingress is reserved for higher-priority
     /// command completion.
     ///
@@ -94,6 +95,18 @@ pub(super) struct RendererOutputPublicationWork {
     future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
 }
 
+#[derive(Debug)]
+struct RendererOutputPrefixBoundary {
+    predecessors: Vec<moli_core::RendererOutputFence>,
+    target_id: Option<String>,
+}
+
+impl RendererOutputPublicationWork {
+    pub(super) fn projected_prefix_target_id(&self) -> Option<&str> {
+        self.prefix_boundary.as_ref()?.target_id.as_deref()
+    }
+}
+
 /// Explicit scheduler predecessor for concrete protocol work that must not
 /// share its producer's client-visible turn.
 ///
@@ -108,6 +121,10 @@ pub(super) enum ClientTurnPredecessor {
 }
 
 impl ProtocolSchedulerResidence {
+    pub(super) fn is_projected_renderer_prefix(&self) -> bool {
+        matches!(self, Self::RendererOutputPublication(work) if work.prefix_boundary.is_some())
+    }
+
     pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match self {
             // These events were already authorized and projected from a
@@ -143,6 +160,12 @@ impl ProtocolSchedulerResidence {
                 !work.projection_pending
                     && work.client_turn_predecessor == ClientTurnPredecessor::Satisfied
                     && work.load_predecessors.is_empty()
+                    && work.prefix_boundary.as_ref().is_none_or(|prefix| {
+                        prefix
+                            .predecessors
+                            .iter()
+                            .all(|fence| conn.renderer_output_cursor_is_projected(fence.cursor()))
+                    })
             }
             Self::ProtocolWork {
                 work,
@@ -157,7 +180,7 @@ impl ProtocolSchedulerResidence {
         }
     }
 
-    fn mark_client_turn_yielded(&mut self) {
+    pub(super) fn mark_client_turn_yielded(&mut self) {
         match self {
             Self::ProtocolWork {
                 client_turn_predecessor,
@@ -303,6 +326,7 @@ impl SchedulerQueues {
                     renderer_output_cursor,
                     output,
                     projection_pending: false,
+                    prefix_boundary: None,
                     client_turn_predecessor: if future_load_predecessor.is_some() {
                         ClientTurnPredecessor::Pending
                     } else {
@@ -333,6 +357,7 @@ impl SchedulerQueues {
                 renderer_output_cursor: cursor,
                 output: ProtocolOutputSequence::empty(),
                 projection_pending: true,
+                prefix_boundary: None,
                 client_turn_predecessor: if future_load_predecessor.is_some() {
                     ClientTurnPredecessor::Pending
                 } else {
@@ -355,12 +380,49 @@ impl SchedulerQueues {
             .iter()
             .find_map(|residence| match residence {
                 ProtocolSchedulerResidence::RendererOutputPublication(work)
-                    if work.renderer_output_cursor == cursor =>
+                    if work.renderer_output_cursor == cursor && work.prefix_boundary.is_none() =>
                 {
                     Some((work.load_predecessors.clone(), work.future_load_predecessor))
                 }
                 _ => None,
             })
+    }
+
+    pub(super) fn enqueue_renderer_output_prefix(
+        &mut self,
+        prefix: moli_protocol::RendererOutputProjectionPrefix,
+        load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
+        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
+    ) {
+        let (source, events, predecessors, target_id) = prefix.into_parts();
+        let (load_predecessors, future_load_predecessor) = self
+            .renderer_output_order(source)
+            .unwrap_or((load_predecessors, future_load_predecessor));
+        let position = self
+            .protocol_residences
+            .iter()
+            .position(|residence| {
+                matches!(residence,
+                    ProtocolSchedulerResidence::RendererOutputPublication(work)
+                        if work.renderer_output_cursor == source && work.prefix_boundary.is_none()
+                )
+            })
+            .unwrap_or(self.protocol_residences.len());
+        self.protocol_residences.insert(
+            position,
+            ProtocolSchedulerResidence::RendererOutputPublication(RendererOutputPublicationWork {
+                renderer_output_cursor: source,
+                output: ProtocolOutputSequence::from_background_events(events),
+                projection_pending: false,
+                prefix_boundary: Some(RendererOutputPrefixBoundary {
+                    predecessors,
+                    target_id,
+                }),
+                client_turn_predecessor: ClientTurnPredecessor::Satisfied,
+                load_predecessors,
+                future_load_predecessor,
+            }),
+        );
     }
 
     pub(super) fn complete_renderer_output_projection(
@@ -405,7 +467,8 @@ impl SchedulerQueues {
                 .iter_mut()
                 .find_map(|residence| match residence {
                     ProtocolSchedulerResidence::RendererOutputPublication(work)
-                        if work.renderer_output_cursor == cursor =>
+                        if work.renderer_output_cursor == cursor
+                            && work.prefix_boundary.is_none() =>
                     {
                         Some(work)
                     }
@@ -425,6 +488,7 @@ impl SchedulerQueues {
         let index = self.protocol_residences.iter().position(|residence| {
             matches!(residence, ProtocolSchedulerResidence::RendererOutputPublication(work)
                 if work.renderer_output_cursor == cursor && !work.projection_pending
+                    && work.prefix_boundary.is_none()
                     && work.load_predecessors.is_empty() && work.future_load_predecessor.is_none())
         })?;
         match self.protocol_residences.remove(index) {
@@ -484,11 +548,20 @@ impl SchedulerQueues {
         load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
         future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
     ) {
+        self.admit_protocol_work_publish_sequence(work.publish_sequence());
+        self.enqueue_admitted_protocol_work(work, load_predecessors, future_load_predecessor);
+    }
+
+    pub(super) fn enqueue_admitted_protocol_work(
+        &mut self,
+        work: ProtocolSchedulerWork,
+        load_predecessors: Vec<DeferredMainDocumentLoadObservationId>,
+        future_load_predecessor: Option<DeferredMainDocumentLoadPredecessorCandidate>,
+    ) {
         let (load_predecessors, future_load_predecessor) = work
             .renderer_output_source()
             .and_then(|cursor| self.renderer_output_order(cursor))
             .unwrap_or((load_predecessors, future_load_predecessor));
-        self.admit_protocol_work_publish_sequence(work.publish_sequence());
         // A replacement must reach its owner before the pending load completes,
         // so it can cancel that load. Keep the client-turn boundary and the
         // action's owner checks, but never make it a successor of that load.
@@ -697,6 +770,24 @@ impl SchedulerQueues {
         &mut self,
     ) -> VecDeque<ProtocolSchedulerResidence> {
         self.take_snapshot(protocol_residence_is_command_followup_activity)
+    }
+
+    pub(super) fn take_projected_renderer_output_snapshot(
+        &mut self,
+    ) -> VecDeque<ProtocolSchedulerResidence> {
+        self.take_snapshot(|residence| match residence {
+            ProtocolSchedulerResidence::RendererOutputPublication(work) => {
+                work.future_load_predecessor.is_none()
+                    && (work.prefix_boundary.is_some() || work.load_predecessors.is_empty())
+            }
+            ProtocolSchedulerResidence::ProtocolWork { .. } => false,
+        })
+    }
+
+    pub(super) fn has_projected_renderer_prefix(&self) -> bool {
+        self.protocol_residences
+            .iter()
+            .any(ProtocolSchedulerResidence::is_projected_renderer_prefix)
     }
 
     /// Takes frozen output from the exact concrete Page stream up to one

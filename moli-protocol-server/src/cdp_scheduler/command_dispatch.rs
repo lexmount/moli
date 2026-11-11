@@ -2,12 +2,27 @@ use moli_protocol::{BackgroundProtocolEvent, CdpSchedulerEvent, RendererOutputDe
 
 use super::{CommandOutputReleasePermit, ProtocolOutputSequence};
 
+/// Work publication order is admitted before a command can wait on Native
+/// output. Execution still belongs after that command's response flush.
+#[derive(Default)]
+pub(crate) struct PostFlushSchedulerEvents {
+    pub(super) events: Vec<CdpSchedulerEvent>,
+}
+
+impl std::ops::Deref for PostFlushSchedulerEvents {
+    type Target = [CdpSchedulerEvent];
+
+    fn deref(&self) -> &Self::Target {
+        &self.events
+    }
+}
+
 pub(crate) struct CommandTurnOutput {
     protocol_output: ProtocolOutputSequence,
     post_renderer_output: ProtocolOutputSequence,
     renderer_output_boundary: Option<moli_core::RendererOutputFence>,
     post_response_events: Vec<BackgroundProtocolEvent>,
-    post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+    post_flush_scheduler_events: PostFlushSchedulerEvents,
     renderer_output_dependencies: RendererOutputDependencies,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
@@ -15,7 +30,7 @@ pub(crate) struct CommandTurnOutput {
 impl CommandTurnOutput {
     pub(super) fn new(
         protocol_output: ProtocolOutputSequence,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: PostFlushSchedulerEvents,
     ) -> Self {
         Self::new_with_post_response_events(
             protocol_output,
@@ -27,7 +42,7 @@ impl CommandTurnOutput {
     pub(super) fn new_with_post_response_events(
         protocol_output: ProtocolOutputSequence,
         post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: PostFlushSchedulerEvents,
     ) -> Self {
         Self::new_with_post_response_events_and_permit(
             protocol_output,
@@ -40,7 +55,7 @@ impl CommandTurnOutput {
     pub(super) fn new_with_post_response_events_and_permit(
         protocol_output: ProtocolOutputSequence,
         post_response_events: Vec<BackgroundProtocolEvent>,
-        post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+        post_flush_scheduler_events: PostFlushSchedulerEvents,
         output_release_permit: Option<CommandOutputReleasePermit>,
     ) -> Self {
         Self {
@@ -125,7 +140,7 @@ impl CommandTurnOutput {
         ProtocolOutputSequence,
         Option<moli_core::RendererOutputFence>,
         Vec<BackgroundProtocolEvent>,
-        Vec<CdpSchedulerEvent>,
+        PostFlushSchedulerEvents,
         RendererOutputDependencies,
         Option<CommandOutputReleasePermit>,
     ) {

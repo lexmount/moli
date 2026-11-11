@@ -77,8 +77,12 @@ impl ProtocolWorkflowState<'_> {
 
     pub(crate) fn start_popup_initial_document(
         self,
+        browser_context_id: String,
         target_id: String,
-    ) -> Option<Option<PendingInitialDocumentPageBuild>> {
+    ) -> Option<(
+        Option<PendingInitialDocumentPageBuild>,
+        Vec<BackgroundProtocolEvent>,
+    )> {
         let route = self
             .connection
             .target_session_route_for_target_id(&target_id)?;
@@ -87,7 +91,14 @@ impl ProtocolWorkflowState<'_> {
             .connection
             .start_initial_document_page_ensure_for_owner(&owner)
         {
-            Ok(pending) => Some(pending),
+            Ok(pending) => {
+                let events = crate::domains::target::popup_target_created_events(
+                    self.connection,
+                    &browser_context_id,
+                    &target_id,
+                )?;
+                Some((pending, events))
+            }
             Err(error) => {
                 tracing::debug!(%error, %target_id, "failed to start popup initial document");
                 None
@@ -116,15 +127,103 @@ impl ProtocolWorkflowState<'_> {
         self,
         browser_context_id: String,
         target_id: String,
-    ) -> PreparedPopupTargetRollback {
-        self.connection
-            .prepare_popup_target_rollback(Some(&browser_context_id), &target_id)
+        announced: bool,
+    ) -> (
+        Option<PreparedPopupTargetRollback>,
+        Vec<BackgroundProtocolEvent>,
+    ) {
+        // A user close already owns retirement and its destruction fact.
+        // Adoption failing as that close releases a dialog must not retire
+        // the same target a second time.
+        if self.connection.page_target_is_closing(&target_id)
+            || self
+                .connection
+                .browser_context_by_id(&browser_context_id)
+                .and_then(|context| context.page_target(&target_id))
+                .is_none()
+        {
+            return (None, Vec::new());
+        }
+        let destroyed = if announced {
+            self.connection
+                .prepare_target_host_closure(&target_id)
+                .into_parts()
+                .1
+        } else {
+            Vec::new()
+        };
+        let pending = self
+            .connection
+            .prepare_popup_target_rollback(Some(&browser_context_id), &target_id);
+        let events = if self.connection.has_any_target_discovery() {
+            self.connection
+                .prepared_target_host_deltas_event_plan(destroyed)
+                .into_iter()
+                .collect()
+        } else {
+            // Creation is observable by automation without CDP discovery;
+            // failure after that announcement must publish destruction too.
+            crate::conn::target_destroyed_automation_events(
+                destroyed
+                    .into_iter()
+                    .filter_map(|delta| delta.into_parts().1)
+                    .collect(),
+            )
+        };
+        (Some(pending), events)
     }
 
     pub(crate) fn finish_popup_rollback(self, session_ids: Vec<String>) {
         for session_id in session_ids {
             self.connection
                 .rollback_attached_session_without_event(&session_id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        automation::AutomationEvent,
+        conn::{BrowserContext, CdpConnection},
+    };
+
+    #[test]
+    fn announced_popup_rollback_publishes_destruction_with_and_without_discovery() {
+        for discover in [false, true] {
+            let mut conn = CdpConnection::new();
+            let mut context = BrowserContext::new("BID-popup-rollback".into());
+            context.set_active_target_id("TID-popup-rollback");
+            conn.browser_context = Some(context);
+            conn.register_top_level_page_target("TID-popup-rollback");
+            conn.set_root_target_discovery_enabled(discover);
+            let created = crate::domains::target::popup_target_created_events(
+                &mut conn,
+                "BID-popup-rollback",
+                "TID-popup-rollback",
+            )
+            .unwrap();
+            assert!(!created.is_empty());
+            let (pending, events) = ProtocolWorkflowState::new(&mut conn).prepare_popup_rollback(
+                "BID-popup-rollback".into(),
+                "TID-popup-rollback".into(),
+                true,
+            );
+            assert!(pending.is_some());
+            let destroyed = events.into_iter().filter(|event| matches!(event.clone().into_parts().1,
+                Some(AutomationEvent::TargetDestroyed(event)) if event.target_id.as_str() == "TID-popup-rollback"
+            )).count();
+            assert_eq!(
+                destroyed, 1,
+                "one Native destruction for the announced popup, discovery={discover}"
+            );
+            assert!(
+                conn.browser_context_by_id("BID-popup-rollback")
+                    .unwrap()
+                    .page_target("TID-popup-rollback")
+                    .is_none()
+            );
         }
     }
 }

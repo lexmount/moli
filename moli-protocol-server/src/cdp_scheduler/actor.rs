@@ -8,9 +8,9 @@ use std::{
 use anyhow::{Context as _, Result};
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpSchedulerEvent,
-    CommandDispatchContext, CommandWaitLifetime, CompletedCdpCommandDispatch,
-    CompletedPageScreencastCapture, ParsedCdpCommand, PendingCdpCommandDispatch,
+    BackgroundNavigationCompletion, BackgroundProtocolEvent, CommandDispatchContext,
+    CommandWaitLifetime, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
+    ParsedCdpCommand, PendingCdpCommandDispatch,
     conn::{RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady},
 };
 use serde_json::Value;
@@ -37,8 +37,8 @@ use super::{
     CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpOwnerActorLifecycle,
     CdpRendererPublicationReceiver, CdpScheduler, CdpSchedulerEventReceivers,
     CommandOutputReleasePermit, CommandStartAction, CommandTaskStep, CommandTurnOutput,
-    ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
-    ProtocolOutputSequence,
+    PostFlushSchedulerEvents, ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance,
+    ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
@@ -908,7 +908,7 @@ enum RuntimeDeferredReplyFlushItem {
 }
 
 struct RuntimeDeferredReplyCompletedCommand {
-    post_flush_scheduler_events: Vec<CdpSchedulerEvent>,
+    post_flush_scheduler_events: PostFlushSchedulerEvents,
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
 
@@ -1205,7 +1205,7 @@ async fn fail_runtime_deferred_reply_for_loose_protocol_response(
             "RuntimeDeferredReplyLooseProtocolResponse".to_owned(),
             None,
         )),
-        Vec::new(),
+        PostFlushSchedulerEvents::default(),
     ))
     .with_output_release_permit(pending.output_release_permit);
     Ok(RuntimeDeferredReplyAdvance::Complete(Box::new(
@@ -1376,7 +1376,7 @@ fn runtime_deferred_reply_unexpected_pending_output(
                 "pendingKind": pending_kind,
             })),
         )),
-        Vec::new(),
+        PostFlushSchedulerEvents::default(),
     )
 }
 
@@ -2561,7 +2561,7 @@ mod tests {
                 dependencies.extend([first, second].map(RendererOutputFence::new_for_test));
                 let output = CommandTurnOutput::new(
                     ProtocolOutputSequence::from_background_event(BackgroundProtocolEvent::command_success(metadata.id, metadata.session_id.as_deref(), json!({}))),
-                    Vec::new(),
+                    PostFlushSchedulerEvents::default(),
                 ).with_renderer_output_dependencies(dependencies)
                     .with_output_release_permit(CommandOutputReleasePermit::new(permit, None));
                 let publication = |cursor| RendererOutputTransportMessage::Publication(RendererOutputPublication::new_for_test(
