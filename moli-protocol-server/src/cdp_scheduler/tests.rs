@@ -1056,6 +1056,306 @@ fn fenced_creation_stays_in_the_complete_source_publication() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn native_successors_queued_before_insertion_wait_for_native_delivery() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for snapshot in [false, true] {
+                assert_native_successor_waits_for_insertion(true, snapshot).await;
+            }
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_successors_queued_after_insertion_wait_for_native_delivery() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for snapshot in [false, true] {
+                assert_native_successor_waits_for_insertion(false, snapshot).await;
+            }
+        })
+        .await;
+}
+
+async fn assert_native_successor_waits_for_insertion(queued_first: bool, snapshot: bool) {
+    use moli_protocol::test_support::{
+        bind_renderer_page_output_stream_to_retired_owner,
+        renderer_projection_with_insertion_boundary,
+    };
+    let source = publication_cursor(&unconstrained_renderer_publication(
+        PageId::new_for_testing(91),
+    ));
+    let native_publication = unconstrained_renderer_publication(PageId::new_for_testing(92));
+    let native = publication_cursor(&native_publication);
+    let successor = RendererOutputCursor::new_for_test(native.stream(), 2);
+    let successor_publication: RendererOutputTransportMessage =
+        RendererOutputPublication::new_for_test(
+            successor,
+            vec![renderer_output_record(PageId::new_for_testing(92), 1)],
+        )
+        .into();
+    let load = deferred_main_document_load_observation_id(1);
+    let event = |method| BackgroundProtocolEvent::immediate(json!({"method": method}));
+    let mut conn = CdpConnection::new();
+    bind_renderer_page_output_stream_to_retired_owner(&mut conn, native.stream());
+    conn.admit_renderer_output(
+        RendererOutputStreamControl::Opened {
+            stream: native.stream(),
+        }
+        .into(),
+    );
+    let (before, scheduled) = renderer_projection_with_insertion_boundary(
+        &mut conn,
+        source,
+        vec![event("Moli.before")],
+        RendererOutputFence::new_for_test(native),
+        vec![event("Moli.after")],
+    );
+    let (mut scheduler, mut receivers) = CdpScheduler::new(conn);
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(source, vec![load], None);
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        source,
+        ProtocolOutputSequence::from_background_events(before)
+    ));
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(native, Vec::new(), None);
+    scheduler
+        .queues
+        .append_renderer_output_projection(
+            native,
+            ProtocolOutputSequence::from_messages(vec![json!({"method":"Moli.native1"})]),
+        )
+        .unwrap();
+    if queued_first {
+        scheduler
+            .queues
+            .enqueue_pending_renderer_output_projection(successor, Vec::new(), None);
+        scheduler
+            .queues
+            .append_renderer_output_projection(
+                successor,
+                ProtocolOutputSequence::from_messages(vec![json!({"method":"Moli.native2"})]),
+            )
+            .unwrap();
+    }
+    scheduler.apply_scheduler_events(scheduled);
+    if !queued_first {
+        scheduler
+            .queues
+            .enqueue_pending_renderer_output_projection(successor, Vec::new(), None);
+        scheduler
+            .queues
+            .append_renderer_output_projection(
+                successor,
+                ProtocolOutputSequence::from_messages(vec![json!({"method":"Moli.native2"})]),
+            )
+            .unwrap();
+    }
+    // Run the real ingress/task completion path, including its unconstrained
+    // fast handoff. Both Native batches are projected while S still awaits load.
+    for publication in [native_publication, successor_publication] {
+        assert!(
+            scheduler
+                .ingest_renderer_publication_now(publication)
+                .is_empty()
+        );
+        let completed = receivers.recv().await.unwrap();
+        let output = scheduler.complete_protocol_work(completed).unwrap();
+        assert!(
+            output.is_empty(),
+            "Native completion cannot hand B#2 past B#1 held inside S: queued_first={queued_first}, snapshot={snapshot}, output={:?}",
+            output.into_messages()
+        );
+    }
+    assert!(
+        scheduler
+            .state
+            .with_state(|state| state.renderer_output_cursor_is_projected(successor))
+            .unwrap()
+    );
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(native)
+            .is_none()
+    );
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(successor)
+            .is_none()
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::Wait
+    );
+    assert!(scheduler.complete_next_protocol_residence().is_empty());
+    assert!(
+        scheduler
+            .complete_renderer_output_predecessor_before_runtime_response(
+                &RendererOutputFence::new_for_test(successor)
+            )
+            .is_empty()
+    );
+
+    let independent = publication_cursor(&unconstrained_renderer_publication(
+        PageId::new_for_testing(93),
+    ));
+    scheduler.queues.enqueue_renderer_output_publication(
+        independent,
+        ProtocolOutputSequence::from_messages(vec![json!({"method":"Moli.independent"})]),
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        scheduler.complete_next_protocol_residence().into_messages(),
+        [json!({"method":"Moli.independent"})],
+        "the insertion is not a global stream barrier"
+    );
+    scheduler.queues.satisfy_load_predecessor(load);
+    if snapshot {
+        let checked_out = scheduler
+            .queues
+            .take_renderer_output_predecessor_snapshot(source);
+        assert_eq!(checked_out.len(), 1);
+        scheduler
+            .queues
+            .bind_renderer_delivery_predecessor(successor, None);
+        assert!(
+            scheduler
+                .queues
+                .take_unconstrained_renderer_output(successor)
+                .is_none(),
+            "rebinding retains the established Native-stream edge while its source is checked out"
+        );
+        let pending = scheduler.queues.protocol_residences.iter().find(|residence| matches!(residence,
+            ProtocolSchedulerResidence::RendererOutputPublication(work) if work.renderer_output_cursor == successor)).unwrap();
+        assert_eq!(
+            scheduler
+                .state
+                .with_state(|state| scheduler.queues.residence_scheduler_step(pending, &state))
+                .unwrap(),
+            ProtocolSchedulerStep::Wait
+        );
+        scheduler.queues.restore_snapshot_to_front(checked_out);
+    }
+    let mut output = scheduler.complete_next_protocol_residence();
+    output.append(scheduler.complete_next_protocol_residence());
+    assert_eq!(
+        output.into_messages(),
+        ["Moli.before", "Moli.native1", "Moli.after", "Moli.native2"]
+            .map(|method| json!({"method":method})),
+        "queued_first={queued_first}, snapshot={snapshot}"
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+    assert!(scheduler.complete_next_protocol_residence().is_empty());
+    for cursor in [source, native, successor] {
+        assert!(
+            scheduler
+                .queues
+                .take_unconstrained_renderer_output(cursor)
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn native_successor_keeps_latest_insertion_when_its_owner_is_checked_out() {
+    use moli_protocol::test_support::renderer_projection_with_insertion_boundary;
+    let source_a = RendererOutputCursor::new_for_test(
+        publication_cursor(&unconstrained_renderer_publication(
+            PageId::new_for_testing(94),
+        ))
+        .stream(),
+        100,
+    );
+    let source_c = publication_cursor(&unconstrained_renderer_publication(
+        PageId::new_for_testing(95),
+    ));
+    let native1 = publication_cursor(&unconstrained_renderer_publication(
+        PageId::new_for_testing(96),
+    ));
+    let native2 = RendererOutputCursor::new_for_test(native1.stream(), 2);
+    let native3 = RendererOutputCursor::new_for_test(native1.stream(), 3);
+    let mut conn = CdpConnection::new();
+    let (before_a, wake_a) = renderer_projection_with_insertion_boundary(
+        &mut conn,
+        source_a,
+        vec![BackgroundProtocolEvent::immediate(
+            json!({"method":"Moli.a"}),
+        )],
+        RendererOutputFence::new_for_test(native1),
+        Vec::new(),
+    );
+    let (before_c, wake_c) = renderer_projection_with_insertion_boundary(
+        &mut conn,
+        source_c,
+        vec![BackgroundProtocolEvent::immediate(
+            json!({"method":"Moli.c"}),
+        )],
+        RendererOutputFence::new_for_test(native2),
+        Vec::new(),
+    );
+    let (mut scheduler, _receivers) = CdpScheduler::new(conn);
+    for (source, before) in [(source_a, before_a), (source_c, before_c)] {
+        scheduler
+            .queues
+            .enqueue_pending_renderer_output_projection(source, Vec::new(), None);
+        assert!(scheduler.queues.complete_renderer_output_projection(
+            source,
+            ProtocolOutputSequence::from_background_events(before)
+        ));
+    }
+    for cursor in [native1, native2, native3] {
+        scheduler.queues.enqueue_renderer_output_publication(
+            cursor,
+            ProtocolOutputSequence::from_messages(vec![
+                json!({"method":"Moli.native", "params":{"sequence":cursor.sequence()}}),
+            ]),
+            Vec::new(),
+            None,
+        );
+    }
+    // Both wakes drain the same connection-owned FIFO. A#100 and C#1 cannot
+    // rank boundaries B#1 and B#2 by their unrelated source sequence numbers.
+    scheduler.apply_scheduler_events(wake_a);
+    scheduler.apply_scheduler_events(wake_c);
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(native3)
+            .is_none()
+    );
+    let checked_out = scheduler
+        .queues
+        .take_renderer_output_predecessor_snapshot(source_c);
+    assert_eq!(checked_out.len(), 1);
+    scheduler
+        .queues
+        .bind_renderer_delivery_predecessor(native3, None);
+
+    // Model the full A/B#1 output handoff at the queue's receipt boundary.
+    // C remains checked out and owns its still-undelivered B#2 insertion.
+    for cursor in [native1, source_a] {
+        let index = scheduler.queues.protocol_residences.iter().position(|residence| matches!(residence,
+            ProtocolSchedulerResidence::RendererOutputPublication(work) if work.renderer_output_cursor == cursor)).unwrap();
+        scheduler.queues.take_protocol_residence_at(index).unwrap();
+        scheduler.queues.finish_renderer_output_delivery(cursor);
+    }
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(native3)
+            .is_none(),
+        "B#3 must retain C/B#2 after A/B#1 has been delivered"
+    );
+    scheduler.queues.restore_snapshot_to_front(checked_out);
+}
+
 #[tokio::test]
 async fn source_publication_keeps_native_insertion_before_its_child_delivery() {
     for nested in [false, true] {
