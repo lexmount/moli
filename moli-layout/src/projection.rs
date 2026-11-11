@@ -852,6 +852,7 @@ where
                 }
                 PaintOrderEvent::BoxOutsetShadow(_)
                 | PaintOrderEvent::BoxContents(_)
+                | PaintOrderEvent::BoxCaret(_)
                 | PaintOrderEvent::PushStackingContext(_)
                 | PaintOrderEvent::TableCollapsedBorders(_)
                 | PaintOrderEvent::PopStackingContext(_) => {}

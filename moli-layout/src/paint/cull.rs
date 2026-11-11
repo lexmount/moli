@@ -11,6 +11,7 @@ use std::{fmt::Debug, hash::Hash};
 use super::{
     filters::{expanded_filter_clip, project_filters},
     geometry::BoxAreas,
+    text::caret_rect,
 };
 use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
@@ -185,6 +186,10 @@ where
         PaintOrderEvent::BoxContents(id)
         | PaintOrderEvent::InlineContents(id)
         | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
+        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
+            .map_or(PaintCullBounds::Empty, |rect| {
+                map_box_rect(projection, id, rect)
+            }),
         PaintOrderEvent::InlineBox { owner, fragment } => {
             let id = projection.owner_paint_fragments[owner.index()][fragment];
             map_box_rect(projection, owner, projection.fragments[id.index()].rect)

@@ -220,6 +220,131 @@ document.body.innerHTML='<input id=plain><input id=placeholder placeholder=Examp
     }).await.expect("text control selection fixture");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn contenteditable_atomic_inlines_paint_carets_without_glyphs() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-caret.html")?,
+        );
+        page.vm_mut().eval(include_str!("atomic_inline_caret.js"))?;
+        page.vm_mut().sync_live_document_style_sources();
+        for (label, text, offset, after_atomic) in [
+            ("atomic and forced break", "\n", 0, true),
+            ("glyphs on another line", "\nX", 0, true),
+            ("empty middle line", "X\n\nY", 2, false),
+            ("drawable glyph carrier", "X", 0, true),
+        ] {
+            page.vm_mut().eval(&format!(
+                "setAtomicCaret({}, {offset});'updated'",
+                serde_json::to_string(text)?,
+            ))?;
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 140, 1.0))?
+                .expect("atomic caret layout");
+            let carets = snapshot
+                .fragments
+                .iter()
+                .filter_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::Fill {
+                        shape: moli_layout::PaintShape::Rect(rect),
+                        brush: moli_layout::PaintBrush::Solid(color),
+                        transform,
+                        ..
+                    } if *color == moli_layout::PaintColor::new(1.0, 0.0, 0.0, 1.0) => {
+                        Some(transform.map_rect(*rect).bounding_rect())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                carets.len(),
+                1,
+                "{label}: one caret without a glyph carrier"
+            );
+            let caret = carets[0];
+            assert_eq!(caret.width, 1.5, "{label}: caret width");
+            assert!(caret.height > 0.0, "{label}: caret height");
+            assert!(
+                (caret.x - if after_atomic { 24.0 } else { 0.0 }).abs() < 0.1,
+                "{label}: caret position {caret:?}"
+            );
+            if !after_atomic {
+                assert!(
+                    caret.y >= 32.0,
+                    "caret belongs to the empty middle line: {caret:?}"
+                );
+            }
+            if text == "\n" {
+                assert!(
+                    !snapshot.fragments.iter().any(|fragment| matches!(
+                        fragment,
+                        moli_layout::PaintFragment::GlyphRun(_)
+                    )),
+                    "the regression fixture must have no drawable glyphs"
+                );
+            }
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            assert!(
+                image
+                    .rgba
+                    .chunks_exact(4)
+                    .any(|p| p[0] > 200 && p[1] < 50 && p[2] < 50),
+                "{label}: visible red caret pixels"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("glyphless atomic caret fixture");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn contenteditable_atomic_inline_caret_keeps_effects_and_viewport_culling() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-caret-effects.html")?,
+        );
+        page.vm_mut().eval(include_str!("atomic_inline_caret.js"))?;
+        page.vm_mut().sync_live_document_style_sources();
+        for (label, styles, visible) in [
+            ("translated", "transform:translate(17px,11px)", true),
+            ("transparent", "opacity:0", false),
+            ("clip path", "clip-path:inset(0 0 0 50%)", false),
+            // The box border is above the capture, but its overflowing caret
+            // still intersects the viewport.
+            (
+                "caret-only capture",
+                "height:1px;transform:translateY(-12px)",
+                true,
+            ),
+        ] {
+            page.vm_mut().eval(&format!(
+                "setAtomicCaret('\\n', 0, {});'updated'",
+                serde_json::to_string(styles)?,
+            ))?;
+            let snapshot = page
+                .vm_mut()
+                .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 140, 1.0))?
+                .expect("atomic caret effects layout");
+            let image = moli_paint::raster_snapshot(&snapshot)?;
+            let red = image.rgba.chunks_exact(4).any(|p| {
+                i16::from(p[0]) - i16::from(p[1]) > 20 && i16::from(p[0]) - i16::from(p[2]) > 20
+            });
+            assert_eq!(red, visible, "{label}: caret compositing");
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("atomic caret effects fixture");
+}
+
 fn dark_pixels(image: &moli_paint::RasterImage, x: u32, y: u32, width: u32, height: u32) -> usize {
     (y..y + height)
         .flat_map(|y| (x..x + width).map(move |x| ((y * image.width + x) * 4) as usize))
