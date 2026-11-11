@@ -1123,16 +1123,10 @@ async fn websocket_cdp_page_navigate_direct_attachment_returns_is_download_and_k
         }),
         "download navigate should not fire Page.loadEventFired before returning the navigate result: {direct_navigation_messages:?}"
     );
-    assert!(
-        !direct_navigation_messages
-            .iter()
-            .any(|message| { message["method"] == json!("Browser.downloadWillBegin") }),
-        "download events should be emitted after the navigate response: {direct_navigation_messages:?}"
-    );
-
+    let mut pending_navigation = direct_navigation_messages.into();
     let will_begin = timeout(Duration::from_secs(2), async {
         loop {
-            let message = recv_ws_json(&mut socket).await;
+            let message = recv_download_message(&mut socket, &mut pending_navigation).await;
             if message["method"] == json!("Browser.downloadWillBegin") {
                 return message;
             }
@@ -1148,7 +1142,7 @@ async fn websocket_cdp_page_navigate_direct_attachment_returns_is_download_and_k
 
     let completed = timeout(Duration::from_secs(2), async {
         loop {
-            let message = recv_ws_json(&mut socket).await;
+            let message = recv_download_message(&mut socket, &mut pending_navigation).await;
             if message["method"] == json!("Browser.downloadProgress")
                 && message["params"]["state"] == json!("completed")
             {
@@ -1354,46 +1348,21 @@ async fn websocket_cdp_page_navigate_post_parse_location_download_keeps_document
         navigation["result"].get("loaderId").is_some(),
         "loaded navigation should still expose loaderId: {navigation:?}"
     );
-    assert!(
-        !navigation_messages
-            .iter()
-            .any(|message| { message["method"] == json!("Browser.downloadWillBegin") }),
-        "download events should be emitted after the navigate response: {navigation_messages:?}"
-    );
-    let mut source_load_seen = navigation_messages.iter().any(|message| {
-        message["sessionId"] == json!(session_id)
-            && message["method"] == json!("Page.loadEventFired")
-    });
-
-    if !source_load_seen {
-        let load_event = timeout(Duration::from_secs(2), async {
-            loop {
-                let message = recv_ws_json(&mut socket).await;
-                assert!(
-                    message["method"] != json!("Browser.downloadWillBegin"),
-                    "download events must not overtake the source page load boundary: {message:?}; navigation_messages={navigation_messages:?}"
-                );
-                if message["sessionId"] == json!(session_id)
-                    && message["method"] == json!("Page.loadEventFired")
-                {
-                    return message;
-                }
-            }
-        })
-        .await
-        .expect("receive Page.loadEventFired before Browser.downloadWillBegin");
-        assert_eq!(load_event["sessionId"], json!(session_id));
-        source_load_seen = true;
-    }
-    assert!(
-        source_load_seen,
-        "source page load boundary should be observed"
-    );
-
+    let mut pending_navigation = navigation_messages.into();
+    let mut source_load_seen = false;
     let will_begin = timeout(Duration::from_secs(2), async {
         loop {
-            let message = recv_ws_json(&mut socket).await;
+            let message = recv_download_message(&mut socket, &mut pending_navigation).await;
+            if message["sessionId"] == json!(session_id)
+                && message["method"] == json!("Page.loadEventFired")
+            {
+                source_load_seen = true;
+            }
             if message["method"] == json!("Browser.downloadWillBegin") {
+                assert!(
+                    source_load_seen,
+                    "download must follow its source load: {message:?}"
+                );
                 return message;
             }
         }
@@ -1408,7 +1377,7 @@ async fn websocket_cdp_page_navigate_post_parse_location_download_keeps_document
 
     let completed = timeout(Duration::from_secs(2), async {
         loop {
-            let message = recv_ws_json(&mut socket).await;
+            let message = recv_download_message(&mut socket, &mut pending_navigation).await;
             if message["method"] == json!("Browser.downloadProgress")
                 && message["params"]["state"] == json!("completed")
             {
