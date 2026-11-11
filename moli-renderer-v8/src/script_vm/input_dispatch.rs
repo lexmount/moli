@@ -27,10 +27,10 @@ use crate::dom::{
 };
 use crate::native_bridge::element::{
     InputEventCoordinates, TextEditInputType, TouchEventPoint,
-    activate_handle_after_pointer_release, activate_handle_via_click,
-    activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_drag_event_with_related_target, construct_keyboard_event,
-    construct_mouse_event_for_target, construct_mouse_event_with_detail_for_target,
+    activate_handle_after_pointer_release, activate_handle_via_click, activate_handle_via_keyboard,
+    cache_input_files_from_selected_files, construct_drag_event_with_related_target,
+    construct_keyboard_event, construct_mouse_event_for_target,
+    construct_mouse_event_with_detail_for_target,
     construct_mouse_event_with_related_target_for_target, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
@@ -2845,15 +2845,10 @@ impl ScriptVm {
                     return Ok(outcome);
                 }
                 if event_name == "keydown" && (target.is_button_like || target.is_anchor_like) {
-                    return Ok(activate_handle_via_click_with_detail_and_modifiers(
+                    return Ok(activate_handle_via_keyboard(
                         scope,
                         runtime_ptr,
                         handle,
-                        0.0,
-                        0.0,
-                        0,
-                        0,
-                        1,
                         modifiers,
                     ));
                 }
@@ -2886,15 +2881,10 @@ impl ScriptVm {
 
             if event_name == "keyup" && is_space_key(&key_lower) {
                 if target.is_checkbox || target.is_button_like || target.is_radio {
-                    return Ok(activate_handle_via_click_with_detail_and_modifiers(
+                    return Ok(activate_handle_via_keyboard(
                         scope,
                         runtime_ptr,
                         handle,
-                        0.0,
-                        0.0,
-                        0,
-                        0,
-                        1,
                         modifiers,
                     ));
                 }

@@ -191,15 +191,16 @@ use super::document::{
     detached_shadow_root_selection_value, node_shadow_root_element_from_point_callback,
     node_shadow_root_elements_from_point_callback,
 };
+#[cfg(feature = "ace-protocol")]
+pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
 use activation::navigate_form_target_browsing_context;
 pub(crate) use activation::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
 };
 pub(crate) use activation::{
-    accepts_drop_default_action, activate_default_submit_button_via_keyboard,
-    activate_handle_after_pointer_release, activate_handle_via_click,
-    activate_handle_via_click_with_detail_and_modifiers, activate_handle_via_synthetic_click,
+    accepts_drop_default_action, activate_handle_after_pointer_release, activate_handle_via_click,
+    activate_handle_via_keyboard, activate_handle_via_synthetic_click,
     dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
     perform_auxiliary_link_default_action, perform_click_default_action_for_dispatched_event,
     perform_drop_default_action, prepare_legacy_activation_for_dispatched_click,
