@@ -686,3 +686,95 @@ dialogProbe.dialogs.second.querySelector('button').focus();
         r#"{"open":[false,false],"cancels":["second","first"]}"#
     );
 }
+
+#[test]
+fn dialog_escape_respects_closedby_policy() {
+    for (attribute, expected_open) in [
+        (None, false),
+        (Some("none"), true),
+        (Some("NONE"), true),
+        (Some(" none "), false),
+        (Some("closerequest"), false),
+        (Some("any"), false),
+        (Some("invalid"), false),
+    ] {
+        let mut vm = new_storage_test_vm("https://dialog-escape-closedby.test/");
+        vm.eval(&format!(
+            r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+const closedby = {attribute};
+if (closedby !== null) dialogProbe.dialogs.first.setAttribute('closedby', closedby);
+"#,
+            fixture = include_str!("dialog_escape_order.js"),
+            attribute = serde_json::to_string(&attribute).unwrap(),
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify([dialogProbe.dialogs.first.open, dialogProbe.state().cancels.length])").unwrap(),
+            format!("[{expected_open},{}]", u8::from(!expected_open)),
+            "closedby={attribute:?}"
+        );
+        // A policy that disables user closure does not disable script closure.
+        vm.eval("dialogProbe.dialogs.first.close()").unwrap();
+        assert_eq!(vm.eval("dialogProbe.dialogs.first.open").unwrap(), "false");
+    }
+}
+
+#[test]
+fn dialog_escape_rechecks_closedby_after_keyboard_and_cancel_listeners() {
+    for (event, initial, action, expected_open, expected_cancels) in [
+        (
+            "keydown",
+            "closerequest",
+            "setAttribute('closedby', 'none')",
+            true,
+            0,
+        ),
+        ("keydown", "none", "removeAttribute('closedby')", false, 1),
+        (
+            "cancel",
+            "closerequest",
+            "setAttribute('closedby', 'none')",
+            true,
+            1,
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://dialog-escape-dynamic-closedby.test/");
+        vm.eval(&format!(
+            r#"
+globalThis.dialogProbe = ({fixture})({{openOrder:['first']}});
+const dialog = dialogProbe.dialogs.first;
+dialog.setAttribute('closedby', '{initial}');
+const target = '{event}' === 'keydown' ? document : dialog;
+target.addEventListener('{event}', () => dialog.{action});
+"#,
+            fixture = include_str!("dialog_escape_order.js"),
+        ))
+        .unwrap();
+        press_dialog_escape(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify([dialogProbe.dialogs.first.open, dialogProbe.state().cancels.length])").unwrap(),
+            format!("[{expected_open},{expected_cancels}]"),
+            "{event}: {action}"
+        );
+    }
+}
+
+#[test]
+fn dialog_escape_does_not_bypass_top_modal_closedby_none() {
+    let mut vm = new_storage_test_vm("https://dialog-escape-disabled-top.test/");
+    vm.eval(&format!(
+        r#"
+globalThis.dialogProbe = ({fixture})({{}});
+dialogProbe.dialogs.second.setAttribute('closedby', 'none');
+"#,
+        fixture = include_str!("dialog_escape_order.js"),
+    ))
+    .unwrap();
+    press_dialog_escape(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify(dialogProbe.state())").unwrap(),
+        r#"{"open":[true,true],"cancels":[]}"#
+    );
+}
