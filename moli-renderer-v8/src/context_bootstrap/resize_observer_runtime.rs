@@ -772,11 +772,12 @@ fn schedule_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
         return;
     };
     let (_, delay_ms) = crate::window_host::next_animation_frame(scope);
-    // Each rAF callback of that frame is its own timer due at most 1 ms past
-    // the frame timestamp. One extra millisecond orders this delivery after
-    // all of them, as in the rendering update. A resize made inside a rAF
-    // callback is still delivered one frame later.
-    unsafe { &mut *host_ptr }.queue_resize_observer_frame(scope, delay_ms.saturating_add(1));
+    // Each rAF callback of that frame is its own timer due about 1 ms past
+    // the frame timestamp (rounding and clock reads add a little more). Two
+    // extra milliseconds order this delivery after all of them, as in the
+    // rendering update. A resize made inside a rAF callback is usually
+    // delivered one frame later.
+    unsafe { &mut *host_ptr }.queue_resize_observer_frame(scope, delay_ms.saturating_add(2));
 }
 
 pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
