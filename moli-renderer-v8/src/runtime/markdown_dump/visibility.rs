@@ -168,8 +168,11 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
                 // A clean textarea gets its default from child text, not the
                 // control-state slot (which is initially empty). Once dirty,
                 // even an empty live value is authoritative.
+                // Range and color always sanitize a value; export it only when
+                // the author supplied one, as the sanitized `.value` reports.
                 let authored_control =
-                    matches!(element.input_type(), InputType::Range | InputType::Color);
+                    matches!(element.input_type(), InputType::Range | InputType::Color)
+                        && element.attribute("value").is_none_or(str::is_empty);
                 if (element.is_html_input() && !authored_control) || element.input_value_dirty() {
                     attribute_overrides
                         .entry(node)
@@ -235,8 +238,20 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
                     Dom::node_kind(dom, node),
                     NodeKind::Element("tr" | "thead" | "tbody" | "tfoot")
                 );
+            // The UA sheet hides <source>, but its media element still uses it.
+            let media_source = matches!(Dom::node_kind(dom, node), NodeKind::Element("source"))
+                && dom.parent_node(node).is_some_and(|parent| {
+                    matches!(
+                        Dom::node_kind(dom, parent),
+                        NodeKind::Element("video" | "audio")
+                    )
+                });
             if collapsed_table_part
-                || (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
+                || (values.display == "none"
+                    && !in_source
+                    && !media_source
+                    && !disclosure_root
+                    && !disclosure_path)
                 || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
                 || dom.parent_node(node).is_some_and(|parent| {
                     suppressed.contains(&parent) || hidden_contents.contains(&parent)
