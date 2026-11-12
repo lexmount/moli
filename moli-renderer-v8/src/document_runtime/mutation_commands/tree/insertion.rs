@@ -271,6 +271,7 @@ impl DocumentRuntime {
         )
     }
 
+    /// Applies moveBefore() after the node binding validates its move constraints.
     pub(crate) fn move_before_preserving_state_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -324,14 +325,14 @@ impl DocumentRuntime {
         child: DomHandle,
         reference_child: Option<DomHandle>,
         hide_nonce_content_attributes: bool,
-        dispatch_atomic_move_callbacks: bool,
+        is_atomic_move: bool,
         connected_script_policy: ConnectedScriptMutationPolicy,
         source_profile: TreeMutationSourceProfile,
     ) -> bool {
         let mutation_options = RuntimeMutationOptions::js_dom_api()
             .with_connected_script_policy(connected_script_policy)
             .with_nonce_hiding(hide_nonce_content_attributes)
-            .with_atomic_move_callbacks(dispatch_atomic_move_callbacks);
+            .with_atomic_move_callbacks(is_atomic_move);
         let started = dom_binding_timing_started();
         trace_resource_dom_mutation(&self.dom_host, "insertBefore", child, None, None);
         // DOM pre-insert adopts (and therefore removes) a self-referenced node
@@ -359,7 +360,7 @@ impl DocumentRuntime {
             ),
         );
         let was_connected = insertion_plan.was_lifecycle_connected_before_insert();
-        if !dispatch_atomic_move_callbacks {
+        if !is_atomic_move {
             self.reset_focus_for_non_preserving_connected_move_before_insert(
                 scope,
                 host_ptr,
@@ -373,7 +374,7 @@ impl DocumentRuntime {
             child,
             insertion_plan.insertion_roots,
             reference_child,
-            dispatch_atomic_move_callbacks,
+            is_atomic_move,
         ) {
             Some(result) => (result.effects, result.prepublished_removals),
             None => (
@@ -381,7 +382,7 @@ impl DocumentRuntime {
                     parent,
                     child,
                     reference_child,
-                    dispatch_atomic_move_callbacks,
+                    is_atomic_move,
                 ),
                 Vec::new(),
             ),
@@ -411,7 +412,7 @@ impl DocumentRuntime {
                 source_profile,
             );
         }
-        if dispatch_atomic_move_callbacks
+        if is_atomic_move
             && was_connected
             && insertion_plan
                 .insertion_roots
@@ -424,7 +425,7 @@ impl DocumentRuntime {
                 insertion_plan.insertion_roots,
             );
         }
-        if dispatch_atomic_move_callbacks && let Some(active) = self.active_element_handle() {
+        if is_atomic_move && let Some(active) = self.active_element_handle() {
             crate::native_bridge::element::schedule_focus_blur_if_needed(scope, host_ptr, active);
         }
         self.preserve_selectedness_for_insertion_plan(scope, host_ptr, &insertion_plan);

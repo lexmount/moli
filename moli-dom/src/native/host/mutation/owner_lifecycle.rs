@@ -29,7 +29,8 @@ struct OwnerLifecycleTraversal {
     candidate_tree_scope: Option<NativeNodeId>,
     collect_stylesheet_owners: bool,
     detect_base_state_owner: bool,
-    preserve_dialog_state: bool,
+    // Internal detach/insert phases of a validated moveBefore() operation.
+    is_atomic_move: bool,
     changes: OwnerLifecycleChanges,
 }
 
@@ -45,7 +46,7 @@ impl OwnerLifecycleTraversal {
             candidate_tree_scope,
             collect_stylesheet_owners,
             detect_base_state_owner,
-            preserve_dialog_state: false,
+            is_atomic_move: false,
             changes: OwnerLifecycleChanges::default(),
         }
     }
@@ -106,7 +107,7 @@ impl NativeDom {
         child: NativeNodeId,
         mut reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
-        preserve_dialog_state: bool,
+        is_atomic_move: bool,
     ) -> Option<OwnerLifecycleChanges> {
         if !self.can_have_children(parent)
             || self.is_host_including_inclusive_ancestor(child, parent)
@@ -152,7 +153,7 @@ impl NativeDom {
                     fragment_child,
                     reference_child,
                     false,
-                    preserve_dialog_state,
+                    is_atomic_move,
                 ));
             }
             if commit_candidate_registration
@@ -177,7 +178,7 @@ impl NativeDom {
             child,
             reference_child,
             commit_candidate_registration,
-            preserve_dialog_state,
+            is_atomic_move,
         ))
     }
 
@@ -191,7 +192,7 @@ impl NativeDom {
         child: NativeNodeId,
         reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
-        preserve_dialog_state: bool,
+        is_atomic_move: bool,
     ) -> OwnerLifecycleChanges {
         debug_assert!(self.can_have_children(parent));
         debug_assert!(self.node(child).is_some_and(|node| {
@@ -208,7 +209,7 @@ impl NativeDom {
         );
 
         let mut changes =
-            self.detach_from_parent_with_owner_lifecycle_changes(child, preserve_dialog_state);
+            self.detach_from_parent_with_owner_lifecycle_changes(child, is_atomic_move);
 
         let previous = match reference_child {
             Some(reference_child) => self.previous_sibling(reference_child),
@@ -318,7 +319,7 @@ impl NativeDom {
     fn detach_from_parent_with_owner_lifecycle_changes(
         &mut self,
         child: NativeNodeId,
-        preserve_dialog_state: bool,
+        is_atomic_move: bool,
     ) -> OwnerLifecycleChanges {
         let Some(parent) = self.parent_node(child) else {
             return OwnerLifecycleChanges::default();
@@ -359,7 +360,7 @@ impl NativeDom {
             false,
             old_tree_scope,
             base_document.is_some(),
-            preserve_dialog_state,
+            is_atomic_move,
         );
         if changes.contains_base_state_owner
             && let Some(document) = base_document
@@ -453,14 +454,14 @@ impl NativeDom {
         in_document_tree: bool,
         old_tree_scope: Option<NativeNodeId>,
         detect_base_state_owner: bool,
-        preserve_dialog_state: bool,
+        is_atomic_move: bool,
     ) -> OwnerLifecycleChanges {
         let mutation = old_tree_scope
             .map(|_| StylesheetCandidateRegistryMutation::Unregister)
             .unwrap_or(StylesheetCandidateRegistryMutation::None);
         let mut traversal =
             OwnerLifecycleTraversal::new(mutation, old_tree_scope, false, detect_base_state_owner);
-        traversal.preserve_dialog_state = preserve_dialog_state;
+        traversal.is_atomic_move = is_atomic_move;
         self.retarget_owner_lifecycle_subtree(
             root,
             owner_document,
@@ -531,7 +532,7 @@ impl NativeDom {
                 != owner_document)
                 .then(|| self.template_contents_fragment(handle))
                 .flatten();
-            if !traversal.preserve_dialog_state
+            if !traversal.is_atomic_move
                 && self.node(handle).is_some_and(|node| {
                     node.flags().connected()
                         && (!connected || node.owner_document() != owner_document)

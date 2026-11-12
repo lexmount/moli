@@ -89,7 +89,7 @@ impl DomHost {
         &mut self,
         parent: DomHandle,
         child: DomHandle,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> DomMutationEffects {
         let owner_document = self.owner_document_handle(parent);
         let records_enabled = self.mutation_records_enabled();
@@ -114,7 +114,7 @@ impl DomHost {
             .unwrap_or_default();
         let previous_sibling = self.node(child).and_then(Node::prev_sibling);
         let next_sibling = self.node(child).and_then(Node::next_sibling);
-        let candidate_changes = if preserve_state {
+        let candidate_changes = if is_atomic_move {
             self.dom
                 .remove_child_preserving_state_with_stylesheet_candidate_changes(parent, child)
         } else {
@@ -128,7 +128,7 @@ impl DomHost {
             let mut effects = DomMutationEffects::changed();
             effects.extend_stylesheet_candidate_changes(candidate_changes);
             self.clear_popover_open_states(&removal_context.open_popovers, &mut effects);
-            if !preserve_state {
+            if !is_atomic_move {
                 effects.extend_stylesheet_owner_changes(
                     self.sync_shadow_tree_scopes_for_removed_subtree(
                         &removal_context.shadow_hosts,
@@ -277,7 +277,7 @@ impl DomHost {
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> DomMutationEffects {
         let reference_child = if reference_child == Some(child) {
             self.node(child).and_then(Node::next_sibling)
@@ -384,7 +384,7 @@ impl DomHost {
         let inserted_shadow_slot_assignment_snapshots =
             self.slot_assignment_snapshots_for_inserted_shadow_tree_slots(parent, &inserted_roots);
         let previous_shadow_root = self.containing_shadow_root(child);
-        let candidate_changes = if preserve_state {
+        let candidate_changes = if is_atomic_move {
             self.dom
                 .insert_before_preserving_state_with_stylesheet_candidate_changes(
                     parent,
@@ -404,7 +404,7 @@ impl DomHost {
                 // flag used by appendChild/insertBefore callers.
                 return DomMutationEffects::changed();
             }
-            if !preserve_state
+            if !is_atomic_move
                 && single_child_was_connected_before_insert
                 && let Some((_, _, context, _)) = implicit_removal_slot_state.as_ref()
             {
