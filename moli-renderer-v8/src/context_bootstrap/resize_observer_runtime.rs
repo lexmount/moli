@@ -390,13 +390,23 @@ fn build_resize_observer_entries<'s>(
                 .copied()
                 .map(|source| moli_layout::LayoutQuery::ResizeObserverMetrics { source }),
         );
-        let answers = match crate::native_bridge::element::published_geometry_batch(
-            runtime,
-            document,
-            &moli_layout::LayoutQueryBatch::new(queries),
-        ) {
+        // Measure the Document's current layout, publishing its first layout
+        // when none exists yet. Pages without observers never reach this.
+        let answers = match runtime
+            .ensure_initial_layout_for_document(document)
+            .and_then(|()| {
+                crate::native_bridge::element::published_geometry_batch(
+                    runtime,
+                    document,
+                    &moli_layout::LayoutQueryBatch::new(queries),
+                )
+            }) {
             Ok(answers) => answers,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(
+                moli_layout::LayoutError::NoLayoutSnapshot
+                | moli_layout::LayoutError::NoLayoutRoot
+                | moli_layout::LayoutError::ReentrantLayoutPass,
+            ) => continue,
             Err(error) => return Err(error),
         };
         let mut answers = answers.answers.into_iter();
@@ -424,9 +434,16 @@ fn build_resize_observer_entries<'s>(
 
     let mut entries = Vec::new();
     for entry in pending {
-        let (metrics, dpr) = entry
+        let measured = entry
             .handle
-            .and_then(|handle| geometry.get(&handle).copied())
+            .and_then(|handle| geometry.get(&handle).copied());
+        if entry.handle.is_some() && measured.is_none() {
+            // No layout exists to measure. Keep the last reported size
+            // unknown instead of recording a size the page never had.
+            continue;
+        }
+        // A measured element without a box reports 0x0, like Chromium.
+        let (metrics, dpr) = measured
             .and_then(|(metrics, dpr)| metrics.map(|metrics| (metrics, dpr)))
             .unwrap_or((moli_layout::LayoutResizeObserverMetrics::default(), 1.0));
         let rect = (
