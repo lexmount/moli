@@ -356,3 +356,32 @@ Useful environment variables:
 
 If both debug and release binaries exist, the runner uses the newest one by file
 modification time. Set `MOLI_BIN` when you need an exact binary.
+
+`bidi-progress` is part of the default suite. It pipelines real WebSocket
+commands while an HTTP response, an unresolved Promise, an input pause, or
+another page's prompt remains pending. It checks per-command terminal replies,
+independent cancellation, top-level input-state sharing, and the performActions
+queue. `releaseActions` bypasses the long performActions wait and only releases
+already-dispatched input state. The Classic/attached-BiDi case records the
+shared ChromeDriver boundary and requires settlement after the HTTP gate opens.
+
+Three additional groups require explicit selection:
+
+- `bidi-input-layout` requires a layout-enabled endpoint (for example,
+  `moli serve --layout --resource`). It checks child-frame viewport and element
+  origins with actual pointer hit testing; default Mock-mode error checks stay
+  in the existing `bidi` group.
+- `bidi-auth-progress` diagnoses concurrent authentication navigation and Native
+  Fetch context ownership. It currently exposes a separate multi-target Fetch
+  routing limitation in Moli and exits unsuccessfully when that occurs. It is
+  deliberately not counted as a passing command-progress contract.
+- `bidi-layout-freshness` requires a layout endpoint. With no input command in
+  flight, it changes an element from left=20 to left=220, waits for a real
+  animation-frame callback, and checks its geometry. The saved Moli baseline and
+  this branch both expose stale geometry here; the diagnostic fails explicitly.
+
+All progress cases keep their requests and received frames in the result JSON.
+No scenario retries failed commands or opens its HTTP gate to rescue a blocked
+control command. Passing the static pointer-origin tests does not establish
+dynamic geometry freshness; that separate rendering precondition must pass
+before interpreting a moving-element input test.

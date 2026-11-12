@@ -118,11 +118,14 @@ class _BidiNetworkConnection:
 @asynccontextmanager
 async def _bidi_connection(
     target: WebDriverTarget, name: str, *, initial_url: str | None = None,
+    unhandled_prompt_behavior: str | None = None,
 ) -> AsyncIterator[tuple[_BidiNetworkConnection, dict[str, Any]]]:
     # Use the same public-wire commands on Moli and ChromeDriver, without
     # attaching a CDP session to either Page.
     options = create_selenium_options(target)
     options.set_capability("webSocketUrl", True)
+    if unhandled_prompt_behavior is not None:
+        options.set_capability("unhandledPromptBehavior", unhandled_prompt_behavior)
     client = ClassicClient(target.endpoint)
     created = classic_value(client.post("/session", {"capabilities": {"alwaysMatch": options.to_capabilities()}}))
     capabilities = created["capabilities"]

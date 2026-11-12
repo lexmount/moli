@@ -25,6 +25,7 @@ from .groups.agent_browser import run_agent_browser_group
 from .groups.agent_episode import run_agent_episode_group
 from .groups.browser_semantics import run_browser_semantics_group
 from .groups.cdp_ordering import run_cdp_ordering_group
+from .groups.protocol_progress import run_protocol_progress_group
 from .groups.classic_scrollbar import run_classic_scrollbar_group
 from .groups.cdp_use import run_cdp_use_group
 from .groups.chrome_remote_interface import run_chrome_remote_interface_group
@@ -126,6 +127,12 @@ async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "protocol-progress",
+        "Session-local navigation queues and unsolicited output from independent pages during a modal dialog.",
+        "raw",
+        run_protocol_progress_group,
+    ),
     SmokeGroup(
         "lazy-main-world",
         "Chromium-calibrated native DOM access before Runtime, first script/Inspector activation, preload ordering, and scriptless navigation/close.",

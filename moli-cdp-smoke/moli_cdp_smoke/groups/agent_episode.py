@@ -466,11 +466,15 @@ def _assert_realm_replacement_order(
             .get("isDefault")
         ),
     )
-    if not all(response_index < index for index in (cleared, started, navigated)):
+    # Starting navigation leaves the old realm alive. Only actual retirement
+    # and commit retain the original synchronous result as their predecessor.
+    if not all(response_index < index for index in (cleared, navigated)):
         raise SmokeError(
             "agent episode Runtime response did not precede destructive navigation events: "
             f"response={response_index}, cleared={cleared}, started={started}, navigated={navigated}"
         )
+    if not started < navigated:
+        raise SmokeError(f"agent episode committed before its navigation started: {started} >= {navigated}")
     if not cleared < created:
         raise SmokeError(
             f"agent episode old realm clear did not precede replacement realm: {cleared} >= {created}"
