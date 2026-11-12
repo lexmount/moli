@@ -7,6 +7,7 @@ use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
 mod response_mime;
+mod runtime_errors;
 mod source_phase;
 mod text;
 
