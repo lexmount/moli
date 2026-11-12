@@ -5,12 +5,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+brotlic = "0.8.2"
 moli-page-types = { path = "../moli-page-types" }
 moli-time = { path = "../moli-time" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
 [build-dependencies]
+brotlic = "0.8.2"
 serde_json = "1.0.145"
 
 [lints]
