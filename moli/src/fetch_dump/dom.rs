@@ -8,7 +8,10 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     cli::StripOptions,
-    network_trace::{NetworkTraceConfigSummary, NetworkTraceOptions, render_network_trace},
+    network_trace::{
+        NetworkTraceConfigSummary, NetworkTraceOptions, capture_network_activity,
+        render_network_trace,
+    },
 };
 
 pub(super) async fn render_json(
@@ -21,20 +24,22 @@ pub(super) async fn render_json(
     network_trace_config: Option<&NetworkTraceConfigSummary>,
     network_trace_options: NetworkTraceOptions,
 ) -> Result<String> {
+    let activity = trace_network.then(|| {
+        capture_network_activity(
+            page,
+            response_wait,
+            network_trace_config,
+            network_trace_options,
+        )
+    });
     let html = render_html(page, strip, with_base, with_frames).await?;
-    let network = if trace_network {
+    let network = if let Some(activity) = activity {
         let main_document_html = if html_dump_needs_dom_postprocess(strip, with_base, with_frames) {
             page.serialize_html_async().await?
         } else {
             html.clone()
         };
-        Some(render_network_trace(
-            page,
-            &main_document_html,
-            response_wait,
-            network_trace_config,
-            network_trace_options,
-        ))
+        Some(render_network_trace(page, &main_document_html, activity))
     } else {
         None
     };

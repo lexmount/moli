@@ -2820,49 +2820,55 @@ fn cli_wait_response_survives_xhr_callback_location_replace() -> Result<()> {
     let runtime = fixture_runtime()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-xhr-location-replace");
-    let output = run_moli([
-        "moli",
-        "fetch",
-        "--log-level",
-        "error",
-        "--http-no-proxy",
-        "*",
-        "--wait-until",
-        "load",
-        "--wait-response-url",
-        "/wait-until-data",
-        "--dump",
-        "json",
-        "--trace-network",
-        &url,
-    ])?;
+    for strip in [false, true] {
+        let mut args = vec![
+            "moli",
+            "fetch",
+            "--log-level",
+            "error",
+            "--http-no-proxy",
+            "*",
+            "--wait-until",
+            "load",
+            "--wait-response-url",
+            "/wait-until-data",
+            "--dump",
+            "json",
+            "--trace-network",
+            &url,
+        ];
+        if strip {
+            args.extend(["--strip-mode", "full"]);
+        }
+        let output = run_moli(args)?;
+
+        assert!(
+            output.status.success(),
+            "moli fetch failed: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = clean_output(&output.stdout);
+        let payload: Value = serde_json::from_str(&stdout)?;
+        let subresources = payload["network"]["subresources"]
+            .as_array()
+            .expect("network.subresources should be an array");
+        let record = subresources
+            .iter()
+            .find(|record| {
+                record["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/wait-until-data"))
+            })
+            .unwrap_or_else(|| panic!("missing XHR record: {subresources:?}"));
+        assert_eq!(record["resource_type"], "XHR");
+        assert_eq!(
+            payload["network"]["matched_response"]["url"], record["url"],
+            "matched_response should remain available when the response callback queues navigation"
+        );
+    }
     runtime.block_on(server.shutdown());
-
-    assert!(
-        output.status.success(),
-        "moli fetch failed: stdout={}\nstderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = clean_output(&output.stdout);
-    let payload: Value = serde_json::from_str(&stdout)?;
-    let subresources = payload["network"]["subresources"]
-        .as_array()
-        .expect("network.subresources should be an array");
-    let record = subresources
-        .iter()
-        .find(|record| {
-            record["url"]
-                .as_str()
-                .is_some_and(|url| url.ends_with("/wait-until-data"))
-        })
-        .unwrap_or_else(|| panic!("missing XHR record: {subresources:?}"));
-    assert_eq!(record["resource_type"], "XHR");
-    assert_eq!(
-        payload["network"]["matched_response"]["url"], record["url"],
-        "matched_response should remain available when the response callback queues navigation"
-    );
     Ok(())
 }
 

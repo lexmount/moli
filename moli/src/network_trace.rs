@@ -59,29 +59,19 @@ impl From<&FetchConfig> for NetworkTraceConfigSummary {
     }
 }
 
-pub(crate) fn render_network_trace(
+/// Freeze the readiness result before an export command can adopt a newer
+/// Document and replace the Page's script-execution report. These are already
+/// the JSON values needed by the output; no additional Page/DOM copy is kept.
+pub(crate) fn capture_network_activity(
     page: &Page,
-    main_document_html: &str,
     response_wait: Option<&SubresourceResponseWaitCriteria>,
     config: Option<&NetworkTraceConfigSummary>,
     options: NetworkTraceOptions,
-) -> Value {
+) -> Map<String, Value> {
     let mut payload = Map::new();
     if let Some(config) = config {
         payload.insert("config".to_owned(), render_config_summary(config));
     }
-    payload.insert(
-        "main_document".to_owned(),
-        render_main_document_trace_from_parts(
-            page.requested_url(),
-            page.final_url(),
-            page.status(),
-            page.headers(),
-            main_document_html,
-            page.navigation_redirected(),
-            page.navigation_redirect_count(),
-        ),
-    );
     payload.insert(
         "subresources".to_owned(),
         Value::Array(
@@ -130,7 +120,27 @@ pub(crate) fn render_network_trace(
             ),
         );
     }
-    Value::Object(payload)
+    payload
+}
+
+pub(crate) fn render_network_trace(
+    page: &Page,
+    main_document_html: &str,
+    mut activity: Map<String, Value>,
+) -> Value {
+    activity.insert(
+        "main_document".to_owned(),
+        render_main_document_trace_from_parts(
+            page.requested_url(),
+            page.final_url(),
+            page.status(),
+            page.headers(),
+            main_document_html,
+            page.navigation_redirected(),
+            page.navigation_redirect_count(),
+        ),
+    );
+    Value::Object(activity)
 }
 
 fn render_websocket_network_event(event: &WebSocketNetworkEvent) -> Value {
