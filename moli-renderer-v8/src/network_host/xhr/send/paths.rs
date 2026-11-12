@@ -348,7 +348,7 @@ pub(super) fn spawn_network_xhr_fetch(
         },
     );
     spawn_async_subresource_fetch(
-        prepared.resource_loader.task_runner(),
+        request_client.resource_task_runner(),
         host.resource_completion_sender(),
         request_client,
         request,

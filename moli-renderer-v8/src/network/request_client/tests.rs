@@ -1879,3 +1879,18 @@ async fn loader_opt_in_network_policy_enforces_blocked_and_offline() -> Result<(
     server.await?;
     Ok(())
 }
+
+#[test]
+fn browser_resource_executor_progresses_without_polling_the_callers_runtime() {
+    let owner = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = owner.resource_task_runner();
+    let second = owner.clone().resource_task_runner();
+    assert!(first.shares_executor_with(&second));
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    first.spawn(async move {
+        tokio::task::yield_now().await;
+        tx.send(()).unwrap();
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the single resource worker must progress while the caller blocks");
+}
