@@ -405,10 +405,18 @@ fn clients_claim_is_applied_during_pending_activation() {
         );
     }
     service.finish_worker_clients_claim_requested(registration_id, version_id);
+    let activating = ServiceWorkerControlState::new(
+        registration_id,
+        Some(version_id),
+        "activating",
+        expected.script_url().clone(),
+        expected.scope_url().clone(),
+    );
     assert_eq!(
         service.matching_controller_for_client(client_id),
-        Some(expected)
+        Some(activating)
     );
+    assert_eq!(expected.active_version_state(), "activated");
 }
 
 #[test]

@@ -10,6 +10,7 @@ use super::{
 pub(crate) struct ServiceWorkerControlState {
     registration_id: ServiceWorkerRegistrationId,
     active_version_id: Option<ServiceWorkerVersionId>,
+    active_version_state: &'static str,
     script_url: Url,
     scope_url: Url,
 }
@@ -18,12 +19,14 @@ impl ServiceWorkerControlState {
     pub(super) fn new(
         registration_id: ServiceWorkerRegistrationId,
         active_version_id: Option<ServiceWorkerVersionId>,
+        active_version_state: &'static str,
         script_url: Url,
         scope_url: Url,
     ) -> Self {
         Self {
             registration_id,
             active_version_id,
+            active_version_state,
             script_url,
             scope_url,
         }
@@ -43,6 +46,10 @@ impl ServiceWorkerControlState {
 
     pub(crate) fn active_version_id(&self) -> Option<ServiceWorkerVersionId> {
         self.active_version_id
+    }
+
+    pub(crate) fn active_version_state(&self) -> &'static str {
+        self.active_version_state
     }
 
     pub(crate) fn controls_document(&self, document_url: &Url) -> bool {
@@ -180,7 +187,7 @@ impl ServiceWorkerRegistrationSnapshot {
             Some(ServiceWorkerVersionSnapshot::new(
                 active_version_id,
                 state.script_url,
-                "activated",
+                state.active_version_state,
             )),
         )
     }

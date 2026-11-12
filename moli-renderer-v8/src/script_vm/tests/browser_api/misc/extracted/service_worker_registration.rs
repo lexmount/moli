@@ -2510,3 +2510,81 @@ async fn worker_service_worker_registration_queries_settle_during_module_top_lev
     );
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn service_worker_controller_getters_preserve_activating_state_and_wrapper_identity() {
+    const PAGE: &str = concat!(
+        "<!doctype html><body><script>",
+        include_str!("service_worker_controller_state_client.js"),
+        "</script>"
+    );
+    const CLIENT_WORKER: &str = include_str!("service_worker_controller_state_worker.js");
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/control/first.js",
+            "text/javascript",
+            "// first controller",
+        ),
+        ("/control/client.html?mode=eager", "text/html", PAGE),
+        (
+            "/control/client-worker.js?type=classic",
+            "text/javascript",
+            CLIENT_WORKER,
+        ),
+        (
+            "/control/client-worker.js?type=module",
+            "text/javascript",
+            CLIENT_WORKER,
+        ),
+        ("/control/client.html?mode=lazy", "text/html", PAGE),
+        (
+            "/control/second.js",
+            "text/javascript",
+            include_str!("service_worker_controller_state_upgrade.js"),
+        ),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/uncontrolled/root.html"),
+        &loader,
+    );
+    vm.eval(include_str!("service_worker_controller_state_probe.js"))
+        .unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(probeDone) + ':' + (results.error || '')",
+        "true:",
+    )
+    .await;
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(results)").unwrap()).unwrap();
+    assert_eq!(result["activationEntered"]["ownState"], "activating");
+    assert_eq!(result["rootRegistrationBeforeRelease"], "activating");
+    assert_eq!(result["unsupported"], serde_json::json!([]));
+    let held = result["held"].as_array().unwrap();
+    assert_eq!(held.len(), 4);
+    for row in held {
+        assert_eq!(row["first"], "activating", "{row}");
+        assert_eq!(row["repeated"], "activating", "{row}");
+        assert_eq!(row["microtask"], "activating", "{row}");
+        assert_eq!(row["same"], true, "{row}");
+        assert_eq!(row["url"], format!("{base_url}/control/second.js"));
+        if row["label"] != "window-first-read" {
+            assert_eq!(row["before"], "activating", "{row}");
+            assert_eq!(row["registrationAfter"], "activating", "{row}");
+            assert_eq!(row["alias"], true, "{row}");
+        }
+    }
+    let after = result["after"].as_array().unwrap();
+    assert_eq!(after.len(), 4);
+    for row in after {
+        assert_eq!(row["before"], "activated", "{row}");
+        assert_eq!(row["after"], "activated", "{row}");
+        assert_eq!(row["same"], true, "{row}");
+        assert_eq!(row["events"], serde_json::json!(["activated"]), "{row}");
+    }
+    server.await.unwrap();
+}
