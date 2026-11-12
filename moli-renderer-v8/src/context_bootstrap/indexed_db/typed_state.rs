@@ -8,7 +8,7 @@ mod mirror;
 pub(super) use mirror::IndexedDbObjectStoreMetadata;
 #[cfg(test)]
 use mirror::IndexedDbObjectStoreMetadataData;
-use mirror::{StoreMap, edit_shared, missing_mirror};
+use mirror::{StoreMap, edit_shared, missing_mirror, store_by_id};
 mod collection;
 mod cursor;
 use collection::*;
@@ -451,16 +451,13 @@ pub(super) struct IndexedDbCursorLifecycleState {
 struct IndexedDbObjectStoreLifecycleState {
     transaction: v8::Weak<v8::Object>,
     database: v8::Weak<v8::Object>,
-    name_override: Option<moli_indexeddb::IndexedDbName>,
     metadata: IndexedDbObjectStoreMetadata,
     deleted: bool,
 }
 
 impl IndexedDbObjectStoreLifecycleState {
     fn name(&self) -> &moli_indexeddb::IndexedDbName {
-        self.name_override
-            .as_ref()
-            .unwrap_or(&self.metadata.info.name)
+        &self.metadata.info.name
     }
 
     fn new(
@@ -475,7 +472,6 @@ impl IndexedDbObjectStoreLifecycleState {
         Self {
             transaction: v8::Weak::new(scope, transaction),
             database: v8::Weak::new(scope, database),
-            name_override: None,
             metadata,
             deleted: false,
         }
@@ -486,7 +482,6 @@ struct IndexedDbIndexLifecycleState {
     schema_id: IndexId,
     object_store: v8::Weak<v8::Object>,
     info: Rc<IndexInfo>,
-    marker: bool,
     deleted: bool,
     created_in_upgrade: bool,
 }
@@ -505,7 +500,6 @@ impl IndexedDbIndexLifecycleState {
             schema_id,
             object_store: v8::Weak::new(scope, object_store),
             info,
-            marker: true,
             deleted: false,
             created_in_upgrade,
         }
@@ -2151,16 +2145,6 @@ pub(super) fn indexed_db_typed_slot_value<'s>(
     if let Some(database) = table.databases.get(&id) {
         return indexed_db_typed_database_slot_value(scope, database, key);
     }
-    if let Some(store) = table
-        .object_stores
-        .get(&id)
-        .and_then(std::rc::Weak::upgrade)
-    {
-        return indexed_db_typed_object_store_slot_value(scope, &store.borrow(), key);
-    }
-    if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
-        return indexed_db_typed_index_slot_value(scope, &index.borrow(), key);
-    }
     None
 }
 
@@ -2187,21 +2171,6 @@ pub(super) fn set_indexed_db_typed_slot_value(
     }
     if let Some(database) = table.databases.get_mut(&id) {
         return set_indexed_db_typed_database_slot_value(scope, database, key, value);
-    }
-    if let Some(store) = table
-        .object_stores
-        .get(&id)
-        .and_then(std::rc::Weak::upgrade)
-    {
-        return set_indexed_db_typed_object_store_slot_value(
-            scope,
-            &mut store.borrow_mut(),
-            key,
-            value,
-        );
-    }
-    if let Some(index) = table.indexes.get(&id).and_then(std::rc::Weak::upgrade) {
-        return set_indexed_db_typed_index_slot_value(&mut index.borrow_mut(), key, value);
     }
     false
 }
@@ -2344,25 +2313,6 @@ fn set_indexed_db_typed_transaction_slot_value(
     }
 }
 
-fn create_database_metadata_object_from_typed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    metadata: &BTreeMap<moli_indexeddb::IndexedDbName, IndexedDbObjectStoreMetadata>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let object = new_null_prototype_object(scope);
-    for (store_name, store) in metadata {
-        let descriptor = create_object_store_descriptor_from_typed(scope, store)?;
-        set_indexed_db_internal_name_property(scope, object, store_name, descriptor.into());
-    }
-    Some(object)
-}
-
-fn create_object_store_descriptor_from_typed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    metadata: &IndexedDbObjectStoreMetadata,
-) -> Option<v8::Local<'s, v8::Object>> {
-    create_object_store_descriptor_object(scope, metadata)
-}
-
 fn indexed_db_typed_database_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: &IndexedDbDatabaseLifecycleState,
@@ -2376,11 +2326,6 @@ fn indexed_db_typed_database_slot_value<'s>(
             v8_string(scope, database.storage_scope.storage_key()).map(Into::into)
         }
         INDEXED_DB_DATABASE_CLOSED_SLOT => Some(v8::Boolean::new(scope, database.closed).into()),
-        INDEXED_DB_DATABASE_METADATA_SLOT => database.mirror.upgrade().and_then(|mirror| {
-            let mirror = mirror.borrow();
-            create_database_metadata_object_from_typed(scope, mirror.metadata.as_ref()?)
-                .map(Into::into)
-        }),
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => database
             .upgrade_transaction
             .as_ref()
@@ -2412,9 +2357,6 @@ fn set_indexed_db_typed_database_slot_value(
             database.closed = value.boolean_value(scope);
             true
         }
-        // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
-        // fall through into V8 private storage and become a second metadata source.
-        INDEXED_DB_DATABASE_METADATA_SLOT => true,
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => {
             database.upgrade_transaction = if value.is_null_or_undefined() {
                 if let Some(mirror) = database.mirror.upgrade() {
@@ -2424,75 +2366,6 @@ fn set_indexed_db_typed_database_slot_value(
             } else {
                 Some(RealmValueHandle::new(scope, value))
             };
-            true
-        }
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_object_store_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    store: &IndexedDbObjectStoreLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            v8::String::new_from_two_byte(scope, store.name().as_utf16(), v8::NewStringType::Normal)
-                .map(Into::into)
-        }
-        INDEXED_DB_OBJECT_STORE_METADATA_SLOT => {
-            create_object_store_descriptor_from_typed(scope, &store.metadata).map(Into::into)
-        }
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_object_store_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    store: &mut IndexedDbObjectStoreLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_OBJECT_STORE_NAME_SLOT => {
-            store.name_override = Some(
-                value
-                    .to_string(scope)
-                    .map(|value| {
-                        moli_indexeddb::IndexedDbName::from_utf16(
-                            crate::util::v8_string_to_u16_string(scope, value).into_vec(),
-                        )
-                    })
-                    .unwrap_or_default(),
-            );
-            true
-        }
-        // Metadata is typed-state authoritative. Consume migrated slot writes here so they do not
-        // fall through into V8 private storage and become a second metadata source.
-        INDEXED_DB_OBJECT_STORE_METADATA_SLOT => true,
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_index_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: &IndexedDbIndexLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_INDEX_MARKER_SLOT => Some(v8::Boolean::new(scope, index.marker).into()),
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_index_slot_value(
-    index: &mut IndexedDbIndexLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_INDEX_MARKER_SLOT => {
-            index.marker = value.is_true();
             true
         }
         _ => false,

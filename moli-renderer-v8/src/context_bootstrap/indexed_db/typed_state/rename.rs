@@ -12,10 +12,8 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_object_store<'
         let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
         let mut mirror = mirror.borrow_mut();
         let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
-        let (name, source) = current
-            .iter()
-            .find(|(_, store)| store.id == store_id)
-            .ok_or_else(missing_mirror)?;
+        let source = store_by_id(current, store_id).ok_or_else(missing_mirror)?;
+        let name = &source.info.name;
         let metadata = source.with_name(new_name);
         let candidate = edit_shared(current, |map| {
             map.remove(name);
@@ -37,7 +35,6 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_object_store<'
                 && store.transaction.to_local(scope) == Some(transaction)
             {
                 store.metadata = metadata.clone();
-                store.name_override = None;
             }
         }
     }
@@ -57,16 +54,10 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
         let mirror = indexed_db_database_mirror(scope, database).ok_or_else(missing_mirror)?;
         let mut mirror = mirror.borrow_mut();
         let current = mirror.metadata.as_ref().ok_or_else(missing_mirror)?;
-        let (store_name, store) = current
-            .iter()
-            .find(|(_, store)| store.id == store_id)
-            .ok_or_else(missing_mirror)?;
-        let (name, _) = store
-            .indexes
-            .iter()
-            .find(|(_, index)| index.id == index_id)
-            .ok_or_else(missing_mirror)?;
-        let store = store.with_renamed_index(name, new_name);
+        let store = store_by_id(current, store_id).ok_or_else(missing_mirror)?;
+        let store_name = &store.info.name;
+        let index = store.index_by_id(index_id).ok_or_else(missing_mirror)?;
+        let store = store.with_renamed_index(&index.info.name, new_name);
         let candidate = edit_shared(current, |map| {
             map.insert(store_name.clone(), store.clone());
         });
@@ -74,8 +65,7 @@ pub(in crate::context_bootstrap::indexed_db) fn rename_indexed_db_index<'s>(
         store
     };
     let index = metadata
-        .indexes
-        .get(new_name)
+        .index_by_id(index_id)
         .expect("renamed index exists");
     sync_indexed_db_store_handles(scope, database, store_id);
     for table in indexed_db_handle_tables(scope, database) {

@@ -125,9 +125,9 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_source_is_index<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
 ) -> bool {
-    cursor_source(scope, cursor)
-        .and_then(|source| object_bool_property(scope, source, INDEXED_DB_INDEX_MARKER_SLOT))
-        .unwrap_or(false)
+    cursor_source(scope, cursor).is_some_and(|source| {
+        indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Index)
+    })
 }
 
 pub(in crate::context_bootstrap::indexed_db) struct CursorMutation<'s> {

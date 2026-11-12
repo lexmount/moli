@@ -4,6 +4,10 @@ use std::collections::BTreeSet;
 
 pub(super) type StoreMap = BTreeMap<moli_indexeddb::IndexedDbName, IndexedDbObjectStoreMetadata>;
 
+pub(super) fn store_by_id(stores: &StoreMap, id: StoreId) -> Option<&IndexedDbObjectStoreMetadata> {
+    stores.values().find(|store| store.id == id)
+}
+
 // Editing a candidate keeps every previously shared snapshot immutable.
 pub(super) fn edit_shared<T: Clone>(value: &Rc<T>, edit: impl FnOnce(&mut T)) -> Rc<T> {
     let mut candidate = (**value).clone();
@@ -112,6 +116,12 @@ impl IndexedDbObjectStoreMetadata {
     ) -> Option<IndexId> {
         self.visible_indexes
             .then(|| self.indexes.get(name).map(|index| index.id))
+            .flatten()
+    }
+
+    pub(super) fn index_by_id(&self, id: IndexId) -> Option<&IndexedDbIndexMetadata> {
+        self.visible_indexes
+            .then(|| self.indexes.values().find(|index| index.id == id))
             .flatten()
     }
 

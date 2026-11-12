@@ -179,15 +179,11 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             let metadata = if store.deleted {
                 store.metadata.without_indexes()
             } else {
-                snapshot
-                    .stores
-                    .values()
-                    .find(|metadata| metadata.id == store.metadata.id)
+                store_by_id(&snapshot.stores, store.metadata.id)
                     .cloned()
                     .expect("existing store has upgrade snapshot")
             };
             store.metadata = metadata;
-            store.name_override = None;
         }
     }
     for table in &tables {
@@ -224,9 +220,7 @@ pub(in crate::context_bootstrap::indexed_db) fn restore_indexed_db_upgrade_metad
             index.deleted = created_in_upgrade;
             if !created_in_upgrade {
                 index.info = metadata
-                    .indexes
-                    .values()
-                    .find(|candidate| candidate.id == index.schema_id)
+                    .index_by_id(index.schema_id)
                     .expect("existing index has upgrade snapshot")
                     .info
                     .clone();
@@ -251,12 +245,11 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
     store_id: StoreId,
 ) {
     let metadata = indexed_db_database_mirror(scope, database).and_then(|mirror| {
-        mirror.borrow().metadata.as_ref().and_then(|stores| {
-            stores
-                .values()
-                .find(|metadata| metadata.id == store_id)
-                .cloned()
-        })
+        mirror
+            .borrow()
+            .metadata
+            .as_ref()
+            .and_then(|stores| store_by_id(stores, store_id).cloned())
     });
     let transaction = object_property_as_object(
         scope,

@@ -24,7 +24,7 @@ pub enum TransactionRequestStatus {
     Finished,
 }
 
-pub struct TransactionRequestQueues<S: Ord + Clone = crate::IndexedDbName> {
+pub struct TransactionRequestQueues<S: Ord + Clone> {
     state: Mutex<QueueState<S>>,
 }
 
@@ -63,7 +63,7 @@ struct QueuedRequest<S: Ord + Clone> {
 }
 
 #[derive(Clone)]
-pub struct TransactionRequestHandle<S: Ord + Clone = crate::IndexedDbName> {
+pub struct TransactionRequestHandle<S: Ord + Clone> {
     queues: Weak<TransactionRequestQueues<S>>,
     key: (String, String),
     id: u64,
@@ -83,9 +83,7 @@ impl<S: Ord + Clone> std::fmt::Debug for TransactionRequestHandle<S> {
 
 /// Dropping an unstarted lease withdraws admission. A started admission belongs
 /// to its backend transaction and is released only after commit or rollback.
-pub struct TransactionRequestLease<S: Ord + Clone = crate::IndexedDbName>(
-    TransactionRequestHandle<S>,
-);
+pub struct TransactionRequestLease<S: Ord + Clone>(TransactionRequestHandle<S>);
 
 impl<S: Ord + Clone> TransactionRequestLease<S> {
     pub fn handle(&self) -> &TransactionRequestHandle<S> {
@@ -330,19 +328,24 @@ impl<S: Ord + Clone> Default for TransactionRequestQueues<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sqlite::StoreId;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    const A: StoreId = StoreId::from_raw(1);
+    const B: StoreId = StoreId::from_raw(2);
+    const C: StoreId = StoreId::from_raw(3);
+
     fn request(
-        queues: &Arc<TransactionRequestQueues>,
+        queues: &Arc<TransactionRequestQueues<StoreId>>,
         connection: u64,
-        stores: &[&str],
+        stores: &[StoreId],
         mode: TransactionMode,
         wake: TransactionRequestWake,
-    ) -> TransactionRequestLease {
+    ) -> TransactionRequestLease<StoreId> {
         queues.enqueue(
             ("origin".into(), "db".into()),
             DatabaseHandle::from_raw(connection),
-            stores.iter().map(|store| (*store).into()).collect(),
+            stores.iter().copied().collect(),
             mode,
             wake,
         )
@@ -350,7 +353,7 @@ mod tests {
 
     #[test]
     fn pending_writers_block_later_readers_across_connections_and_cancel_on_drop() {
-        let queues = Arc::new(TransactionRequestQueues::<crate::IndexedDbName>::default());
+        let queues = Arc::new(TransactionRequestQueues::<StoreId>::default());
         let wakes = Arc::new(AtomicUsize::new(0));
         let wake: TransactionRequestWake = {
             let queues = Arc::downgrade(&queues);
@@ -361,26 +364,26 @@ mod tests {
                 wakes.fetch_add(1, Ordering::SeqCst);
             })
         };
-        let reader = request(&queues, 1, &["a"], TransactionMode::ReadOnly, wake.clone());
+        let reader = request(&queues, 1, &[A], TransactionMode::ReadOnly, wake.clone());
         assert!(reader.handle().belongs_to(&queues));
         assert!(
-            !reader.handle().belongs_to(&Arc::new(
-                TransactionRequestQueues::<crate::IndexedDbName>::default()
-            ))
+            !reader
+                .handle()
+                .belongs_to(&Arc::new(TransactionRequestQueues::<StoreId>::default()))
         );
         assert_eq!(reader.handle().database(), DatabaseHandle::from_raw(1));
-        assert_eq!(reader.handle().stores(), ["a"]);
+        assert_eq!(reader.handle().stores(), [A]);
         assert_eq!(reader.handle().mode(), TransactionMode::ReadOnly);
-        let parallel_reader = request(&queues, 2, &["a"], TransactionMode::ReadOnly, wake.clone());
+        let parallel_reader = request(&queues, 2, &[A], TransactionMode::ReadOnly, wake.clone());
         let writer = request(
             &queues,
             2,
-            &["a", "b"],
+            &[A, B],
             TransactionMode::ReadWrite,
             wake.clone(),
         );
-        let last_reader = request(&queues, 3, &["b"], TransactionMode::ReadOnly, wake.clone());
-        let independent = request(&queues, 1, &["c"], TransactionMode::ReadOnly, wake);
+        let last_reader = request(&queues, 3, &[B], TransactionMode::ReadOnly, wake.clone());
+        let independent = request(&queues, 1, &[C], TransactionMode::ReadOnly, wake);
         assert!(reader.0.is_ready());
         assert!(parallel_reader.0.is_ready());
         assert!(!writer.0.is_ready());
@@ -404,16 +407,15 @@ mod tests {
 
     #[test]
     fn one_writer_allows_disjoint_readers_and_retains_admission_until_backend_finishes() {
-        let queues = Arc::new(TransactionRequestQueues::<crate::IndexedDbName>::default());
+        let queues = Arc::new(TransactionRequestQueues::<StoreId>::default());
         let wake: TransactionRequestWake = Arc::new(|| {});
-        let first = request(&queues, 1, &["a"], TransactionMode::ReadWrite, wake.clone());
+        let first = request(&queues, 1, &[A], TransactionMode::ReadWrite, wake.clone());
         assert!(first.handle().claim_start());
         let first_handle = first.handle().clone();
-        let overlapping_reader =
-            request(&queues, 2, &["a"], TransactionMode::ReadOnly, wake.clone());
-        let disjoint_reader = request(&queues, 2, &["b"], TransactionMode::ReadOnly, wake.clone());
-        let second_writer = request(&queues, 3, &["c"], TransactionMode::ReadWrite, wake.clone());
-        let later_reader = request(&queues, 4, &["c"], TransactionMode::ReadOnly, wake);
+        let overlapping_reader = request(&queues, 2, &[A], TransactionMode::ReadOnly, wake.clone());
+        let disjoint_reader = request(&queues, 2, &[B], TransactionMode::ReadOnly, wake.clone());
+        let second_writer = request(&queues, 3, &[C], TransactionMode::ReadWrite, wake.clone());
+        let later_reader = request(&queues, 4, &[C], TransactionMode::ReadOnly, wake);
         assert!(!overlapping_reader.handle().is_ready());
         assert!(disjoint_reader.handle().is_ready());
         assert!(!second_writer.handle().is_ready());
@@ -441,26 +443,20 @@ mod tests {
 
     #[test]
     fn canceling_middle_writer_unblocks_readers_and_connection_cancellation_is_idempotent() {
-        let queues = Arc::new(TransactionRequestQueues::<crate::IndexedDbName>::default());
+        let queues = Arc::new(TransactionRequestQueues::<StoreId>::default());
         let wake: TransactionRequestWake = Arc::new(|| {});
-        let first = request(&queues, 1, &["a"], TransactionMode::ReadOnly, wake.clone());
+        let first = request(&queues, 1, &[A], TransactionMode::ReadOnly, wake.clone());
         let writer = request(
             &queues,
             2,
-            &["a", "b"],
+            &[A, B],
             TransactionMode::ReadWrite,
             wake.clone(),
         );
-        let reader = request(
-            &queues,
-            3,
-            &["a", "b"],
-            TransactionMode::ReadOnly,
-            wake.clone(),
-        );
+        let reader = request(&queues, 3, &[A, B], TransactionMode::ReadOnly, wake.clone());
         let independent_writer =
-            request(&queues, 2, &["c"], TransactionMode::ReadWrite, wake.clone());
-        let independent_reader = request(&queues, 3, &["c"], TransactionMode::ReadOnly, wake);
+            request(&queues, 2, &[C], TransactionMode::ReadWrite, wake.clone());
+        let independent_reader = request(&queues, 3, &[C], TransactionMode::ReadOnly, wake);
         assert!(!reader.0.is_ready());
         assert!(!independent_reader.0.is_ready());
         queues.cancel_connection(DatabaseHandle::from_raw(2));
@@ -477,13 +473,13 @@ mod tests {
 
     #[test]
     fn database_names_and_storage_keys_are_independent_and_leases_do_not_retain_partition() {
-        let queues = Arc::new(TransactionRequestQueues::<crate::IndexedDbName>::default());
+        let queues = Arc::new(TransactionRequestQueues::<StoreId>::default());
         let leases =
             [("origin", "db"), ("origin", "other"), ("bucket", "db")].map(|(origin, name)| {
                 queues.enqueue(
                     (origin.into(), name.into()),
                     DatabaseHandle::from_raw(1),
-                    BTreeSet::from(["store".into()]),
+                    BTreeSet::from([A]),
                     TransactionMode::ReadWrite,
                     Arc::new(|| {}),
                 )

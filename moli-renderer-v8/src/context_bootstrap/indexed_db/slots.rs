@@ -13,7 +13,6 @@ pub(super) const INDEXED_DB_REQUEST_READY_STATE_SLOT: &str = "moli.IndexedDb.req
 pub(super) const INDEXED_DB_REQUEST_RESULT_SLOT: &str = "moli.IndexedDb.requestResult";
 pub(super) const INDEXED_DB_REQUEST_ERROR_SLOT: &str = "moli.IndexedDb.requestError";
 pub(super) const INDEXED_DB_DATABASE_HANDLE_SLOT: &str = "moli.IndexedDb.databaseHandle";
-pub(super) const INDEXED_DB_DATABASE_METADATA_SLOT: &str = "moli.IndexedDb.databaseMetadata";
 pub(super) const INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT: &str =
     "moli.IndexedDb.databaseUpgradeTransaction";
 pub(super) const INDEXED_DB_DATABASE_STORAGE_KEY_SLOT: &str = "moli.IndexedDb.databaseStorageKey";
@@ -32,6 +31,3 @@ pub(super) const INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT: &str =
     "moli.IndexedDb.transactionCommitScheduled";
 pub(super) const INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT: &str =
     "moli.IndexedDb.transactionAbortDispatched";
-pub(super) const INDEXED_DB_OBJECT_STORE_NAME_SLOT: &str = "moli.IndexedDb.objectStoreName";
-pub(super) const INDEXED_DB_OBJECT_STORE_METADATA_SLOT: &str = "moli.IndexedDb.objectStoreMetadata";
-pub(super) const INDEXED_DB_INDEX_MARKER_SLOT: &str = "moli.IndexedDb.indexMarker";
