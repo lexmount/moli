@@ -46,6 +46,7 @@ pub(crate) struct HistoryTraversalParticipant {
     pub(crate) source: SessionHistoryEntry,
     pub(crate) source_url: String,
     pub(crate) destination: SessionHistoryEntry,
+    pub(crate) results: Vec<PendingNavigationResult>,
     pub(crate) outcome: TraversalParticipantOutcome,
 }
 
