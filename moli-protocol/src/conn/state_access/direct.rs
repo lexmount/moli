@@ -351,6 +351,21 @@ mod tests {
         context
             .install_navigation_fixture_for_session_owner("about:blank", Some("SID-native-close"))
             .await;
+        let navigation = context.with_fixture(|conn| {
+            let browser = conn.browser_context.as_mut().unwrap();
+            let token = browser
+                .start_document_navigation_for_target(
+                    "TID-native-close",
+                    "LID-close-pending".into(),
+                )
+                .unwrap();
+            browser
+                .page_target_mut("TID-native-close")
+                .unwrap()
+                .runtime_slot
+                .claim_background_navigation_completion(&token, None)
+                .unwrap()
+        });
         let mut routing = BrowserContext::new("BID-native-routing".into());
         routing.set_active_target_id("TID-native-routing");
         routing.attach_active_session("SID-native-routing");
@@ -368,6 +383,10 @@ mod tests {
             })
             .unwrap()
             .unwrap();
+        assert!(
+            navigation.is_cancelled(),
+            "finite host retirement cancels its request before waiting for Native teardown"
+        );
         handle
             .with_state(|state| {
                 let conn = state.connection;
