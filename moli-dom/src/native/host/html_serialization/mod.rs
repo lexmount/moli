@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::html_serialization::{
-    HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
-    serialize_html_with_shadow_root_provider,
+    HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
+    HtmlShadowRootProvider, escape_html_attribute_into_string, serialize_html_with_options,
 };
 use crate::native::{
     HtmlEmbeddedDocumentProvider, HtmlSerializationError, HtmlSerializationPolicy,
@@ -53,16 +53,17 @@ impl DomHost {
         embedded: Option<&dyn HtmlEmbeddedDocumentProvider>,
         max_bytes: Option<usize>,
     ) -> Result<String, HtmlSerializationError> {
+        let mut options =
+            HtmlSerializationOptions::new(HtmlSerializationTarget::ChildrenOnly, scripting);
+        options.policy = policy;
+        options.embedded_documents = embedded;
+        options.max_bytes = max_bytes;
         self.serialize_html_with_shadow_roots(
             handle,
-            HtmlSerializationTarget::ChildrenOnly,
-            scripting,
+            options,
             ShadowRootInclusion::AllAuthor,
             ShadowRootMarkupProfile::WebApi,
             None,
-            policy,
-            embedded,
-            max_bytes,
         )?
         .ok_or(HtmlSerializationError::InvalidNode { node: handle })
     }
@@ -77,17 +78,13 @@ impl DomHost {
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
             handle,
-            HtmlSerializationTarget::ChildrenOnly,
-            scripting,
+            HtmlSerializationOptions::new(HtmlSerializationTarget::ChildrenOnly, scripting),
             ShadowRootInclusion::SerializableOrExplicit {
                 serializable,
                 explicit,
             },
             ShadowRootMarkupProfile::WebApi,
             registry,
-            None,
-            None,
-            None,
         )
         .ok()
         .flatten()
@@ -103,14 +100,10 @@ impl DomHost {
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
             handle,
-            HtmlSerializationTarget::IncludeNode,
-            scripting,
+            HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, scripting),
             inclusion,
             profile,
             registry,
-            None,
-            None,
-            None,
         )
         .ok()
         .flatten()
@@ -119,16 +112,14 @@ impl DomHost {
     fn serialize_html_with_shadow_roots(
         &self,
         handle: DomHandle,
-        target: HtmlSerializationTarget,
-        scripting: &dyn Fn(DomHandle) -> bool,
+        options: HtmlSerializationOptions<'_>,
         inclusion: ShadowRootInclusion<'_>,
         profile: ShadowRootMarkupProfile,
         registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
-        policy: Option<&dyn HtmlSerializationPolicy>,
-        embedded: Option<&dyn HtmlEmbeddedDocumentProvider>,
-        max_bytes: Option<usize>,
     ) -> Result<Option<String>, HtmlSerializationError> {
-        let include_style_sheets = policy.is_none_or(|p| p.include_shadow_adopted_style_sheets());
+        let include_style_sheets = options
+            .policy
+            .is_none_or(|p| p.include_shadow_adopted_style_sheets());
         let provider = |host| {
             let roots = self.shadow_roots_by_host.borrow();
             let state = roots.get(&host)?;
@@ -158,9 +149,14 @@ impl DomHost {
         };
         let provider = (!self.shadow_roots_by_host.borrow().is_empty()
             && inclusion != ShadowRootInclusion::None)
-            .then_some(&provider);
-        serialize_html_with_shadow_root_provider(
-            &self.dom, handle, target, scripting, provider, policy, embedded, max_bytes,
+            .then_some(&provider as &dyn HtmlShadowRootProvider);
+        serialize_html_with_options(
+            &self.dom,
+            handle,
+            HtmlSerializationOptions {
+                shadow_root_provider: provider,
+                ..options
+            },
         )
     }
 

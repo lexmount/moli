@@ -1,4 +1,44 @@
 use super::*;
+
+#[test]
+fn output_limit_stops_before_shadow_queries_or_embedded_document_validation() {
+    struct Filter;
+    impl HtmlSerializationPolicy for Filter {}
+    struct InvalidDocument(NativeNodeId);
+    impl HtmlEmbeddedDocumentProvider for InvalidDocument {
+        fn embedded_document(&self, owner: NativeNodeId) -> Option<HtmlEmbeddedDocument<'_>> {
+            Some(HtmlEmbeddedDocument {
+                document: owner,
+                url: Cow::Borrowed("about:blank"),
+            })
+        }
+        fn sole_owner(&self) -> Option<NativeNodeId> {
+            Some(self.0)
+        }
+    }
+    let mut dom = NativeDom::new_html(url::Url::parse("https://export.test/").unwrap());
+    let owner = dom.create_element("iframe");
+    assert!(dom.set_attribute(owner, "title", &"x".repeat(128)));
+    assert!(dom.set_attribute(owner, "data-after", "kept"));
+    let shadow = |_| -> Option<HtmlSerializedShadowRoot> {
+        panic!("output already exceeded the limit before reaching this host's shadow tree")
+    };
+    let documents = InvalidDocument(owner);
+    let scripting = |_| true;
+    for embedded in [false, true] {
+        let options = HtmlSerializationOptions {
+            shadow_root_provider: Some(&shadow),
+            policy: Some(&Filter),
+            embedded_documents: embedded.then_some(&documents as &dyn HtmlEmbeddedDocumentProvider),
+            max_bytes: Some(20),
+            ..HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, &scripting)
+        };
+        assert_eq!(
+            serialize_html_with_options(&dom, owner, options),
+            Err(HtmlSerializationError::OutputLimitExceeded { max_bytes: 20 }),
+        );
+    }
+}
 use crate::native::DomHost;
 
 fn test_url() -> url::Url {
