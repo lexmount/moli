@@ -207,6 +207,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) fetch_subresource_interception:
         (bool, Option<moli_core::page::SubresourceResourceType>),
+    pub(crate) synchronous_xhr_interception_patterns: Vec<String>,
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
     session_history_position: Option<moli_session_history::SessionHistoryPosition>,
@@ -414,6 +415,9 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: page_state
                 .fetch_owner
                 .subresource_interception_config(),
+            synchronous_xhr_interception_patterns: page_state
+                .fetch_owner
+                .synchronous_xhr_interception_patterns(),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
             session_history_position: Some(
@@ -491,6 +495,7 @@ impl TargetNavigationLoadInputs {
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
             fetch_subresource_interception: (false, None),
+            synchronous_xhr_interception_patterns: Vec::new(),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
             session_history_position: None,
@@ -822,6 +827,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         f(&mut self.target_mut().owner_state)
     }
 
+    pub(super) fn synchronous_xhr_interception_patterns(&self) -> Vec<String> {
+        self.target()
+            .fetch_owner
+            .synchronous_xhr_interception_patterns()
+    }
+
     pub(super) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
         self.target()
             .fetch_owner
@@ -877,6 +888,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
     ) -> FetchDisableStateWithSubresourceConfig {
         let target = self.target_mut();
         let previous_subresource_config = target.fetch_owner.subresource_interception_config();
+        let previous_xhr_patterns = target.fetch_owner.synchronous_xhr_interception_patterns();
         let removed = target.fetch_owner.remove_fetch_session(session_id);
         let subresource_config = target.fetch_owner.subresource_interception_config();
         let pending = if removed {
@@ -886,7 +898,10 @@ impl<'a> TargetSessionOwnerMut<'a> {
         } else {
             empty_pending_fetch_state()
         };
-        let page_update_required = removed && previous_subresource_config != subresource_config;
+        let page_update_required = removed
+            && (previous_subresource_config != subresource_config
+                || previous_xhr_patterns
+                    != target.fetch_owner.synchronous_xhr_interception_patterns());
         (pending, subresource_config, page_update_required)
     }
 
@@ -895,10 +910,17 @@ impl<'a> TargetSessionOwnerMut<'a> {
     ) -> FetchDisableStateWithSubresourceConfig {
         let target = self.target_mut();
         let previous = target.fetch_owner.subresource_interception_config();
+        let previous_xhr_patterns = target.fetch_owner.synchronous_xhr_interception_patterns();
         target.fetch_owner.reset_config();
         let config = target.fetch_owner.subresource_interception_config();
         let pending = target.fetch_owner.drain_pending_requests();
-        (pending, config, previous != config)
+        (
+            pending,
+            config,
+            previous != config
+                || previous_xhr_patterns
+                    != target.fetch_owner.synchronous_xhr_interception_patterns(),
+        )
     }
 
     pub(super) fn drain_fetch_pending_state(

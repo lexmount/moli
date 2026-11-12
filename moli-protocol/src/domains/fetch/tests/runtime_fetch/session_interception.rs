@@ -1861,7 +1861,7 @@ async fn continue_request_returns_before_delayed_subresource_response() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_path() {
+async fn unmatched_substring_pattern_keeps_synchronous_xhr_on_the_network_path() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1870,7 +1870,7 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
     }
 
     async fn trapped() -> impl IntoResponse {
-        ([(CONTENT_TYPE.as_str(), "text/plain")], "path-trap-body")
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "unmatched-body")
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1880,7 +1880,7 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
             listener,
             Router::new()
                 .route("/page", get(page))
-                .route("/js/google-analytics.com.js", get(trapped)),
+                .route("/api/plain", get(trapped)),
         )
         .await
         .unwrap();
@@ -1903,14 +1903,8 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
     ctx.expect_result(38_600, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 38_601).await;
 
-    // An ad-blocker-style client enables a deliberately wide substring
-    // pattern without a resourceType and decides per paused request. The
-    // synchronous XHR below targets the client's own host and only carries
-    // the tracker domain in its path. Chromium pauses it and the client
-    // continues it to a 200. moli cannot pause a synchronous send (its
-    // renderer thread would deadlock), so the request must keep its
-    // ordinary network path instead of failing with a fabricated
-    // NetworkError before the host is ever contacted.
+    // The XHR class is eligible, but this URL does not match the actual
+    // substring rule. It must reach the network without a pause or failure.
     ctx.process_async(json!({
         "id": 38_602,
         "method": "Runtime.evaluate",
@@ -1919,7 +1913,7 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
             "expression": r#"(() => {
   try {
     const request = new XMLHttpRequest();
-    request.open('GET', '/js/google-analytics.com.js', false);
+    request.open('GET', '/api/plain', false);
     request.send();
     return `sync:${request.status}:${request.responseText}`;
   } catch (error) {
@@ -1933,8 +1927,8 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
     let observed = take_response_by_id(&mut ctx, 38_602);
     assert_eq!(
         observed["result"]["result"]["value"],
-        json!("sync:200:path-trap-body"),
-        "a synchronous XHR whose URL merely contains the pattern marker in its path must reach the network; sent={:?}",
+        json!("sync:200:unmatched-body"),
+        "an unmatched synchronous XHR must reach the network; sent={:?}",
         ctx.sent
     );
 
@@ -1945,7 +1939,7 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
             message["method"] == json!("Fetch.requestPaused")
                 && message["params"]["request"]["url"]
                     .as_str()
-                    .is_some_and(|url| url.ends_with("/js/google-analytics.com.js"))
+                    .is_some_and(|url| url.ends_with("/api/plain"))
         })
         .count();
     assert_eq!(
@@ -1962,7 +1956,7 @@ async fn substring_pattern_interception_keeps_synchronous_xhr_on_the_network_pat
             let matches = message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["request"]["url"]
                     .as_str()
-                    .is_some_and(|url| url.ends_with("/js/google-analytics.com.js"));
+                    .is_some_and(|url| url.ends_with("/api/plain"));
             matches.then(|| message["params"]["requestId"].as_str().unwrap().to_owned())
         })
         .expect("the synchronous trap XHR must announce itself over Network");
@@ -2191,93 +2185,245 @@ async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn typed_xhr_pattern_still_keeps_synchronous_xhr_on_the_network_path() {
-    async fn page() -> impl IntoResponse {
-        (
-            [(CONTENT_TYPE.as_str(), "text/html")],
-            "<!doctype html><html><body>ready</body></html>",
-        )
-    }
-
-    async fn api() -> impl IntoResponse {
-        ([(CONTENT_TYPE.as_str(), "text/plain")], "typed-api-body")
-    }
-
+async fn matching_synchronous_xhr_is_rejected_before_network_and_disable_restores_it() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let requests = Arc::new(AtomicUsize::new(0));
+    let observed = requests.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
             Router::new()
-                .route("/page", get(page))
-                .route("/api", get(api)),
+                .route(
+                    "/page",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/js/google-analytics.com.js",
+                    axum::routing::post(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async { "network-body" }
+                    }),
+                ),
         )
         .await
         .unwrap();
     });
+    for (resource_type, stage, auth) in [
+        (None, "Request", false),
+        (Some("XHR"), "Request", false),
+        (Some("XHR"), "Response", false),
+        (Some("Image"), "Request", true),
+    ] {
+        requests.store(0, Ordering::SeqCst);
+        let mut ctx = TestContext::new();
+        with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+        let mut pattern = json!({"urlPattern": "*google-analytics.com*", "requestStage": stage});
+        if let Some(resource_type) = resource_type {
+            pattern["resourceType"] = json!(resource_type);
+        }
+        ctx.process_async(
+            json!({"id":38750,"method":"Fetch.enable","sessionId":"SID-1",
+            "params":{"patterns":[pattern],"handleAuthRequests":auth}}),
+        )
+        .await;
+        ctx.expect_result(38750, json!({}), Some("SID-1"));
+        enable_runtime_async(&mut ctx, "SID-1", 38751).await;
+        ctx.process_async(
+            json!({"id":38755,"method":"Page.navigate","sessionId":"SID-1",
+            "params":{"url":format!("http://{addr}/page?replacement")}}),
+        )
+        .await;
+        assert!(take_response_by_id(&mut ctx, 38755).get("error").is_none());
+        let expression = r#"(() => {
+            try {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/js/google-analytics.com.js', false);
+                xhr.send('payload');
+                return `sync:${xhr.status}:${xhr.responseText}`;
+            } catch (error) { return `sync-error:${error.name}`; }
+        })()"#;
+        ctx.sent.clear();
+        ctx.process_async(
+            json!({"id":38752,"method":"Runtime.evaluate","sessionId":"SID-1",
+            "params":{"expression":expression}}),
+        )
+        .await;
+        let result = take_response_by_id(&mut ctx, 38752);
+        assert_eq!(
+            result["result"]["result"]["value"], "sync-error:NetworkError",
+            "{result}"
+        );
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            0,
+            "matching POST must not escape interception"
+        );
+        assert!(
+            ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Network.loadingFailed"
+                    && message["params"]["errorText"]
+                        == "Synchronous XMLHttpRequest interception is not supported"),
+            "{:?}",
+            ctx.sent
+        );
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Fetch.requestPaused")
+        );
+        ctx.process_async(json!({"id":38753,"method":"Fetch.disable","sessionId":"SID-1"}))
+            .await;
+        ctx.expect_result(38753, json!({}), Some("SID-1"));
+        ctx.process_async(
+            json!({"id":38754,"method":"Runtime.evaluate","sessionId":"SID-1",
+            "params":{"expression":expression}}),
+        )
+        .await;
+        let result = take_response_by_id(&mut ctx, 38754);
+        assert_eq!(
+            result["result"]["result"]["value"], "sync:200:network-body",
+            "{result}"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+    server.abort();
+}
 
-    let page_url = format!("http://{addr}/page");
+#[tokio::test(flavor = "multi_thread")]
+async fn synchronous_worker_xhr_uses_exact_interception_urls() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let allowed = Arc::new(AtomicUsize::new(0));
+    let blocked = Arc::new(AtomicUsize::new(0));
+    let allowed_hits = allowed.clone();
+    let blocked_hits = blocked.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/page",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/allowed",
+                    get(move || {
+                        allowed_hits.fetch_add(1, Ordering::SeqCst);
+                        async { "allowed" }
+                    }),
+                )
+                .route(
+                    "/blocked",
+                    get(move || {
+                        blocked_hits.fetch_add(1, Ordering::SeqCst);
+                        async { "blocked" }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
     let mut ctx = TestContext::new();
-    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    // The client explicitly names the XHR class and a URL pattern the
-    // request below matches. Chromium would pause this synchronous send and
-    // hand the decision to the client; moli cannot pause it without
-    // deadlocking the renderer, and must not fabricate a failure either:
-    // the request keeps its network path, and the unavailable pause is the
-    // documented divergence (deliberate blocking of synchronous XHR).
-    ctx.process_async(json!({
-        "id": 38_750,
-        "method": "Fetch.enable",
-        "sessionId": "SID-1",
-        "params": {
-            "patterns": [ { "urlPattern": "*", "resourceType": "XHR", "requestStage": "Request" } ]
-        }
-    }))
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.process_async(
+        json!({"id":38800,"method":"Fetch.enable","sessionId":"SID-1",
+        "params":{"patterns":[{"urlPattern":"*/blocked"}]}}),
+    )
     .await;
-    ctx.expect_result(38_750, json!({}), Some("SID-1"));
-    enable_runtime_async(&mut ctx, "SID-1", 38_751).await;
+    ctx.expect_result(38800, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38801).await;
+    ctx.process_and_wait_for_response_async(json!({"id":38802,"method":"Runtime.evaluate","sessionId":"SID-1",
+        "params":{"awaitPromise":true,"expression":format!(r#"new Promise((resolve,reject)=>{{
+            const worker=new Worker(URL.createObjectURL(new Blob([`
+                const results=[];
+                for(const path of ['/allowed','/blocked']) {{
+                    try {{const xhr=new XMLHttpRequest();xhr.open('GET','http://{addr}'+path,false);xhr.send();results.push(xhr.status+':'+xhr.responseText);}}
+                    catch(error){{results.push(error.name);}}
+                }}
+                postMessage(results);
+            `],{{type:'text/javascript'}})));
+            worker.onmessage=event=>{{worker.terminate();resolve(JSON.stringify(event.data));}};
+            worker.onerror=event=>{{worker.terminate();reject(new Error(event.message));}};
+        }})"#)}})).await;
+    let result = take_response_by_id(&mut ctx, 38802);
+    assert_eq!(
+        result["result"]["result"]["value"], r#"["200:allowed","NetworkError"]"#,
+        "{result}"
+    );
+    assert_eq!(allowed.load(Ordering::SeqCst), 1);
+    assert_eq!(blocked.load(Ordering::SeqCst), 0);
+    server.abort();
+}
 
-    ctx.process_async(json!({
-        "id": 38_752,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": {
-            "expression": r#"(() => {
-  try {
-    const request = new XMLHttpRequest();
-    request.open('GET', '/api', false);
-    request.send();
-    return `sync:${request.status}:${request.responseText}`;
-  } catch (error) {
-    return `sync-error:${error && error.name}`;
-  }
-})()"#
-        }
-    }))
+#[tokio::test(flavor = "multi_thread")]
+async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let blocked = Arc::new(AtomicUsize::new(0));
+    let hits = blocked.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/page",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/redirect",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::FOUND,
+                            [("location", "/blocked")],
+                            "",
+                        )
+                    }),
+                )
+                .route(
+                    "/blocked",
+                    get(move || {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        async { "unexpected" }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.process_async(
+        json!({"id":38810,"method":"Fetch.enable","sessionId":"SID-1",
+        "params":{"patterns":[{"urlPattern":"*/blocked"}]}}),
+    )
     .await;
-
-    let observed = take_response_by_id(&mut ctx, 38_752);
+    ctx.expect_result(38810, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38811).await;
+    ctx.process_async(json!({"id":38812,"method":"Runtime.evaluate","sessionId":"SID-1",
+        "params":{"expression":"(() => {try{const xhr=new XMLHttpRequest();xhr.open('GET','/redirect',false);xhr.send();return xhr.responseText;}catch(error){return error.name;}})()"}})).await;
+    let result = take_response_by_id(&mut ctx, 38812);
     assert_eq!(
-        observed["result"]["result"]["value"],
-        json!("sync:200:typed-api-body"),
-        "a synchronous XHR matching a typed XHR pattern must still reach the network; sent={:?}",
-        ctx.sent
+        result["result"]["result"]["value"], "NetworkError",
+        "{result}"
     );
-    let paused = ctx
-        .sent
-        .iter()
-        .filter(|message| {
-            message["method"] == json!("Fetch.requestPaused")
-                && message["params"]["request"]["url"]
-                    .as_str()
-                    .is_some_and(|url| url.ends_with("/api"))
-        })
-        .count();
     assert_eq!(
-        paused, 0,
-        "no pause can be published for a synchronous send: {:?}",
-        ctx.sent
+        blocked.load(Ordering::SeqCst),
+        0,
+        "a matching redirect target must not receive the request"
     );
-
     server.abort();
 }

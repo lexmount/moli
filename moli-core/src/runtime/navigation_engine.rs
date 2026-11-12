@@ -951,6 +951,11 @@ impl NavigationEngine {
         self.page_network_policy.set_blocked_url_patterns(patterns);
     }
 
+    pub fn set_synchronous_xhr_interception_patterns(&mut self, patterns: &[String]) {
+        self.page_network_policy
+            .set_synchronous_xhr_interception_patterns(Some(patterns));
+    }
+
     fn ensure_resource_runtime(
         &mut self,
         cookie_store: SharedBrowserCookieStore,

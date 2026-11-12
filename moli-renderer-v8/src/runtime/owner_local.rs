@@ -169,6 +169,7 @@ pub enum RendererPageRequestPolicyUpdate {
     FetchInterception {
         enabled: bool,
         resource_type: Option<crate::SubresourceResourceType>,
+        synchronous_xhr_url_patterns: Option<Vec<String>>,
     },
     BlockedUrls(Vec<String>),
 }
@@ -179,9 +180,11 @@ impl RendererPageRequestPolicyUpdate {
             Self::FetchInterception {
                 enabled,
                 resource_type,
+                synchronous_xhr_url_patterns,
             } => RendererPageCommand::SetFetchSubresourceInterception {
                 enabled,
                 resource_type,
+                synchronous_xhr_url_patterns,
             },
             Self::BlockedUrls(patterns) => RendererPageCommand::SetBlockedUrlPatterns(patterns),
         }

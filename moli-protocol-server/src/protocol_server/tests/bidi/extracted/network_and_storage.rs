@@ -1520,6 +1520,31 @@ async fn websocket_bidi_completed_synchronous_xhr_never_reports_a_response_pause
         assert_eq!(event["params"]["isBlocked"], false, "{event}");
         assert!(event["params"].get("intercepts").is_none(), "{event}");
     }
+    // A network URL covered by the response rule cannot be silently delivered
+    // to JS either. Until an independent decision lane exists, fail explicitly.
+    let reply=send_bidi_command_response(&mut socket,7,"script.evaluate",json!({
+        "target":{"context":context},"awaitPromise":false,
+        "expression":"(() => {try {const xhr=new XMLHttpRequest();xhr.open('GET','/api',false);xhr.send();return xhr.responseText;}catch(e){return e.name;}})()"
+    })).await;
+    assert_eq!(
+        reply["result"]["result"]["value"], "NetworkError",
+        "{reply}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    let removed = send_bidi_command_response(
+        &mut socket,
+        8,
+        "network.removeIntercept",
+        json!({"intercept":intercept["result"]["intercept"]}),
+    )
+    .await;
+    assert_eq!(removed["type"], "success", "{removed}");
+    let reply = send_bidi_command_response(&mut socket,9,"script.evaluate",json!({
+        "target":{"context":context},"awaitPromise":false,
+        "expression":"(() => {const xhr=new XMLHttpRequest();xhr.open('GET','/api',false);xhr.send();return xhr.responseText;})()"
+    })).await;
+    assert_eq!(reply["result"]["result"]["value"], "network", "{reply}");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
     fixture.abort();

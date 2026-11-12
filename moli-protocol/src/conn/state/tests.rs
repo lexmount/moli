@@ -1773,3 +1773,62 @@ fn committed_document_navigation_accepts_matching_late_body_only_until_next_navi
     );
     assert!(context.accepts_document_body_completion_event(&second));
 }
+
+#[test]
+fn synchronous_xhr_rules_preserve_url_scope_resource_type_and_auth_sources() {
+    let mut owner = TargetFetchOwner::default();
+    let pattern = |url: &str, kind, stage| FetchInterceptionPattern {
+        url_pattern: url.to_owned(),
+        resource_type_filter: kind,
+        request_stage: stage,
+    };
+    owner.configure(
+        Some("CDP".to_owned()),
+        false,
+        vec![
+            pattern(
+                "*/image",
+                Some(FetchResourceTypeFilter::Image),
+                FetchRequestStage::Request,
+            ),
+            pattern(
+                "*/api-a",
+                Some(FetchResourceTypeFilter::Xhr),
+                FetchRequestStage::Request,
+            ),
+            pattern(
+                "*/api-b",
+                Some(FetchResourceTypeFilter::Xhr),
+                FetchRequestStage::Response,
+            ),
+        ],
+    );
+    owner.add_network_intercept(
+        "auth".to_owned(),
+        Some("BIDI".to_owned()),
+        true,
+        vec!["*/auth-only".to_owned()],
+        Vec::new(),
+    );
+    assert_eq!(
+        owner.synchronous_xhr_interception_patterns(),
+        ["*/api-a", "*/api-b", "*/auth-only"]
+    );
+    owner.configure(
+        Some("CDP".to_owned()),
+        true,
+        vec![pattern(
+            "*/image",
+            Some(FetchResourceTypeFilter::Image),
+            FetchRequestStage::Request,
+        )],
+    );
+    assert_eq!(owner.synchronous_xhr_interception_patterns(), ["*"]);
+    owner.remove_fetch_session(Some("CDP"));
+    assert_eq!(
+        owner.synchronous_xhr_interception_patterns(),
+        ["*/auth-only"]
+    );
+    owner.remove_network_intercept("auth");
+    assert!(owner.synchronous_xhr_interception_patterns().is_empty());
+}

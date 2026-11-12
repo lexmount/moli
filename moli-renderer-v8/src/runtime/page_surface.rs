@@ -5391,6 +5391,7 @@ pub enum RendererPageCommand {
     SetFetchSubresourceInterception {
         enabled: bool,
         resource_type: Option<crate::SubresourceResourceType>,
+        synchronous_xhr_url_patterns: Option<Vec<String>>,
     },
     ReplaceBrowserResourceRuntime {
         resource_runtime: crate::network::BrowserResourceRuntime,

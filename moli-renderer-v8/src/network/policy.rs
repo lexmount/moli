@@ -92,6 +92,7 @@ impl PageNetworkConditionsState {
 pub struct PageNetworkPolicy {
     state: Arc<Mutex<PageNetworkPolicyState>>,
     network_conditions: Arc<Mutex<PageNetworkConditionsState>>,
+    synchronous_xhr_intercepts: Arc<Mutex<Option<SharedPatternList>>>,
 }
 
 impl Default for PageNetworkPolicy {
@@ -99,6 +100,7 @@ impl Default for PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(PageNetworkPolicyState::default())),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
+            synchronous_xhr_intercepts: Arc::default(),
         }
     }
 }
@@ -118,6 +120,7 @@ impl PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(state)),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
+            synchronous_xhr_intercepts: Arc::default(),
         }
     }
 
@@ -133,10 +136,12 @@ impl PageNetworkPolicy {
     /// Renderer Documents need independent request-policy state, but resource
     /// reuse across top-level navigation remains owned by the stable Page.
     pub fn isolated_same_page_copy(&self) -> Self {
-        Self::from_snapshot_with_memory_cache_partition(
+        let mut copy = Self::from_snapshot_with_memory_cache_partition(
             self.snapshot(),
             self.memory_cache_partition_id(),
-        )
+        );
+        copy.synchronous_xhr_intercepts = Arc::clone(&self.synchronous_xhr_intercepts);
+        copy
     }
 
     pub fn shares_memory_cache_partition_with(&self, other: &Self) -> bool {
@@ -168,16 +173,18 @@ impl PageNetworkPolicy {
                 revision: snapshot.network_conditions_revision,
                 offline: snapshot.network_offline,
             })),
+            synchronous_xhr_intercepts: Arc::new(Mutex::new(snapshot.synchronous_xhr_intercepts)),
         }
     }
 
     /// Freezes request configuration while retaining the target's live
-    /// network-emulation conditions.
+    /// network-emulation conditions and interception rules.
     ///
     /// A resource lease uses this view to keep its original backend, headers
     /// and blocked-URL policy across re-entry. It deliberately continues to
     /// observe `Network.emulateNetworkConditions`, including while a DevTools
-    /// request-stage interception is paused.
+    /// request-stage interception is paused. Interception rules also stay live
+    /// so existing Documents and workers observe subsequent enable/disable calls.
     pub(crate) fn frozen_request_view(&self) -> Self {
         let snapshot = self.snapshot();
         Self {
@@ -194,6 +201,7 @@ impl PageNetworkPolicy {
                 cache_disabled: snapshot.cache_disabled,
             })),
             network_conditions: Arc::clone(&self.network_conditions),
+            synchronous_xhr_intercepts: Arc::clone(&self.synchronous_xhr_intercepts),
         }
     }
 
@@ -204,6 +212,10 @@ impl PageNetworkPolicy {
     pub fn shares_state_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.state, &other.state)
             && Arc::ptr_eq(&self.network_conditions, &other.network_conditions)
+            && Arc::ptr_eq(
+                &self.synchronous_xhr_intercepts,
+                &other.synchronous_xhr_intercepts,
+            )
     }
 
     /// Captures the current request configuration and network conditions.
@@ -222,6 +234,7 @@ impl PageNetworkPolicy {
             extra_http_headers: state.extra_http_headers.clone(),
             browser_identity: state.browser_identity.clone(),
             network_offline: network_conditions.offline,
+            synchronous_xhr_intercepts: self.synchronous_xhr_intercepts.lock().clone(),
             blocked_url_patterns: state.blocked_url_patterns.clone(),
             optional_resource_fetch_mask: state.optional_resource_fetch_mask,
             subframe_loading_enabled: state.subframe_loading_enabled,
@@ -296,6 +309,36 @@ impl PageNetworkPolicy {
         }
         state.blocked_url_patterns = patterns;
         state.advance_revision();
+    }
+
+    /// Exact protocol rules for synchronous XHR, shared by all Documents and
+    /// workers in this target. None retains the native API's conservative
+    /// resource-class fallback; an empty list means no matching intercept.
+    pub fn set_synchronous_xhr_interception_patterns(&self, patterns: Option<&[String]>) {
+        *self.synchronous_xhr_intercepts.lock() = patterns.map(|patterns| {
+            Arc::from(
+                patterns
+                    .iter()
+                    .map(|value| value.clone().into_boxed_str())
+                    .collect::<Vec<_>>(),
+            )
+        });
+    }
+
+    pub(crate) fn synchronous_xhr_interception_patterns(
+        &self,
+        class_intercepted: bool,
+    ) -> Arc<[Box<str>]> {
+        self.synchronous_xhr_intercepts
+            .lock()
+            .clone()
+            .unwrap_or_else(|| {
+                if class_intercepted {
+                    Arc::from([Box::<str>::from("*")])
+                } else {
+                    Arc::from([])
+                }
+            })
     }
 
     pub fn set_optional_resource_fetch_mask(&self, mask: OptionalResourceFetchMask) {
@@ -390,6 +433,7 @@ pub struct PageNetworkPolicySnapshot {
     extra_http_headers: SharedHeaderList,
     browser_identity: Option<Arc<moli_browser_profile::BrowserIdentityProfile>>,
     network_offline: bool,
+    synchronous_xhr_intercepts: Option<SharedPatternList>,
     blocked_url_patterns: SharedPatternList,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
@@ -487,6 +531,38 @@ impl PageNetworkPolicySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synchronous_xhr_rules_follow_document_and_worker_views_but_isolate_new_targets() {
+        let page = PageNetworkPolicy::default();
+        let document = page.isolated_same_page_copy();
+        let worker = document.isolated_same_page_copy();
+        let lease = document.frozen_request_view();
+        let target = page.isolated_copy();
+        page.set_synchronous_xhr_interception_patterns(Some(&["*/api/*".to_owned()]));
+        for view in [&page, &document, &worker, &lease] {
+            assert_eq!(
+                view.synchronous_xhr_interception_patterns(false).as_ref(),
+                &[Box::<str>::from("*/api/*")]
+            );
+        }
+        assert!(
+            target
+                .synchronous_xhr_interception_patterns(false)
+                .is_empty()
+        );
+        page.set_synchronous_xhr_interception_patterns(Some(&[]));
+        assert!(
+            worker
+                .synchronous_xhr_interception_patterns(true)
+                .is_empty()
+        );
+        // Native users that configure only a resource class stay conservative.
+        assert_eq!(
+            target.synchronous_xhr_interception_patterns(true).as_ref(),
+            &[Box::<str>::from("*")]
+        );
+    }
 
     #[test]
     fn isolated_policy_copy_preserves_values_without_sharing_mutations() {
