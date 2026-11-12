@@ -8,6 +8,10 @@ struct Documents {
     lookups: Cell<usize>,
 }
 impl HtmlEmbeddedDocumentProvider for Documents {
+    fn sole_owner(&self) -> Option<NativeNodeId> {
+        (self.entries.len() == 1).then(|| self.entries[0].0)
+    }
+
     fn embedded_document(&self, owner: NativeNodeId) -> Option<HtmlEmbeddedDocument<'_>> {
         self.lookups.set(self.lookups.get() + 1);
         self.entries
@@ -44,6 +48,28 @@ fn export(
     limit: Option<usize>,
 ) -> Result<String, HtmlSerializationError> {
     host.get_html_for_export(host.document_handle(), &|_| true, None, Some(docs), limit)
+}
+
+#[test]
+fn single_owner_skips_unrelated_nodes_without_skipping_live_content() {
+    let mut host = host();
+    let root = host.document_handle();
+    for _ in 0..1000 {
+        let p = child(&mut host, root, "p");
+        text(&mut host, p, "ordinary");
+    }
+    let owner = child(&mut host, root, "iframe");
+    let document = host.create_detached_html_document();
+    let p = child(&mut host, document, "p");
+    text(&mut host, p, "live & child");
+    let docs = Documents {
+        entries: vec![(owner, document, "about:blank".into())],
+        ..Default::default()
+    };
+    let output = export(&host, &docs, None).unwrap();
+    assert_eq!(output.matches("<p>ordinary</p>").count(), 1000);
+    assert!(output.contains("srcdoc=\"&lt;p&gt;live &amp;amp; child&lt;/p&gt;\""));
+    assert_eq!(docs.lookups.get(), 1);
 }
 
 #[test]
