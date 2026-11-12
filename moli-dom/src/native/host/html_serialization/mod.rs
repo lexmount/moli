@@ -49,6 +49,28 @@ impl DomHost {
         )
     }
 
+    /// Like [`Self::get_html`], but serializes `dom`, an edited copy of this
+    /// host's DOM (for example an export copy), with this host's shadow roots.
+    pub fn get_html_from_copy(
+        &self,
+        dom: &NativeDom,
+        handle: DomHandle,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
+        explicit_shadow_roots: &[DomHandle],
+    ) -> Option<String> {
+        self.serialize_html_with_shadow_roots(
+            dom,
+            handle,
+            HtmlSerializationTarget::ChildrenOnly,
+            scripting_enabled_for_node,
+            ShadowRootInclusion::SerializableOrExplicit {
+                serializable: false,
+                explicit: explicit_shadow_roots,
+            },
+            None,
+        )
+    }
+
     pub fn get_html_with_shadow_root_registry_attribute_policy(
         &self,
         handle: DomHandle,
@@ -58,6 +80,7 @@ impl DomHost {
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
+            &self.dom,
             handle,
             HtmlSerializationTarget::ChildrenOnly,
             scripting_enabled_for_node,
@@ -77,6 +100,7 @@ impl DomHost {
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
+            &self.dom,
             handle,
             HtmlSerializationTarget::IncludeNode,
             scripting_enabled_for_node,
@@ -87,6 +111,7 @@ impl DomHost {
 
     fn serialize_html_with_shadow_roots(
         &self,
+        dom: &NativeDom,
         handle: DomHandle,
         target: HtmlSerializationTarget,
         scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
@@ -108,7 +133,7 @@ impl DomHost {
             Some(HtmlSerializedShadowRoot::new(shadow_root, template_start))
         };
         serialize_html_with_shadow_root_provider(
-            &self.dom,
+            dom,
             handle,
             target,
             scripting_enabled_for_node,

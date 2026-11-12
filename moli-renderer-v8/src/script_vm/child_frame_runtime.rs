@@ -433,13 +433,14 @@ impl ScriptVm {
             .detached_child_browsing_context_document_snapshots_for_dom_snapshot(top_frame_id)
     }
 
-    pub(crate) fn child_browsing_context_document_snapshot_by_frame_id(
-        &mut self,
+    pub(crate) fn child_browsing_context_document_snapshot_from_copy(
+        &self,
         frame_id: &str,
+        dom: &crate::dom::native::NativeDom,
     ) -> Option<crate::native_bridge::ChildBrowsingContextDocumentSnapshot> {
         self._context_host
-            .borrow_mut()
-            .child_browsing_context_document_snapshot_by_frame_id(frame_id)
+            .borrow()
+            .child_browsing_context_document_snapshot_from_copy(frame_id, dom)
     }
 
     pub(crate) fn take_pending_location_navigation_with_seed(
