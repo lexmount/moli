@@ -770,6 +770,8 @@ pub(super) enum ServiceWorkerPeriodicSyncStart {
 
 pub(super) struct ServiceWorkerFetchJob {
     pub(super) request: moli_fetch::Request,
+    // Only redirects followed during this job transfer network fallback to it.
+    pub(super) initial_redirect_count: usize,
     pub(super) internal_id: u64,
     pub(super) owner: Option<ServiceWorkerRunOwner>,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,

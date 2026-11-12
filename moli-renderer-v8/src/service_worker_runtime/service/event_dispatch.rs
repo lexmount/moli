@@ -276,8 +276,10 @@ impl ServiceWorkerRuntimeService {
         let native_request = dispatch
             .request_client
             .bind_browser_site_context(native_request);
+        let initial_redirect_count = native_request.redirect_count();
         let fetch_job = ServiceWorkerFetchJob {
             request: native_request,
+            initial_redirect_count,
             internal_id: dispatch.internal_id,
             owner: None,
             cors_preflight_request_headers: dispatch.cors_preflight_request_headers,
