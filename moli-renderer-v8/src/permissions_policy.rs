@@ -179,6 +179,14 @@ fn iframe_allow_feature(
     source_origin: &url::Origin,
 ) -> Option<bool> {
     let allow_attribute = allow_attribute?;
+    // src may designate an opaque document without changing origin identity.
+    let source_matches = || {
+        child_origin == source_origin
+            || matches!(
+                (child_origin, source_origin),
+                (url::Origin::Opaque(_), url::Origin::Opaque(_))
+            )
+    };
     allow_attribute.split(';').find_map(|directive| {
         let mut tokens = directive.split_ascii_whitespace();
         let name = tokens.next()?;
@@ -187,7 +195,7 @@ fn iframe_allow_feature(
         }
         let allowlist = tokens.collect::<Vec<_>>();
         if allowlist.is_empty() {
-            return Some(child_origin == source_origin);
+            return Some(source_matches());
         }
         if allowlist
             .iter()
@@ -197,7 +205,7 @@ fn iframe_allow_feature(
         }
         Some(allowlist.into_iter().any(|token| {
             token == "*"
-                || (token.eq_ignore_ascii_case("'src'") && child_origin == source_origin)
+                || (token.eq_ignore_ascii_case("'src'") && source_matches())
                 || (token.eq_ignore_ascii_case("'self'") && child_origin == parent_origin)
                 || Url::parse(token.trim_matches(['\'', '"']))
                     .ok()
@@ -442,5 +450,45 @@ mod tests {
             Some("gamepad *"),
         );
         assert!(!delegated.gamepad_enabled());
+    }
+    #[test]
+    fn iframe_src_delegates_opaque_documents_without_changing_self_matching() {
+        let parent = url("https://parent.test/").origin();
+        let child = url::Origin::new_opaque();
+        let source = url::Origin::new_opaque();
+        let other = url("https://other.test/").origin();
+        assert_ne!(child, source);
+        for feature in ["gamepad", "tools"] {
+            for (tokens, expected) in [
+                ("", true),
+                (" 'src'", true),
+                (" *", true),
+                (" 'self'", false),
+                (" 'none'", false),
+                (" ()", false),
+                (" https://parent.test", false),
+            ] {
+                let allow = format!("{feature}{tokens}");
+                assert_eq!(
+                    iframe_allow_feature(Some(&allow), feature, &parent, &child, &source),
+                    Some(expected),
+                    "{allow}"
+                );
+            }
+            for (child, source, expected) in [
+                (&parent, &parent, true),
+                (&parent, &other, false),
+                (&child, &parent, false),
+                (&parent, &child, false),
+            ] {
+                let allow = format!("{feature} 'src'");
+                assert_eq!(
+                    iframe_allow_feature(Some(&allow), feature, &parent, child, source),
+                    Some(expected),
+                    "{allow}"
+                );
+            }
+        }
+        assert_ne!(child, source);
     }
 }
