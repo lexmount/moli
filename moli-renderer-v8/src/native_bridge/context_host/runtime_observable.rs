@@ -245,6 +245,7 @@ impl PageScriptHost {
         drop(std::mem::take(self.font_loading_tasks.get_mut()));
         drop(std::mem::take(&mut self.device_sensor_tasks));
         drop(std::mem::take(&mut self.file_entry_file_callbacks));
+        drop(std::mem::take(&mut self.service_worker_queries));
         drop(std::mem::take(&mut self.user_interaction_tasks));
         self.pending_font_face_loads.clear();
         self.pending_image_load_events.clear();

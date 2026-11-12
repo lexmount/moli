@@ -106,6 +106,7 @@ mod file_entry_file_callbacks;
 mod file_reading_tasks;
 mod focus;
 mod node_adoption;
+mod service_worker_queries;
 pub(crate) use focus::SequentialFocusStartingPoint;
 mod frame_document_ready_routes;
 mod hash_changes;
@@ -1085,6 +1086,7 @@ pub(crate) struct PageScriptHost {
     canvas_blob_serialization_tasks:
         canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
+    service_worker_queries: service_worker_queries::ServiceWorkerQueryState,
     script_preparation_errors: script_preparation_errors::ScriptPreparationErrorState,
     promise_rejection_tasks: promise_rejection_tasks::PromiseRejectionTaskState,
     pending_selectedcontent_updates: HashSet<DomHandle>,

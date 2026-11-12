@@ -521,6 +521,8 @@ impl PageScriptHost {
                 super::canvas_blob_serialization_tasks::CanvasBlobSerializationTaskState::default(),
             file_entry_file_callbacks:
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
+            service_worker_queries: super::service_worker_queries::ServiceWorkerQueryState::default(
+            ),
             script_preparation_errors:
                 super::script_preparation_errors::ScriptPreparationErrorState::default(),
             promise_rejection_tasks:
@@ -1051,6 +1053,18 @@ impl PageScriptHost {
             )
             .dom_manipulation()
             .file_entry_file_callback()
+    }
+
+    pub(crate) fn page_service_worker_query_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPageServiceWorkerQuerySender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before FileSystemregistration query.file callback admission",
+            )
+            .dom_manipulation()
+            .service_worker_query()
     }
 
     pub(crate) fn page_script_preparation_error_sender(

@@ -92,6 +92,16 @@ impl WorkerServiceWorkerRequestIdAllocator {
 }
 
 impl WorkerGlobalState {
+    pub(in crate::worker) fn register_pending_service_worker_registration_query(
+        &mut self,
+        resolver: v8::Global<v8::PromiseResolver>,
+    ) -> u64 {
+        let request_id = self.service_worker_update_request_ids.allocate();
+        self.pending_service_worker_registration_queries
+            .insert(request_id, resolver);
+        request_id
+    }
+
     pub(in crate::worker) fn register_pending_service_worker_skip_waiting(
         &mut self,
         resolver: v8::Global<v8::PromiseResolver>,
