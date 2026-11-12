@@ -31,25 +31,26 @@ pub(super) fn apply_entry(
         reject_canceled_history_traversal_results(scope, &traversal.results);
         return;
     };
-    // Trackers registered before an earlier traversal's navigate event are
-    // adopted by that traversal. A reentrant call registered during the event
-    // remains upcoming, and rejects if its queued task finds the entry active.
-    if !traversal.results.is_empty()
-        && let Some(key) = traversal.target_key.as_deref()
+    // A promoted tracker's queued task must not replay an already committed
+    // joint traversal. Calls registered during navigate still have results
+    // and reject when their later task finds this entry active.
+    if let Some(key) = traversal.target_key.as_deref()
         && navigation_current_entry(scope, owner)
             .and_then(|entry| navigation_entry_key_value(scope, entry))
             .is_some_and(|current| current == key)
     {
-        let error = super::navigation_result::navigation_dom_exception(
-            scope,
-            "The traversal target is already the active history entry",
-            "InvalidStateError",
-        );
-        super::history_runtime::results::reject_pending_navigation_results(
-            scope,
-            &traversal.results,
-            error,
-        );
+        if !traversal.results.is_empty() {
+            let error = super::navigation_result::navigation_dom_exception(
+                scope,
+                "The traversal target is already the active history entry",
+                "InvalidStateError",
+            );
+            super::history_runtime::results::reject_pending_navigation_results(
+                scope,
+                &traversal.results,
+                error,
+            );
+        }
         return;
     }
     let step = traversal.joint_step.or_else(|| {
