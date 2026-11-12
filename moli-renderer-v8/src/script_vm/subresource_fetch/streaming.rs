@@ -422,6 +422,40 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::InterceptionOutputReady(output) => {
+                output.drain();
+                Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered)
+            }
+            AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted { info, started } => {
+                self._context_host
+                    .borrow_mut()
+                    .start_pending_subresource_native_stream(&info);
+                let reported_redirects = started.head.redirect_chain.len();
+                self.start_streaming_async_subresource_fetch_body_with_reported_redirects(
+                    *started,
+                    reported_redirects,
+                )
+            }
+            AsyncSubresourceFetchEvent::InterceptedXhrCompleted(completed) => {
+                self._context_host
+                    .borrow_mut()
+                    .update_pending_subresource_native_info(&completed.info);
+                self.complete_async_subresource_fetch_body(AsyncSubresourceFetchCompletion {
+                    internal_id: completed.info.internal_id,
+                    request_url: completed.info.url,
+                    request_method: completed.info.method,
+                    request_headers: completed.info.request_headers,
+                    request_body: completed.info.request_body,
+                    response_status_text: None,
+                    skip_fetch_security_validation: completed.synthetic,
+                    response_filter: None,
+                    network_error_text: None,
+                    result: completed
+                        .result
+                        .map(crate::protocol_types::NavigationResponse::from)
+                        .into(),
+                })
+            }
             AsyncSubresourceFetchEvent::Completion(completion) => {
                 self.complete_async_subresource_fetch_body(*completion)
             }
@@ -571,6 +605,14 @@ impl ScriptVm {
     pub(super) fn start_streaming_async_subresource_fetch_body(
         &mut self,
         started: crate::types::AsyncSubresourceStreamingStarted,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        self.start_streaming_async_subresource_fetch_body_with_reported_redirects(started, 0)
+    }
+
+    fn start_streaming_async_subresource_fetch_body_with_reported_redirects(
+        &mut self,
+        started: crate::types::AsyncSubresourceStreamingStarted,
+        reported_redirects: usize,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = AsyncSubresourceTraceFields {
@@ -835,8 +877,7 @@ impl ScriptVm {
                                 started
                                     .head
                                     .redirect_chain
-                                    .clone()
-                                    .into_iter()
+                                    .iter().skip(reported_redirects).cloned()
                                     .map(Into::into)
                                     .collect(),
                                 started.head.final_url.clone(),
@@ -907,8 +948,7 @@ impl ScriptVm {
                             started
                                 .head
                                 .redirect_chain
-                                .clone()
-                                .into_iter()
+                                .iter().skip(reported_redirects).cloned()
                                 .map(Into::into)
                                 .collect(),
                             started.head.final_url.clone(),

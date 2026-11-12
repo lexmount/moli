@@ -5,6 +5,8 @@ use crate::content_security_policy::ContentSecurityPolicy;
 use super::*;
 
 pub(crate) struct NestedWorkerContext {
+    pub(crate) interception_context:
+        Option<crate::network::interception_output::ResourceInterceptionContext>,
     pub(crate) worker_id: DedicatedWorkerId,
     pub(crate) base_url: Url,
     pub(crate) loader: crate::network::context::WorkerResourceLoader,
@@ -41,6 +43,7 @@ pub(crate) fn reserve_nested_worker_context(
         .nested_worker_wrappers
         .insert(worker_id, v8::Global::new(scope, worker));
     Some(NestedWorkerContext {
+        interception_context: state.interception_context.clone(),
         worker_id,
         base_url,
         loader: state.loader.clone(),

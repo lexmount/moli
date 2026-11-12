@@ -195,6 +195,11 @@ impl FetchCancelHandle {
         true
     }
 
+    /// Waits for unconditional or inherited cancellation without polling an owner loop.
+    pub async fn cancelled(&self) {
+        self.state.cancellation.cancelled().await;
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.state.cancellation.is_cancelled()
     }

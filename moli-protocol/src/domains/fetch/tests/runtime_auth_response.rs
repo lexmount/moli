@@ -38,11 +38,18 @@ fn network_events_for_request<'a>(
         .collect()
 }
 
-fn assert_chromium_successful_http_extra_info(
-    ctx: &TestContext,
+async fn assert_chromium_successful_http_extra_info(
+    ctx: &mut TestContext,
     request_id: &str,
     expected_host: &str,
 ) {
+    wait_for_network_loading_finished(
+        ctx,
+        "SID-1",
+        request_id,
+        "HTTP response terminal before inspecting extra info",
+    )
+    .await;
     let requests = network_events_for_request(ctx, "Network.requestWillBeSent", request_id);
     assert_eq!(requests.len(), 1, "one browser-visible request");
 
@@ -241,7 +248,8 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
         .expect("network request id")
         .to_owned();
     assert_eq!(request["params"]["type"], "Fetch");
-    assert_chromium_successful_http_extra_info(&ctx, &network_request_id, &addr.to_string());
+    assert_chromium_successful_http_extra_info(&mut ctx, &network_request_id, &addr.to_string())
+        .await;
     let response = ctx
         .sent
         .iter()
@@ -918,7 +926,8 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
         .expect("network request id")
         .to_owned();
     assert_eq!(request["params"]["type"], "XHR");
-    assert_chromium_successful_http_extra_info(&ctx, &network_request_id, &addr.to_string());
+    assert_chromium_successful_http_extra_info(&mut ctx, &network_request_id, &addr.to_string())
+        .await;
     let response = ctx
         .sent
         .iter()
@@ -1232,6 +1241,33 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
     )
     .await;
 
+    let redirect_paused =
+        take_fetch_event_for_request(&mut ctx, "Fetch.requestPaused", &request_id);
+    assert_eq!(redirect_paused["params"]["responseStatusCode"], 307);
+    assert_eq!(redirect_paused["params"]["networkId"], network_id);
+    ctx.process_async(json!({"id":409,"method":"Fetch.continueResponse","sessionId":"SID-1","params":{"requestId":request_id}})).await;
+    ctx.expect_result(409, json!({}), Some("SID-1"));
+    let redirected = ctx
+        .wait_for_scheduler_message("redirect target's request interception", |message| {
+            message["method"] == "Fetch.requestPaused"
+                && message["params"]["request"]["url"] == final_url
+                && message["params"].get("responseStatusCode").is_none()
+        })
+        .await;
+    assert_eq!(redirected["params"]["networkId"], network_id);
+    let request_id = redirected["params"]["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ctx.process_async(json!({"id":410,"method":"Fetch.continueRequest","sessionId":"SID-1","params":{"requestId":request_id,"interceptResponse":true}})).await;
+    ctx.expect_result(410, json!({}), Some("SID-1"));
+    wait_until_message(
+        &mut ctx,
+        "SID-1",
+        "final redirect response interception",
+        |message| is_fetch_event_for_request(message, "Fetch.requestPaused", &request_id),
+    )
+    .await;
     let response_paused =
         take_fetch_event_for_request(&mut ctx, "Fetch.requestPaused", &request_id);
     assert_eq!(response_paused["method"], "Fetch.requestPaused");
@@ -1248,6 +1284,12 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
     }))
     .await;
     ctx.expect_result(406, json!({}), Some("SID-1"));
+
+    ctx.wait_for_scheduler_message("redirected XHR completed", |message| {
+        message["method"] == "Network.loadingFinished"
+            && message["params"]["requestId"] == network_id
+    })
+    .await;
 
     let xhr_requests = ctx
         .sent
@@ -1465,7 +1507,8 @@ async fn runtime_fetch_subresource_auth_required_then_continue_with_auth_resolve
         .expect("network request id")
         .to_owned();
     assert_eq!(network_request_id, network_id);
-    assert_chromium_successful_http_extra_info(&ctx, &network_request_id, &addr.to_string());
+    assert_chromium_successful_http_extra_info(&mut ctx, &network_request_id, &addr.to_string())
+        .await;
     let response = ctx
         .sent
         .iter()
@@ -2781,7 +2824,7 @@ async fn runtime_fetch_subresource_handles_multi_round_basic_auth() {
         .cloned()
         .expect("network request event");
     assert_eq!(request["params"]["requestId"], json!(network_id));
-    assert_chromium_successful_http_extra_info(&ctx, &network_id, &addr.to_string());
+    assert_chromium_successful_http_extra_info(&mut ctx, &network_id, &addr.to_string()).await;
 
     ctx.process_async(json!({
         "id": 702,
@@ -3010,7 +3053,7 @@ async fn runtime_fetch_subresource_handles_multi_round_digest_auth() {
         .cloned()
         .expect("network request event");
     assert_eq!(request["params"]["requestId"], json!(network_id));
-    assert_chromium_successful_http_extra_info(&ctx, &network_id, &addr.to_string());
+    assert_chromium_successful_http_extra_info(&mut ctx, &network_id, &addr.to_string()).await;
 
     ctx.process_async(json!({
         "id": 719,
@@ -3166,6 +3209,16 @@ async fn runtime_xhr_subresource_auth_required_default_aborts_request() {
     .await;
     ctx.expect_result(447, json!({}), Some("SID-1"));
 
+    wait_until_message(
+        &mut ctx,
+        "SID-1",
+        "native XHR failure notification",
+        |message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == network_id
+        },
+    )
+    .await;
     let failed = ctx
         .sent
         .iter()
@@ -4578,14 +4631,15 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
     .await;
     ctx.expect_result(460, json!({}), Some("SID-1"));
 
-    ctx.process_async(json!({
-        "id": 461,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_xhr_streamed" }
-    }))
+    let resolved = evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        461,
+        "globalThis.__lm_xhr_streamed",
+        &json!("streamed-xhr-response"),
+        "XHR callback after fulfilling the intercepted stream",
+    )
     .await;
-    let resolved = take_response_by_id(&mut ctx, 461);
     assert_eq!(
         resolved["result"]["result"]["value"],
         "streamed-xhr-response"
@@ -4897,6 +4951,16 @@ async fn runtime_xhr_subresource_fail_request_at_response_stage_fires_error_and_
     .await;
     ctx.expect_result(433, json!({}), Some("SID-1"));
 
+    wait_until_message(
+        &mut ctx,
+        "SID-1",
+        "native XHR failure notification",
+        |message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == request_paused["params"]["networkId"]
+        },
+    )
+    .await;
     let failed = ctx
         .sent
         .iter()
@@ -5054,14 +5118,15 @@ async fn stop_loading_aborts_paused_response_stage_runtime_xhr_subresource() {
     .await;
     ctx.expect_error(792, -32000, "RequestNotFound");
 
-    ctx.process_async(json!({
-        "id": 793,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_xhr_result" }
-    }))
+    let resolved = evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        793,
+        "globalThis.__lm_xhr_result",
+        &json!("failed"),
+        "stopped response-stage XHR error callback",
+    )
     .await;
-    let resolved = take_response_by_id(&mut ctx, 793);
     assert_eq!(resolved["result"]["result"]["value"], "failed");
 
     server.abort();
@@ -5496,14 +5561,15 @@ async fn stop_loading_aborts_paused_runtime_xhr_auth_subresource() {
     .await;
     ctx.expect_error(7937, -32000, "RequestNotFound");
 
-    ctx.process_async(json!({
-        "id": 7938,
-        "method": "Runtime.evaluate",
-        "sessionId": "SID-1",
-        "params": { "expression": "globalThis.__lm_xhr_stop_auth_result" }
-    }))
+    let resolved = evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        7938,
+        "globalThis.__lm_xhr_stop_auth_result",
+        &json!("failed"),
+        "stopped authentication-stage XHR error callback",
+    )
     .await;
-    let resolved = take_response_by_id(&mut ctx, 7938);
     assert_eq!(resolved["result"]["result"]["value"], "failed");
 
     server.abort();

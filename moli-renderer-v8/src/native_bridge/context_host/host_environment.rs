@@ -2752,6 +2752,12 @@ impl PageScriptHost {
         enabled: bool,
         resource_type: Option<SubresourceResourceType>,
     ) {
+        if let Some(loader) = self.current_main_document_resource_loader() {
+            loader
+                .request_client()
+                .page_network_policy()
+                .set_subresource_interception(enabled, resource_type);
+        }
         self.fetch_subresource_interception_enabled = enabled;
         self.fetch_subresource_interception_resource_type = resource_type;
         for worker in self.workers.values() {
@@ -2765,20 +2771,42 @@ impl PageScriptHost {
         &self,
         resource_type: SubresourceResourceType,
     ) -> bool {
-        self.fetch_subresource_interception_enabled
+        let fallback = self.fetch_subresource_interception_enabled
             && self
                 .fetch_subresource_interception_resource_type
-                .is_none_or(|expected| expected.has_same_cdp_fetch_interception_type(resource_type))
+                .is_none_or(|expected| {
+                    expected.has_same_cdp_fetch_interception_type(resource_type)
+                });
+        self.current_main_document_resource_loader()
+            .map_or(fallback, |loader| {
+                loader
+                    .request_client()
+                    .page_network_policy()
+                    .should_intercept_subresource(resource_type, fallback)
+            })
     }
 
     pub(crate) fn fetch_subresource_interception_enabled(&self) -> bool {
-        self.fetch_subresource_interception_enabled
+        self.subresource_interception_config().0
     }
 
     pub(crate) fn fetch_subresource_interception_resource_type(
         &self,
     ) -> Option<SubresourceResourceType> {
-        self.fetch_subresource_interception_resource_type
+        self.subresource_interception_config().1
+    }
+    fn subresource_interception_config(&self) -> (bool, Option<SubresourceResourceType>) {
+        let fallback = (
+            self.fetch_subresource_interception_enabled,
+            self.fetch_subresource_interception_resource_type,
+        );
+        self.current_main_document_resource_loader()
+            .map_or(fallback, |loader| {
+                loader
+                    .request_client()
+                    .page_network_policy()
+                    .subresource_interception_config(fallback)
+            })
     }
 }
 

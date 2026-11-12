@@ -849,6 +849,10 @@ pub(crate) struct PageScriptHost {
     style_viewport_generation: Cell<u64>,
     root_document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
+    native_interception_output: Option<(
+        crate::runtime::RendererDocumentLifecycleIdentity,
+        crate::network::interception_output::InterceptionOutput,
+    )>,
     page_context_resources_closed: bool,
     context_host_lifecycle: Rc<Cell<crate::util::ContextHostLifecycle>>,
     deferred_context_host_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
@@ -1087,13 +1091,11 @@ pub(crate) struct PageScriptHost {
     next_javascript_dialog_id: u64,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
-    next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
     fetch_subresource_interception_enabled: bool,
     fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
     active_subresource_requests: usize,
-    next_pending_subresource_fetch_id: u64,
     pending_subresource_fetches: HashMap<u64, PendingSubresourceFetchState>,
     pending_subresource_auths: HashMap<u64, PendingSubresourceAuthState>,
     pending_subresource_responses: HashMap<u64, PendingSubresourceResponseState>,
@@ -1364,6 +1366,9 @@ impl PageScriptHost {
         self.close_owned_message_ports();
         self.shutdown_workers();
         self.output_journal = None;
+        if let Some((_, output)) = self.native_interception_output.take() {
+            output.close();
+        }
         self.root_document_lifecycle = None;
         self.child_default_context_bootstrap = None;
         self.command_turn_output = None;

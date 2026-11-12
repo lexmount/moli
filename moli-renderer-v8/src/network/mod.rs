@@ -54,3 +54,9 @@ pub(crate) fn request_resource_type_for_subresource(
         | SubresourceResourceType::WebSocket => None,
     }
 }
+
+pub(crate) mod interception_control;
+pub(crate) mod interception_output;
+pub use interception_control::{ResourceInterceptionPause, ResourceInterceptionReply};
+
+pub(crate) mod synchronous_load;

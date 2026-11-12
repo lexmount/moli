@@ -337,10 +337,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
     assert!(aggregate.is_enabled());
     assert_eq!(aggregate.patterns().len(), 2);
     assert!(aggregate.handle_auth_requests());
-    assert_eq!(
-        owner.subresource_interception_config(),
-        (true, Some(SubresourceResourceType::Fetch))
-    );
+    assert_eq!(owner.subresource_interception_config(), (true, None));
 
     let primary = owner.config_snapshot_for_session(Some("SID-primary"));
     assert!(primary.is_enabled());
@@ -350,10 +347,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
         primary.patterns()[0].url_pattern,
         "https://example.test/primary"
     );
-    assert_eq!(
-        primary.subresource_interception_config(),
-        (true, Some(SubresourceResourceType::Fetch))
-    );
+    assert_eq!(primary.subresource_interception_config(), (true, None));
 
     let aux = owner.config_snapshot_for_session(Some("SID-attached"));
     assert!(aux.is_enabled());
@@ -1775,7 +1769,7 @@ fn committed_document_navigation_accepts_matching_late_body_only_until_next_navi
 }
 
 #[test]
-fn synchronous_xhr_rules_preserve_url_scope_resource_type_and_auth_sources() {
+fn interception_eligibility_includes_authentication_independent_of_resource_type() {
     let mut owner = TargetFetchOwner::default();
     let pattern = |url: &str, kind, stage| FetchInterceptionPattern {
         url_pattern: url.to_owned(),
@@ -1810,10 +1804,7 @@ fn synchronous_xhr_rules_preserve_url_scope_resource_type_and_auth_sources() {
         vec!["*/auth-only".to_owned()],
         Vec::new(),
     );
-    assert_eq!(
-        owner.synchronous_xhr_interception_patterns(),
-        ["*/api-a", "*/api-b", "*/auth-only"]
-    );
+    assert_eq!(owner.subresource_interception_config(), (true, None));
     owner.configure(
         Some("CDP".to_owned()),
         true,
@@ -1823,12 +1814,9 @@ fn synchronous_xhr_rules_preserve_url_scope_resource_type_and_auth_sources() {
             FetchRequestStage::Request,
         )],
     );
-    assert_eq!(owner.synchronous_xhr_interception_patterns(), ["*"]);
+    assert_eq!(owner.subresource_interception_config(), (true, None));
     owner.remove_fetch_session(Some("CDP"));
-    assert_eq!(
-        owner.synchronous_xhr_interception_patterns(),
-        ["*/auth-only"]
-    );
+    assert_eq!(owner.subresource_interception_config(), (true, None));
     owner.remove_network_intercept("auth");
-    assert!(owner.synchronous_xhr_interception_patterns().is_empty());
+    assert_eq!(owner.subresource_interception_config(), (false, None));
 }

@@ -1465,6 +1465,17 @@ pub struct PendingSubresourceFetchRequest {
 }
 
 impl PendingSubresourceFetchRequest {
+    pub(crate) fn bind_native_network_pause(
+        &mut self,
+        pause: moli_core::network::ResourceInterceptionPause,
+    ) {
+        if let PendingSubresourceFetchResidence::Document { command_target, .. } =
+            &mut self.residence
+        {
+            *command_target = command_target.clone().with_network_pause(pause);
+        }
+    }
+
     pub(crate) fn page_owner(&self) -> Option<&super::state::TargetPageResidenceIdentity> {
         match &self.residence {
             PendingSubresourceFetchResidence::Page(owner)

@@ -180,6 +180,8 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) script_source: WorkerScriptSource,
     pub(crate) script_url: String,
     pub(crate) request_client: ResourceRequestClient,
+    pub(crate) interception_context:
+        Option<crate::network::interception_output::ResourceInterceptionContext>,
     pub(crate) script_kind: WorkerScriptKind,
     pub(crate) module_static_import_initiator_url: Option<url::Url>,
     pub(crate) module_credentials_mode: RequestCredentialsMode,
@@ -312,6 +314,7 @@ impl WorkerSpawnOptions {
             script_source,
             script_url,
             request_client,
+            interception_context: None,
             script_kind: WorkerScriptKind::Classic,
             module_static_import_initiator_url: None,
             module_credentials_mode: RequestCredentialsMode::SameOrigin,
@@ -428,6 +431,14 @@ impl WorkerSpawnOptions {
         policy_context: crate::types::SubresourcePolicyContext,
     ) -> Self {
         self.policy_context = policy_context;
+        self
+    }
+
+    pub(crate) fn with_interception_context(
+        mut self,
+        context: Option<crate::network::interception_output::ResourceInterceptionContext>,
+    ) -> Self {
+        self.interception_context = context;
         self
     }
 
@@ -1248,6 +1259,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         script_source,
         script_url,
         request_client,
+        interception_context,
         script_kind,
         module_static_import_initiator_url,
         module_credentials_mode,
@@ -1282,6 +1294,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
     let devtools =
         WorkerDevToolsHandle::new(parent_to_worker_tx.clone(), Arc::clone(&isolate_handle));
     let worker_inspector_tasks = devtools.inspector_tasks().clone();
+    let network_cancel = devtools.network_cancel_handle();
     let termination_requested = Arc::new(AtomicBool::new(false));
     let worker_termination_requested = Arc::clone(&termination_requested);
 
@@ -1300,6 +1313,8 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 script_source,
                 script_url,
                 request_client,
+                interception_context,
+                network_cancel,
                 script_kind,
                 module_static_import_initiator_url,
                 module_credentials_mode,
@@ -1432,6 +1447,8 @@ async fn worker_main(
     script_source: WorkerScriptSource,
     script_url: String,
     request_client: ResourceRequestClient,
+    interception_context: Option<crate::network::interception_output::ResourceInterceptionContext>,
+    network_cancel: moli_fetch::FetchCancelHandle,
     script_kind: WorkerScriptKind,
     module_static_import_initiator_url: Option<url::Url>,
     module_credentials_mode: RequestCredentialsMode,
@@ -1578,6 +1595,8 @@ async fn worker_main(
         message_agent_cluster,
     );
     let state = Rc::new(RefCell::new(WorkerGlobalState {
+        interception_context,
+        network_cancel,
         message_source_security,
         common: Rc::new(crate::common_runtime::CommonRuntimeState::default()),
         resource_timing_buffers: crate::native_bridge::SharedResourceTimingBufferRegistry::new(),

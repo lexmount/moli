@@ -99,6 +99,92 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     Ok(observed)
 }
 
+pub(super) async fn fetch_controlled_subresource_hop(
+    loader: &ResourceRequestClient,
+    request: Request,
+    cancel: FetchCancelHandle,
+    preflight_headers: Vec<(String, String)>,
+    observer: &CorsPreflightNetworkObserver,
+    stream: Option<(
+        &mut super::controlled_xhr::ControlledXhrStream,
+        &PendingSubresourceFetchInfo,
+    )>,
+    handle_auth_requests: bool,
+) -> Result<NetworkFetchResult<super::controlled_xhr::ControlledXhrBody>, String> {
+    run_cors_preflight_if_needed(
+        loader,
+        &request,
+        Some(cancel.clone()),
+        &preflight_headers,
+        Some(observer),
+    )
+    .await?;
+    use super::controlled_xhr::ControlledXhrBody;
+    let Some((stream, info)) = stream.filter(|_| !request.auth_requires_buffered_transport())
+    else {
+        return fetch_once_with_network_metadata_unvalidated(
+            loader,
+            request.with_single_hop(),
+            Some(cancel),
+        )
+        .await
+        .map(|observed| observed.map_response(ControlledXhrBody::Buffered));
+    };
+    let observed = loader
+        .fetch_raw_stream_with_cancel_and_network_metadata(
+            request.clone().with_single_hop(),
+            cancel,
+        )
+        .await
+        .map_err(format_network_error)?;
+    let (mut response, observation) = observed.into_parts();
+    let mut head = response.head();
+    head.redirect_chain = request.redirect_chain().to_vec();
+    head.redirected = !head.redirect_chain.is_empty();
+    let redirects = next_redirect_url(
+        &head.final_url,
+        head.status,
+        &head.headers,
+        request.redirect_count(),
+    )?
+    .is_some();
+    let authenticates = handle_auth_requests
+        && matches!(head.status, 401 | 407)
+        && crate::protocol_types::extract_subresource_auth_challenge(&head.headers).is_some();
+    if redirects || authenticates {
+        let response = response
+            .into_lossy_materialized_text_response()
+            .await
+            .map_err(format_network_error)?;
+        return Ok(NetworkFetchResult::new(
+            ControlledXhrBody::Buffered(response),
+            observation,
+        ));
+    }
+    request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
+    stream.start(
+        info,
+        head.clone(),
+        observation
+            .as_ref()
+            .map(|observation| observation.clone().into_headers()),
+    )?;
+    let mut body =
+        crate::protocol_types::SubresourceResponseBodyWriter::with_disk_pool(loader.disk_pool());
+    while let Some(chunk) = response.next_chunk().await {
+        body.append(&chunk);
+        stream.chunk(chunk)?;
+    }
+    response.finish().await.map_err(format_network_error)?;
+    Ok(NetworkFetchResult::new(
+        ControlledXhrBody::Streamed {
+            head,
+            body: body.finish(),
+        },
+        observation,
+    ))
+}
+
 pub(crate) fn browser_request_needs_manual_preflight_redirects(
     request: &Request,
     preflight_request_headers: &[(String, String)],

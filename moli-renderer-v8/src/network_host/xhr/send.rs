@@ -24,8 +24,9 @@ use super::events::{
     xhr_dispatch_progress_event, xhr_dispatch_upload_progress_event, xhr_is_aborted, xhr_is_async,
 };
 use super::*;
+use crate::network::synchronous_load::{SynchronousLoadOutcome, wait_for_synchronous_load};
 use crate::runtime::RendererPageContextCancelReason;
-use crossbeam_channel::{after, bounded, never, select};
+use crossbeam_channel::bounded;
 use moli_fetch::{FetchCancelHandle, RequestMode};
 use std::time::Duration;
 
@@ -188,9 +189,8 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    // Pause publication and continuation currently require the owner loop.
-    // Async sends use that channel; the synchronous network path checks exact
-    // interception URLs before dispatch and before following redirects.
+    // Both delivery modes use the same native pause/decision controller.
+    // Only application of the terminal result belongs to the Page thread.
     if async_request && host.should_intercept_subresource(SubresourceResourceType::Xhr) {
         let internal_id = record_intercepted_xhr(scope, host, xhr, prepared);
         set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, internal_id as f64);
@@ -302,18 +302,26 @@ fn send_synchronous_network_xhr(
     prepared: PreparedXhrSendRequest,
     loader: ResourceRequestClient,
 ) {
-    let request = prepared.request();
+    let request = prepared.request().with_request_mode(RequestMode::Cors);
 
-    let request = match loader.prepare_synchronous_xhr_request(
-        request,
-        host.should_intercept_subresource(SubresourceResourceType::Xhr),
-    ) {
-        Ok(request) => request,
-        Err(error) => {
-            record_synchronous_xhr_failure(scope, host, xhr, prepared, error.to_string());
-            return;
-        }
+    let requires_control = host.should_intercept_subresource(SubresourceResourceType::Xhr);
+    let control = if requires_control {
+        host.root_document_lifecycle_identity()
+            .zip(host.native_interception_output())
+            .zip(host.document_connect_policy_snapshot_for_owner(prepared.owner))
+    } else {
+        None
     };
+    if requires_control && control.is_none() {
+        record_synchronous_xhr_failure(
+            scope,
+            host,
+            xhr,
+            prepared,
+            "Synchronous XMLHttpRequest interception requires a protocol output owner".into(),
+        );
+        return;
+    }
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -332,7 +340,6 @@ fn send_synchronous_network_xhr(
     let worker_cancel_handle = cancel_handle.clone();
     let (response_tx, response_rx) = bounded(1);
     let xhr_timeout = synchronous_xhr_timeout(scope, xhr);
-    let timeout_rx = xhr_timeout.map(after).unwrap_or_else(never);
     let page_context_cancel_rx = host.page_context_cancel_receiver();
     if let Some(reason) = page_context_cancel_rx.reason() {
         cancel_handle.cancel();
@@ -354,82 +361,144 @@ fn send_synchronous_network_xhr(
         return;
     }
 
-    prepared
-        .resource_loader
-        .request_client()
-        .resource_task_runner()
-        .spawn(async move {
-            let result = fetch_browser_subresource_with_preflight_headers(
-                loader,
-                request,
-                Some(worker_cancel_handle),
-                preflight_headers,
-            )
-            .await;
-            let _ = response_tx.send(result);
-        });
-
-    let result = select! {
-            recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("sync XHR resource task dropped response channel".to_owned())
-            }),
-            recv(timeout_rx) -> _ => {
-                let timeout = xhr_timeout.expect("never channel should not fire without xhr timeout");
-                cancel_handle.cancel();
-                host.record_subresource_network(SubresourceNetworkRecord::failure(
-                    prepared.frame_id,
-                    prepared.document_url,
-                    request_url.clone(),
-                    request_method,
-                    request_headers,
-                    request_body,
-                    SubresourceResourceType::Xhr,
-                    format!(
-                        "Synchronous XMLHttpRequest timed out after {} ms",
-                        timeout.as_millis()
-                    ),
-                ));
-                throw_synchronous_xhr_failure(
-                    scope,
-                    xhr,
-                    request_url.as_str(),
-                    "TimeoutError",
-                );
-                return;
-            },
-            recv(page_context_cancel_rx.wake_receiver()) -> _ => {
-                let reason = page_context_cancel_rx
-                    .reason()
-                    .unwrap_or(RendererPageContextCancelReason::ContextDropped);
-                cancel_handle.cancel();
-                let reason_text = match reason {
-                    RendererPageContextCancelReason::PageClosed => "page was closed",
-                    RendererPageContextCancelReason::ContextDropped => "context was dropped",
-                };
-                host.record_subresource_network(SubresourceNetworkRecord::failure(
-                    prepared.frame_id,
-                    prepared.document_url,
-                    request_url,
-                    request_method,
-                    request_headers,
-                    request_body,
-                    SubresourceResourceType::Xhr,
-                    format!("Synchronous XMLHttpRequest aborted because {reason_text}"),
-                ));
-                apply_xhr_abort(scope, xhr);
-                return;
-            }
+    let Some(load) = prepared.resource_loader.register_load(
+        crate::network::loads::ResourceLoadKind::Xhr,
+        crate::network::loads::ResourceLoadDisposition::Ordinary,
+        Some(cancel_handle.clone()),
+    ) else {
+        record_synchronous_xhr_failure(
+            scope,
+            host,
+            xhr,
+            prepared,
+            "XHR Document is no longer active".into(),
+        );
+        return;
     };
-
+    let mut info = PendingSubresourceFetchInfo {
+        internal_id: 0,
+        network_request_handle: None,
+        frame_id: prepared.frame_id.clone(),
+        document_url: prepared.document_url.clone(),
+        url: prepared.resolved_url.clone(),
+        websocket_socket_id: None,
+        method: prepared.method.clone(),
+        request_headers: prepared.request_headers.clone(),
+        request_body: request_body.clone(),
+        request_body_bytes: prepared.send_body.clone(),
+        resource_type: SubresourceResourceType::Xhr,
+        request_cookie_report: request_cookie_report.clone(),
+    };
+    host.assign_pending_subresource_fetch_identity(&mut info);
+    let native_handle = control.as_ref().and(info.network_request_handle);
+    let output_scope = host.begin_synchronous_network_wait();
+    let runner = loader.resource_task_runner();
+    runner.spawn(async move {
+        let result = match control {
+            Some(((source_document, output), connect_policy)) => {
+                crate::network_host::controlled_xhr::ControlledXhrLoad {
+                    initial_decision: None,
+                    request,
+                    info,
+                    load,
+                    cancel: worker_cancel_handle,
+                    source_document,
+                    output,
+                    connect_policy,
+                    preflight_headers,
+                }
+                .run()
+                .await
+            }
+            None => crate::network_host::controlled_xhr::ControlledXhrResponse {
+                result: fetch_browser_subresource_with_preflight_headers(
+                    loader,
+                    request,
+                    Some(worker_cancel_handle),
+                    preflight_headers,
+                )
+                .await,
+                synthetic: false,
+                info,
+            },
+        };
+        let _ = response_tx.send(Ok(result));
+    });
+    let result = match wait_for_synchronous_load(
+        response_rx,
+        page_context_cancel_rx.wake_receiver(),
+        xhr_timeout,
+    ) {
+        SynchronousLoadOutcome::Completed(result) => result,
+        SynchronousLoadOutcome::TimedOut => {
+            cancel_handle.cancel();
+            drop(output_scope);
+            let mut record = SubresourceNetworkRecord::failure(
+                prepared.frame_id,
+                prepared.document_url,
+                request_url.clone(),
+                request_method,
+                request_headers,
+                request_body,
+                SubresourceResourceType::Xhr,
+                format!(
+                    "Synchronous XMLHttpRequest timed out after {} ms",
+                    xhr_timeout.unwrap().as_millis()
+                ),
+            );
+            if let Some(handle) = native_handle {
+                record = record.with_request_handle(handle);
+            }
+            host.record_subresource_network(record);
+            throw_synchronous_xhr_failure(scope, xhr, request_url.as_str(), "TimeoutError");
+            return;
+        }
+        SynchronousLoadOutcome::OwnerCancelled => {
+            cancel_handle.cancel();
+            drop(output_scope);
+            let reason = page_context_cancel_rx
+                .reason()
+                .unwrap_or(RendererPageContextCancelReason::ContextDropped);
+            let reason_text = match reason {
+                RendererPageContextCancelReason::PageClosed => "page was closed",
+                RendererPageContextCancelReason::ContextDropped => "context was dropped",
+            };
+            let mut record = SubresourceNetworkRecord::failure(
+                prepared.frame_id,
+                prepared.document_url,
+                request_url,
+                request_method,
+                request_headers,
+                request_body,
+                SubresourceResourceType::Xhr,
+                format!("Synchronous XMLHttpRequest aborted because {reason_text}"),
+            );
+            if let Some(handle) = native_handle {
+                record = record.with_request_handle(handle);
+            }
+            host.record_subresource_network(record);
+            apply_xhr_abort(scope, xhr);
+            return;
+        }
+    };
+    // XHR's own completion events may now run on the original JS stack; the
+    // native network publication privilege ends before entering those callbacks.
+    drop(output_scope);
+    let (result, request_info, synthetic) = match result {
+        Ok(completed) => (completed.result, Some(completed.info), completed.synthetic),
+        Err(error) => (Err(error), None, false),
+    };
     let result = result.and_then(|response| {
-        crate::network_host::validate_fetch_response_security_policy_with_body(
-            &prepared.request_origin,
-            &response.head(),
-            response.body_bytes(),
-            RequestMode::Cors,
-            prepared.credentials_mode,
-            prepared.policy_context,
-        )?;
+        if !synthetic {
+            crate::network_host::validate_fetch_response_security_policy_with_body(
+                &prepared.request_origin,
+                &response.head(),
+                response.body_bytes(),
+                RequestMode::Cors,
+                prepared.credentials_mode,
+                prepared.policy_context,
+            )?;
+        }
         Ok(response)
     });
 
@@ -455,40 +524,57 @@ fn send_synchronous_network_xhr(
                 &response.head(),
                 prepared.credentials_mode,
             );
-            host.record_subresource_network(
-                SubresourceNetworkRecord::success_with_body(
-                    prepared.frame_id,
-                    prepared.document_url,
-                    prepared.resolved_url,
-                    prepared.method,
-                    prepared.request_headers,
-                    request_body,
-                    SubresourceResourceType::Xhr,
-                    response
-                        .request_cookie_report
-                        .clone()
-                        .or(request_cookie_report),
-                    response
-                        .redirect_chain
-                        .clone()
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
-                    response.final_url.clone(),
-                    response.status,
-                    response.headers.clone(),
-                    crate::protocol_types::SubresourceResponseBody::from_fetch_response(&response),
-                    response.cookie_set_reports.clone(),
-                )
-                .with_from_cache(response.from_cache)
-                .with_negotiated_http_version(response.negotiated_http_version),
+            let mut record = SubresourceNetworkRecord::success_with_body(
+                prepared.frame_id,
+                prepared.document_url,
+                request_info
+                    .as_ref()
+                    .map_or(prepared.resolved_url, |info| info.url.clone()),
+                request_info
+                    .as_ref()
+                    .map_or(prepared.method, |info| info.method.clone()),
+                request_info
+                    .as_ref()
+                    .map_or(prepared.request_headers, |info| {
+                        info.request_headers.clone()
+                    }),
+                request_info
+                    .as_ref()
+                    .map_or(request_body, |info| info.request_body.clone()),
+                SubresourceResourceType::Xhr,
+                response
+                    .request_cookie_report
+                    .clone()
+                    .or(request_cookie_report),
+                response
+                    .redirect_chain
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                response.final_url.clone(),
+                response.status,
+                response.headers.clone(),
+                crate::protocol_types::SubresourceResponseBody::from_fetch_response(&response),
+                response.cookie_set_reports.clone(),
+            )
+            .with_from_cache(response.from_cache)
+            .with_negotiated_http_version(response.negotiated_http_version)
+            .with_request_body_bytes(
+                request_info
+                    .as_ref()
+                    .map_or(prepared.send_body, |info| info.request_body_bytes.clone()),
             );
+            if let Some(handle) = native_handle {
+                record = record.with_request_handle(handle);
+            }
+            host.record_subresource_network(record);
             let mut response = response;
             response.headers = observable_headers;
             apply_xhr_response(scope, xhr, response);
         }
         Err(error_text) => {
-            host.record_subresource_network(SubresourceNetworkRecord::failure(
+            let mut record = SubresourceNetworkRecord::failure(
                 prepared.frame_id,
                 prepared.document_url,
                 request_url.clone(),
@@ -497,7 +583,11 @@ fn send_synchronous_network_xhr(
                 request_body,
                 SubresourceResourceType::Xhr,
                 error_text,
-            ));
+            );
+            if let Some(handle) = native_handle {
+                record = record.with_request_handle(handle);
+            }
+            host.record_subresource_network(record);
             throw_synchronous_xhr_failure(scope, xhr, request_url.as_str(), "NetworkError");
         }
     }

@@ -66,6 +66,7 @@ pub enum RendererOwnerAction {
     TopLevelLocationNavigation(RendererDocumentSourcedTopLevelLocationNavigation),
     TopLevelHistoryTraversal(RendererPendingTopLevelHistoryTraversal),
     SubresourceFetchPause {
+        network_pause: Option<crate::network::ResourceInterceptionPause>,
         source_document: RendererDocumentLifecycleIdentity,
         info: Box<PendingSubresourceFetchInfo>,
         /// Set for a child frame navigation, whose Network request id is the
@@ -73,6 +74,7 @@ pub enum RendererOwnerAction {
         child_document: Option<Box<crate::protocol_types::ChildDocumentFetchRequest>>,
     },
     SubresourceContinue {
+        network_pause: Option<crate::network::ResourceInterceptionPause>,
         source_document: RendererDocumentLifecycleIdentity,
         event: Box<PendingSubresourceContinueEvent>,
     },

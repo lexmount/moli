@@ -12,7 +12,7 @@ use crate::conn::{
 use crate::domains::activity;
 use crate::domains::command_output::CommandOutputPlan;
 use anyhow::Context as _;
-use moli_core::page::CompletedPageCommand;
+use moli_core::page::CompletedResourceCommand;
 
 use super::PendingFetchCommandOperation;
 use super::helpers::{
@@ -579,7 +579,7 @@ pub(super) fn next_chained_subresource_auth_required_event(
 pub(super) fn complete_continue_with_auth_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     state: PendingContinueWithAuthState,
     out: &mut FetchCommandOutput,
 ) {
@@ -607,7 +607,7 @@ pub(super) fn complete_continue_with_auth_command(
 pub(super) fn complete_subresource_auth_terminal(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     pending: crate::conn::PendingSubresourceFetchAuthRequest,
     correlation: Option<PreparedSubresourceCorrelation>,
     out: &mut FetchCommandOutput,
@@ -645,7 +645,7 @@ pub(super) fn complete_subresource_auth_terminal(
     out.extend_background_events(events);
 }
 
-fn finish_continue_subresource_auth(completed: Result<CompletedPageCommand>) -> Result<()> {
+fn finish_continue_subresource_auth(completed: Result<CompletedResourceCommand>) -> Result<()> {
     let completion = completed?;
     completion
         .into_subresource_continue_outcome()

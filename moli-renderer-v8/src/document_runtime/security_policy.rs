@@ -88,6 +88,18 @@ pub(crate) struct DocumentConnectPolicySnapshot {
 }
 
 impl DocumentConnectPolicySnapshot {
+    pub(crate) fn from_worker_policies(
+        enforce_policies: Vec<ContentSecurityPolicy>,
+        report_only_policies: Vec<ContentSecurityPolicy>,
+        reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    ) -> Self {
+        Self {
+            enforce_policies,
+            report_only_policies,
+            reporting_endpoints,
+        }
+    }
+
     pub(crate) fn font_violation(
         &self,
         document_url: &Url,

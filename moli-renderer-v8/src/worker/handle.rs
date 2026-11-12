@@ -708,6 +708,8 @@ impl WorkerRuntimeEvent {
 /// running worker.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerDevToolsHandle {
+    network_cancel: moli_fetch::FetchCancelHandle,
+    isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     worker_tx: mpsc::UnboundedSender<WorkerMessage>,
     inspector_tasks: WorkerInspectorTaskRunner,
 }
@@ -718,9 +720,15 @@ impl WorkerDevToolsHandle {
         isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     ) -> Self {
         Self {
+            network_cancel: moli_fetch::FetchCancelHandle::new(),
+            isolate_handle: Arc::clone(&isolate_handle),
             inspector_tasks: WorkerInspectorTaskRunner::new(wake_tx.clone(), isolate_handle),
             worker_tx: wake_tx,
         }
+    }
+
+    pub(crate) fn network_cancel_handle(&self) -> moli_fetch::FetchCancelHandle {
+        self.network_cancel.clone()
     }
 
     pub(crate) fn inspector_tasks(&self) -> &WorkerInspectorTaskRunner {
@@ -761,10 +769,14 @@ impl WorkerDevToolsHandle {
     }
 
     pub(crate) fn dispose(&self, error: WorkerInspectorError) {
+        self.network_cancel.cancel();
         self.inspector_tasks.dispose(error);
     }
 
     pub(crate) fn terminate_for_devtools(&self) -> bool {
+        if let Some(handle) = self.isolate_handle.lock().as_ref() {
+            handle.terminate_execution();
+        }
         self.dispose(WorkerInspectorError::Closed);
         self.worker_tx.send(WorkerMessage::Terminate).is_ok()
     }
@@ -846,9 +858,9 @@ impl WorkerHandle {
         // Publish the lifecycle transition before interrupting V8. The worker
         // event loop can then reject an already-selected task without relying
         // on ordering between cloned mpsc senders.
-        self.devtools.dispose(WorkerInspectorError::Terminated);
         self.termination_requested.store(true, Ordering::Release);
         self.terminate_execution_if_ready();
+        self.devtools.dispose(WorkerInspectorError::Terminated);
         let _ = self.tx.send(WorkerMessage::Terminate);
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand};
+use moli_core::page::{CompletedResourceCommand, PendingResourceCommand};
 
 use super::state::PreparedSubresourceCorrelation;
 use crate::automation::DevToolsNetworkInterceptId;
@@ -15,7 +15,7 @@ pub(super) enum SubresourceResponseInterception {
 }
 
 pub(crate) struct PreparedSubresourceAutoContinue {
-    pending: PendingPageCommand,
+    pending: PendingResourceCommand,
     correlation: PreparedSubresourceCorrelation,
     binding: TargetRootDocumentProtocolAttachmentIdentity,
 }
@@ -95,12 +95,17 @@ pub(crate) struct SubresourceAutoContinueCompletion {
 }
 
 impl SubresourceAutoContinueCompletion {
-    pub(crate) fn finish(self, conn: &mut CdpConnection, completed: Result<CompletedPageCommand>) {
+    pub(crate) fn finish(
+        self,
+        conn: &mut CdpConnection,
+        completed: Result<CompletedResourceCommand>,
+    ) {
         if !conn.target_root_document_output_identity_is_current(&self.binding) {
             self.correlation.rollback(conn);
             return;
         }
-        let result = completed.and_then(CompletedPageCommand::into_subresource_continue_outcome);
+        let result =
+            completed.and_then(CompletedResourceCommand::into_subresource_continue_outcome);
         if let Err(error) = result {
             self.correlation.rollback(conn);
             tracing::debug!(%error, "automatic subresource continuation failed");

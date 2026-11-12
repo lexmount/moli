@@ -528,6 +528,7 @@ impl PageScriptHost {
             script_url,
             request_client,
         )
+        .with_interception_context(self.native_interception_context())
         .with_script_kind(script_kind)
         .with_module_credentials_mode(module_credentials_mode)
         .with_referrer_policy(response_referrer_policy)

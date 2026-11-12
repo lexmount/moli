@@ -16,7 +16,7 @@ use crate::domains::{activity, network, page};
 use anyhow::Context as _;
 use moli_core::RendererPageCommand;
 use moli_core::page::{
-    CompletedPageCommand, RendererSyntheticResponseBody, SubresourceResourceType,
+    CompletedResourceCommand, RendererSyntheticResponseBody, SubresourceResourceType,
 };
 use moli_url_policy::BrowserUrlScheme;
 use url::Url;
@@ -486,7 +486,7 @@ fn start_devtools_continue_intercepted_request_command(
 
 pub(super) fn complete_continue_request_command(
     conn: &mut CdpConnection,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     state: PendingContinueRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -502,7 +502,7 @@ pub(super) fn complete_continue_request_command(
     }
 }
 
-fn finish_continue_subresource_request(completed: Result<CompletedPageCommand>) -> Result<()> {
+fn finish_continue_subresource_request(completed: Result<CompletedResourceCommand>) -> Result<()> {
     let completion = completed?;
     completion
         .into_subresource_continue_outcome()
@@ -729,11 +729,11 @@ fn start_devtools_fail_intercepted_request_command(
 pub(super) fn complete_fail_request_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     state: PendingFailRequestState,
     out: &mut FetchCommandOutput,
 ) {
-    if let Err(error) = completed.and_then(CompletedPageCommand::into_unit_reply) {
+    if let Err(error) = completed.and_then(CompletedResourceCommand::into_unit_reply) {
         out.push_error(-32000, format!("{error:#}"));
         return;
     }
@@ -1023,11 +1023,11 @@ fn start_devtools_fulfill_intercepted_request_command(
 pub(super) fn complete_fulfill_request_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     state: PendingFulfillRequestState,
     out: &mut FetchCommandOutput,
 ) {
-    if let Err(error) = completed.and_then(CompletedPageCommand::into_unit_reply) {
+    if let Err(error) = completed.and_then(CompletedResourceCommand::into_unit_reply) {
         out.push_error(-32000, format!("{error:#}"));
         return;
     }
@@ -1164,7 +1164,7 @@ pub(super) fn start_dispatch_websocket_message_command(
         cmd.id,
         cmd.session_id,
         PendingFetchCommandOperation::Page {
-            pending,
+            pending: pending.into(),
             finish: PageFetchCompletion::WebSocket { operation },
         },
     ))
@@ -1222,7 +1222,7 @@ pub(super) fn start_close_websocket_command(
         cmd.id,
         cmd.session_id,
         PendingFetchCommandOperation::Page {
-            pending,
+            pending: pending.into(),
             finish: PageFetchCompletion::WebSocket {
                 operation: PendingWebSocketCommandOperation::Close,
             },
@@ -1233,11 +1233,11 @@ pub(super) fn start_close_websocket_command(
 pub(super) fn complete_websocket_page_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     operation: PendingWebSocketCommandOperation,
     out: &mut FetchCommandOutput,
 ) {
-    let completion = match completed {
+    let completion = match completed.and_then(CompletedResourceCommand::into_page_command) {
         Ok(completion) => completion,
         Err(error) => {
             out.push_error(-32000, format!("{error:#}"));
@@ -1568,7 +1568,7 @@ fn continue_response_auth_command(
 pub(super) fn complete_continue_response_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand>,
+    completed: Result<CompletedResourceCommand>,
     state: PendingContinueResponseState,
     out: &mut FetchCommandOutput,
 ) {

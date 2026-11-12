@@ -419,7 +419,7 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
     assert!(matches!(
         record.outcome(),
         SubresourceNetworkOutcome::Failure { error_text }
-            if error_text == "Synchronous XMLHttpRequest interception is not supported"
+            if error_text == "Synchronous XMLHttpRequest interception requires a protocol output owner"
     ));
     assert_eq!(
         post.expect("sync worker XHR interception should post final surface"),

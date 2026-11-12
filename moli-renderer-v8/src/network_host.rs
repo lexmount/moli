@@ -260,3 +260,5 @@ pub(crate) use response::{fetch_response_metadata, set_response_metadata};
 
 #[cfg(test)]
 pub(crate) use response::build_fetch_response_object_from_stream_for_request_mode;
+
+pub(crate) mod controlled_xhr;
