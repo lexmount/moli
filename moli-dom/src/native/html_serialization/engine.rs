@@ -8,6 +8,9 @@ use std::collections::HashSet;
 
 trait HtmlSerializationSink {
     fn push_str(&mut self, value: &str);
+    fn attribute_value(&mut self, value: &str) {
+        escape_html_attribute(value, self);
+    }
     fn push(&mut self, value: char);
     fn limit_exceeded(&self) -> bool;
 }
@@ -62,6 +65,7 @@ struct HtmlSerializationOptions<'a> {
     filtering: bool,
     insertion: Option<HtmlSerializationInsertion<'a>>,
     embedded_documents: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
+    sole_embedded_owner: Option<NativeNodeId>,
 }
 
 impl<'a> HtmlSerializationOptions<'a> {
@@ -77,6 +81,7 @@ impl<'a> HtmlSerializationOptions<'a> {
             filtering: false,
             insertion: None,
             embedded_documents: None,
+            sole_embedded_owner: None,
         }
     }
 
@@ -215,7 +220,44 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
     }
 
     #[inline]
-    fn attribute(&mut self, value: &str) {
+    fn attribute(&mut self, attribute: &super::super::Attribute) {
+        if EMBEDDED && self.attribute_depth == 0 {
+            serialize_attribute(attribute, self.sink);
+        } else {
+            serialize_attribute(attribute, self);
+        }
+    }
+
+    #[inline]
+    fn start_tag(&mut self, name: &str) {
+        if EMBEDDED && self.attribute_depth == 0 {
+            self.sink.push('<');
+            self.sink.push_str(name);
+        } else {
+            self.push('<');
+            self.push_str(name);
+        }
+    }
+
+    #[inline]
+    fn close_tag(&mut self, name: &str) {
+        if EMBEDDED && self.attribute_depth == 0 {
+            self.sink.push_str("</");
+            self.sink.push_str(name);
+            self.sink.push('>');
+        } else {
+            self.push_str("</");
+            self.push_str(name);
+            self.push('>');
+        }
+    }
+}
+
+impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
+    for HtmlEscapingWriter<'_, S, EMBEDDED>
+{
+    #[inline]
+    fn attribute_value(&mut self, value: &str) {
         if EMBEDDED && self.attribute_depth == 0 {
             escape_html_attribute(value, self.sink);
         } else if EMBEDDED {
@@ -235,11 +277,6 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
             escape_html_attribute(value, self);
         }
     }
-}
-
-impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
-    for HtmlEscapingWriter<'_, S, EMBEDDED>
-{
     fn push_str(&mut self, value: &str) {
         if !EMBEDDED || self.attribute_depth == 0 {
             self.sink.push_str(value);
@@ -360,9 +397,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     self.stack.push(HtmlSerializationFrame::Children(root.root));
                 }
                 HtmlSerializationFrame::CloseElement(name) => {
-                    self.out.push_str("</");
-                    self.out.push_str(name);
-                    self.out.push('>');
+                    self.out.close_tag(name);
                 }
                 HtmlSerializationFrame::CloseShadowRootTemplate => self.out.push_str("</template>"),
                 HtmlSerializationFrame::Markup(markup) => self.out.push_str(markup),
@@ -420,8 +455,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     .policy
                     .filter(|_| POLICY)
                     .map_or(&[][..], |p| p.attribute_overrides(id));
-                self.out.push('<');
-                self.out.push_str(element.local_name());
+                self.out.start_tag(element.local_name());
                 if let Some(name) = element.custom_element_is_name()
                     && !element.has_attribute("is")
                     && !overrides
@@ -429,7 +463,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                         .any(|a| a.namespace().is_empty() && a.local_name() == "is")
                 {
                     self.out.push_str(" is=\"");
-                    self.out.attribute(name);
+                    self.out.attribute_value(name);
                     self.out.push('"');
                 }
                 // Filtering happens before lookup; excluded ancestors never
@@ -438,6 +472,11 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     .options
                     .embedded_documents
                     .filter(|_| EMBEDDED)
+                    .filter(|_| {
+                        self.options
+                            .sole_embedded_owner
+                            .is_none_or(|owner| owner == id)
+                    })
                     .and_then(|p| p.embedded_document(id))
                 {
                     self.embedded_attributes.push(EmbeddedAttributes {
@@ -458,7 +497,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             if self.out.limit_exceeded() {
                                 return Ok(());
                             }
-                            serialize_attribute(attribute, &mut self.out);
+                            self.out.attribute(attribute);
                         }
                     } else {
                         for attribute in element.attributes() {
@@ -467,7 +506,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             }
                             let output = replacement_attribute(attribute, overrides);
                             if filter.is_none_or(|p| p.include_attribute(id, output)) {
-                                serialize_attribute(output, &mut self.out);
+                                self.out.attribute(output);
                             }
                         }
                     }
@@ -478,7 +517,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             .any(|a| attribute_key_eq(a, attribute))
                             && filter.is_none_or(|p| p.include_attribute(id, attribute))
                         {
-                            serialize_attribute(attribute, &mut self.out);
+                            self.out.attribute(attribute);
                         }
                     }
                     self.end_open_element(id);
@@ -593,10 +632,10 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             if attribute.name_matches("data-moli-frame-url") {
                 state.wrote_url = true;
                 self.out.push_str(" data-moli-frame-url=\"");
-                self.out.attribute(&state.embedded.url);
+                self.out.attribute_value(&state.embedded.url);
                 self.out.push('"');
             } else if filter.is_none_or(|p| p.include_attribute(state.owner, attribute)) {
-                serialize_attribute(attribute, &mut self.out);
+                self.out.attribute(attribute);
             }
         }
         if !state.wrote_srcdoc {
@@ -606,7 +645,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
         }
         if !state.wrote_url {
             self.out.push_str(" data-moli-frame-url=\"");
-            self.out.attribute(&state.embedded.url);
+            self.out.attribute_value(&state.embedded.url);
             self.out.push('"');
         }
         self.end_open_element(state.owner);
@@ -648,14 +687,11 @@ fn replacement_attribute<'a>(
         .unwrap_or(attribute)
 }
 #[inline(always)]
-fn serialize_attribute<S: HtmlSerializationSink, const EMBEDDED: bool>(
-    attribute: &super::super::Attribute,
-    out: &mut HtmlEscapingWriter<'_, S, EMBEDDED>,
-) {
+fn serialize_attribute<S: HtmlSerializationSink>(attribute: &super::super::Attribute, out: &mut S) {
     out.push(' ');
     attribute.push_html_serialized_name(|part| out.push_str(part));
     out.push_str("=\"");
-    out.attribute(attribute.value());
+    out.attribute_value(attribute.value());
     out.push('"');
 }
 
@@ -854,6 +890,7 @@ where
     options.filtering = policy.is_some_and(|p| p.has_filters());
     options.insertion = policy.and_then(|p| p.insertion());
     options.embedded_documents = embedded_documents;
+    options.sole_embedded_owner = embedded_documents.and_then(|p| p.sole_owner());
     if let Some(limit) = max_bytes {
         let mut out = BoundedHtmlSerialization::new(limit);
         if !serialize_html_into_sink(dom, node_id, options, &mut out)? {
@@ -936,7 +973,7 @@ mod escaping_tests {
                 attribute_depth: depth,
             };
             writer.text(value);
-            writer.attribute(value);
+            writer.attribute_value(value);
             assert_eq!(output, expected, "depth={depth}");
             for limit in [0, expected.len() - 1, expected.len()] {
                 let mut output = BoundedHtmlSerialization::new(limit);
@@ -945,7 +982,7 @@ mod escaping_tests {
                     attribute_depth: depth,
                 };
                 writer.text(value);
-                writer.attribute(value);
+                writer.attribute_value(value);
                 if limit < expected.len() {
                     assert_eq!(
                         output.finish(),
@@ -1007,7 +1044,7 @@ mod escaping_tests {
                     sink: &mut output,
                     attribute_depth: depth,
                 }
-                .attribute(&input);
+                .attribute_value(&input);
                 assert_eq!(output, expected_attribute);
             }
         }

@@ -53,18 +53,15 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> Option<ChildFrameOwnerElementKind> {
-        [
-            ("iframe", ChildFrameOwnerElementKind::Iframe),
-            ("frame", ChildFrameOwnerElementKind::Frame),
-            ("embed", ChildFrameOwnerElementKind::Embed),
-            ("object", ChildFrameOwnerElementKind::Object),
-        ]
-        .into_iter()
-        .find_map(|(name, kind)| {
-            self.dom_host()
-                .is_html_element_named(handle, name)
-                .then_some(kind)
-        })
+        let element = self.dom_host().node(handle)?.as_element()?;
+        let kind = match element.local_name() {
+            "iframe" => ChildFrameOwnerElementKind::Iframe,
+            "frame" => ChildFrameOwnerElementKind::Frame,
+            "embed" => ChildFrameOwnerElementKind::Embed,
+            "object" => ChildFrameOwnerElementKind::Object,
+            _ => return None,
+        };
+        (element.namespace() == "http://www.w3.org/1999/xhtml").then_some(kind)
     }
 
     pub(crate) fn frame_owner_attribute_requires_child_refresh(

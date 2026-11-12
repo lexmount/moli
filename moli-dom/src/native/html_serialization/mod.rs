@@ -70,6 +70,12 @@ pub struct HtmlEmbeddedDocument<'a> {
 
 /// Lookup only: implementations must not load documents or execute scripts.
 pub trait HtmlEmbeddedDocumentProvider {
+    /// If known, this is the only element that can own an embedded Document.
+    /// None leaves ownership unrestricted; the hint is read once per export.
+    fn sole_owner(&self) -> Option<NativeNodeId> {
+        None
+    }
+
     fn embedded_document(&self, owner: NativeNodeId) -> Option<HtmlEmbeddedDocument<'_>>;
 }
 

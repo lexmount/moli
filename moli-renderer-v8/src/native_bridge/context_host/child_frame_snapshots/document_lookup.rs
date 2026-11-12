@@ -6,10 +6,23 @@ use crate::dom::native::{
 use std::borrow::Cow;
 
 impl HtmlEmbeddedDocumentProvider for PageScriptHost {
+    fn sole_owner(&self) -> Option<crate::document_runtime::DomHandle> {
+        if self.child_browsing_context_document_handles.len() != 1 {
+            return None;
+        }
+        self.child_browsing_context_document_handles
+            .keys()
+            .next()
+            .copied()
+    }
+
     fn embedded_document(
         &self,
         owner: crate::document_runtime::DomHandle,
     ) -> Option<HtmlEmbeddedDocument<'_>> {
+        if !self.is_child_browsing_context_host_handle(owner) {
+            return None;
+        }
         let document = self.child_browsing_context_document_handle(owner)?;
         if !self.child_browsing_context_host_is_active(owner) {
             return None;
