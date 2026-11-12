@@ -1492,6 +1492,11 @@ impl PageVm {
         let pending_runtime_work = self
             .vm_mut()
             .has_post_domcontentloaded_runtime_work_for_wait()
+            || self
+                .vm_mut()
+                .has_post_domcontentloaded_load_delaying_runtime_work()
+            || self.vm().has_pending_child_document_lifecycle()
+            || self.vm().has_loading_dedicated_workers()
             || self.vm().has_pending_webcrypto_tasks()
             || self.vm().has_pending_opfs_tasks();
         state.saw_post_domcontentloaded_runtime_work |= pending_runtime_work;

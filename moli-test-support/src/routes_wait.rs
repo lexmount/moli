@@ -302,6 +302,14 @@ pub(super) fn add_wait_routes(router: Router) -> Router {
         )
         .route("/wait-until-delayed-xhr", get(wait_until_delayed_xhr_page))
         .route(
+            "/wait-until-domstable-pending-load",
+            get(wait_until_domstable_pending_load_page),
+        )
+        .route(
+            "/wait-until-domstable-slow-load",
+            get(wait_until_domstable_slow_load),
+        )
+        .route(
             "/wait-until-xhr-location-replace",
             get(wait_until_xhr_location_replace_page),
         )
@@ -693,6 +701,40 @@ async fn wait_until_cookie_fetch_page() -> Response {
         Html(WAIT_UNTIL_COOKIE_FETCH_HTML),
     )
         .into_response()
+}
+
+// Each `kind` starts one load that a `domstable` wait must not outlive: a
+// parser-inserted async script, a starting iframe or a dedicated Worker.
+async fn wait_until_domstable_pending_load_page(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Html<&'static str> {
+    Html(match params.get("kind").map(String::as_str) {
+        Some("async") => {
+            "<!doctype html><p id=s>initial</p><script async src=\"/wait-until-domstable-slow-load?kind=async\"></script>"
+        }
+        Some("frame") => {
+            "<!doctype html><p id=s>initial</p><iframe src=\"/wait-until-domstable-slow-load?kind=frame\"></iframe>"
+        }
+        _ => {
+            "<!doctype html><p id=s>initial</p><script>new Worker('/wait-until-domstable-slow-load?kind=worker').onmessage=e=>{s.textContent=e.data}</script>"
+        }
+    })
+}
+
+async fn wait_until_domstable_slow_load(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    // Longer than the domstable quiet window, so only an explicit pending-load
+    // check keeps the wait open.
+    sleep(Duration::from_millis(1800)).await;
+    match params.get("kind").map(String::as_str) {
+        Some("async") => javascript_response("document.getElementById('s').textContent='async-ran'"),
+        Some("frame") => Html(
+            "<!doctype html><script>parent.document.getElementById('s').textContent='frame-ran'</script>",
+        )
+        .into_response(),
+        _ => javascript_response("postMessage('worker-ran')"),
+    }
 }
 
 async fn wait_until_delayed_xhr_page() -> Html<&'static str> {
