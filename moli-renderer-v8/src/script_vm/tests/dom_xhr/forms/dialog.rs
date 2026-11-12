@@ -221,3 +221,102 @@ fn dialog_form_submission_distinguishes_absent_and_empty_submitter_values() {
         r#"{"absentValue":{"open":false,"returnValue":"previous","valueAttribute":null},"emptyValue":{"open":false,"returnValue":"","valueAttribute":""}}"#
     );
 }
+
+#[test]
+fn dialog_close_restores_saved_focus_without_scrolling() {
+    let mut vm = new_storage_test_vm("https://dialog-focus-restoration.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  body.style.cssText = 'height:3000px;width:3000px';
+  const before = document.createElement('button');
+  const outside = document.createElement('button');
+  const dialog = document.createElement('dialog');
+  const inner = document.createElement('button');
+  dialog.append(inner);
+  body.append(before, outside, dialog);
+
+  for (const method of ['show', 'showModal']) {
+    before.focus();
+    check(document.activeElement === before, method + ' initial focus');
+    dialog[method]();
+    inner.focus();
+    check(document.activeElement === inner, method + ' inner focus');
+    window.scrollTo(11, 19);
+    const position = [scrollX, scrollY].join('|');
+    before.focus = () => { throw Error('author focus expando must not be called'); };
+    dialog.close('result');
+    check(document.activeElement === before, method + ' restores saved focus');
+    check([scrollX, scrollY].join('|') === position, method + ' prevents scrolling');
+    check(dialog.returnValue === 'result', method + ' preserves return value');
+    delete before.focus;
+  }
+
+  before.focus();
+  dialog.show();
+  inner.focus();
+  dialog.show();
+  dialog.close();
+  check(document.activeElement === before, 'repeated show preserves the original saved element');
+
+  before.focus();
+  dialog.show();
+  outside.focus();
+  dialog.close();
+  check(document.activeElement === outside, 'non-modal close preserves focus moved outside');
+
+  outside.focus();
+  dialog.show();
+  inner.focus();
+  dialog.close();
+  check(document.activeElement === outside, 'reopening stores a fresh focused element');
+
+  before.focus();
+  dialog.showModal();
+  inner.focus();
+  inner.blur();
+  dialog.close();
+  check(document.activeElement === before, 'modal close restores even after focus is cleared');
+
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'open'});
+  const shadowButton = document.createElement('button');
+  shadow.append(shadowButton);
+  dialog.append(host);
+  before.focus();
+  dialog.show();
+  shadowButton.focus();
+  dialog.close();
+  check(document.activeElement === before, 'shadow-including descendant restores saved focus');
+
+  const slotHost = document.createElement('div');
+  const slotShadow = slotHost.attachShadow({mode: 'open'});
+  slotShadow.innerHTML = '<dialog><slot></slot></dialog>';
+  const slottedButton = document.createElement('button');
+  slotHost.append(slottedButton);
+  body.append(slotHost);
+  const slotDialog = slotShadow.querySelector('dialog');
+  before.focus();
+  slotDialog.show();
+  slottedButton.focus();
+  slotDialog.close();
+  check(document.activeElement === before, 'slotted descendant restores saved focus');
+
+  before.focus();
+  dialog.show();
+  inner.focus();
+  before.remove();
+  dialog.close();
+  check(document.activeElement !== before, 'removed saved element cannot receive focus');
+  return 'passed';
+})()
+"#
+        )
+        .unwrap(),
+        "passed"
+    );
+}
