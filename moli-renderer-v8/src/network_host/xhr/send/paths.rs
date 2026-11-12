@@ -12,6 +12,12 @@ pub(super) fn record_intercepted_xhr(
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) -> u64 {
+    if host.root_document_lifecycle_identity().is_some()
+        && host.native_interception_output().is_some()
+    {
+        let loader = prepared.resource_loader.request_client().clone();
+        return spawn_network_xhr_fetch(scope, host, xhr, prepared, loader);
+    }
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -101,6 +107,7 @@ pub(super) fn dispatch_service_worker_xhr(
             resource_type: SubresourceResourceType::Xhr,
             request_cookie_report: request_cookie_report.clone(),
         },
+        true,
     );
     let request = host.service_worker_fetch_request(
         client_id,
@@ -282,8 +289,16 @@ pub(super) fn spawn_network_xhr_fetch(
     prepared: PreparedXhrSendRequest,
     request_client: ResourceRequestClient,
 ) -> u64 {
+    let control = if host.should_intercept_subresource(SubresourceResourceType::Xhr) {
+        host.root_document_lifecycle_identity()
+            .zip(host.native_interception_output())
+            .zip(host.document_connect_policy_snapshot_for_owner(prepared.owner))
+    } else {
+        None
+    };
     let request = prepared
         .request()
+        .with_request_mode(moli_fetch::RequestMode::Cors)
         .with_subframe_context(prepared.frame_id.is_some());
 
     let request_cookie_report = observe_subresource_request_cookie_report(
@@ -325,7 +340,53 @@ pub(super) fn spawn_network_xhr_fetch(
             resource_type: SubresourceResourceType::Xhr,
             request_cookie_report,
         },
+        control.is_none(),
     );
+    if let Some(((source_document, output), connect_policy)) = control {
+        let (load, info) = host
+            .pending_subresource_native_inputs(internal_id)
+            .expect("registered XHR must retain its resource authority");
+        let completion_tx = host.resource_completion_sender();
+        let runner = request_client.resource_task_runner();
+        let mut controlled = crate::network_host::controlled_xhr::ControlledXhrLoad {
+            initial_decision: None,
+            request,
+            info,
+            load,
+            cancel: cancel_handle,
+            source_document,
+            output,
+            connect_policy,
+            preflight_headers: prepared.cors_preflight_request_headers,
+        };
+        host.append_live_turn_owner_action(controlled.prepare_initial_pause());
+        runner.spawn(async move {
+            use crate::network_host::controlled_xhr::{
+                ControlledXhrCompletion, ControlledXhrStream,
+            };
+            let completed = controlled
+                .run_with_stream(Some(ControlledXhrStream::new(completion_tx.clone())))
+                .await;
+            let event = match completed {
+                ControlledXhrCompletion::Buffered(completed) => {
+                    crate::types::AsyncSubresourceFetchEvent::InterceptedXhrCompleted(completed)
+                }
+                ControlledXhrCompletion::Streamed {
+                    internal_id,
+                    body_source_id,
+                    result,
+                } => crate::types::AsyncSubresourceFetchEvent::StreamingFinished(
+                    crate::types::AsyncSubresourceStreamingFinished {
+                        internal_id,
+                        body_source_id,
+                        result,
+                    },
+                ),
+            };
+            let _ = completion_tx.send_async_subresource_event(event);
+        });
+        return internal_id;
+    }
     spawn_async_subresource_fetch(
         request_client.resource_task_runner(),
         host.resource_completion_sender(),

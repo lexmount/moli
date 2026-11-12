@@ -8,17 +8,23 @@ use crate::RendererOutputFence;
 use anyhow::{Result, bail};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PageDocumentCommandTarget(moli_renderer_v8::RendererDocumentCommandTarget);
+pub struct PageDocumentCommandTarget {
+    pub(super) target: moli_renderer_v8::RendererDocumentCommandTarget,
+    pub(super) network_pause: Option<moli_renderer_v8::network::ResourceInterceptionPause>,
+}
 
 impl PageDocumentCommandTarget {
     pub(crate) fn new(target: moli_renderer_v8::RendererDocumentCommandTarget) -> Self {
-        Self(target)
+        Self {
+            target,
+            network_pause: None,
+        }
     }
     pub fn document(&self) -> crate::RendererDocumentLifecycleIdentity {
-        self.0.document()
+        self.target.document()
     }
     pub fn start(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
-        self.0
+        self.target
             .enqueue(command)
             .map(PendingPageCommand::from_renderer)
     }

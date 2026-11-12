@@ -380,6 +380,11 @@ async fn event_source_network_fallback_preserves_no_store_with_cache_disabled() 
                     AsyncSubresourceFetchEvent::Completion(completion) => {
                         panic!("expected streaming EventSource fallback, got {completion:?}");
                     }
+                    AsyncSubresourceFetchEvent::InterceptionOutputReady(_)
+                    | AsyncSubresourceFetchEvent::InterceptedXhrCompleted(_)
+                    | AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted { .. } => {
+                        panic!("EventSource fallback must not create XHR interception tasks");
+                    }
                     AsyncSubresourceFetchEvent::ObservedNetworkRecord(_) => {}
                 }
             }

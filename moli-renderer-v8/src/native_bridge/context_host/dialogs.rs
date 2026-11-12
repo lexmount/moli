@@ -52,25 +52,7 @@ impl PageScriptHost {
             self.record_pending_javascript_dialog(target, dialog);
             return None;
         }
-        if let Some(environment) = self.page_script_environment() {
-            // Every related Page shares this renderer thread. Its suspended
-            // creator may still hold the popup's creation in its command
-            // recorder, so publish those predecessors before entering wait.
-            for host in environment.related_document_hosts() {
-                if std::ptr::eq(self, host.as_ptr()) {
-                    continue;
-                }
-                // As in related-Page turn completion, this owner-thread
-                // boundary only publishes records; it runs no Page tasks.
-                let host = unsafe { &*host.as_ptr() };
-                if let Some(environment) = host.page_script_environment() {
-                    host.append_live_turn_output_prefix();
-                    environment
-                        .output_journal()
-                        .publish_pending_before_modal_wait();
-                }
-            }
-        }
+        self.publish_related_document_prefix_before_native_wait();
         let (dialog, modal) = self.javascript_dialog_runtime.begin_modal(dialog);
         if self.append_live_turn_owner_action(
             crate::runtime::RendererOwnerAction::JavaScriptDialog(dialog),

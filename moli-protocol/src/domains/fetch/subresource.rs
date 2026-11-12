@@ -57,6 +57,8 @@ struct PendingSubresourceFetchPauseSource {
     /// A child frame navigation keeps Chromium's document identity: its
     /// Network request id is the loader id of the Document it creates.
     child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
+    native_network: bool,
+    redirect: Option<moli_page_types::NavigationRedirect>,
 }
 
 pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -64,6 +66,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     owner: &CommandOwnerScope,
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
+    network_pause: Option<moli_core::network::ResourceInterceptionPause>,
     child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
     page_source: Option<(
         crate::conn::TargetPageResidenceIdentity,
@@ -80,7 +83,7 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     if source.attachment().page_owner() != &page_owner {
         return network::NetworkPreparedOutputs::default();
     }
-    let Ok(command_target) = conn.capture_document_output_command_target(
+    let Ok(mut command_target) = conn.capture_document_output_command_target(
         owner,
         &page_owner,
         renderer_page,
@@ -88,6 +91,14 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
     ) else {
         return network::NetworkPreparedOutputs::default();
     };
+    let native_network = network_pause.is_some();
+    let redirect = network_pause
+        .as_ref()
+        .and_then(|pause| pause.request_redirect().cloned())
+        .map(Into::into);
+    if let Some(pause) = network_pause {
+        command_target = command_target.with_network_pause(pause);
+    }
     prepare_subresource_fetch_pause_sources(
         conn,
         owner,
@@ -101,6 +112,8 @@ pub(crate) fn subresource_fetch_pause_prepared_outputs_for_renderer_record(
             info,
             detached_parser_script_fetch_continuation: None,
             child_document,
+            native_network,
+            redirect,
         }],
     )
 }
@@ -128,6 +141,8 @@ pub(crate) fn detached_parser_script_fetch_pause_prepared_outputs_for_renderer_r
             info,
             detached_parser_script_fetch_continuation: Some(continuation),
             child_document: None,
+            native_network: false,
+            redirect: None,
         }],
     )
 }
@@ -169,11 +184,22 @@ fn prepare_subresource_fetch_pause_sources(
             info,
             detached_parser_script_fetch_continuation,
             child_document,
+            native_network,
+            redirect,
         } = source;
         let Some((request_id, network_request_id)) =
             conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
             return network::NetworkPreparedOutputs::from_subresource_fetch_pauses_and_continuations(outputs, automatic);
+        };
+        let network_request_id = if native_network {
+            info.network_request_handle
+                .and_then(|handle| {
+                    conn.network_request_id_for_subresource_handle_for_owner(owner, handle)
+                })
+                .unwrap_or(network_request_id)
+        } else {
+            network_request_id
         };
         let (network_request_id, request_loader_id) = match &child_document {
             Some(document) => (document.loader_id.clone(), document.loader_id.clone()),
@@ -206,7 +232,7 @@ fn prepare_subresource_fetch_pause_sources(
             child_fetch_ids = ids;
         }
         if request_stage_pause_sessions.is_empty() {
-            if child_document.is_some() {
+            if child_document.is_some() || native_network {
                 let network_output =
                     network::TargetSubresourceFetchPauseNetworkOutput::from_pending_fetch_info(
                         network_request_id.clone(),
@@ -217,7 +243,8 @@ fn prepare_subresource_fetch_pause_sources(
                         &info,
                     )
                     .with_fetch_request_id(request_id.clone())
-                    .with_child_document(child_document.clone());
+                    .with_child_document(child_document.clone())
+                    .with_redirect(redirect.clone());
                 outputs.push(network::TargetSubresourceFetchPauseOutput::network_only(
                     network_output,
                 ));
@@ -431,7 +458,8 @@ fn prepare_subresource_fetch_pause_sources(
             )
             .with_blocked_intercepts(blocked_intercepts)
             .with_fetch_request_id(request_id.clone())
-            .with_child_document(child_document);
+            .with_child_document(child_document)
+            .with_redirect(redirect);
         let mut payload = subresource_request_paused_payload(
             &request_id,
             &pending,

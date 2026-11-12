@@ -47,30 +47,6 @@ pub struct ResourceRequestClientOwner {
 }
 
 impl ResourceRequestClient {
-    /// Synchronous XHR cannot service the owner-loop pause/continue channel.
-    /// Reject matching URLs before dispatch, including each redirect target,
-    /// while preserving the ordinary network path for unmatched URLs.
-    pub(crate) fn prepare_synchronous_xhr_request(
-        &self,
-        request: Request,
-        class_intercepted: bool,
-    ) -> Result<Request> {
-        let patterns = self
-            .page_network_policy
-            .synchronous_xhr_interception_patterns(class_intercepted);
-        let check = move |url: &url::Url, _: usize| {
-            anyhow::ensure!(
-                !patterns
-                    .iter()
-                    .any(|pattern| moli_fetch::url_pattern_matches(pattern, url.as_str())),
-                "Synchronous XMLHttpRequest interception is not supported"
-            );
-            Ok(())
-        };
-        check(&request.url, 0)?;
-        Ok(request.with_redirect_policy(moli_fetch::RequestRedirectPolicy::new(check)))
-    }
-
     // Standalone clients must return their thread-affine lifetime owner; the
     // owner dereferences to this request-side handle for existing call sites.
     #[allow(clippy::new_ret_no_self)]

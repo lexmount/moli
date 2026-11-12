@@ -1,6 +1,8 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+use super::native_xhr::run_cdp_command_with_network_decisions;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_local_fetch_and_xhr_bypass_request_and_response_interception() {
     for request_stage in ["Request", "Response"] {
@@ -2207,7 +2209,7 @@ async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn matching_synchronous_xhr_is_rejected_before_network_and_disable_restores_it() {
+async fn matching_synchronous_xhr_uses_client_decisions_and_disable_restores_network() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -2270,35 +2272,26 @@ async fn matching_synchronous_xhr_is_rejected_before_network_and_disable_restore
             } catch (error) { return `sync-error:${error.name}`; }
         })()"#;
         ctx.sent.clear();
-        ctx.process_async(
-            json!({"id":38752,"method":"Runtime.evaluate","sessionId":"SID-1",
-            "params":{"expression":expression}}),
-        )
-        .await;
+        let pauses = run_cdp_command_with_network_decisions(&mut ctx,
+            json!({"id":38752,"method":"Runtime.evaluate","sessionId":"SID-1", "params":{"expression":expression}}),
+            |pause| json!({"id":38756,"method":"Fetch.failRequest","sessionId":"SID-1", "params":{"requestId":pause["params"]["requestId"],"errorReason":"Aborted"}}),
+        ).await;
         let result = take_response_by_id(&mut ctx, 38752);
         assert_eq!(
-            result["result"]["result"]["value"], "sync-error:NetworkError",
+            result["result"]["result"]["value"],
+            if auth {
+                "sync:200:network-body"
+            } else {
+                "sync-error:NetworkError"
+            },
             "{result}"
         );
-        assert_eq!(
-            requests.load(Ordering::SeqCst),
-            0,
-            "matching POST must not escape interception"
-        );
-        assert!(
-            ctx.sent
-                .iter()
-                .any(|message| message["method"] == "Network.loadingFailed"
-                    && message["params"]["errorText"]
-                        == "Synchronous XMLHttpRequest interception is not supported"),
-            "{:?}",
-            ctx.sent
-        );
-        assert!(
-            !ctx.sent
-                .iter()
-                .any(|message| message["method"] == "Fetch.requestPaused")
-        );
+        let initial_requests = usize::from(auth || stage == "Response");
+        assert_eq!(requests.load(Ordering::SeqCst), initial_requests);
+        assert_eq!(pauses.len(), usize::from(!auth), "{pauses:?}");
+        if stage == "Response" {
+            assert_eq!(pauses[0]["params"]["responseStatusCode"], 200);
+        }
         ctx.process_async(json!({"id":38753,"method":"Fetch.disable","sessionId":"SID-1"}))
             .await;
         ctx.expect_result(38753, json!({}), Some("SID-1"));
@@ -2312,7 +2305,7 @@ async fn matching_synchronous_xhr_is_rejected_before_network_and_disable_restore
             result["result"]["result"]["value"], "sync:200:network-body",
             "{result}"
         );
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), initial_requests + 1);
     }
     server.abort();
 }
@@ -2364,7 +2357,7 @@ async fn synchronous_worker_xhr_uses_exact_interception_urls() {
     .await;
     ctx.expect_result(38800, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 38801).await;
-    ctx.process_and_wait_for_response_async(json!({"id":38802,"method":"Runtime.evaluate","sessionId":"SID-1",
+    let pauses = run_cdp_command_with_network_decisions(&mut ctx, json!({"id":38802,"method":"Runtime.evaluate","sessionId":"SID-1",
         "params":{"awaitPromise":true,"expression":format!(r#"new Promise((resolve,reject)=>{{
             const worker=new Worker(URL.createObjectURL(new Blob([`
                 const results=[];
@@ -2376,7 +2369,8 @@ async fn synchronous_worker_xhr_uses_exact_interception_urls() {
             `],{{type:'text/javascript'}})));
             worker.onmessage=event=>{{worker.terminate();resolve(JSON.stringify(event.data));}};
             worker.onerror=event=>{{worker.terminate();reject(new Error(event.message));}};
-        }})"#)}})).await;
+        }})"#)}}), |pause| json!({"id":38803,"method":"Fetch.failRequest","sessionId":"SID-1", "params":{"requestId":pause["params"]["requestId"],"errorReason":"Aborted"}})).await;
+    assert_eq!(pauses.len(), 2, "{pauses:?}");
     let result = take_response_by_id(&mut ctx, 38802);
     assert_eq!(
         result["result"]["result"]["value"], r#"["200:allowed","NetworkError","NetworkError"]"#,
@@ -2445,7 +2439,7 @@ async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
     .await;
     ctx.expect_result(38810, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 38811).await;
-    ctx.process_async(json!({"id":38812,"method":"Runtime.evaluate","sessionId":"SID-1",
+    let pauses = run_cdp_command_with_network_decisions(&mut ctx, json!({"id":38812,"method":"Runtime.evaluate","sessionId":"SID-1",
         "params":{"expression":r#"JSON.stringify(['/blocked#ignored','/redirect','/redirect-fragment'].map(path => {
             try {
                 const xhr = new XMLHttpRequest();
@@ -2453,7 +2447,8 @@ async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
                 xhr.send();
                 return xhr.responseText;
             } catch (error) { return error.name; }
-        }))"#}})).await;
+        }))"#}}), |pause| json!({"id":38813,"method":"Fetch.failRequest","sessionId":"SID-1", "params":{"requestId":pause["params"]["requestId"],"errorReason":"Aborted"}})).await;
+    assert_eq!(pauses.len(), 3, "{pauses:?}");
     let result = take_response_by_id(&mut ctx, 38812);
     assert_eq!(
         result["result"]["result"]["value"], r#"["NetworkError","NetworkError","NetworkError"]"#,
@@ -2509,7 +2504,7 @@ async fn popup_synchronous_xhr_does_not_inherit_parent_interception() {
     enable_runtime_async(&mut ctx, "SID-1", 38821).await;
     // Both sends run in the same JS task, before protocol adoption can update
     // the new popup's policy. Only the parent target has enabled interception.
-    ctx.process_and_wait_for_response_async(json!({
+    let pauses = run_cdp_command_with_network_decisions(&mut ctx, json!({
         "id": 38822,
         "method": "Runtime.evaluate",
         "sessionId": "SID-1",
@@ -2530,8 +2525,8 @@ async fn popup_synchronous_xhr_does_not_inherit_parent_interception() {
             popup.close();
             return JSON.stringify({parent, child});
         })()"#}
-    }))
-    .await;
+    }), |pause| json!({"id":38823,"method":"Fetch.failRequest","sessionId":"SID-1", "params":{"requestId":pause["params"]["requestId"],"errorReason":"Aborted"}})).await;
+    assert_eq!(pauses.len(), 1, "the popup must not pause: {pauses:?}");
     let result = take_response_by_id(&mut ctx, 38822);
     assert_eq!(
         result["result"]["result"]["value"],

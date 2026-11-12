@@ -24,7 +24,6 @@ impl Page {
             RendererPageCommand::SetFetchSubresourceInterception {
                 enabled,
                 resource_type,
-                synchronous_xhr_url_patterns: None,
             },
             "set fetch subresource interception",
         )
@@ -39,20 +38,6 @@ impl Page {
         self.start_page_command(RendererPageCommand::SetFetchSubresourceInterception {
             enabled,
             resource_type,
-            synchronous_xhr_url_patterns: None,
-        })
-    }
-
-    pub fn start_set_fetch_subresource_interception_with_patterns(
-        &self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
-        synchronous_xhr_url_patterns: Vec<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetFetchSubresourceInterception {
-            enabled,
-            resource_type,
-            synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns),
         })
     }
 

@@ -283,6 +283,7 @@ fn register_pending_window_xhr_for_test(
             resource_type: crate::types::SubresourceResourceType::Xhr,
             request_cookie_report: None,
         },
+        true,
     );
     (internal_id, owner, realm_token)
 }

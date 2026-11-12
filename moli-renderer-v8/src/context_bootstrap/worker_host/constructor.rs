@@ -318,6 +318,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 resolved_url.to_string(),
                 creator_request_client.clone(),
             )
+            .with_interception_context(host.native_interception_context())
             .with_script_kind(worker_options.worker_type)
             .with_module_credentials_mode(worker_options.credentials_mode.0)
             .with_module_static_import_initiator_url(base_url.clone())
@@ -525,6 +526,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             script_url,
             nested_context.loader.request_client().clone(),
         )
+        .with_interception_context(nested_context.interception_context.clone())
         .with_script_kind(worker_options.worker_type)
         .with_module_credentials_mode(worker_options.credentials_mode.0)
         .with_module_static_import_initiator_url(nested_context.base_url.clone())

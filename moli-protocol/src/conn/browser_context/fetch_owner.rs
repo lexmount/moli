@@ -206,23 +206,14 @@ fn remove_network_intercept_from_browser_context(
             continue;
         }
         let (enabled, resource_type) = target.fetch_owner.subresource_interception_config();
-        let synchronous_xhr_url_patterns =
-            target.fetch_owner.synchronous_xhr_interception_patterns();
         return browser_context
             .start_page_policy_update(
                 &target_id,
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled,
                     resource_type,
-                    synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns.clone()),
                 },
-                |page| {
-                    page.start_set_fetch_subresource_interception_with_patterns(
-                        enabled,
-                        resource_type,
-                        synchronous_xhr_url_patterns.clone(),
-                    )
-                },
+                |page| page.start_set_fetch_subresource_interception(enabled, resource_type),
             )
             .map(Some)
             .context("failed to update page fetch interception");
@@ -464,7 +455,7 @@ impl CdpConnection {
         page_owner: &crate::conn::TargetPageResidenceIdentity,
         target: Option<&moli_core::page::PageDocumentCommandTarget>,
         command: moli_core::RendererPageCommand,
-    ) -> Result<moli_core::page::PendingPageCommand> {
+    ) -> Result<moli_core::page::PendingResourceCommand> {
         let target = target.context(SubresourceRequestNotFound)?;
         if !self.subresource_document_is_current_for_owner(
             owner,
@@ -473,7 +464,7 @@ impl CdpConnection {
         ) {
             return Err(SubresourceRequestNotFound.into());
         }
-        target.start(command)
+        target.start_resource_command(command)
     }
 
     pub(crate) fn subresource_document_is_current(
@@ -1104,7 +1095,6 @@ impl CdpConnection {
             handle_auth_requests,
             patterns,
         );
-        let synchronous_xhr_url_patterns = owner.synchronous_xhr_interception_patterns();
         owner
             .browser_context
             .start_page_policy_update(
@@ -1112,13 +1102,11 @@ impl CdpConnection {
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
-                    synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns.clone()),
                 },
                 |page| {
-                    page.start_set_fetch_subresource_interception_with_patterns(
+                    page.start_set_fetch_subresource_interception(
                         subresource_enabled,
                         subresource_resource_type,
-                        synchronous_xhr_url_patterns.clone(),
                     )
                 },
             )
@@ -1145,7 +1133,6 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
-        let synchronous_xhr_url_patterns = owner.synchronous_xhr_interception_patterns();
         owner
             .browser_context
             .start_page_policy_update(
@@ -1153,13 +1140,11 @@ impl CdpConnection {
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
-                    synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns.clone()),
                 },
                 |page| {
-                    page.start_set_fetch_subresource_interception_with_patterns(
+                    page.start_set_fetch_subresource_interception(
                         subresource_enabled,
                         subresource_resource_type,
-                        synchronous_xhr_url_patterns.clone(),
                     )
                 },
             )
@@ -1183,7 +1168,6 @@ impl CdpConnection {
             }
             return Err(crate::conn::NetworkInterceptNotFound.into());
         };
-        let synchronous_xhr_url_patterns = owner.synchronous_xhr_interception_patterns();
         owner
             .browser_context
             .start_page_policy_update(
@@ -1191,13 +1175,11 @@ impl CdpConnection {
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
-                    synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns.clone()),
                 },
                 |page| {
-                    page.start_set_fetch_subresource_interception_with_patterns(
+                    page.start_set_fetch_subresource_interception(
                         subresource_enabled,
                         subresource_resource_type,
-                        synchronous_xhr_url_patterns.clone(),
                     )
                 },
             )
@@ -1245,8 +1227,13 @@ impl CdpConnection {
         let (pending, (enabled, resource_type), update_required) = self
             .target_session_owner_mut_for_owner(command_owner)?
             .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
-        let policy =
-            self.start_fetch_cleanup_policy(command_owner, update_required, enabled, resource_type);
+        let policy = self.start_fetch_cleanup_policy(
+            command_owner,
+            update_required,
+            &pending,
+            enabled,
+            resource_type,
+        );
         Some((pending, policy))
     }
 
@@ -1260,8 +1247,13 @@ impl CdpConnection {
         let (pending, (enabled, resource_type), update_required) = self
             .target_session_owner_mut_for_owner(command_owner)?
             .disable_target_fetch_and_drain_pending_state();
-        let policy =
-            self.start_fetch_cleanup_policy(command_owner, update_required, enabled, resource_type);
+        let policy = self.start_fetch_cleanup_policy(
+            command_owner,
+            update_required,
+            &pending,
+            enabled,
+            resource_type,
+        );
         Some((pending, policy))
     }
 
@@ -1269,14 +1261,39 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         update_required: bool,
+        pending: &SessionOwnerPendingFetchState,
         enabled: bool,
         resource_type: Option<moli_core::page::SubresourceResourceType>,
     ) -> Option<Result<moli_core::page::PendingPageCommand>> {
         if !update_required {
             return None;
         }
+        // A native pause already carries the target's shared eligibility.
+        // Update that fact without queuing an ACK behind another session's
+        // still-paused synchronous load. Legacy Page APIs read this same fact.
+        let mut native = false;
+        for (_, request) in &pending.3 {
+            if let Some(target) = request.document_command_target() {
+                native |= target.update_native_interception_policy(enabled, resource_type);
+            }
+        }
+        for target in pending
+            .4
+            .iter()
+            .filter_map(|(_, request)| request.command_target.as_ref())
+            .chain(
+                pending
+                    .5
+                    .iter()
+                    .filter_map(|(_, request)| request.command_target.as_ref()),
+            )
+        {
+            native |= target.update_native_interception_policy(enabled, resource_type);
+        }
+        if native {
+            return None;
+        }
         let target = self.target_session_owner_mut_for_owner(owner)?;
-        let synchronous_xhr_url_patterns = target.synchronous_xhr_interception_patterns();
         target
             .browser_context
             .start_page_policy_update(
@@ -1284,13 +1301,8 @@ impl CdpConnection {
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled,
                     resource_type,
-                    synchronous_xhr_url_patterns: Some(synchronous_xhr_url_patterns.clone()),
                 },
-                |page| page.start_set_fetch_subresource_interception_with_patterns(
-                    enabled,
-                    resource_type,
-                    synchronous_xhr_url_patterns.clone(),
-                ),
+                |page| page.start_set_fetch_subresource_interception(enabled, resource_type),
             )
             .transpose()
     }

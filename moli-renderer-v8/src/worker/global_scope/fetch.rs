@@ -60,32 +60,6 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
         .send(WorkerToParentMessage::SubresourceNetwork(record));
 }
 
-pub(in crate::worker) fn record_worker_subresource_success(
-    state: &WorkerGlobalState,
-    document_url: Url,
-    url: Url,
-    method: String,
-    request_headers: moli_fetch::RequestHeaders,
-    request_body: Option<String>,
-    resource_type: SubresourceResourceType,
-    head: ResponseHead,
-    body: SubresourceResponseBody,
-) {
-    record_worker_subresource_success_with_handle(
-        state,
-        None,
-        document_url,
-        url,
-        method,
-        request_headers,
-        request_body.map(bytes::Bytes::from),
-        resource_type,
-        None,
-        head,
-        body,
-    );
-}
-
 pub(in crate::worker) fn record_worker_subresource_success_with_handle(
     state: &WorkerGlobalState,
     request_handle: Option<SubresourceNetworkRequestHandle>,
@@ -524,7 +498,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
 ) {
-    tokio::task::spawn_local(async move {
+    load.task_runner().spawn(async move {
         let loader = load.request_client();
         let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(
@@ -619,6 +593,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             Err(error) => (Err(format!("xhr: failed to build request: {error}")), None),
         };
         let _ = completion_tx.send(WorkerXhrCompletion {
+            native_result: None,
             xhr_id,
             network_request_headers,
             result,
@@ -1089,6 +1064,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1113,6 +1089,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr_auth(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1153,6 +1130,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
@@ -1192,6 +1170,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Streamed {
@@ -1222,6 +1201,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr_response(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1253,6 +1233,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
+        native_result: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
@@ -2027,8 +2008,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.extra_http_headers.clone(),
             state.network_offline,
             state.blocked_url_patterns.clone(),
-            state.fetch_subresource_interception_enabled,
-            state.fetch_subresource_interception_resource_type,
+            state.subresource_interception_config().0,
+            state.subresource_interception_config().1,
             state.policy_context,
         )
     };

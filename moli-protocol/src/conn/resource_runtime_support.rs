@@ -84,8 +84,9 @@ impl CdpConnection {
         engine.set_extra_http_headers(&load_inputs.extra_http_headers);
         engine.set_network_offline(load_inputs.network_offline);
         engine.set_blocked_url_patterns(&load_inputs.blocked_url_patterns);
-        engine.set_synchronous_xhr_interception_patterns(
-            &load_inputs.synchronous_xhr_interception_patterns,
+        engine.set_subresource_interception(
+            load_inputs.fetch_subresource_interception.0,
+            load_inputs.fetch_subresource_interception.1,
         );
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
         engine.set_cache_disabled(load_inputs.cache_disabled);

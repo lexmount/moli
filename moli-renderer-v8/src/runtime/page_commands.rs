@@ -1044,11 +1044,7 @@ impl PageVm {
             RendererPageCommand::SetFetchSubresourceInterception {
                 enabled,
                 resource_type,
-                synchronous_xhr_url_patterns,
             } => {
-                self.request_client.page_network_policy().set_synchronous_xhr_interception_patterns(
-                    synchronous_xhr_url_patterns.as_deref(),
-                );
                 self.set_fetch_subresource_interception(enabled, resource_type);
                 Ok(RendererPageReply::Unit)
             }
