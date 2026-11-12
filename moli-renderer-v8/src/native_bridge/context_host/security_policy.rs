@@ -4,9 +4,9 @@ use crate::types::SubresourceResourceType;
 use crate::{
     content_security_policy::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
-        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyStyleElementRequest, TrustedTypesForScriptRequirements,
-        current_script_violation_location,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
+        TrustedTypesForScriptRequirements, current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -839,43 +839,6 @@ impl PageScriptHost {
         unsafe { &*self.document_runtime }.cross_origin_isolated()
     }
 
-    pub(crate) fn check_service_worker_registration_csp_for_owner(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        owner: OwnerDispatchScope,
-        script_url: &url::Url,
-    ) -> DocumentCspOutcome {
-        let Some(document) = self.owner_document_policy_snapshot(owner) else {
-            return DocumentCspOutcome::Allowed;
-        };
-        let origin = self
-            .window_document_origin(owner)
-            .and_then(|origin| url::Url::parse(&origin).ok());
-        // SAFETY: this host and the DocumentRuntime are owned by the same ScriptVm.
-        let (report_only, enforced) = unsafe { &*self.document_runtime }
-            .service_worker_registration_csp_check_for_document(
-                document.document_handle,
-                &document.document_url,
-                origin.as_ref(),
-                &document.policy_container,
-                script_url,
-            )
-            .into_violations();
-        let host_ptr: *mut Self = self;
-        if let Some(violation) = report_only {
-            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-                scope, host_ptr, owner, &violation,
-            );
-        }
-        let Some(violation) = enforced else {
-            return DocumentCspOutcome::Allowed;
-        };
-        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
-            scope, host_ptr, owner, &violation,
-        );
-        DocumentCspOutcome::Blocked(violation)
-    }
-
     pub(crate) fn window_cross_origin_isolated(&self, owner: OwnerDispatchScope) -> bool {
         self.window_policy_container(owner).is_some_and(|policy| {
             policy.allows_cross_origin_isolation()
@@ -1388,6 +1351,28 @@ impl PageScriptHost {
             Some(violation) => DocumentCspOutcome::Blocked(violation),
             None => DocumentCspOutcome::Allowed,
         }
+    }
+
+    pub(crate) fn check_service_worker_registration_csp_for_owner(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        script_url: &Url,
+    ) -> DocumentCspOutcome {
+        let Some(document) = self.owner_document_policy_snapshot(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let Some(policy) = self.document_connect_policy_snapshot_for_owner(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let check = policy
+            .for_resource_kind(ContentSecurityPolicyResourceKind::WorkerConstructor)
+            .check_url(
+                &document.document_url,
+                script_url,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+            );
+        self.queue_document_connect_csp_check_with_script_location(scope, owner, check)
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(

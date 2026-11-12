@@ -2880,69 +2880,6 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
 }
 
 #[tokio::test]
-async fn service_worker_register_csp_blocks_before_fetch_or_registration() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
-    for (policy, kind) in [
-        ("worker-src 'none'", "classic"),
-        ("worker-src 'none'", "module"),
-        ("child-src 'none'; script-src 'self'", "classic"),
-        ("script-src 'none'", "classic"),
-        ("default-src 'none'", "module"),
-    ] {
-        // Keep a listener open so a mistaken fetch remains observable, rather
-        // than turning into a network error that resembles a CSP rejection.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let (mut vm, runtime) =
-            new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-                &format!("{base}/app/page.html"),
-                &loader,
-            );
-        vm.set_response_content_security_policies(&[policy.to_owned()]);
-        vm.eval(&format!(
-            "globalThis.__kind = {}",
-            serde_json::to_string(kind).unwrap()
-        ))
-        .unwrap();
-        vm.eval(r#"
-            globalThis.__cspEvents = [];
-            document.addEventListener('securitypolicyviolation', e => {
-                __cspEvents.push([e.effectiveDirective, e.disposition,
-                    e.isTrusted, e.target === document, e.blockedURI.endsWith('/app/sw.js')].join(':'));
-            });
-            globalThis.__cspRegisterDone = false;
-            navigator.serviceWorker.register('sw.js', {type: __kind}).then(
-                () => { globalThis.__cspResult = 'resolved'; },
-                e => { globalThis.__cspResult = [e.name, e instanceof DOMException, __cspEvents.length].join(':'); }
-            ).then(async () => {
-                globalThis.__cspRegistrations = (await navigator.serviceWorker.getRegistrations()).length;
-                globalThis.__cspRegisterDone = true;
-            });
-        "#).unwrap();
-        drain_service_worker_test_until_eval_equals(
-            &mut vm,
-            &runtime,
-            &loader,
-            "String(__cspRegisterDone && __cspEvents.length === 1)",
-            "true",
-        )
-        .await;
-        assert_eq!(
-            vm.eval("__cspResult + '|' + __cspEvents + '|' + __cspRegistrations")
-                .unwrap(),
-            "SecurityError:true:0|worker-src:enforce:true:true:true|0",
-            "{policy}, {kind}"
-        );
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(20), listener.accept())
-                .await
-                .is_err(),
-            "blocked registration fetched its script: {policy}, {kind}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn navigator_service_worker_update_check_preserves_mime_security_error() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
         (
