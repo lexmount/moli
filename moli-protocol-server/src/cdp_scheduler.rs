@@ -511,12 +511,6 @@ pub(crate) fn drain_pending_background_events(
 }
 
 impl CdpScheduler {
-    pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.state
-            .with_state(|state| state.has_pending_javascript_dialog())
-            .expect("live protocol actor state")
-    }
-
     pub(crate) fn register_automation_javascript_dialog_handler(
         &mut self,
         protocol: FrontendProtocol,
@@ -1303,10 +1297,55 @@ impl CdpScheduler {
             .await
     }
 
-    pub(crate) fn replace_target_discovery_enabled(&mut self, enabled: bool) -> bool {
+    pub(crate) fn navigation_completion_key(
+        &mut self,
+        context: &moli_protocol::automation::AutomationContext,
+        wait: Option<DevToolsNavigationWait>,
+        result: &Result<AutomationResult, DevToolsError>,
+    ) -> Option<moli_protocol::DevToolsDocumentLifecycleWaitKey> {
+        let milestone = devtools_navigation_lifecycle_milestone(wait)?;
+        let loader = devtools_navigation_result_loader_id(result)?;
         self.state
-            .with_state(|state| state.replace_root_target_discovery_enabled(enabled))
+            .with_state(|state| {
+                state.capture_devtools_document_lifecycle_wait_key(context, &loader, milestone)
+            })
             .expect("live protocol actor state")
+    }
+
+    pub(crate) fn poll_navigation_completion(
+        &mut self,
+        context: &moli_protocol::automation::AutomationContext,
+        key: &moli_protocol::DevToolsDocumentLifecycleWaitKey,
+    ) -> Option<Result<(), DevToolsError>> {
+        let state = self
+            .state
+            .with_state(|state| state.devtools_document_lifecycle_wait_state(context, key))
+            .expect("live protocol actor state");
+        let dialog = self
+            .state
+            .with_state(|state| state.has_pending_javascript_dialog_for_devtools_context(context))
+            .expect("live protocol actor state");
+        if dialog {
+            return Some(Ok(()));
+        }
+        if state == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
+            || (state == moli_protocol::DevToolsDocumentLifecycleWaitState::Reached
+                && key.milestone() == RendererDocumentLifecycleMilestone::Load
+                && self.has_main_document_post_load_work_for_devtools_context(context))
+        {
+            return None;
+        }
+        Some(devtools_document_lifecycle_wait_error(state, key.milestone()).map_or(Ok(()), Err))
+    }
+
+    pub(crate) fn release_navigation_completion(
+        &mut self,
+        context: &moli_protocol::automation::AutomationContext,
+        key: &moli_protocol::DevToolsDocumentLifecycleWaitKey,
+    ) {
+        self.state
+            .with_state(|state| state.release_devtools_document_lifecycle_wait_key(context, key))
+            .expect("live protocol actor state");
     }
 
     pub(crate) async fn execute_automation_command_with_external_load_wait(
@@ -1328,23 +1367,6 @@ impl CdpScheduler {
     ) -> AutomationExecution {
         self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
             receivers, command, None, None, None,
-        )
-        .await
-        .execution
-    }
-
-    pub(crate) async fn execute_automation_command_with_external_load_wait_and_protocol_messages_background_command_id(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        command: AutomationCommand,
-        background_command_id: Option<u64>,
-    ) -> AutomationExecution {
-        self.execute_automation_command_with_external_load_wait_and_protocol_messages_inner(
-            receivers,
-            command,
-            None,
-            background_command_id,
-            None,
         )
         .await
         .execution
@@ -1617,18 +1639,7 @@ impl CdpScheduler {
         let mut out = ProtocolOutputSequence::empty();
         // These commands settle or replace the request being waited on. They
         // must reach their own owner without waiting for that request first.
-        if devtools_navigation_wait(command).is_some()
-            || matches!(
-                command,
-                AutomationCommand::CloseTarget(_)
-                    | AutomationCommand::RemoveBrowserContext(_)
-                    | AutomationCommand::ContinueInterceptedRequest(_)
-                    | AutomationCommand::ContinueInterceptedResponse(_)
-                    | AutomationCommand::ContinueWithAuth(_)
-                    | AutomationCommand::FailInterceptedRequest(_)
-                    | AutomationCommand::FulfillInterceptedRequest(_)
-            )
-        {
+        if devtools_command_settles_pending_navigation(command) {
             return Ok(out);
         }
         while self
@@ -2087,9 +2098,6 @@ impl CdpScheduler {
     pub(crate) fn complete_ready_protocol_residences_after_command(
         &mut self,
     ) -> ProtocolOutputSequence {
-        if self.has_pending_javascript_dialog() {
-            return ProtocolOutputSequence::empty();
-        }
         let snapshot = self.queues.take_command_followup_snapshot();
         self.complete_protocol_residence_snapshot(snapshot)
     }
@@ -2182,12 +2190,6 @@ impl CdpScheduler {
         let mut retained = VecDeque::new();
         let mut blocked_target_ids = Vec::new();
         while let Some(mut residence) = snapshot.pop_front() {
-            if self.has_pending_javascript_dialog() {
-                retained.push_back(residence);
-                retained.append(&mut snapshot);
-                self.queues.restore_snapshot_to_front(retained);
-                return out;
-            }
             // This is an execution dependency of this action, not a barrier
             // on later output from its target. Such output can be needed to
             // finish the very command whose permit the action observes.
@@ -2551,6 +2553,9 @@ impl CdpScheduler {
                 url,
                 has_inflight_navigation,
                 should_wait,
+                navigation_target_id = ?navigation_target_id,
+                source_session_id = ?event.protocol_session_id(),
+                global_navigation_fallback = should_wait && navigation_target_id.is_none(),
             );
         }
         if has_inflight_navigation {
@@ -3363,7 +3368,23 @@ fn renderer_output_transport_terminal_error(
     )
 }
 
-fn devtools_navigation_wait(command: &AutomationCommand) -> Option<DevToolsNavigationWait> {
+fn devtools_command_settles_pending_navigation(command: &AutomationCommand) -> bool {
+    devtools_navigation_wait(command).is_some()
+        || matches!(
+            command,
+            AutomationCommand::CloseTarget(_)
+                | AutomationCommand::RemoveBrowserContext(_)
+                | AutomationCommand::ContinueInterceptedRequest(_)
+                | AutomationCommand::ContinueInterceptedResponse(_)
+                | AutomationCommand::ContinueWithAuth(_)
+                | AutomationCommand::FailInterceptedRequest(_)
+                | AutomationCommand::FulfillInterceptedRequest(_)
+        )
+}
+
+pub(crate) fn devtools_navigation_wait(
+    command: &AutomationCommand,
+) -> Option<DevToolsNavigationWait> {
     match command {
         AutomationCommand::Navigate(command) => Some(command.wait),
         AutomationCommand::Reload(command) => Some(command.wait),

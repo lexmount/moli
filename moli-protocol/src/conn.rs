@@ -82,7 +82,7 @@ mod output;
 mod owned_wait_task;
 mod page_host_scope;
 mod page_state;
-pub(crate) use page_host_scope::ProtocolPageHostScope;
+pub use page_host_scope::ProtocolPageHostScope;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod renderer_output_dependencies;
@@ -1857,9 +1857,16 @@ impl CdpConnection {
     ) -> Option<String> {
         event
             .navigation_gate_target_id()
-            .filter(|target_id| self.browser_context_id_for_target(target_id).is_some())
+            .filter(|target_id| self.target_session_route_for_target_id(target_id).is_some())
             .map(str::to_owned)
-            .or_else(|| self.target_id_for_session_owner(event.protocol_session_id()))
+            .or_else(|| match self.session_route(event.protocol_session_id()) {
+                Some(
+                    CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
+                    | CdpSessionRoute::SharedWorkerTarget { target_id, .. }
+                    | CdpSessionRoute::ServiceWorkerTarget { target_id, .. },
+                ) => Some(target_id),
+                _ => self.target_id_for_session_owner(event.protocol_session_id()),
+            })
     }
 
     pub fn has_inflight_background_navigation_for_devtools_context(

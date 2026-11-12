@@ -74,7 +74,7 @@ async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_rece
             evaluate_window_name_probe(&mut child, 4, "document.body.textContent").await,
             "/two"
         );
-        evaluate_window_name_probe(&mut child, 5, "window.close();true").await;
+        evaluate_window_name_probe(&mut opener, 6, "p.close();true").await;
         wait_for_target_list(addr, "closed popup removed", |targets| {
             !targets.iter().any(|target| target["id"] == child_id)
         })
@@ -513,7 +513,9 @@ async fn saved_popup_locations_cannot_navigate_a_replacement_document() {
             evaluate_window_name_probe(&mut child, 5, "location.href").await,
             format!("{target}/two")
         );
-        evaluate_window_name_probe(&mut child, 6, "window.close();true").await;
+        // Observe cleanup through the live opener. Closing the page whose
+        // WebSocket owns the query can retire that transport before its reply.
+        evaluate_window_name_probe(&mut opener, 5, "p.close();true").await;
         wait_for_target_list(addr, "closed popup removed", |targets| {
             !targets.iter().any(|target| target["id"] == child_id)
         })

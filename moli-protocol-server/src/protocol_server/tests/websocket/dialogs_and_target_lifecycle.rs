@@ -1298,29 +1298,20 @@ async fn websocket_cdp_window_open_self_navigation_reaches_attached_page_session
     let runtime_response = &navigation_messages[runtime_response_index];
     assert!(
         runtime_response.get("result").is_some() && runtime_response.get("error").is_none(),
-        "Runtime.callFunctionOn must complete successfully before its _self navigation is released: {navigation_messages:#?}"
+        "Runtime.callFunctionOn must retain its original successful result across _self navigation: {navigation_messages:#?}"
     );
-    assert!(
-        !navigation_messages[..runtime_response_index]
-            .iter()
-            .any(|message| {
-                let routed_to_target = matches!(
-                    message["sessionId"].as_str(),
-                    Some(session_id)
-                        if session_id == primary_session_id || session_id == attached_session_id
-                );
-                routed_to_target
-                    && (message["method"] == json!("Runtime.executionContextsCleared")
-                        || (message["method"] == json!("Page.frameStartedNavigating")
-                            && message["params"]["url"] == json!(history_url))
-                        || (message["method"] == json!("Page.frameNavigated")
-                            && message["params"]["frame"]["url"] == json!(history_url))
-                        || (message["method"] == json!("Network.requestWillBeSent")
-                            && message["params"]["request"]["url"] == json!(history_url))
-                        || message["method"] == json!("Page.loadEventFired"))
-            }),
-        "Runtime.callFunctionOn response must precede command-caused navigation output on every session attached to the target: {navigation_messages:#?}"
+    assert_eq!(
+        runtime_response["result"]["result"]["value"],
+        json!({"v":"undefined"})
     );
+    // Initiating a navigation does not retire the old realm. Preserve the
+    // actual result/realm-retirement boundary, without gating started/loading
+    // and Network request facts on the Inspector response.
+    assert!(!navigation_messages[..runtime_response_index].iter().any(|message| {
+        matches!(message["sessionId"].as_str(), Some(id) if id == primary_session_id || id == attached_session_id)
+            && (message["method"] == "Runtime.executionContextsCleared"
+                || (message["method"] == "Page.frameNavigated" && message["params"]["frame"]["url"] == history_url))
+    }), "original result must remain ahead of realm retirement: {navigation_messages:#?}");
     if !navigation_messages.iter().any(|message| {
         message["sessionId"].as_str() == Some(attached_session_id.as_str())
             && message["method"] == json!("Page.frameNavigated")
@@ -1671,10 +1662,10 @@ document.querySelector('main').textContent = globalThis.__realmMarker;
                 )
             });
         assert!(
-            [contexts_cleared_index, started_index, navigated_index]
+            [contexts_cleared_index, navigated_index]
                 .into_iter()
                 .all(|navigation_index| response_index < navigation_index),
-            "target {index} must flush its Runtime response before output that destroys the command realm: {navigation_messages:#?}"
+            "target {index} must retain its Runtime result before realm retirement: {navigation_messages:#?}"
         );
         assert!(
             contexts_cleared_index < replacement_context_index,

@@ -53,9 +53,9 @@ impl ProtocolAdapterScheduler {
     pub(crate) fn schedule_turn_if_needed(
         &mut self,
         scheduler: &CdpScheduler,
-        page_javascript_blocked: bool,
+        exclusive_owner_turn: bool,
     ) {
-        if page_javascript_blocked {
+        if exclusive_owner_turn {
             return;
         }
         let step = self.next_scheduler_step(scheduler);

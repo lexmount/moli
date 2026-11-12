@@ -50,6 +50,25 @@ pub(crate) enum AutomationCommandProgress {
 }
 
 impl CdpScheduler {
+    pub(crate) fn automation_page_host_scope(
+        &mut self,
+        context: &moli_protocol::automation::AutomationContext,
+    ) -> Option<moli_protocol::conn::ProtocolPageHostScope> {
+        self.state
+            .with_state(|state| state.automation_page_host_scope(context))
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn automation_page_host_can_start_operation(
+        &mut self,
+        scope: &moli_protocol::conn::ProtocolPageHostScope,
+    ) -> bool {
+        self.state
+            .with_state(|state| state.automation_page_host_can_start_operation(scope))
+            .unwrap_or(false)
+    }
+
     pub(super) async fn execute_owned_automation_command_with_interleaved_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
@@ -184,10 +203,22 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
         command: AutomationCommand,
+        background_command_id: Option<u64>,
     ) -> Result<AutomationCommandProgress, Box<PendingAutomationCommandAdmission>> {
         let step = self
             .state
-            .with_state(|state| state.start_runtime_command_with_navigation_admission(command))
+            .with_state(|state| {
+                if super::devtools_command_settles_pending_navigation(&command) {
+                    Ok(
+                        state.start_automation_command_dispatch_with_background_command_id(
+                            command,
+                            background_command_id,
+                        ),
+                    )
+                } else {
+                    state.start_automation_command_with_navigation_admission(command)
+                }
+            })
             .expect("live protocol actor state")?;
         Ok(self
             .advance_automation_command_step(
@@ -208,7 +239,7 @@ impl CdpScheduler {
     ) -> Result<AutomationCommandProgress, Box<PendingAutomationCommandAdmission>> {
         let step = self
             .state
-            .with_state(|state| state.resume_runtime_command_admission(pending))
+            .with_state(|state| state.resume_automation_command_admission(pending))
             .expect("live protocol actor state")?;
         Ok(self
             .advance_automation_command_step(
@@ -221,7 +252,7 @@ impl CdpScheduler {
             .await)
     }
 
-    pub(crate) fn route_devtools_runtime_protocol_output(
+    pub(crate) fn route_automation_command_output(
         &mut self,
         mut pending: Box<PendingAutomationExecution>,
         output: ProtocolOutputSequence,
@@ -285,7 +316,7 @@ impl CdpScheduler {
             .await
     }
 
-    pub(crate) async fn cancel_devtools_runtime_command(
+    pub(crate) async fn cancel_automation_command_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         mut pending: Box<PendingAutomationExecution>,
