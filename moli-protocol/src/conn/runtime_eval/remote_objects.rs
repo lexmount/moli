@@ -1,4 +1,5 @@
 use super::*;
+use moli_inspector_json::{response_remote_object_ids_in_value, response_result_remote_object_ids};
 
 impl CdpConnection {
     pub(super) fn register_runtime_remote_object_ids_from_response_for_owner(
@@ -11,8 +12,31 @@ impl CdpConnection {
             .response_remote_object_ids(MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "falling back to the structured Inspector ownership scan");
-                runtime_remote_object_ids_in_value(message.value())
+                response_remote_object_ids_in_value(
+                    message.value(),
+                    MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH,
+                )
             });
+        self.register_runtime_remote_object_ids_for_owner(owner, object_ids, object_group);
+    }
+
+    pub(super) fn register_runtime_remote_object_ids_from_response_result_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        result: &Value,
+        object_group: Option<&str>,
+    ) {
+        let object_ids =
+            response_result_remote_object_ids(result, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH);
+        self.register_runtime_remote_object_ids_for_owner(owner, object_ids, object_group);
+    }
+
+    fn register_runtime_remote_object_ids_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        object_ids: Vec<String>,
+        object_group: Option<&str>,
+    ) {
         if owner.session_id().is_some() {
             if let Some(group) = object_group {
                 self.register_runtime_remote_object_ids_for_session_owner_with_group(
@@ -125,45 +149,13 @@ impl CdpConnection {
             .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
     }
 
-    pub(crate) fn register_runtime_remote_object_ids_from_value_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        value: &Value,
-    ) {
-        let object_ids = runtime_remote_object_ids_in_value(value);
-        self.register_runtime_remote_object_ids_for_session_owner(session_id, object_ids);
-    }
-
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         value: &Value,
     ) {
-        if owner.session_id().is_some() {
-            self.register_runtime_remote_object_ids_from_value_for_session_owner(
-                owner.session_id(),
-                value,
-            );
-            return;
-        }
         let object_ids = runtime_remote_object_ids_in_value(value);
-        let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.register_runtime_remote_object_ids(object_ids)
-        });
-    }
-
-    pub(crate) fn register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-        &mut self,
-        session_id: Option<&str>,
-        value: &Value,
-        object_group: &str,
-    ) {
-        let object_ids = runtime_remote_object_ids_in_value(value);
-        self.register_runtime_remote_object_ids_for_session_owner_with_group(
-            session_id,
-            object_ids,
-            object_group,
-        );
+        self.register_runtime_remote_object_ids_for_owner(owner, object_ids, None);
     }
 
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_owner_with_group(
@@ -172,18 +164,8 @@ impl CdpConnection {
         value: &Value,
         object_group: &str,
     ) {
-        if owner.session_id().is_some() {
-            self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-                owner.session_id(),
-                value,
-                object_group,
-            );
-            return;
-        }
         let object_ids = runtime_remote_object_ids_in_value(value);
-        let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.register_runtime_remote_object_ids_with_group(object_ids, object_group)
-        });
+        self.register_runtime_remote_object_ids_for_owner(owner, object_ids, Some(object_group));
     }
 
     pub(crate) fn runtime_remote_object_group_for_session_owner(

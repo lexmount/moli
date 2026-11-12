@@ -915,8 +915,8 @@ fn devtools_session_output_preserves_remote_object_group_projection() {
     let session_id = Some("SID-session-projection");
     let attachment_id = RendererAgentAttachmentId::allocate();
 
-    conn.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-        session_id,
+    conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+        &CommandOwnerScope::for_session("SID-session-projection"),
         &json!({ "objectId": "nested-parent-object" }),
         "nested-object-group",
     );
@@ -1426,6 +1426,83 @@ fn completed_runtime_await_registers_raw_response_groups_without_materializing()
         );
     }
     assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-object"));
+}
+
+#[test]
+fn completed_runtime_await_response_containers_preserve_user_data_object_groups() {
+    #[derive(Debug)]
+    enum Container {
+        Raw,
+        Parsed,
+        Typed,
+    }
+    for container in [Container::Raw, Container::Parsed, Container::Typed] {
+        for group in [Some("group-B"), None] {
+            for session_id in [Some("SID-response"), None] {
+                let mut conn = CdpConnection::default();
+                let mut context = BrowserContext::new("BID-response".to_owned());
+                context.set_active_target_id("TID-response".to_owned());
+                context.attach_active_session("SID-response".to_owned());
+                conn.install_browser_context_fixture_for_test(context);
+                let owner = CommandOwnerScope::capture(&conn, session_id);
+                conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                    &owner,
+                    &json!({"objectId":"existing-handle"}),
+                    "group-A",
+                );
+                conn.try_register_pending_inspector_await_with_object_group_for_owner(
+                    45, &owner, group,
+                )
+                .unwrap();
+                let entry = conn
+                    .remove_pending_inspector_await_for_owner(45, &owner)
+                    .unwrap();
+                let body = json!({
+                    "result": {"type":"object", "objectId":"actual", "value": {
+                        "objectId":"existing-handle", "nested":{"errorObjectId":"user-only"}
+                    }},
+                    "exceptionDetails":{"exception":{"type":"object", "objectId":"exception"}}
+                });
+                let envelope = json!({"id":45,"result":body});
+                let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
+                let event = match container {
+                    Container::Raw => BackgroundProtocolEvent::immediate(raw.clone()),
+                    Container::Parsed => BackgroundProtocolEvent::immediate(envelope),
+                    Container::Typed => {
+                        BackgroundProtocolEvent::command_success(Some(45), session_id, body)
+                    }
+                };
+                conn.apply_completed_pending_inspector_await_entry(&owner, entry, &[event]);
+                assert_eq!(
+                    conn.runtime_remote_object_group_for_owner(&owner, "existing-handle")
+                        .as_deref(),
+                    Some("group-A"),
+                    "{container:?}, {group:?} must not reassign a handle from user data"
+                );
+                assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-only"));
+                for id in ["actual", "exception"] {
+                    assert!(conn.runtime_remote_object_id_known_for_owner(&owner, id));
+                    assert_eq!(
+                        conn.runtime_remote_object_group_for_owner(&owner, id)
+                            .as_deref(),
+                        group
+                    );
+                }
+                if let Some(group) = group {
+                    conn.unregister_runtime_remote_object_group_for_owner(&owner, group);
+                    assert!(
+                        conn.runtime_remote_object_id_known_for_owner(&owner, "existing-handle")
+                    );
+                    assert_eq!(
+                        conn.runtime_remote_object_group_for_owner(&owner, "existing-handle")
+                            .as_deref(),
+                        Some("group-A")
+                    );
+                }
+                assert!(!raw.is_materialized());
+            }
+        }
+    }
 }
 
 #[test]

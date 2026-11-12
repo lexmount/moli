@@ -208,10 +208,10 @@ fn register_helper_result(
     if let (Some(group), BackgroundCommandResponsePayload::Success { result }) =
         (object_group, response)
     {
-        conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+        conn.register_runtime_remote_object_ids_from_response_result_for_owner(
             identity.scope.owner(),
             result,
-            group,
+            Some(group),
         );
     }
 }

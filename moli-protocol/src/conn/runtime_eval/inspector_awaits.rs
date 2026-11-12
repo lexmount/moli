@@ -970,49 +970,34 @@ impl CdpConnection {
         entry: PendingInspectorAwait,
         protocol_events: &[BackgroundProtocolEvent],
     ) {
-        if let Some(object_group) = entry.object_group() {
-            for event in protocol_events {
-                if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
-                    event.command_response_payload_ref()
-                {
-                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+        let object_group = entry.object_group();
+        for event in protocol_events {
+            if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
+                event.command_response_payload_ref()
+            {
+                self.register_runtime_remote_object_ids_from_response_result_for_owner(
+                    owner,
+                    result,
+                    object_group,
+                );
+            } else if let Some(message) = event.protocol_json() {
+                if message.id_u64().is_some() {
+                    self.register_runtime_remote_object_ids_from_response_for_owner(
                         owner,
-                        result,
+                        message,
                         object_group,
                     );
-                } else if let Some(message) = event.protocol_json() {
-                    if message.id_u64().is_some() {
-                        self.register_runtime_remote_object_ids_from_response_for_owner(
-                            owner,
-                            message,
-                            Some(object_group),
-                        );
-                    } else {
-                        self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                            owner,
-                            message.value(),
-                            object_group,
-                        );
-                    }
-                }
-            }
-        } else {
-            for event in protocol_events {
-                if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
-                    event.command_response_payload_ref()
-                {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, result);
-                } else if let Some(message) = event.protocol_json() {
-                    if message.id_u64().is_some() {
-                        self.register_runtime_remote_object_ids_from_response_for_owner(
-                            owner, message, None,
-                        );
-                    } else {
-                        self.register_runtime_remote_object_ids_from_value_for_owner(
-                            owner,
-                            message.value(),
-                        );
-                    }
+                } else if let Some(group) = object_group {
+                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                        owner,
+                        message.value(),
+                        group,
+                    );
+                } else {
+                    self.register_runtime_remote_object_ids_from_value_for_owner(
+                        owner,
+                        message.value(),
+                    );
                 }
             }
         }
