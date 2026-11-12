@@ -1,8 +1,8 @@
 use crate::document_runtime::DomHandle;
 use crate::parser_script::payload::{
     ParserClassicScriptMetadata, ParserClassicScriptSourceFailure,
-    ParserClassicScriptSourceIdentity, ParserClassicScriptSourceResult,
-    ParserExecutableClassicScript, ParserPreparedClassicScript, ParserReadyClassicScript,
+    ParserClassicScriptSourceIdentity, ParserExecutableClassicScript, ParserPreparedClassicScript,
+    ParserReadyClassicScript,
 };
 use crate::types::SharedNavigationResponseResult;
 use url::Url;
@@ -383,13 +383,6 @@ impl ParserPendingClassicScriptSourceLoadCompletionRecord {
     pub(crate) fn source_identity(&self) -> ParserClassicScriptSourceIdentity {
         self.source_identity
     }
-
-    pub(crate) fn into_source_result(
-        self,
-        result: Result<String, String>,
-    ) -> ParserClassicScriptSourceResult {
-        ParserClassicScriptSourceResult::from_identity_result(self.source_identity, result)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -462,6 +455,7 @@ pub(crate) struct ParserPendingClassicScriptSourceResultAction<'a> {
     network_result: Option<&'a SharedNavigationResponseResult>,
     network_record_urls: Option<ParserClassicScriptNetworkRecordUrls>,
     network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
+    source_script: Option<Box<crate::planning::PreparedScript>>,
 }
 
 impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
@@ -470,17 +464,23 @@ impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
         network_result: Option<&'a SharedNavigationResponseResult>,
         network_record_urls: Option<ParserClassicScriptNetworkRecordUrls>,
         network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
+        source_script: Option<crate::planning::PreparedScript>,
     ) -> Self {
         Self {
             notification,
             network_result,
             network_record_urls,
             network_request_handle,
+            source_script: source_script.map(Box::new),
         }
     }
 
     pub(crate) fn notification(&self) -> ParserPendingClassicScriptNotification {
         self.notification
+    }
+
+    pub(crate) fn source_script(&self) -> Option<&crate::planning::PreparedScript> {
+        self.source_script.as_deref()
     }
 
     pub(crate) fn network_request_handle(

@@ -17,8 +17,17 @@ async fn retired_announced_child_classic_completion_does_not_replay_network() {
                 load_id: 7,
                 handle: NodeId::new(401),
                 script_handle: NodeId::new(402),
-                result: Ok("globalThis.__retiredScriptRan = true".to_owned()),
-                network_result: Some(Arc::new(Err("late transport completion".to_owned()))),
+                outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                    source_result: Ok("globalThis.__retiredScriptRan = true".to_owned()),
+                    source_bytes: None,
+                    network_result: Some(Arc::new(Err("late transport completion".to_owned()))),
+                    muted_errors: false,
+                    fetch_timing: None,
+                    network_request_handle: Some(
+                        crate::types::SubresourceNetworkRequestHandle::new(77),
+                    ),
+                },
                 network_attribution: ChildClassicScriptNetworkAttribution {
                     // The original admission was already retired; its handle
                     // must never become a new request in this Document.
@@ -80,10 +89,18 @@ async fn stale_child_classic_completion_preserves_network_without_document_activ
                 load_id: 7,
                 handle: child_handle,
                 script_handle: crate::dom::native::NativeNodeId::new(402),
-                result: Ok("globalThis.__staleChildClassicRan = true".to_owned()),
-                network_result: Some(Arc::new(Err(
-                    "stale child classic request failed".to_owned()
-                ))),
+                outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                    source_result: Ok("globalThis.__staleChildClassicRan = true".to_owned()),
+                    source_bytes: None,
+                    fetch_timing: None,
+                    network_result: Some(Arc::new(Err(
+                        "stale child classic request failed".to_owned()
+                    ))),
+                    muted_errors: false,
+
+                    network_request_handle: None,
+                },
                 network_attribution: ChildClassicScriptNetworkAttribution {
                     request_handle: None,
                     timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(
@@ -183,8 +200,16 @@ async fn child_classic_completion_queue_runs_exactly_one_terminal_per_owner_turn
             load_id,
             handle: child_handle,
             script_handle: crate::dom::native::NativeNodeId::new(script_handle),
-            result: Ok(format!("globalThis.__staleChildClassic{load_id} = true")),
-            network_result: None,
+            outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                source_result: Ok(format!("globalThis.__staleChildClassic{load_id} = true")),
+                source_bytes: None,
+                fetch_timing: None,
+                network_result: None,
+                muted_errors: false,
+
+                network_request_handle: None,
+            },
             network_attribution: ChildClassicScriptNetworkAttribution {
                 request_handle: None,
                 timing: crate::context_bootstrap::FetchResourceTiming::from_captured_initiator(

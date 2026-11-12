@@ -3,6 +3,7 @@
 use std::convert::TryInto;
 
 use crate::Context;
+use crate::Data;
 use crate::Local;
 use crate::Message;
 use crate::Object;
@@ -22,6 +23,7 @@ unsafe extern "C" {
     context: *const Context,
   ) -> *const String;
   fn v8__Message__GetScriptResourceName(this: *const Message) -> *const Value;
+  fn v8__Message__GetHostDefinedOptions(this: *const Message) -> *const Data;
   fn v8__Message__GetLineNumber(
     this: *const Message,
     context: *const Context,
@@ -288,6 +290,15 @@ impl Message {
     scope: &PinScope<'s, '_>,
   ) -> Option<Local<'s, Value>> {
     unsafe { scope.cast_local(|_| v8__Message__GetScriptResourceName(self)) }
+  }
+
+  /// Returns the host-defined options of the script that caused this message.
+  #[inline(always)]
+  pub fn get_host_defined_options<'s>(
+    &self,
+    scope: &PinScope<'s, '_>,
+  ) -> Option<Local<'s, Data>> {
+    unsafe { scope.cast_local(|_| v8__Message__GetHostDefinedOptions(self)) }
   }
 
   /// Returns the number, 1-based, of the line where the error occurred.
