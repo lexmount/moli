@@ -2235,20 +2235,7 @@ impl CdpScheduler {
         match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => self
                 .state
-                .with_state(|state| {
-                    let mut targets = work.output.navigation_gate_target_ids(&state);
-                    if targets.is_empty() && !work.output.is_empty() {
-                        return targets;
-                    }
-                    if let Some(insertion) = &work.insertion {
-                        let after_targets = insertion.after.navigation_gate_target_ids(&state);
-                        if after_targets.is_empty() && !insertion.after.is_empty() {
-                            return Vec::new();
-                        }
-                        append_unique_target_ids(&mut targets, after_targets);
-                    }
-                    targets
-                })
+                .with_state(|state| work.output.navigation_gate_target_ids(&state))
                 .expect("live protocol actor state"),
             ProtocolSchedulerResidence::ProtocolWork { work, .. } => work
                 .navigation_gate_target_id()
@@ -2324,13 +2311,6 @@ impl CdpScheduler {
                 .expect("live protocol actor state")
                 == ProtocolSchedulerStep::Wait
             {
-                // An independent Native insertion can still need owner work
-                // behind this source. Let that work progress; the delivery
-                // ledger keeps later same-stream and child output behind S.
-                if matches!(residence, ProtocolSchedulerResidence::RendererOutputPublication(work) if work.insertion.is_some())
-                {
-                    continue;
-                }
                 if target_ids.is_empty() {
                     return None;
                 }
@@ -3180,25 +3160,6 @@ impl CdpScheduler {
                 out.append(self.route_background_events_around_inflight_navigation(
                     work.output.into_background_events(),
                 ));
-                if let Some(insertion) = work.insertion {
-                    let inserted = self.queues.take_inserted_renderer_output(
-                        work.renderer_output_cursor,
-                        insertion.boundary.cursor(),
-                    );
-                    for residence in inserted {
-                        out.append(self.complete_protocol_residence(residence));
-                    }
-                    assert!(
-                        self.queues.renderer_insertion_is_drained(
-                            work.renderer_output_cursor,
-                            insertion.boundary.cursor(),
-                        ),
-                        "source output cannot finish before its inserted Native members"
-                    );
-                    out.append(self.route_background_events_around_inflight_navigation(
-                        insertion.after.into_background_events(),
-                    ));
-                }
                 self.queues
                     .finish_renderer_output_delivery(work.renderer_output_cursor);
             }

@@ -91,13 +91,11 @@ enum ProtocolWorkExecution {
     AfterCommandOutput(Box<crate::CommandResponseFlushContext>),
 }
 
-/// Frozen protocol output with separate whole-batch dependencies and an
-/// optional position for an independently transported Native publication.
+/// Frozen protocol output with exact whole-batch projection dependencies.
 #[derive(Debug)]
 pub struct RendererFencedProtocolOutput {
     pub events: Vec<BackgroundProtocolEvent>,
     pub predecessors: Vec<RendererOutputFence>,
-    pub insertion_boundary: Option<RendererOutputFence>,
     target_id: Option<String>,
 }
 
@@ -220,7 +218,6 @@ impl ProtocolSchedulerWork {
                 RendererFencedProtocolOutput {
                     events,
                     predecessors,
-                    insertion_boundary: None,
                     target_id,
                 },
             ),
@@ -234,17 +231,6 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::RendererFencedOutput(output) => Ok(output),
             _ => Err(Box::new(self)),
         }
-    }
-
-    pub(crate) fn with_renderer_insertion_boundary(
-        mut self,
-        boundary: RendererOutputFence,
-    ) -> Self {
-        let ProtocolSchedulerWorkPayload::RendererFencedOutput(output) = &mut self.payload else {
-            unreachable!("only materialized output has a Native insertion position");
-        };
-        output.insertion_boundary = Some(boundary);
-        self
     }
 
     /// A materialized observation retains its original concrete renderer

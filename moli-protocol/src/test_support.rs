@@ -193,29 +193,20 @@ pub fn renderer_fenced_output_work(
     )
 }
 
+pub fn protocol_work_after_renderer_delivery(
+    mut work: ProtocolSchedulerWork,
+    predecessor: moli_core::RendererOutputCursor,
+) -> ProtocolSchedulerWork {
+    work.bind_renderer_delivery_predecessor(predecessor);
+    work
+}
+
 pub fn protocol_work_from_renderer_output(
     mut work: ProtocolSchedulerWork,
     source: moli_core::RendererOutputCursor,
 ) -> ProtocolSchedulerWork {
     work.bind_renderer_output_source(source);
     work
-}
-
-/// Finishes a source projection through the production before/boundary/after
-/// handoff, including the source on any fenced output it publishes.
-pub fn renderer_projection_with_insertion_boundary(
-    conn: &mut CdpConnection,
-    source: moli_core::RendererOutputCursor,
-    before: Vec<crate::BackgroundProtocolEvent>,
-    boundary: moli_core::RendererOutputFence,
-    after: Vec<crate::BackgroundProtocolEvent>,
-) -> (
-    Vec<crate::BackgroundProtocolEvent>,
-    Vec<crate::CdpSchedulerEvent>,
-) {
-    let mut context = crate::CommandDispatchContext::default();
-    context.append_renderer_fenced_protocol_events(before, Some(boundary), after);
-    conn.finish_renderer_output_projection_for_test_support(context, source)
 }
 
 pub fn command_completion_with_scheduler_events(
