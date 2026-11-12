@@ -1514,9 +1514,13 @@ impl HtmlPreloadScannerSink {
         if !is_stylesheet && !is_style_preload {
             return;
         }
-        if !moli_web_mime::is_css_stylesheet_type_hint(
-            html_attr_value(&tag.attrs, "type").as_deref(),
-        ) {
+        let type_hint = html_attr_value(&tag.attrs, "type");
+        let supported_type = if is_stylesheet {
+            moli_web_mime::is_css_stylesheet_type_hint(type_hint.as_deref())
+        } else {
+            crate::link_as::LinkAsDestination::Style.preload_type_matches(type_hint.as_deref())
+        };
+        if !supported_type {
             return;
         }
         let Some(href) = html_attr_value(&tag.attrs, "href") else {
