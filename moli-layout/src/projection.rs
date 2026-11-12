@@ -1080,6 +1080,13 @@ impl<N: Copy + Debug + Eq + Hash> CoordinateSpaceResolver<'_, N> {
             self.resolve(parent.index())?;
         }
         let sticky = sticky::prepare_constraints(index, self.world, self.scroll_extents)?;
+        if let Some(constraints) = &sticky
+            && constraints.scroll_container != self.world.root
+        {
+            // Scroll ancestry need not equal numeric layout ancestry. Resolve
+            // the actual referenced space, retaining the same cycle checks.
+            self.resolve(constraints.scroll_container.index())?;
+        }
         let (placement, is_viewport_anchored) = self.resolve_placement(index, sticky.as_ref())?;
         let local_delta = placement.local_sticky_delta_in_parent;
         let space = ProjectedCoordinateSpace {
@@ -1287,5 +1294,90 @@ where
         padding: padding_box,
         border: border_box,
         margin: margin_box,
+    }
+}
+
+#[cfg(test)]
+mod dependency_tests {
+    use super::*;
+
+    #[test]
+    fn sticky_resolves_a_scroll_space_outside_its_layout_parent_chain() {
+        fn box_for(id: usize) -> crate::world::LayoutBox<usize> {
+            LayoutWorld::new_box(
+                Some(id),
+                None,
+                None,
+                id.to_string(),
+                None,
+                None,
+                None,
+                crate::LayoutBoxKind::PrincipalBlock,
+                crate::ResolvedLayoutStyle::synthetic(
+                    crate::LayoutDisplay::Block,
+                    taffy::Style::default(),
+                    crate::PaintColor::TRANSPARENT,
+                ),
+                None,
+            )
+        }
+        let mut world = LayoutWorld::new(box_for(0), false);
+        world.boxes.extend([box_for(1), box_for(2)]);
+        for layout_box in &mut world.boxes {
+            layout_box.final_layout.size = taffy::Size {
+                width: 1000.0,
+                height: 1000.0,
+            };
+        }
+        let root = LayoutBoxId::from_index(0);
+        let scroller = LayoutBoxId::from_index(2);
+        world.boxes[1].parent = Some(scroller);
+        world.boxes[1].layout_parent = Some(root);
+        world.boxes[1].style = crate::ResolvedLayoutStyle::synthetic(
+            crate::LayoutDisplay::Block,
+            taffy::Style {
+                inset: taffy::Rect {
+                    top: taffy::style_helpers::length(10.0),
+                    ..taffy::Rect::auto()
+                },
+                ..taffy::Style::default()
+            },
+            crate::PaintColor::TRANSPARENT,
+        )
+        .with_position(crate::LayoutPosition::Sticky);
+        world.boxes[1].final_layout.size = taffy::Size {
+            width: 20.0,
+            height: 20.0,
+        };
+        world.boxes[2].layout_parent = Some(root);
+        world.boxes[2].parent = Some(root);
+        world.boxes[2].final_layout.location.y = 40.0;
+        let mut projection = OutputProjection::new(&world, LayoutViewport::new(100, 100, 1.0));
+        projection.scroll_extents = (0..3)
+            .map(|index| LayoutScrollExtent {
+                scrollport: LayoutRect::new(0.0, 0.0, 100.0, 100.0),
+                scrollable_overflow: LayoutRect::ZERO,
+                scroll_size: LayoutSize::new(100.0, 100.0),
+                applied_offset: LayoutPoint::ZERO,
+                minimum_offset: LayoutPoint::ZERO,
+                maximum_offset: LayoutPoint::ZERO,
+                is_scroll_container: index == 2,
+                allows_user_scroll_x: false,
+                allows_user_scroll_y: false,
+                clips_overflow: false,
+                horizontal_scrollbar: None,
+                vertical_scrollbar: None,
+                scrollbar_corner: None,
+                scrollbar_colors: None,
+            })
+            .collect();
+        projection.build_coordinate_spaces().unwrap();
+        let sticky = &projection.coordinate_spaces[2].layout;
+        assert_eq!(
+            sticky.local_to_viewport.map_point(LayoutPoint::ZERO).y,
+            50.0
+        );
+        // The output pass borrows the numeric world and never patches locations.
+        assert_eq!(world.boxes[1].final_layout.location.y, 0.0);
     }
 }
