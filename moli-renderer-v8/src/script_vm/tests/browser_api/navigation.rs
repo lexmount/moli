@@ -6,6 +6,7 @@ mod element_navigation;
 mod history_api;
 #[path = "navigation/history_traversal.rs"]
 mod history_traversal;
+mod joint_traversal_trackers;
 mod main_beforeunload;
 #[path = "navigation/navigate_event.rs"]
 mod navigate_event;

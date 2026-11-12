@@ -108,6 +108,7 @@ fn capture_participants<'s>(
                     .map(|entry| entry.borrow().url.clone())
                     .unwrap_or_default(),
                 destination: entry_reference(scope, target.history, target.target_index)?,
+                results: Vec::new(),
                 outcome: Default::default(),
             })
         })
@@ -118,31 +119,8 @@ pub(super) fn execute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     plan: JointTraversalPlan<'s>,
     initiator_info: Option<v8::Local<'s, v8::Value>>,
-    mut results: Vec<PendingNavigationResult>,
+    results: Vec<PendingNavigationResult>,
 ) {
-    let mut upcoming_info = None;
-    if results.is_empty()
-        && let Some(target) = plan
-            .targets
-            .iter()
-            .find(|target| target.owner.strict_equals(plan.owner.into()))
-        && let Some(entry) = entry_reference(scope, target.history, target.target_index)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        if let Some(target) = window_task_target_for_runtime_owner(scope, host, target.owner)
-            && let Some((info, upcoming)) =
-                host.take_upcoming_history_traversal_tracker(target, entry.key.as_str())
-        {
-            upcoming_info = info;
-            results = upcoming;
-        }
-    }
-    let initiator_info = initiator_info.or_else(|| {
-        upcoming_info
-            .as_ref()
-            .map(|info| v8::Local::new(scope, info))
-    });
     let captured = capture_participants(scope, &plan).and_then(|participants| {
         let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
         let owner = window_task_target_for_runtime_owner(scope, host, plan.owner)?.owner();
@@ -218,8 +196,33 @@ pub(super) fn execute<'s>(
             abort(scope, &admission, None);
             return;
         }
-        // Only the initiating Navigation owns this API method's info.
-        let info = initiator_info.filter(|_| target.owner.strict_equals(plan.owner.into()));
+        // Each changing Window promotes its own upcoming tracker immediately
+        // before navigate. Another Window can initiate the shared traversal;
+        // its tracker and info must not replace this Window's API method.
+        let initiator = target.owner.strict_equals(plan.owner.into());
+        if initiator {
+            admission.participants[index].results = std::mem::take(&mut admission.results);
+        }
+        let mut upcoming_info = None;
+        if navigation.is_some()
+            && admission.participants[index].results.is_empty()
+            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        {
+            let host = unsafe { &mut *host_ptr };
+            let key = &admission.participants[index].destination.key;
+            if let Some(target) = window_task_target_for_runtime_owner(scope, host, target.owner)
+                && let Some((info, upcoming)) =
+                    host.take_upcoming_history_traversal_tracker(target, key.as_str())
+            {
+                upcoming_info = info;
+                admission.participants[index].results = upcoming;
+            }
+        }
+        let info = initiator_info.filter(|_| initiator).or_else(|| {
+            upcoming_info
+                .as_ref()
+                .map(|info| v8::Local::new(scope, info))
+        });
         let outcome = navigation
             .map(|navigation| {
                 dispatch_navigation_traverse_event_with_outcome(
@@ -261,17 +264,12 @@ pub(super) fn execute<'s>(
             target.target_index,
         ) && let Some(navigation) = navigation
         {
-            let results = if target.owner.strict_equals(plan.owner.into()) {
-                admission.results.as_slice()
-            } else {
-                &[]
-            };
             super::navigation_result::track_cross_document_traversal_navigation(
                 scope,
                 navigation,
                 outcome.signal,
                 url.as_str(),
-                results,
+                &admission.participants[index].results,
             );
         }
         if let Some(promise) = outcome.precommit_result {
@@ -397,6 +395,7 @@ fn settle_aborted_admission<'s>(
     for participant in &admission.participants {
         // A participant that has not dispatched navigate has no event to abort.
         if participant.outcome.signal.is_none() {
+            results::reject_pending_navigation_results(scope, &participant.results, error);
             continue;
         }
         let navigation = participant
@@ -422,6 +421,7 @@ fn settle_aborted_admission<'s>(
             results::reject_pending_navigation_results(scope, &admission.results, error);
             results_rejected = true;
         }
+        results::reject_pending_navigation_results(scope, &participant.results, error);
         if let Some(navigation) = navigation {
             super::navigation_lifecycle::finish_navigation_error_events(
                 scope,
@@ -639,7 +639,6 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     if targets.is_empty() {
         super::session_history_traversal::finish_entry(scope, owner, None);
     }
-    let finished = traversal::finished_resolver_array(scope, &admission.results);
     let resolved_entry = navigation_current_entry(scope, owner)
         .map(Into::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -651,12 +650,14 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     }
     let mut completions = Vec::new();
     for (index, entry) in &applied {
-        let outcome = admission.participants[*index].outcome.local(scope);
-        let resolvers = if entry.owner.strict_equals(owner.into()) {
-            finished
-        } else {
-            v8::Array::new(scope, 0)
-        };
+        let participant = &admission.participants[*index];
+        results::resolve_pending_navigation_committed(
+            scope,
+            &participant.results,
+            entry.resolved_entry,
+        );
+        let outcome = participant.outcome.local(scope);
+        let resolvers = traversal::finished_resolver_array(scope, &participant.results);
         let settlement = traversal::prepare_history_participant(scope, entry, &outcome, resolvers);
         completions.push((outcome, resolvers, settlement));
     }
