@@ -161,6 +161,33 @@ pub struct RendererDocumentCommandTarget {
     pub(super) document: RendererDocumentLifecycleIdentity,
 }
 
+/// Target-owned request policy that may change after native commit admission
+/// but before the browser has observed the new Document's identity.
+/// This deliberately grants no Document query or request-settlement access.
+#[derive(Clone, Debug)]
+pub enum RendererPageRequestPolicyUpdate {
+    FetchInterception {
+        enabled: bool,
+        resource_type: Option<crate::SubresourceResourceType>,
+    },
+    BlockedUrls(Vec<String>),
+}
+
+impl RendererPageRequestPolicyUpdate {
+    pub(super) fn into_command(self) -> RendererPageCommand {
+        match self {
+            Self::FetchInterception {
+                enabled,
+                resource_type,
+            } => RendererPageCommand::SetFetchSubresourceInterception {
+                enabled,
+                resource_type,
+            },
+            Self::BlockedUrls(patterns) => RendererPageCommand::SetBlockedUrlPatterns(patterns),
+        }
+    }
+}
+
 impl PartialEq for RendererDocumentCommandTarget {
     fn eq(&self, other: &Self) -> bool {
         self.token == other.token && self.document == other.document

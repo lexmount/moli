@@ -1017,14 +1017,10 @@ impl TargetPageSlot {
         Some(Some(commit.attachment) == attachment && commit.native_document == Some(source))
     }
 
-    pub(crate) fn prepared_document_output_binding(
-        &self,
-    ) -> Option<(
-        RendererPageResidenceIdentity,
-        CommittedRendererDocumentBinding,
-    )> {
+    /// Only a synchronously admitted native commit may receive Page policy
+    /// before its Document identity has been projected from renderer output.
+    pub(crate) fn prepared_document_policy_page(&self) -> Option<RendererPageResidenceIdentity> {
         let request = self.prepared_document_navigation_handoff()?;
-        let document = request.renderer_commit.as_ref()?.native_document?;
         let (renderer_page, page_attachment_id) = match self.pending_renderer_page.binding.as_ref()
         {
             Some(pending) => (pending.renderer_page(), pending.page_attachment_id()),
@@ -1033,9 +1029,19 @@ impl TargetPageSlot {
                 self.page_attachment_id()?,
             ),
         };
-        if page_attachment_id != request.page_attachment_id
-            || renderer_page.page_id() != document.frame.page_id
-        {
+        (page_attachment_id == request.page_attachment_id).then_some(renderer_page)
+    }
+
+    pub(crate) fn prepared_document_output_binding(
+        &self,
+    ) -> Option<(
+        RendererPageResidenceIdentity,
+        CommittedRendererDocumentBinding,
+    )> {
+        let request = self.prepared_document_navigation_handoff()?;
+        let document = request.renderer_commit.as_ref()?.native_document?;
+        let renderer_page = self.prepared_document_policy_page()?;
+        if renderer_page.page_id() != document.frame.page_id {
             return None;
         }
         Some((
