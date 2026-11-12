@@ -2,7 +2,7 @@ use super::global_attributes::parse_tab_index_attribute;
 use crate::dom::native::Node;
 
 use super::super::{
-    JsContextHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
+    PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
 };
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
@@ -38,12 +38,12 @@ enum ReadingFlowMode {
     FlexVisual,
 }
 
-pub(super) fn is_disabled_form_control(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn is_disabled_form_control(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     form_control_is_effectively_disabled(runtime, handle)
 }
 
 pub(crate) fn contenteditable_editing_host(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let dom = runtime.dom_host().dom();
@@ -74,7 +74,7 @@ fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
     }
 }
 
-pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
     };
@@ -101,7 +101,7 @@ fn overflow_makes_scroll_container(value: &str) -> bool {
     )
 }
 
-fn element_is_scrollable(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn element_is_scrollable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let scrolls_x = overflow_makes_scroll_container(&style_property_value(
         runtime,
         handle,
@@ -137,7 +137,7 @@ fn element_is_scrollable(runtime: &JsContextHost, handle: DomHandle) -> bool {
 }
 
 fn shadow_including_contains(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     ancestor: DomHandle,
     node: DomHandle,
 ) -> bool {
@@ -158,7 +158,7 @@ fn shadow_including_contains(
 }
 
 fn first_delegates_focus_descendant(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     autofocus_only: bool,
 ) -> Option<DomHandle> {
@@ -189,12 +189,12 @@ fn first_delegates_focus_descendant(
     None
 }
 
-fn first_delegates_focus_target(runtime: &JsContextHost, root: DomHandle) -> Option<DomHandle> {
+fn first_delegates_focus_target(runtime: &PageScriptHost, root: DomHandle) -> Option<DomHandle> {
     first_delegates_focus_descendant(runtime, root, true)
         .or_else(|| first_delegates_focus_descendant(runtime, root, false))
 }
 
-fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn delegated_focus_target(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let root = runtime.dom_host().shadow_root_handle(handle)?;
     if runtime.dom_host().shadow_root_delegates_focus(root) != Some(true) {
         return None;
@@ -207,7 +207,7 @@ fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<
     first_delegates_focus_target(runtime, root)
 }
 
-fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
+fn first_autofocus_candidate(runtime: &PageScriptHost) -> Option<DomHandle> {
     let mut stack = runtime
         .dom_host()
         .child_handles(runtime.document_handle())
@@ -236,13 +236,13 @@ fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
 /// This is only an admission snapshot. The selected rendering task resolves
 /// the candidate again because script can move focus or mutate the Document
 /// between publication and execution.
-pub(crate) fn post_parse_autofocus_is_pending(runtime: &JsContextHost) -> bool {
+pub(crate) fn post_parse_autofocus_is_pending(runtime: &PageScriptHost) -> bool {
     runtime.active_element_handle().is_none() && first_autofocus_candidate(runtime).is_some()
 }
 
 pub(crate) fn process_post_parse_autofocus(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if runtime.active_element_handle().is_some() {
@@ -259,7 +259,7 @@ pub(crate) fn process_post_parse_autofocus(
     true
 }
 
-fn focused_chain_requires_async_blur(runtime: &JsContextHost, active: DomHandle) -> bool {
+fn focused_chain_requires_async_blur(runtime: &PageScriptHost, active: DomHandle) -> bool {
     let mut current = Some(active);
     while let Some(handle) = current {
         if element_has_attribute(runtime, handle, "inert")
@@ -305,7 +305,7 @@ fn blur_if_focused_chain_is_display_none_callback(
 
 pub(crate) fn schedule_focus_blur_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     active: DomHandle,
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -330,7 +330,7 @@ pub(crate) fn schedule_focus_blur_if_needed(
 
 fn wrap_handle_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: Option<DomHandle>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let handle = handle?;
@@ -343,7 +343,7 @@ fn wrap_handle_value<'s>(
 
 fn dispatch_pending_text_control_change_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let committed_value = unsafe { &mut *runtime_ptr }.take_text_control_change_commit(handle);
@@ -358,7 +358,7 @@ fn dispatch_pending_text_control_change_if_needed(
 
 pub(crate) fn update_focus(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     next: Option<DomHandle>,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
@@ -368,7 +368,7 @@ pub(crate) fn update_focus(
 
 pub(crate) fn reset_focus_from_previous_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     previous: DomHandle,
 ) {
     update_focus_from_previous_with_previous_focus_within(
@@ -382,7 +382,7 @@ pub(crate) fn reset_focus_from_previous_handle(
 
 pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     previous: DomHandle,
     previous_focus_within: Vec<DomHandle>,
 ) {
@@ -397,7 +397,7 @@ pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
 
 fn update_focus_from_previous(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
 ) {
@@ -406,7 +406,7 @@ fn update_focus_from_previous(
 
 fn update_focus_from_previous_with_previous_focus_within(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
@@ -464,7 +464,7 @@ fn update_focus_from_previous_with_previous_focus_within(
 
 fn window_focus_transition_for_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
 ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
@@ -497,7 +497,7 @@ fn current_execution_window_endpoint(
 }
 
 fn focused_window_endpoint(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<PendingWindowMessageEndpoint> {
     if runtime.dom_host().is_html_element_named(handle, "iframe")
@@ -517,7 +517,7 @@ fn focused_window_endpoint(
 
 fn dispatch_window_focus_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     endpoint: PendingWindowMessageEndpoint,
     event_type: &str,
 ) {
@@ -546,7 +546,7 @@ fn dispatch_window_focus_event(
 
 fn dispatch_interest_event_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     event_type: &str,
 ) -> Option<DomHandle> {
@@ -559,7 +559,7 @@ fn dispatch_interest_event_if_needed(
 
 pub(crate) fn perform_hover_interest_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
 ) {
     let Some(target) =
@@ -572,7 +572,7 @@ pub(crate) fn perform_hover_interest_default_action_for_dispatched_event(
 
 pub(crate) fn perform_access_key_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
     document: DomHandle,
 ) {
@@ -607,7 +607,7 @@ pub(crate) fn perform_access_key_default_action_for_dispatched_event(
 
 pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
 ) {
     if event_string_property(scope, event, "key").as_deref() != Some("Tab") {
@@ -637,7 +637,7 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
     update_focus(scope, runtime_ptr, Some(next_handle));
 }
 
-fn sequential_focus_order(runtime: &JsContextHost, active: Option<DomHandle>) -> Vec<DomHandle> {
+fn sequential_focus_order(runtime: &PageScriptHost, active: Option<DomHandle>) -> Vec<DomHandle> {
     sequential_focus_order_for_children(
         runtime,
         runtime
@@ -649,7 +649,7 @@ fn sequential_focus_order(runtime: &JsContextHost, active: Option<DomHandle>) ->
 }
 
 fn sequential_focus_order_for_children(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     children: Vec<DomHandle>,
     active: Option<DomHandle>,
 ) -> Vec<DomHandle> {
@@ -672,7 +672,7 @@ fn sequential_focus_order_for_children(
 }
 
 fn collect_sequential_focus_entries(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     active: Option<DomHandle>,
     entries: &mut Vec<SequentialFocusEntry>,
@@ -768,7 +768,7 @@ fn collect_sequential_focus_entries(
 }
 
 fn append_child_entries(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     active: Option<DomHandle>,
     entries: &mut Vec<SequentialFocusEntry>,
@@ -780,7 +780,7 @@ fn append_child_entries(
 }
 
 fn push_focus_entry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     handles: Vec<DomHandle>,
     entries: &mut Vec<SequentialFocusEntry>,
@@ -812,7 +812,7 @@ fn push_focus_entry_with_tab_index(
 }
 
 fn sequential_focus_order_for_reading_flow_container(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     container: DomHandle,
     children: Vec<DomHandle>,
     active: Option<DomHandle>,
@@ -827,7 +827,7 @@ fn sequential_focus_order_for_reading_flow_container(
 }
 
 fn sequential_focus_order_for_reading_flow_items(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     container: DomHandle,
     mode: ReadingFlowMode,
     children: Vec<DomHandle>,
@@ -840,7 +840,7 @@ fn sequential_focus_order_for_reading_flow_items(
 }
 
 fn reading_flow_item_groups(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     container: DomHandle,
     mode: ReadingFlowMode,
     children: Vec<DomHandle>,
@@ -862,7 +862,7 @@ fn reading_flow_item_groups(
 }
 
 fn reading_flow_item_group(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     child: DomHandle,
     mode: ReadingFlowMode,
     tree_order: usize,
@@ -898,7 +898,7 @@ fn reading_flow_item_group(
 }
 
 fn reading_flow_child_order_key(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     child: DomHandle,
     mode: ReadingFlowMode,
     tree_order: usize,
@@ -925,7 +925,7 @@ fn reading_flow_child_order_key(
     (position_group, reading_order, layout_order, order)
 }
 
-fn reading_flow_mode(runtime: &JsContextHost, handle: DomHandle) -> Option<ReadingFlowMode> {
+fn reading_flow_mode(runtime: &PageScriptHost, handle: DomHandle) -> Option<ReadingFlowMode> {
     let display = computed_display(runtime, handle);
     let mode = match style_property_value(runtime, handle, StyleMode::Computed, "reading-flow")
         .trim()
@@ -943,14 +943,14 @@ fn reading_flow_mode(runtime: &JsContextHost, handle: DomHandle) -> Option<Readi
     Some(mode)
 }
 
-fn computed_display(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn computed_display(runtime: &PageScriptHost, handle: DomHandle) -> String {
     style_property_value(runtime, handle, StyleMode::Computed, "display")
         .trim()
         .to_ascii_lowercase()
 }
 
 fn style_integer_property(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<i32> {
@@ -960,14 +960,14 @@ fn style_integer_property(
         .ok()
 }
 
-fn slot_focus_scope_tab_index(runtime: &JsContextHost, handle: DomHandle) -> Option<i32> {
+fn slot_focus_scope_tab_index(runtime: &PageScriptHost, handle: DomHandle) -> Option<i32> {
     let value = element_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .unwrap_or(0);
     (value >= 0).then_some(value)
 }
 
-fn slot_generates_focusable_box(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn slot_generates_focusable_box(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     !matches!(
         computed_display(runtime, handle).as_str(),
         "none" | "contents"
@@ -975,7 +975,7 @@ fn slot_generates_focusable_box(runtime: &JsContextHost, handle: DomHandle) -> b
 }
 
 fn sequential_tab_index(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     active: Option<DomHandle>,
 ) -> Option<i32> {
@@ -986,7 +986,7 @@ fn sequential_tab_index(
 }
 
 fn sequential_tab_index_without_scroll_descendant_check(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<i32> {
     let value = element_attribute(runtime, handle, "tabindex")
@@ -996,7 +996,7 @@ fn sequential_tab_index_without_scroll_descendant_check(
 }
 
 fn is_sequentially_focusable(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     active: Option<DomHandle>,
 ) -> bool {
@@ -1009,7 +1009,7 @@ fn is_sequentially_focusable(
     !element_is_scrollable(runtime, handle) || !has_sequential_focusable_descendant(runtime, handle)
 }
 
-fn has_sequential_focusable_descendant(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn has_sequential_focusable_descendant(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut stack = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
     if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(handle) {
         stack.extend(runtime.dom_host().child_handles(shadow_root));
@@ -1027,7 +1027,7 @@ fn has_sequential_focusable_descendant(runtime: &JsContextHost, handle: DomHandl
 }
 
 fn is_interactive_sequential_focusable_descendant(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -1047,13 +1047,13 @@ fn is_interactive_sequential_focusable_descendant(
         && sequential_tab_index_without_scroll_descendant_check(runtime, handle).is_some()
 }
 
-fn explicit_negative_tab_index(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn explicit_negative_tab_index(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_attribute(runtime, handle, "tabindex")
         .and_then(|value| parse_tab_index_attribute(&value))
         .is_some_and(|value| value < 0)
 }
 
-fn default_sequential_tab_index(runtime: &JsContextHost, handle: DomHandle) -> i32 {
+fn default_sequential_tab_index(runtime: &PageScriptHost, handle: DomHandle) -> i32 {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };
@@ -1068,7 +1068,7 @@ fn default_sequential_tab_index(runtime: &JsContextHost, handle: DomHandle) -> i
 }
 
 fn negative_shadow_scope_tab_target(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     active: DomHandle,
     reverse: bool,
 ) -> Option<DomHandle> {
@@ -1100,7 +1100,7 @@ fn negative_shadow_scope_tab_target(
 }
 
 fn focusable_adjacent_to_negative_shadow_host(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     host: DomHandle,
     reverse: bool,
 ) -> Option<DomHandle> {
@@ -1125,7 +1125,11 @@ fn focusable_adjacent_to_negative_shadow_host(
     None
 }
 
-fn access_key_target(runtime: &JsContextHost, document: DomHandle, key: &str) -> Option<DomHandle> {
+fn access_key_target(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    key: &str,
+) -> Option<DomHandle> {
     let needle = key.to_ascii_lowercase();
     let mut stack = runtime
         .dom_host()
@@ -1188,7 +1192,7 @@ fn event_string_property(
 
 fn show_interest_popover_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     target: DomHandle,
 ) {
@@ -1199,7 +1203,7 @@ fn show_interest_popover_if_needed(
 }
 
 fn interest_for_element_target(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "interestfor")
@@ -1207,7 +1211,7 @@ fn interest_for_element_target(
 
 pub(crate) fn focus_element(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     if let Err(error) = focus_element_with_options(scope, runtime_ptr, handle, false) {
@@ -1224,7 +1228,7 @@ pub(crate) fn focus_element(
 /// about labels, delegated shadow focus, or focus event ordering.
 pub(crate) fn perform_mouse_focus_default_action(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     hit: DomHandle,
 ) {
     let mut candidate = Some(hit);
@@ -1256,7 +1260,7 @@ pub(crate) fn perform_mouse_focus_default_action(
     update_focus(scope, runtime_ptr, None);
 }
 
-fn flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn flat_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
         return Some(slot);
     }
@@ -1269,7 +1273,7 @@ fn flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHan
 
 fn focus_element_with_options(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     prevent_scroll: bool,
 ) -> Result<(), moli_layout::LayoutError> {
@@ -1296,7 +1300,7 @@ fn focus_element_with_options(
 
 pub(crate) fn focus_live_element_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> RendererDomFocusOutcome {
     let runtime = unsafe { &*runtime_ptr };

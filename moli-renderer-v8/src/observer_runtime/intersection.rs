@@ -4,7 +4,7 @@ use std::{collections::HashMap, mem};
 
 use crate::{
     dom::native::{DomHost, NativeNodeId},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 use super::{
@@ -89,7 +89,7 @@ impl ObserverStore {
 }
 
 pub(super) fn compute_intersection_check_batch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     batch: IntersectionCheckBatch,
 ) -> Result<CompletedIntersectionCheckBatch, moli_layout::LayoutError> {
@@ -190,7 +190,7 @@ pub(super) fn compute_intersection_check_batch(
 }
 
 fn compute_mock_intersection_check_batch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     mut batch: IntersectionCheckBatch,
 ) -> CompletedIntersectionCheckBatch {

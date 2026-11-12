@@ -1113,7 +1113,7 @@ impl_reflection_callback_data!(CrossOriginReflection);
 
 pub(super) fn set_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,
     name: &str,
     value: &str,
@@ -1131,7 +1131,7 @@ pub(super) fn set_reflected_attribute(
 
 pub(super) fn set_reflected_style_attribute_with_inline_base_url(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,
     value: &str,
     inline_base_url: Option<&url::Url>,
@@ -1156,7 +1156,7 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
 
 pub(super) fn remove_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) {
@@ -1172,7 +1172,7 @@ pub(super) fn remove_reflected_attribute(
 
 pub(super) fn set_reflected_boolean_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,
     name: &str,
     enabled: bool,
@@ -1302,7 +1302,7 @@ pub(super) fn nullable_attribute_property_getter_from_object_or_detached<'s>(
 pub(super) fn element_reflection_receiver_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<(*mut super::super::JsContextHost, DomHandle)> {
+) -> Option<(*mut super::super::PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
         webidl::throw_type_error(scope, "Illegal invocation");

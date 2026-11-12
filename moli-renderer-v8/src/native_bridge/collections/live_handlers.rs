@@ -365,7 +365,7 @@ fn live_collection_has_named_property(
 fn live_collection_named_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'_, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     descriptor: &LiveCollectionDescriptor,
     key: String,
 ) -> Option<v8::Local<'s, v8::Value>> {

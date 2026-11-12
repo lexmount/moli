@@ -272,7 +272,7 @@ pub(crate) type WeakPrebootstrappedChildDefaultContexts =
 
 #[derive(Clone)]
 struct ChildDefaultContextBootstrapConfig {
-    host: Weak<RefCell<JsContextHost>>,
+    host: Weak<RefCell<PageScriptHost>>,
     pending_contexts: WeakPrebootstrappedChildDefaultContexts,
     resource_owner_id: crate::resource_owner::ResourceOwnerId,
     promise_reject_dispatch: crate::script_vm::PromiseRejectDispatchSlot,
@@ -824,11 +824,18 @@ impl PendingImageLoadEvent {
 pub(crate) type JsContextHostPageTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
-pub(crate) struct JsContextHost {
+/// Native DOM and Web API host shared by the Window realms of a page's
+/// document execution instance.
+///
+/// This is neither a V8 Context nor an isolate-wide singleton. Its lifetime is
+/// distinct from the navigation-stable `RendererPageScriptEnvironment`.
+pub(crate) struct PageScriptHost {
     pub(crate) session_histories: session_history::RendererSessionHistories,
     pub(crate) pending_history_traversal_admissions:
         super::history_traversal::PendingHistoryTraversalAdmissions,
-    runtime: *mut DocumentRuntime,
+    /// Non-owning pointer kept valid by the execution owner or a retained-host
+    /// handoff of the same boxed runtime.
+    document_runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
@@ -1222,17 +1229,17 @@ pub(crate) struct PointerCaptureDispatchEvent {
     pub(crate) target: DomHandle,
 }
 
-impl fmt::Debug for JsContextHost {
+impl fmt::Debug for PageScriptHost {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JsContextHost")
-            .field("runtime", &self.runtime)
+        f.debug_struct("PageScriptHost")
+            .field("document_runtime", &self.document_runtime)
             .field("bridge", &self.bridge)
             .finish()
     }
 }
 
 #[cfg(test)]
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn child_browsing_context_attribute_bootstrap_for_test(
         &self,
         handle: crate::document_runtime::DomHandle,
@@ -1261,21 +1268,21 @@ impl JsContextHost {
     }
 }
 
-impl Deref for JsContextHost {
+impl Deref for PageScriptHost {
     type Target = DocumentRuntime;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { &*self.runtime }
+        unsafe { &*self.document_runtime }
     }
 }
 
-impl DerefMut for JsContextHost {
+impl DerefMut for PageScriptHost {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.runtime }
+        unsafe { &mut *self.document_runtime }
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn advance_app_manifest_link_change_epoch(&mut self) {
         self.app_manifest_link_change_epoch = self.app_manifest_link_change_epoch.wrapping_add(1);
     }
@@ -1317,10 +1324,13 @@ impl JsContextHost {
     ) {
         assert!(
             self.retained_document_runtime.is_none(),
-            "JsContextHost must adopt its DocumentRuntime at most once"
+            "PageScriptHost must adopt its DocumentRuntime at most once"
         );
         assert!(
-            std::ptr::eq(self.runtime.cast_const(), document_runtime.as_ref()),
+            std::ptr::eq(
+                self.document_runtime.cast_const(),
+                document_runtime.as_ref()
+            ),
             "retained DocumentRuntime transfer must preserve the host raw pointer"
         );
         self.retained_document_runtime = Some(document_runtime);
@@ -1362,7 +1372,7 @@ impl JsContextHost {
     }
 }
 
-impl Drop for JsContextHost {
+impl Drop for PageScriptHost {
     fn drop(&mut self) {
         self.close_page_context_resources_for_teardown();
         self.context_host_lifecycle

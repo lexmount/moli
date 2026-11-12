@@ -8,7 +8,7 @@
 
 use moli_layout::{FrozenLayoutTree, LayoutPosition, LayoutRect};
 
-use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost};
 
 use super::src::image_selected_request_key;
 
@@ -19,7 +19,7 @@ use super::src::image_selected_request_key;
 const LAZY_IMAGE_VERTICAL_MARGIN_PX: f32 = 1_250.0;
 const LAZY_IMAGE_HORIZONTAL_MARGIN_PX: f32 = LAZY_IMAGE_VERTICAL_MARGIN_PX / 2.0;
 
-pub(super) fn image_load_is_deferred(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn image_load_is_deferred(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(node) = runtime.dom_host().node(handle) else {
         return false;
     };
@@ -52,7 +52,7 @@ pub(super) fn image_load_is_deferred(runtime: &JsContextHost, handle: DomHandle)
 }
 
 pub(super) fn revealed_lazy_image_handles(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     output: &FrozenLayoutTree<DomHandle>,
 ) -> Vec<DomHandle> {
@@ -64,7 +64,7 @@ pub(super) fn revealed_lazy_image_handles(
 }
 
 fn is_unadmitted_lazy_image(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     handle: DomHandle,
 ) -> bool {
@@ -83,7 +83,7 @@ fn is_unadmitted_lazy_image(
 }
 
 fn image_is_near_live_viewport(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     output: &FrozenLayoutTree<DomHandle>,
     handle: DomHandle,
@@ -121,7 +121,7 @@ fn image_is_near_live_viewport(
 }
 
 fn live_scroll_translation(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     output: &FrozenLayoutTree<DomHandle>,
     handle: DomHandle,
 ) -> (f32, f32) {

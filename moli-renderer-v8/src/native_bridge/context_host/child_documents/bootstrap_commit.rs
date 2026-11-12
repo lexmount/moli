@@ -1,4 +1,4 @@
-use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
+use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
 use super::{ChildDocumentCommitResult, ChildDocumentNavigationInitiator};
 use crate::{
     document_runtime::DomHandle,
@@ -6,7 +6,7 @@ use crate::{
 };
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn commit_child_document_bootstrap_or_start_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

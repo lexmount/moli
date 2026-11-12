@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn value_to_inserted_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
@@ -25,7 +25,7 @@ pub(super) fn value_to_inserted_handle(
 
 pub(super) fn build_insertion_fragment_from_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     handles: &[DomHandle],
 ) -> Option<DomHandle> {
@@ -50,7 +50,7 @@ pub(super) fn build_insertion_fragment_from_handles(
 
 fn blur_focused_inserted_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -65,7 +65,7 @@ fn blur_focused_inserted_handles(
     }
 }
 
-fn handle_contains(runtime: &JsContextHost, root: DomHandle, handle: DomHandle) -> bool {
+fn handle_contains(runtime: &PageScriptHost, root: DomHandle, handle: DomHandle) -> bool {
     let mut current = Some(handle);
     while let Some(candidate) = current {
         if candidate == root {
@@ -80,7 +80,7 @@ fn handle_contains(runtime: &JsContextHost, root: DomHandle, handle: DomHandle) 
 }
 
 pub(super) fn validate_document_sequence(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     reference_child: Option<DomHandle>,
     inserted: &[DomHandle],
@@ -139,7 +139,7 @@ pub(super) fn validate_document_sequence(
 
 pub(super) fn insert_fragment_with_validation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
     reference_child: Option<DomHandle>,
     skipped: &[DomHandle],

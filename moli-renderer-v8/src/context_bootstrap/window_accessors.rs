@@ -1,6 +1,6 @@
 use super::shared::*;
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{
         context_host_ptr_from_context_slot, context_host_ptr_from_global_bridge,
         context_host_ptr_from_window_object,

@@ -1,7 +1,7 @@
 use super::helpers::{window_child_context_handle, window_host_ptr, window_receiver};
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, WindowEnvironmentSettings},
+    native_bridge::{PageScriptHost, WindowEnvironmentSettings},
     util::{get_private_object, set_private_value},
 };
 
@@ -58,7 +58,7 @@ pub(crate) fn retain_window_document_in_retired_realm(
 
 pub(crate) fn bind_current_child_window_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     child_handle: DomHandle,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<()> {

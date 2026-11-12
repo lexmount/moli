@@ -1,7 +1,7 @@
-use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
+use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
 use crate::document_runtime::DomHandle;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn child_browsing_context_bootstrap(
         &self,
         handle: DomHandle,

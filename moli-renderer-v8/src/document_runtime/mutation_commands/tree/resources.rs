@@ -3,7 +3,7 @@ use super::{insertion_plan::TreeInsertionPlan, removal::TreeRemovalPlan};
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 fn push_unique_handle(handles: &mut Vec<DomHandle>, handle: DomHandle) {
@@ -44,7 +44,7 @@ impl DocumentRuntime {
     pub(super) fn queue_tree_insertion_resource_followups(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) {
@@ -80,7 +80,7 @@ impl DocumentRuntime {
     fn queue_inserted_image_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) {
@@ -258,7 +258,7 @@ impl DocumentRuntime {
     pub(super) fn queue_image_relevant_mutation_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         plan: &ImageRelevantMutationPlan,
         request_initiator_type: crate::types::SubresourceRequestInitiatorType,
     ) {
@@ -285,7 +285,7 @@ impl DocumentRuntime {
     fn queue_inserted_media_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
         mutation_plan: &MediaRelevantMutationPlan,
     ) {
@@ -327,7 +327,7 @@ impl DocumentRuntime {
     pub(super) fn queue_tree_removal_resource_followups(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         removal_plan: &TreeRemovalPlan,
     ) {
         let mut handles = Vec::new();
@@ -373,7 +373,7 @@ impl DocumentRuntime {
     fn queue_inserted_text_track_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
     ) {
         if let [root] = roots

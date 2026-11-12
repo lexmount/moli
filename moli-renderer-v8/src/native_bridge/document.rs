@@ -17,7 +17,7 @@ use super::node::{
     node_runtime_and_handle_from_object_or_detached,
 };
 use super::{
-    JsContextHost, callback_arg_namespace, callback_arg_string, collections,
+    PageScriptHost, callback_arg_namespace, callback_arg_string, collections,
     identity::{CollectionKind, LiveCollectionQueryKind},
     runtime_ptr_from_object, set_wrapped_handle_or_null_for_receiver, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
@@ -525,7 +525,7 @@ struct DocumentFragmentCollectionQueryPrototypeDeclaration {
 fn document_receiver_runtime_and_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -564,7 +564,7 @@ fn set_document_string_return_value(
 fn set_document_node_return_value_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'s, v8::Object>,
     handle: Option<DomHandle>,
 ) {
@@ -599,7 +599,7 @@ fn document_title_getter_function<'s>(
 
 pub(in crate::native_bridge) fn set_document_title_for_handle_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     title_text: &str,
 ) {
@@ -1041,7 +1041,7 @@ fn document_current_script_getter_function<'s>(
 }
 
 fn current_script_handle_for_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
     if runtime
@@ -1064,7 +1064,7 @@ fn current_script_handle_for_document(
 }
 
 fn current_script_is_visible_for_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     script: DomHandle,
     document_handle: DomHandle,
 ) -> bool {
@@ -1074,7 +1074,7 @@ fn current_script_is_visible_for_document(
 }
 
 fn current_script_belongs_to_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     script: DomHandle,
     document_handle: DomHandle,
 ) -> bool {
@@ -1277,7 +1277,7 @@ fn document_default_view_getter_function<'s>(
 
 fn document_associated_window_for_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -1301,7 +1301,7 @@ fn document_associated_window_for_object<'s>(
 
 pub(crate) fn document_associated_window_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if !node_is_document(unsafe { &*runtime_ptr }, handle) {
@@ -1524,7 +1524,7 @@ pub(in crate::native_bridge) fn node_document_has_storage_access_callback<'s>(
     else {
         return;
     };
-    // SAFETY: document_storage_access_resolver returns a live JsContextHost
+    // SAFETY: document_storage_access_resolver returns a live PageScriptHost
     // pointer from this isolate's native bridge wrapper.
     let has_access = document_storage_access_has_secure_context(scope, unsafe { &*runtime_ptr });
     let _ = resolver.resolve(scope, v8::Boolean::new(scope, has_access).into());
@@ -1540,7 +1540,7 @@ pub(in crate::native_bridge) fn node_document_request_storage_access_callback<'s
     else {
         return;
     };
-    // SAFETY: document_storage_access_resolver returns a live JsContextHost
+    // SAFETY: document_storage_access_resolver returns a live PageScriptHost
     // pointer from this isolate's native bridge wrapper.
     if !document_storage_access_has_secure_context(scope, unsafe { &*runtime_ptr }) {
         reject_document_storage_access_dom_exception(
@@ -1563,7 +1563,7 @@ fn document_storage_access_resolver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     method: &'static str,
-) -> Option<(v8::Local<'s, v8::PromiseResolver>, *mut JsContextHost)> {
+) -> Option<(v8::Local<'s, v8::PromiseResolver>, *mut PageScriptHost)> {
     let resolver = v8::PromiseResolver::new(scope)?;
     rv.set(resolver.get_promise(scope).into());
     let Ok((runtime_ptr, handle)) =
@@ -1573,13 +1573,13 @@ fn document_storage_access_resolver<'s>(
         return None;
     };
     // SAFETY: node_runtime_and_handle_from_object only returns a non-null
-    // JsContextHost pointer stored on a native bridge wrapper for this isolate.
+    // PageScriptHost pointer stored on a native bridge wrapper for this isolate.
     if !node_is_document(unsafe { &*runtime_ptr }, handle) {
         reject_document_storage_access_receiver(scope, resolver, method);
         return None;
     }
     // SAFETY: node_runtime_and_handle_from_object_or_detached only returns a
-    // non-null JsContextHost pointer from this isolate's native bridge state.
+    // non-null PageScriptHost pointer from this isolate's native bridge state.
     if !unsafe { &*runtime_ptr }.dom_host().is_connected(handle) {
         reject_document_storage_access_dom_exception(
             scope,
@@ -1594,7 +1594,7 @@ fn document_storage_access_resolver<'s>(
 
 fn document_storage_access_has_secure_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
 ) -> bool {
     let secure_context_url = runtime
         .current_runtime_window_execution_context_identity(scope)
@@ -1648,7 +1648,7 @@ fn detached_method_forward<'s>(
     call_global_bridge_method(scope, helper_name, &forwarded)
 }
 
-pub(super) fn is_html_document(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn is_html_document(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)

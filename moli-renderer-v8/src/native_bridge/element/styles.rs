@@ -3,7 +3,7 @@ use std::ops::ControlFlow;
 
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{
-    BridgeHandle, ComputedStyleTargetKey, JsContextHost, bridge_handle_from_object,
+    BridgeHandle, ComputedStyleTargetKey, PageScriptHost, bridge_handle_from_object,
 };
 use crate::style_engine::StyleViewport;
 use crate::webidl;
@@ -148,7 +148,7 @@ fn style_object_forces_empty_computed<'s>(
 }
 
 fn popup_document_target_is_current(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     target: DomHandle,
     popup_document: DomHandle,
 ) -> bool {
@@ -164,7 +164,7 @@ fn popup_document_target_is_current(
 
 fn target_context_epoch_is_current<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     style: v8::Local<'s, v8::Object>,
 ) -> bool {
     let Some(value) = get_private_value(scope, style, STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT)
@@ -180,7 +180,7 @@ fn target_context_epoch_is_current<'s>(
 
 fn cache_target_empty_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     style: v8::Local<'s, v8::Object>,
     empty: bool,
 ) {
@@ -353,7 +353,7 @@ fn live_computed_style_viewport<'s>(
 fn style_object_property_count_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     context: StyleComputationContext,
@@ -458,7 +458,7 @@ impl ComputedStyleTargetContext {
         }
     }
 
-    pub(crate) fn viewport(self, host: &JsContextHost) -> StyleViewport {
+    pub(crate) fn viewport(self, host: &PageScriptHost) -> StyleViewport {
         match self {
             Self::ChildFrameDocument { frame_handle, .. } => {
                 iframe_handle_viewport(host, frame_handle).unwrap_or_default()
@@ -471,7 +471,7 @@ impl ComputedStyleTargetContext {
 
 pub(crate) fn computed_style_target_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     requesting_child_window: Option<DomHandle>,
 ) -> ComputedStyleTargetContext {
@@ -500,7 +500,7 @@ pub(crate) fn computed_style_target_context(
 
 fn computed_style_target_child_frame_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let document_handle = host
@@ -511,7 +511,7 @@ fn computed_style_target_child_frame_handle(
 }
 
 fn computed_style_target_requesting_child_frame_handle(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     requesting_child_window: Option<DomHandle>,
 ) -> Option<DomHandle> {
@@ -526,14 +526,14 @@ fn computed_style_target_requesting_child_frame_handle(
 }
 
 pub(crate) fn iframe_handle_viewport(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     frame_handle: DomHandle,
 ) -> Option<StyleViewport> {
     iframe_handle_viewport_with_depth(host, frame_handle, 0)
 }
 
 pub(crate) fn style_viewport_for_document(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> StyleViewport {
     if document == host.document_handle() {
@@ -545,7 +545,7 @@ pub(crate) fn style_viewport_for_document(
 }
 
 pub(crate) fn computed_style_property_values_for_document_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
 ) -> Vec<Vec<String>> {
@@ -564,7 +564,7 @@ pub(crate) struct ComputedStyleExportValues {
 }
 
 pub(crate) fn computed_style_export_values_for_document_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
 ) -> Vec<ComputedStyleExportValues> {
@@ -605,7 +605,7 @@ pub(crate) fn computed_style_export_values_for_document_snapshot(
 }
 
 pub(crate) fn computed_style_properties_for_inspector_handle(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<Vec<(String, String)>> {
     let node = host.dom_host().node(handle)?;
@@ -625,7 +625,7 @@ pub(crate) fn computed_style_properties_for_inspector_handle(
 }
 
 pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<bool> {
     let DocumentSnapshotStyleComputation::Available(context) =
@@ -664,7 +664,7 @@ pub(crate) fn marker_pseudo_element_is_generated_for_document_snapshot(
 }
 
 fn document_snapshot_has_display_none_ancestor(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> bool {
@@ -685,7 +685,7 @@ fn document_snapshot_has_display_none_ancestor(
 }
 
 fn document_snapshot_flat_tree_parent(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     if let Some(slot) = host.dom_host().assigned_slot_for_node(handle) {
@@ -707,7 +707,7 @@ enum DocumentSnapshotStyleComputation {
 }
 
 fn style_computation_context_for_document_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DocumentSnapshotStyleComputation> {
     document_snapshot_style_context(host, handle, |handle| {
@@ -716,7 +716,7 @@ fn style_computation_context_for_document_snapshot(
 }
 
 fn document_snapshot_style_context(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     target_is_in_flat_tree: impl FnOnce(DomHandle) -> bool,
 ) -> Option<DocumentSnapshotStyleComputation> {
@@ -745,7 +745,7 @@ fn document_snapshot_style_context(
 }
 
 fn iframe_handle_viewport_with_depth(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     frame_handle: DomHandle,
     depth: usize,
 ) -> Option<StyleViewport> {
@@ -821,7 +821,7 @@ fn iframe_handle_viewport_with_depth(
     )
 }
 
-fn computed_style_target_is_in_flat_tree(host: &JsContextHost, handle: DomHandle) -> bool {
+fn computed_style_target_is_in_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = handle;
     loop {
         match computed_style_flat_tree_step(host, current) {
@@ -832,7 +832,7 @@ fn computed_style_target_is_in_flat_tree(host: &JsContextHost, handle: DomHandle
 }
 
 fn computed_style_flat_tree_step(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     current: DomHandle,
 ) -> ControlFlow<bool, DomHandle> {
     #[cfg(test)]
@@ -865,7 +865,7 @@ fn computed_style_flat_tree_step(
     ControlFlow::Continue(parent)
 }
 
-fn computed_style_node_is_slotable_for_flat_tree(host: &JsContextHost, handle: DomHandle) -> bool {
+fn computed_style_node_is_slotable_for_flat_tree(host: &PageScriptHost, handle: DomHandle) -> bool {
     host.dom_host()
         .node(handle)
         .is_some_and(|node| node.is_element() || node.is_text())
@@ -1008,7 +1008,7 @@ fn style_for_element<'s>(
 
 pub(crate) fn style_for_element_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {

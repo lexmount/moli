@@ -5,7 +5,7 @@ use super::super::node::{
     node_runtime_and_handle_from_object,
 };
 use super::super::{
-    JsContextHost, throw_dom_exception, validate_attribute_name, validate_element_name,
+    PageScriptHost, throw_dom_exception, validate_attribute_name, validate_element_name,
     validate_qualified_element_name_and_namespace, validate_qualified_name_and_namespace,
 };
 use super::{

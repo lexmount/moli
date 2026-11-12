@@ -1,4 +1,4 @@
-use super::{JsContextHost, OwnerDispatchScope};
+use super::{OwnerDispatchScope, PageScriptHost};
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::types::DedicatedWorkerId;
 use crate::{
@@ -31,7 +31,7 @@ fn navigation_response_from_subresource_body(
     )
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn has_pending_load_event_delaying_subresource_requests(&self) -> bool {
         self.pending_subresource_fetches
@@ -69,13 +69,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn document_url(&self) -> &url::Url {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.document_url()
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }.document_url()
     }
 
     pub(crate) fn document_character_set(&self) -> &str {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.document_character_set()
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }.document_character_set()
     }
 
     pub(crate) fn resolve_module_specifier_with_base(
@@ -83,16 +83,16 @@ impl JsContextHost {
         specifier: &str,
         base_url: &url::Url,
     ) -> std::result::Result<url::Url, String> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &mut *self.runtime }.resolve_module_specifier(specifier, base_url)
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &mut *self.document_runtime }.resolve_module_specifier(specifier, base_url)
     }
 
     pub(crate) fn native_module_wasm_record_for(
         &self,
         module: v8::Local<'_, v8::Module>,
     ) -> Option<WasmModuleRecord> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_module_wasm_record_for(module)
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }.native_module_wasm_record_for(module)
     }
 
     pub(crate) fn native_wasm_instance_for_namespace<'s>(
@@ -100,8 +100,8 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         namespace: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_wasm_instance_for_namespace(scope, namespace)
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }.native_wasm_instance_for_namespace(scope, namespace)
     }
 
     pub(crate) fn native_resolved_dependency_module_for(
@@ -110,24 +110,24 @@ impl JsContextHost {
         specifier: &str,
         attributes: &ModuleAttributesKey,
     ) -> Option<v8::Global<v8::Module>> {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }
             .native_resolved_dependency_module_for(referrer, specifier, attributes)
     }
 
     pub(crate) fn native_document_modulator_ptr(
         &self,
     ) -> *const crate::module_runtime::NativeDocumentModulator {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &*self.runtime }.native_document_modulator_ptr()
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &*self.document_runtime }.native_document_modulator_ptr()
     }
 
     pub(crate) fn queue_native_dynamic_module_import(
         &mut self,
         request: PendingDynamicModuleImport,
     ) {
-        // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-        unsafe { &mut *self.runtime }.queue_native_dynamic_module_import(request);
+        // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+        unsafe { &mut *self.document_runtime }.queue_native_dynamic_module_import(request);
     }
 
     pub(crate) fn current_dynamic_module_import_owner(

@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+    PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
     WindowExecutionContextOwner,
 };
 use moli_indexeddb::{
@@ -63,7 +63,7 @@ impl IndexedDbContextState {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_indexed_db_open_connection(
         &self,
         execution_context: WindowExecutionContextIdentity,

@@ -1,7 +1,7 @@
 use super::cross_origin_request_modes as image_cross_origin_request_modes;
 use super::*;
 use crate::native_bridge::{
-    ImageLoadEventId, JsContextHost, OwnerDispatchScope, PendingImageLoadEventOwner,
+    ImageLoadEventId, OwnerDispatchScope, PageScriptHost, PendingImageLoadEventOwner,
 };
 use crate::service_worker_runtime::{
     ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
@@ -35,7 +35,7 @@ pub(crate) enum ScannedImagePreloadStart {
 
 pub(crate) fn start_scanned_image_preload(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_url: url::Url,
     fetch_priority: Option<FetchPriorityHint>,
 ) -> ScannedImagePreloadStart {
@@ -160,7 +160,7 @@ pub(crate) fn start_scanned_image_preload(
 
 pub(crate) fn start_image_element_resource_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     image_handle: crate::document_runtime::DomHandle,
     sequence: ImageLoadEventId,
     request_url: url::Url,

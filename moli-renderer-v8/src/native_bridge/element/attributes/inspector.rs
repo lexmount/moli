@@ -2,7 +2,7 @@ use crate::custom_elements;
 use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
 use crate::native_bridge::document::clear_live_attr_cache_entry_ns;
-use crate::native_bridge::{JsContextHost, validate_attribute_name};
+use crate::native_bridge::{PageScriptHost, validate_attribute_name};
 use crate::runtime::{RendererDomAttributeMutation, RendererDomAttributeMutationOutcome};
 
 use super::super::{
@@ -13,7 +13,7 @@ use super::super::{
 use super::mutation::attribute_target_for_remove_name;
 
 fn attribute_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     normalized_name: &str,
 ) -> Option<String> {
@@ -27,7 +27,7 @@ fn attribute_value(
 
 pub(crate) fn mutate_live_element_attribute_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     mutation: RendererDomAttributeMutation,
 ) -> RendererDomAttributeMutationOutcome {

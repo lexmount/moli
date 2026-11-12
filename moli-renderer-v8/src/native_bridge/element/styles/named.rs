@@ -92,7 +92,7 @@ pub(crate) fn live_style_named_property_value<'s>(
 fn live_style_named_property_value_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     mode: StyleMode,
     raw_key: &str,

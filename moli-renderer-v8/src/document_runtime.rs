@@ -46,7 +46,7 @@ use super::{
         host_event_defaults,
     },
     mutation_coordinator::{MutationCoordinator, RuntimeMutationOptions},
-    native_bridge::{self, JsContextHost},
+    native_bridge::{self, PageScriptHost},
     page_task_queue::{PageTask, PageTaskQueue, PostParseLifecycleWork, PostParsePageOwnedWork},
     planning::PreparedScript,
     runtime::RendererBrowserContextRuntime,

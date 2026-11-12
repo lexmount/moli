@@ -1,4 +1,4 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::construction_failure::ConstructionFailure;
 use super::construction_result::FailedExistingConstructionPrototype;
 use super::element_state::definition_name_for_handle;
@@ -13,7 +13,7 @@ use super::{
 
 pub(crate) fn upgrade_handle_if_defined(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let already_handled = unsafe { &*host_ptr }
@@ -62,7 +62,7 @@ pub(crate) fn upgrade_handle_if_defined(
 
 pub(crate) fn upgrade_handle_with_immediate_form_lifecycle_if_defined(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let was_upgraded = unsafe { &*host_ptr }
@@ -83,7 +83,7 @@ pub(crate) fn upgrade_handle_with_immediate_form_lifecycle_if_defined(
 
 pub(crate) fn upgrade_element_with_wrapper_if_defined<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     wrapper: v8::Local<'s, v8::Object>,
     handle: DomHandle,
 ) -> bool {

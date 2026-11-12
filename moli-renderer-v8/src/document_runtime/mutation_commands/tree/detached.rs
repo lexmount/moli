@@ -2,14 +2,14 @@ use super::policy::{TreeMutationSourceProfile, TreeNoncePolicy, TreeReactionDisp
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     mutation_coordinator::ConnectedScriptMutationPolicy,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 impl DocumentRuntime {
     pub(crate) fn insert_detached_native_child(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -27,7 +27,7 @@ impl DocumentRuntime {
     pub(crate) fn insert_detached_native_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -45,7 +45,7 @@ impl DocumentRuntime {
     fn insert_detached_native_child_with_reaction_policy(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -70,7 +70,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_detached_native_child(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -80,7 +80,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_detached_native_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {

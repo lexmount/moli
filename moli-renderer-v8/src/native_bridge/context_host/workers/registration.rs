@@ -1,6 +1,6 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use super::{
     WorkerConnectionState, WorkerExecutionState, WorkerModuleStaticImportPolicySnapshot,
     WorkerRelayTerminalState,
@@ -60,7 +60,7 @@ impl WorkerScriptLoadFailure {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_dedicated_worker_outside_settings_load(
         &self,
         dispatch_scope: super::super::OwnerDispatchScope,

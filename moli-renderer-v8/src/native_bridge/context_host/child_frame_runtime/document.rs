@@ -1,4 +1,4 @@
-use super::super::{JsContextHost, WindowExecutionContextOwner};
+use super::super::{PageScriptHost, WindowExecutionContextOwner};
 use super::document_slots::sync_child_document_window_slots;
 use crate::context_bootstrap::bind_current_child_window_document;
 use crate::document_runtime::DomHandle;
@@ -31,7 +31,7 @@ struct ChildDocumentStreamMethodsDeclaration<'scope> {
     close: (),
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn frame_owner_content_document_wrapper<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -132,7 +132,7 @@ impl JsContextHost {
                         .is_some_and(Node::is_document)
                 })
         {
-            let host_ptr = self as *mut JsContextHost;
+            let host_ptr = self as *mut PageScriptHost;
             let Some(document) =
                 self.native_bridge_mut()
                     .wrap_handle(scope, host_ptr, document_handle)
@@ -270,7 +270,7 @@ impl JsContextHost {
 
 fn child_document_native_handle_for_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     if let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, document) {
@@ -593,7 +593,7 @@ fn begin_child_document_stream_replacement<'s>(
 ) -> Option<v8::Local<'s, v8::Context>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let document_handle = child_document_native_handle_for_runtime(scope, host_ptr, document)?;
-    JsContextHost::begin_child_document_stream_replacement(
+    PageScriptHost::begin_child_document_stream_replacement(
         scope,
         host_ptr,
         child_handle,
@@ -601,10 +601,10 @@ fn begin_child_document_stream_replacement<'s>(
     )
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn begin_child_document_stream_replacement<'s>(
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Context>> {
@@ -796,7 +796,7 @@ impl JsContextHost {
     /// `Document.open`, `write`, or `close` properties.
     pub(crate) fn set_child_browsing_context_document_content(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         child_handle: DomHandle,
         html: &str,
     ) -> bool {

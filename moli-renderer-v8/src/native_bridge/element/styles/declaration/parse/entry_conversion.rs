@@ -6,7 +6,7 @@ use super::inline_state::{
 use super::*;
 
 pub(in crate::native_bridge::element::styles) fn style_entries(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Vec<StyleEntry> {
     if runtime.element_inline_style_csp_state(handle)
@@ -21,7 +21,7 @@ pub(in crate::native_bridge::element::styles) fn style_entries(
 }
 
 pub(super) fn style_entries_with_base(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     base_url: Option<&url::Url>,
 ) -> Vec<StyleEntry> {
@@ -39,7 +39,7 @@ pub(super) fn style_entries_with_base(
 pub(in crate::native_bridge::element::styles) fn style_entries_for_style_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> StyleObjectEntries {
     let base_url = get_private_value(scope, style, STYLE_DECLARATION_BASE_URL_SLOT)
@@ -51,7 +51,7 @@ pub(in crate::native_bridge::element::styles) fn style_entries_for_style_object<
 
 pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_base_url(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     entries: &[StyleEntry],
     inline_base_url: Option<&url::Url>,
@@ -76,7 +76,7 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_b
 
 pub(in crate::native_bridge::element::styles) fn set_style_entries_if_changed_with_inline_base_url(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     entries: &[StyleEntry],
     inline_base_url: Option<&url::Url>,

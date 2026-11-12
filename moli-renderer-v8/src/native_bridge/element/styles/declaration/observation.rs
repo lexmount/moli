@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::super::{
     ancestry::AncestorQueries, computed_style_flat_tree_step, style_viewport_for_document,
 };
@@ -51,7 +51,7 @@ impl StyleComputationContext {
 
     pub(super) fn resolved_read_document(
         self,
-        runtime: &JsContextHost,
+        runtime: &PageScriptHost,
         handle: DomHandle,
     ) -> DomHandle {
         runtime
@@ -69,7 +69,7 @@ impl StyleComputationContext {
 /// input is materialized only if that world must be updated or a specialized
 /// query needs it, then shared by every read in this observation.
 pub(crate) struct StyleObservation<'a> {
-    runtime: &'a JsContextHost,
+    runtime: &'a PageScriptHost,
     #[cfg(test)]
     read_count: usize,
     /// `None` resolves one stable context per touched Document. Layout and
@@ -95,7 +95,7 @@ pub(crate) struct StyleObservation<'a> {
 }
 
 pub(super) struct StyleObservationInputs<'a> {
-    runtime: &'a JsContextHost,
+    runtime: &'a PageScriptHost,
     key: StyleObservationKey,
     context: StyleComputationContext,
     /// Page-level media inputs are stable for one synchronous observation.
@@ -112,7 +112,7 @@ pub(super) struct StyleObservationInputs<'a> {
 
 impl<'a> StyleObservationInputs<'a> {
     fn new(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         source_document: Option<DomHandle>,
         context: StyleComputationContext,
         _tracks_persistent_world: bool,
@@ -258,7 +258,7 @@ impl RetainedStyleObservation for StyleObservationInputs<'_> {
 }
 
 impl<'a> StyleObservation<'a> {
-    pub(crate) fn new(runtime: &'a JsContextHost) -> Self {
+    pub(crate) fn new(runtime: &'a PageScriptHost) -> Self {
         Self::new_with_fixed_context(runtime, None, true, None)
     }
 
@@ -271,7 +271,7 @@ impl<'a> StyleObservation<'a> {
     /// scoped context keeps viewport units and media queries aligned with the
     /// numeric layout demand without mutating retained document state.
     pub(crate) fn new_for_document_viewport(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         document: DomHandle,
         viewport: StyleViewport,
         environment_override: Option<StyloStyleEnvironment>,
@@ -288,7 +288,7 @@ impl<'a> StyleObservation<'a> {
     }
 
     pub(super) fn new_for_element(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         handle: DomHandle,
         context: Option<StyleComputationContext>,
     ) -> Self {
@@ -296,7 +296,7 @@ impl<'a> StyleObservation<'a> {
     }
 
     fn new_with_fixed_context(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         fixed_context: Option<StyleComputationContext>,
         tracks_persistent_world: bool,
         sizing_target: Option<DomHandle>,
@@ -317,7 +317,7 @@ impl<'a> StyleObservation<'a> {
         }
     }
 
-    pub(crate) const fn runtime(&self) -> &'a JsContextHost {
+    pub(crate) const fn runtime(&self) -> &'a PageScriptHost {
         self.runtime
     }
 
@@ -498,7 +498,7 @@ impl<'a> StyleObservation<'a> {
 /// read observe the same retained ComputedStyle; Moli follows that model with
 /// canonical Stylo `ElementData` and a lazy observation-local slow path.
 pub(crate) struct ComputedStyleRead<'a> {
-    pub(super) runtime: &'a JsContextHost,
+    pub(super) runtime: &'a PageScriptHost,
     pub(super) handle: DomHandle,
     pub(super) context: StyleComputationContext,
     pub(super) observation_inputs: Rc<StyleObservationInputs<'a>>,
@@ -508,13 +508,13 @@ pub(crate) struct ComputedStyleRead<'a> {
 /// A document world already updated by the pass's initial style read. Layout
 /// remains synchronous; subsequent anonymous boxes only inherit and cascade.
 pub(crate) struct PreparedAnonymousStyleContext<'a> {
-    runtime: &'a JsContextHost,
+    runtime: &'a PageScriptHost,
     document: DomHandle,
     document_context: OwnedStyleSourceDocumentContext,
 }
 
 impl<'a> PreparedAnonymousStyleContext<'a> {
-    pub(super) fn new(runtime: &'a JsContextHost, document: DomHandle) -> Self {
+    pub(super) fn new(runtime: &'a PageScriptHost, document: DomHandle) -> Self {
         Self {
             runtime,
             document,

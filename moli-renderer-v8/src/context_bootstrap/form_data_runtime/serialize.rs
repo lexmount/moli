@@ -24,7 +24,7 @@ struct EmptyFileOptionsDeclaration {
 
 pub(super) fn serialize_form_data_controls<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: crate::document_runtime::DomHandle,
     submitter: Option<v8::Local<'s, v8::Object>>,
 ) -> Vec<(String, v8::Global<v8::Value>)> {
@@ -44,7 +44,7 @@ pub(super) fn serialize_form_data_controls<'s>(
 
 fn form_data_control_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if let Some(control) = crate::native_bridge::document::paired_detached_native_object_for_handle(

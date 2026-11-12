@@ -1,4 +1,4 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use crate::{
     document_runtime::{DocumentPolicyContainer, DomHandle},
     frame_owner_model::{FrameDocumentLoadDeliveryTask, FrameLocalWindowOwnerTransition},
@@ -24,7 +24,7 @@ pub(in crate::native_bridge::context_host) struct ChildInitialEmptyDocumentIniti
         FrameDocumentLoadDeliveryTask,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn initial_child_about_blank_policy_container_from_parent(
         &self,
         handle: DomHandle,

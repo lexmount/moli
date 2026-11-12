@@ -13,7 +13,7 @@ use crate::{
     },
     document_runtime::DocumentSubresourceCspKind,
     dom::native::{DomHost, DomMutationEffects},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     network::{
         RendererPreparedNetworkResourceLoad,
         loads::{ResourceLoadDisposition, ResourceLoadKind},
@@ -163,7 +163,7 @@ impl ScriptVm {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn note_app_manifest_link_mutation(
         &mut self,
         dom_host: &DomHost,

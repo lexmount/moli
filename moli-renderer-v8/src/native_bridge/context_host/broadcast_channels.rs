@@ -1,7 +1,7 @@
 use super::*;
 use crate::{broadcast_channel_runtime::SharedBroadcastChannelRegistry, types::BroadcastChannelId};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn broadcast_channel_registry(&self) -> SharedBroadcastChannelRegistry {
         self.broadcast_channel_registry.clone()
     }

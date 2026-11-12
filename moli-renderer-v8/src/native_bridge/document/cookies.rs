@@ -1,4 +1,4 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use crate::{document_runtime::DomHandle, native_bridge::node};
 use url::Url;
 
@@ -61,7 +61,7 @@ pub(crate) fn set_document_cookie_for_receiver<'s>(
     }
 }
 
-fn document_cookie_url_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Option<Url> {
+fn document_cookie_url_for_handle(runtime: &PageScriptHost, handle: DomHandle) -> Option<Url> {
     let url = if handle == runtime.document_handle() {
         runtime.document_url().clone()
     } else {
@@ -77,7 +77,7 @@ fn document_cookie_url_for_handle(runtime: &JsContextHost, handle: DomHandle) ->
 
 fn document_cookie_origin_allows_access(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let opaque = matches!(

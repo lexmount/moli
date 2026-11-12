@@ -1,11 +1,11 @@
 use super::CustomElementReaction;
 use super::reactions::{enqueue_custom_element_reaction, with_custom_element_reaction_scope};
 
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 fn enqueue_lifecycle_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     callback_name: &str,
     reaction: CustomElementReaction,
@@ -31,7 +31,7 @@ fn enqueue_lifecycle_callback(
 
 pub(crate) fn enqueue_connected_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     enqueue_lifecycle_callback(
@@ -45,7 +45,7 @@ pub(crate) fn enqueue_connected_callback(
 
 pub(crate) fn enqueue_disconnected_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     enqueue_lifecycle_callback(
@@ -59,7 +59,7 @@ pub(crate) fn enqueue_disconnected_callback(
 
 pub(crate) fn enqueue_disconnected_callback_unless_pending(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if unsafe { &*host_ptr }
@@ -73,7 +73,7 @@ pub(crate) fn enqueue_disconnected_callback_unless_pending(
 
 pub(crate) fn enqueue_connected_move_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     enqueue_lifecycle_callback(
@@ -87,7 +87,7 @@ pub(crate) fn enqueue_connected_move_callback(
 
 pub(crate) fn dispatch_connected_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {

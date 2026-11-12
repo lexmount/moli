@@ -54,7 +54,7 @@ fn legacy_execution_context(
     })
 }
 
-fn window_host(owner: RuntimeExecutionContext) -> Option<*mut JsContextHost> {
+fn window_host(owner: RuntimeExecutionContext) -> Option<*mut PageScriptHost> {
     match owner {
         RuntimeExecutionContext::Window(host) => Some(host),
         RuntimeExecutionContext::Worker => None,
@@ -64,7 +64,7 @@ fn window_host(owner: RuntimeExecutionContext) -> Option<*mut JsContextHost> {
 fn sample(
     scope: &mut v8::PinScope<'_, '_>,
     iterations: usize,
-    operation: &mut impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut JsContextHost>,
+    operation: &mut impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut PageScriptHost>,
 ) -> f64 {
     // Bound V8's temporary handles to this sample, identically for both paths.
     let scope = std::pin::pin!(v8::HandleScope::new(scope));
@@ -79,8 +79,8 @@ fn sample(
 fn compare(
     scope: &mut v8::PinScope<'_, '_>,
     label: &str,
-    mut legacy: impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut JsContextHost>,
-    mut resolved: impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut JsContextHost>,
+    mut legacy: impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut PageScriptHost>,
+    mut resolved: impl FnMut(&mut v8::PinScope<'_, '_>) -> Option<*mut PageScriptHost>,
 ) {
     const ITERATIONS: usize = 500_000;
     const SAMPLES: usize = 9;
@@ -125,7 +125,7 @@ fn benchmark_common_runtime_binding_resolution() {
     let lifecycle = Rc::new(Cell::new(ContextHostLifecycle::Active));
     // Lookup does not dereference the host. Identity validation and JS
     // invocation are deliberately outside this microbenchmark.
-    let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+    let host = std::ptr::NonNull::<PageScriptHost>::dangling().as_ptr();
     CommonRuntimeBinding::install_window(context, &common, host, &lifecycle);
     let scope = &mut v8::ContextScope::new(scope, context);
     let (binding, _) = CommonRuntimeBinding::from_scope(scope).unwrap();

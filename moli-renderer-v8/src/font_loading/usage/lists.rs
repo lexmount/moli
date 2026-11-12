@@ -6,7 +6,7 @@ use crate::{
         element_child_box_policy, flat_children, flat_parent, is_list_container,
         layout_element_classification, list_data,
     },
-    native_bridge::{JsContextHost, element::StyleObservation},
+    native_bridge::{PageScriptHost, element::StyleObservation},
 };
 use moli_layout::{
     ChildBoxPolicy, LayoutDisplay, LayoutElementCategory, LayoutFormControlKind,
@@ -27,7 +27,7 @@ pub(super) struct ListCounters {
 impl ListCounters {
     pub(super) fn value(
         &mut self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         observation: &mut StyleObservation<'_>,
         root: DomHandle,
         item: DomHandle,
@@ -75,7 +75,7 @@ impl ListCounters {
 
     fn collect_scope(
         &mut self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         observation: &mut StyleObservation<'_>,
         root: DomHandle,
         container: DomHandle,
@@ -168,7 +168,7 @@ impl ListCounters {
 
 fn push_children(
     pending: &mut Vec<Work>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     root: DomHandle,
     node: DomHandle,
     before: Option<Arc<ComputedValues>>,

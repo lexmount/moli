@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 #[cfg(test)]
@@ -146,7 +146,7 @@ impl DocumentRuntime {
 
     pub(crate) fn ensure_parser_custom_element_reaction_queue(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         if !self.parser_reentry.custom_element_reaction_queue_active {
             custom_elements::push_parser_custom_element_reaction_queue(host_ptr);
@@ -181,7 +181,7 @@ impl DocumentRuntime {
     pub(crate) fn run_pending_parser_post_step_runtime_work(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let followups = self.pending_parser_post_step_runtime_work.take();
         self.run_parser_post_step_runtime_work(scope, host_ptr, &followups);
@@ -190,7 +190,7 @@ impl DocumentRuntime {
     fn run_parser_post_step_runtime_work(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         followups: &ParserPostStepRuntimeWork,
     ) {
         if followups.is_empty() {
@@ -214,7 +214,7 @@ impl DocumentRuntime {
     fn dispatch_parser_focus_resets(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handles: &[DomHandle],
     ) {
         if handles.is_empty() {
@@ -238,7 +238,7 @@ impl DocumentRuntime {
     pub(super) fn enqueue_parser_adoption_custom_element_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         lifecycle_connected_roots: &[DomHandle],
         custom_elements: &custom_elements::CustomElementAdoptionPlan,
     ) -> bool {
@@ -265,7 +265,7 @@ impl DocumentRuntime {
     pub(super) fn enqueue_parser_form_state_custom_element_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
     ) -> bool {
         if roots.is_empty() || unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {

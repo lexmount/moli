@@ -9,14 +9,14 @@ use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
     mutation_coordinator::{ConnectedScriptMutationPolicy, RuntimeMutationOptions},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 impl DocumentRuntime {
     pub(crate) fn append_child(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -32,7 +32,7 @@ impl DocumentRuntime {
     pub(crate) fn append_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -48,7 +48,7 @@ impl DocumentRuntime {
     pub(crate) fn append_html_fragment_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -65,7 +65,7 @@ impl DocumentRuntime {
     fn append_child_with_source_profile(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         source_profile: TreeMutationSourceProfile,
@@ -212,7 +212,7 @@ impl DocumentRuntime {
     pub(crate) fn insert_before(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -233,7 +233,7 @@ impl DocumentRuntime {
     pub(crate) fn insert_before_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -254,7 +254,7 @@ impl DocumentRuntime {
     pub(crate) fn insert_html_fragment_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -273,7 +273,7 @@ impl DocumentRuntime {
     pub(crate) fn move_before_preserving_state_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -294,7 +294,7 @@ impl DocumentRuntime {
     fn insert_before_with_source_profile(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -318,7 +318,7 @@ impl DocumentRuntime {
     pub(super) fn insert_before_with_nonce_handling(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,

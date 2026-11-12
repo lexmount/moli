@@ -8,7 +8,7 @@ use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::{DomMutationEffects, Node},
     mutation_coordinator::RuntimeMutationOptions,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(super) struct TreeRemovalPlan {
@@ -27,7 +27,7 @@ pub(super) struct TreeRemovalPlan {
 impl DocumentRuntime {
     pub(super) fn tree_removal_plan(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         root: DomHandle,
     ) -> TreeRemovalPlan {
@@ -76,7 +76,7 @@ impl DocumentRuntime {
 
     pub(super) fn apply_tree_removal_node_iterator_plan_if_changed(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         removal_plan: &TreeRemovalPlan,
         effects: &DomMutationEffects,
     ) {
@@ -90,7 +90,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_child(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -106,7 +106,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_child_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) -> bool {
@@ -129,7 +129,7 @@ impl DocumentRuntime {
     pub(crate) fn remove_all_children_for_document_replacement(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
     ) -> bool {
         let removed_children = self.dom_host.child_handles(parent).collect::<Vec<_>>();
@@ -180,7 +180,7 @@ impl DocumentRuntime {
     pub(super) fn remove_child_with_source_profile(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         source_profile: TreeMutationSourceProfile,

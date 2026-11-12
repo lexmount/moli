@@ -21,7 +21,7 @@ fn image_complete_value<'s>(
 }
 
 fn image_complete_value_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
     let Some(element) = runtime

@@ -3,7 +3,7 @@
 use super::bindings::{check_target, document_owner, js_string};
 use super::tasks::queue_task;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::util::get_private_value;
 use crate::web_api_interfaces;
 
@@ -103,7 +103,7 @@ pub(super) fn handler_setter<'s>(
 
 pub(super) fn queue_tool_change<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     origin: &url::Origin,
     exposed_to: &[url::Origin],
@@ -113,7 +113,7 @@ pub(super) fn queue_tool_change<'s>(
 
 pub(super) fn queue_form_removal_change<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     origin: &url::Origin,
 ) {
@@ -126,7 +126,7 @@ pub(super) fn queue_form_removal_change<'s>(
 
 fn queue_tool_change_tasks<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     origin: &url::Origin,
     exposed_to: &[url::Origin],

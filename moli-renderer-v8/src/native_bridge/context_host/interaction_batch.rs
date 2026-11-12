@@ -1,6 +1,6 @@
 use crate::document_runtime::DomHandle;
 
-use super::JsContextHost;
+use super::PageScriptHost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PendingScrollObservableEffects {
@@ -68,7 +68,7 @@ impl ScrollObservableEffectBatchState {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn begin_scroll_observable_effect_batch(&mut self) {
         self.scroll_observable_effect_batch.begin();
     }

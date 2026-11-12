@@ -62,7 +62,7 @@ fn text_control_selection_offset_value<'s>(
     }
 }
 
-fn text_control_selection_idl_owner(runtime: &JsContextHost, handle: DomHandle) -> &'static str {
+fn text_control_selection_idl_owner(runtime: &PageScriptHost, handle: DomHandle) -> &'static str {
     runtime
         .dom_host()
         .node(handle)
@@ -76,7 +76,7 @@ fn text_control_selection_idl_owner(runtime: &JsContextHost, handle: DomHandle) 
 
 pub(crate) fn text_control_set_selection_range_internal(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     start: u32,
     end: u32,
@@ -93,7 +93,7 @@ pub(crate) fn text_control_set_selection_range_internal(
 
 pub(crate) fn text_control_set_selection_range_with_direction_internal(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     start: u32,
     end: u32,
@@ -117,7 +117,7 @@ pub(crate) fn text_control_set_selection_range_with_direction_internal(
 
 pub(crate) fn replace_text_control_selection(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     replacement_text: &str,
     input_type: TextEditInputType,
@@ -134,7 +134,7 @@ pub(crate) fn replace_text_control_selection(
 
 pub(crate) fn replace_text_control_selection_for_insert_html(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     replacement_text: &str,
 ) -> bool {
@@ -169,7 +169,7 @@ enum TextControlEditEvents {
 
 fn replace_text_control_selection_with_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     replacement_text: &str,
     input_type: TextEditInputType,
@@ -302,7 +302,7 @@ fn replace_text_control_selection_with_events(
 }
 
 fn text_control_user_edit_replacement_units(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     current_value_len: usize,
     selection_start: usize,
@@ -368,7 +368,7 @@ fn normalize_single_line_text_insertion(value: &str) -> String {
 }
 
 fn current_selection_or_end(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     value_len: u32,
 ) -> (u32, u32) {

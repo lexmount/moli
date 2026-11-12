@@ -1,4 +1,4 @@
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost, scroll_options};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost, scroll_options};
 
 use super::super::super::{
     document,
@@ -35,7 +35,7 @@ fn node_scroll_position_value<'s>(
 
 fn set_observable_node_scroll_position(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     left: f64,
     top: f64,
@@ -241,7 +241,7 @@ fn set_box_metric_return_value<'s>(
 
 fn detached_child_document_box_metric(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &mut JsContextHost,
+    runtime: &mut PageScriptHost,
     handle: DomHandle,
     metric: &str,
 ) -> Option<i32> {
@@ -262,7 +262,7 @@ fn detached_child_document_box_metric(
     })
 }
 
-fn detached_metric_element_has_zero_mock_box(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn detached_metric_element_has_zero_mock_box(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     matches!(
         raw_inline_style_property_value(runtime, handle, "display")
             .unwrap_or_default()
@@ -271,7 +271,7 @@ fn detached_metric_element_has_zero_mock_box(runtime: &JsContextHost, handle: Do
     ) || light_child_suppressed_by_shadow_host(runtime, handle)
 }
 
-fn light_child_suppressed_by_shadow_host(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn light_child_suppressed_by_shadow_host(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .parent_node(handle)

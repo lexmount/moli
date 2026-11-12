@@ -8,7 +8,7 @@ use super::navigation_and_traversal::{
 };
 
 /// PageVm-local key for one V8-bearing Navigation API payload retained by
-/// `JsContextHost`.
+/// `PageScriptHost`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RendererPageNavigationApiTaskId(u64);
 

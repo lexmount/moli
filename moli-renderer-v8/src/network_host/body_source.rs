@@ -532,7 +532,7 @@ pub(crate) fn new_network_body_source_id() -> NetworkBodySourceId {
 
 fn context_host_mut<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-) -> Option<&'s mut crate::native_bridge::JsContextHost> {
+) -> Option<&'s mut crate::native_bridge::PageScriptHost> {
     context_host_ptr_from_global_bridge(scope).map(|ptr| unsafe { &mut *ptr })
 }
 

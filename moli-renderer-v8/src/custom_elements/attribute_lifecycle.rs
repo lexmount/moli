@@ -1,4 +1,4 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost, util::v8_string};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost, util::v8_string};
 use super::CustomElementReaction;
 use super::lifecycle::{custom_element_callback_receiver, invoke_custom_element_callback};
 use super::reactions::{
@@ -8,7 +8,7 @@ use super::reactions::{
 
 pub(crate) fn enqueue_attribute_changed_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,
@@ -50,7 +50,7 @@ pub(crate) fn enqueue_attribute_changed_callback(
 
 pub(super) fn call_attribute_changed_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,
@@ -100,7 +100,7 @@ pub(super) fn call_attribute_changed_callback(
 
 pub(crate) fn dispatch_attribute_changed_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     namespace: Option<&str>,

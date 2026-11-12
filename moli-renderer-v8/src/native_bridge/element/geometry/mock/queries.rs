@@ -13,10 +13,10 @@ use super::layout::{
     compute_mock_client_rect, compute_mock_offset_parent, mock_hit_test_handle,
     mock_layout_client_rect_for_node,
 };
-use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost};
 
 pub(crate) fn answer_queries(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     reason: LayoutFlushReason,
     batch: &LayoutQueryBatch<DomHandle>,
@@ -58,7 +58,7 @@ pub(crate) fn answer_queries(
 }
 
 pub(crate) fn answer_query(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> LayoutQueryAnswer<DomHandle> {
@@ -196,7 +196,7 @@ pub(crate) fn answer_query(
     }
 }
 
-fn mock_box_model(runtime: &JsContextHost, source: DomHandle) -> Option<LayoutBoxModel> {
+fn mock_box_model(runtime: &PageScriptHost, source: DomHandle) -> Option<LayoutBoxModel> {
     let rect = mock_layout_client_rect_for_node(runtime, source)?;
     let quad = quad_from_client_rect(rect);
     Some(LayoutBoxModel {
@@ -208,7 +208,7 @@ fn mock_box_model(runtime: &JsContextHost, source: DomHandle) -> Option<LayoutBo
 }
 
 fn mock_element_metrics(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Option<LayoutElementMetrics<DomHandle>> {
     let rect = mock_layout_client_rect_for_node(runtime, source)?;
@@ -247,7 +247,7 @@ fn mock_element_metrics(
 }
 
 fn mock_scroll_into_view_geometry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     source: DomHandle,
 ) -> Option<LayoutScrollIntoViewGeometry<DomHandle>> {
@@ -273,7 +273,7 @@ fn mock_scroll_into_view_geometry(
 }
 
 fn mock_intersection_geometry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     target: DomHandle,
     root: Option<DomHandle>,

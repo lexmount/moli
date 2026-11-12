@@ -8,7 +8,7 @@ use super::super::{
         v8_string, v8str,
     },
 };
-use super::JsContextHost;
+use super::PageScriptHost;
 use super::node::{
     element_name_for_owner_document, node_is_document, node_is_element,
     node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached,
@@ -679,7 +679,7 @@ use url_attributes::{
 
 pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     value: &str,
@@ -724,7 +724,7 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
 
 pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     namespace: Option<&str>,
     prefix: Option<&str>,
@@ -780,7 +780,7 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
 
 pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> bool {
@@ -821,7 +821,7 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
 
 fn clear_detached_iframe_context_before_navigation_attribute_change(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     next_value: Option<&str>,
@@ -845,7 +845,7 @@ fn clear_detached_iframe_context_before_navigation_attribute_change(
 
 pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     namespace: Option<&str>,
     local_name: &str,
@@ -983,7 +983,7 @@ fn element_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1000,7 +1000,7 @@ fn element_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1019,7 +1019,7 @@ pub(in crate::native_bridge::element) fn html_element_getter_receiver<'s>(
     interface: &'static str,
     member: &'static str,
     local_name: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1042,7 +1042,7 @@ pub(in crate::native_bridge::element) fn html_element_setter_receiver<'s>(
     interface: &'static str,
     member: &'static str,
     local_name: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1063,7 +1063,7 @@ pub(in crate::native_bridge::element) fn html_media_element_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1084,7 +1084,7 @@ pub(in crate::native_bridge::element) fn html_media_element_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1105,7 +1105,7 @@ pub(in crate::native_bridge::element) fn html_media_element_method_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     method: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1126,7 +1126,7 @@ fn document_element_or_shadow_root_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -1734,7 +1734,7 @@ fn aria_element_reference_attribute_setter_callback<'s>(
 }
 
 fn element_reference_is_in_valid_scope(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     owner: DomHandle,
     candidate: DomHandle,
 ) -> bool {
@@ -1765,7 +1765,7 @@ fn element_reference_is_in_valid_scope(
 }
 
 fn element_by_id_including_disconnected(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     owner: DomHandle,
     id: &str,
 ) -> Option<DomHandle> {
@@ -1789,7 +1789,7 @@ fn element_by_id_including_disconnected(
 }
 
 pub(in crate::native_bridge::element) fn reflected_element_attribute_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     owner: DomHandle,
     attribute: &str,
 ) -> Option<DomHandle> {
@@ -1813,7 +1813,7 @@ pub(in crate::native_bridge::element) fn reflected_element_attribute_handle(
 }
 
 pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     owner: DomHandle,
     attribute: &str,
 ) -> Option<DomHandle> {

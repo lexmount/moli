@@ -341,7 +341,7 @@ impl DocumentRuntime {
         &mut self,
         load: Arc<StylesheetLinkClient>,
         urls: Vec<Url>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let fetch = load.fetch().clone();
         let roots = self.linked_stylesheet_import_roots(&fetch);

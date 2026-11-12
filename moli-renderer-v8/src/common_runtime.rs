@@ -22,7 +22,7 @@ use std::{
 };
 
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     text_codec::TextCodecStore,
     util::{ContextHostLifecycle, page_context_is_disconnected},
     v8_finalizer::V8FinalizerRegistry,
@@ -74,7 +74,7 @@ pub(crate) struct CommonRuntimeBinding {
 
 enum RuntimeOwner {
     Window {
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         lifecycle: Weak<Cell<ContextHostLifecycle>>,
     },
     Worker {
@@ -85,7 +85,7 @@ enum RuntimeOwner {
 
 #[derive(Clone, Copy)]
 pub(crate) enum RuntimeExecutionContext {
-    Window(*mut JsContextHost),
+    Window(*mut PageScriptHost),
     Worker,
 }
 
@@ -93,7 +93,7 @@ impl CommonRuntimeBinding {
     pub(crate) fn install_window(
         context: v8::Local<'_, v8::Context>,
         common: &Rc<CommonRuntimeState>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         lifecycle: &Rc<Cell<ContextHostLifecycle>>,
     ) {
         if let Some(existing) = context.get_slot::<Self>() {
@@ -210,7 +210,7 @@ impl CommonRuntimeBinding {
         Some(context)
     }
 
-    pub(crate) fn window_host_ptr(&self) -> Option<*mut JsContextHost> {
+    pub(crate) fn window_host_ptr(&self) -> Option<*mut PageScriptHost> {
         self.runtime()?;
         let RuntimeOwner::Window {
             host_ptr,
@@ -263,7 +263,7 @@ mod tests {
         let other_lifecycle = Rc::new(Cell::new(ContextHostLifecycle::Active));
         // This test exercises component ownership and Context identity only.
         // The opaque host address is never dereferenced by a host API.
-        let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+        let host = std::ptr::NonNull::<PageScriptHost>::dangling().as_ptr();
         CommonRuntimeBinding::install_window(first, &common, host, &lifecycle);
         CommonRuntimeBinding::install_window(second, &common, host, &lifecycle);
         CommonRuntimeBinding::install_window(other, &other_common, host, &other_lifecycle);
@@ -319,7 +319,7 @@ mod tests {
         let common = Rc::new(CommonRuntimeState::default());
         let lifecycle = Rc::new(Cell::new(ContextHostLifecycle::Active));
         // Owner lookup must not dereference this opaque test address.
-        let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+        let host = std::ptr::NonNull::<PageScriptHost>::dangling().as_ptr();
         CommonRuntimeBinding::install_window(context, &common, host, &lifecycle);
         let scope = &mut v8::ContextScope::new(scope, context);
         let source = v8::String::new(
@@ -363,7 +363,7 @@ mod tests {
         template.set_internal_field_count(1);
         let bridge = template.new_instance(scope).unwrap();
         // This non-owning carrier must never grant ownership or be dereferenced.
-        let host = std::ptr::NonNull::<JsContextHost>::dangling().as_ptr();
+        let host = std::ptr::NonNull::<PageScriptHost>::dangling().as_ptr();
         let external = v8::External::new(scope, host.cast());
         assert!(bridge.set_internal_field(0, external.into()));
         let key = v8::String::new(scope, "__moliNativeBridge").unwrap();

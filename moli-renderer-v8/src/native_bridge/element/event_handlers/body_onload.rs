@@ -16,7 +16,7 @@ const BODY_ONLOAD_COMPILED_SLOT: &str = "__moliBodyOnloadCompiled";
 /// page's document/body/onload JavaScript getters.
 pub(crate) fn compile_window_body_event_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let host = unsafe { &*host_ptr };
@@ -238,7 +238,7 @@ fn body_window_event_handler_set(
 
 pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
@@ -254,7 +254,7 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
 
 pub(super) fn invalidate_body_window_event_attribute_handler(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &mut crate::native_bridge::JsContextHost,
+    runtime: &mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     name: &str,
 ) {

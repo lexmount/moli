@@ -1,6 +1,6 @@
 use crate::document_runtime::DomHandle;
 
-use super::{JsContextHost, element_attribute};
+use super::{PageScriptHost, element_attribute};
 
 mod lists;
 mod marquee;
@@ -15,7 +15,7 @@ pub(super) use self::table::*;
 pub(super) use self::track::*;
 
 fn parse_i32_attribute_or(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
     default: i32,

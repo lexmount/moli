@@ -8,7 +8,7 @@ use super::super::context_bootstrap::bridge_descriptor::{
     WrapperKind, node_bridge_descriptor, node_bridge_descriptors,
 };
 use super::{
-    BridgeHandle, JsContextHost, ReflectorId, collections, document, element, traversal, window,
+    BridgeHandle, PageScriptHost, ReflectorId, collections, document, element, traversal, window,
 };
 
 mod native_template;
@@ -132,7 +132,7 @@ fn wrapper_kind_for_handle(handle: &BridgeHandle) -> WrapperKind {
     }
 }
 
-fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle) -> &'static str {
+fn prototype_name_for_handle(host_ptr: *mut PageScriptHost, handle: &BridgeHandle) -> &'static str {
     match handle {
         BridgeHandle::Window => "Window",
         BridgeHandle::ClassList(_, _) => "DOMTokenList",
@@ -257,13 +257,13 @@ impl NativeBridgeTemplates {
     }
 
     /// Install the native bridge global object with two internal fields:
-    /// - field 0: `*mut JsContextHost` (for `runtime_ptr_from_object` compatibility)
-    /// - field 1: `*const RefCell<JsContextHost>` from the per-context bridge-ref token
+    /// - field 0: `*mut PageScriptHost` (for `runtime_ptr_from_object` compatibility)
+    /// - field 1: `*const RefCell<PageScriptHost>` from the per-context bridge-ref token
     pub(super) fn install_global<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         global: v8::Local<'s, v8::Object>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         rc_ptr: *mut c_void,
     ) -> Result<()> {
         let template = self.bridge_template();
@@ -284,7 +284,7 @@ impl NativeBridgeTemplates {
     pub(super) fn instantiate_wrapper<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: BridgeHandle,
         reflector_id: ReflectorId,
     ) -> v8::Local<'s, v8::Object> {
@@ -359,7 +359,7 @@ impl NativeBridgeTemplates {
     pub(super) fn instantiate_window_shell<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> v8::Local<'s, v8::Object> {
         let wrapper = self
             .window_wrapper_template()

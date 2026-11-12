@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn resolve_computed_custom_function_calls(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,
@@ -84,7 +84,7 @@ fn css_identifier_byte(byte: u8) -> bool {
 }
 
 fn computed_custom_property_source_scope(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,
@@ -119,7 +119,7 @@ fn computed_custom_property_source_scope(
 }
 
 fn stylesheet_sources_compute_custom_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,
@@ -183,7 +183,7 @@ pub(super) struct CustomFunctionContainerRuleText {
 }
 
 fn visible_custom_functions_for_scope(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     inputs: &FullStyleWorldSnapshot,
     scope: DomHandle,
     viewport: StyleViewport,
@@ -218,7 +218,7 @@ fn visible_custom_functions_for_scope(
 }
 
 fn collect_custom_functions_from_stylesheet_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: &StyloStylesheetSource,
     functions: &mut HashMap<String, CustomCssFunction>,
 ) {
@@ -235,7 +235,7 @@ fn collect_custom_functions_from_stylesheet_source(
     collect_custom_functions_from_css(&source.serialized_css_text(), functions);
 }
 
-fn shadow_root_ancestor_chain(runtime: &JsContextHost, scope: DomHandle) -> Vec<DomHandle> {
+fn shadow_root_ancestor_chain(runtime: &PageScriptHost, scope: DomHandle) -> Vec<DomHandle> {
     let mut chain = Vec::new();
     let mut current = Some(scope);
     while let Some(root) = current {
@@ -379,7 +379,7 @@ fn container_query_width_equality_px(query: &str) -> Option<f64> {
 }
 
 fn evaluate_custom_function(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     function: &CustomCssFunction,
     context: StyleComputationContext,
@@ -395,7 +395,7 @@ fn evaluate_custom_function(
 }
 
 fn named_container_width(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     container_name: &str,
     context: StyleComputationContext,
@@ -415,7 +415,7 @@ fn named_container_width(
 }
 
 pub(super) fn flat_tree_element_parent(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
@@ -443,7 +443,7 @@ pub(super) fn flat_tree_element_parent(
 }
 
 fn element_is_named_size_container(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     container_name: &str,
     context: StyleComputationContext,
@@ -478,13 +478,13 @@ pub(super) fn container_type_is_size_container(value: &str) -> bool {
         .any(|ty| matches!(ty, "size" | "inline-size"))
 }
 
-fn inline_width_px(runtime: &JsContextHost, handle: DomHandle) -> Option<f64> {
+fn inline_width_px(runtime: &PageScriptHost, handle: DomHandle) -> Option<f64> {
     let read = ComputedStyleRead::new(runtime, handle);
     inline_width_px_with_resolution(runtime, handle, read.resolution_context())
 }
 
 pub(super) fn inline_width_px_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<f64> {

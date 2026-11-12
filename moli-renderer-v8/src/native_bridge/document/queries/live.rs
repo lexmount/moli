@@ -87,7 +87,7 @@ pub(in crate::native_bridge) fn node_get_element_by_id_callback<'s>(
 }
 
 fn find_element_by_id_in_subtree(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     id: &str,
 ) -> Option<DomHandle> {

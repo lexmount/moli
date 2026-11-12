@@ -1,8 +1,8 @@
 use super::registry::{CustomElementRegistryAssociation, CustomElementRegistryKey};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) fn registry_association_for_clone_source(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     source: DomHandle,
     target_document: DomHandle,
 ) -> CustomElementRegistryAssociation {
@@ -18,7 +18,7 @@ pub(super) fn registry_association_for_clone_source(
 }
 
 pub(super) fn registry_association_for_import_clone_source(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     source: DomHandle,
     target_document: DomHandle,
     fallback_registry: Option<CustomElementRegistryAssociation>,

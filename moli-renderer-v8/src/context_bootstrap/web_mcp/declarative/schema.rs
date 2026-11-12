@@ -6,7 +6,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::Node,
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         element::{
             control_label_handles, form_control_elements, form_control_is_effectively_disabled,
         },
@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub(super) fn parameter_controls(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     controls: impl IntoIterator<Item = DomHandle>,
 ) -> ParameterControls {
     let mut groups = ParameterControls::new();
@@ -37,7 +37,7 @@ pub(super) fn parameter_controls(
 }
 
 pub(super) fn input_schema(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     form: DomHandle,
     pattern_is_usable: impl FnMut(&str) -> bool,
 ) -> String {

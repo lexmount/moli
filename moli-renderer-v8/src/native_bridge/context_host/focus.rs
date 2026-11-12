@@ -1,7 +1,7 @@
-use super::{JsContextHost, PendingWindowMessageEndpoint};
+use super::{PageScriptHost, PendingWindowMessageEndpoint};
 use crate::document_runtime::DomHandle;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn window_endpoint_for_document(
         &self,
         document_handle: DomHandle,

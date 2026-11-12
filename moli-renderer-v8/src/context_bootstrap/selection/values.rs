@@ -455,7 +455,7 @@ pub(in crate::context_bootstrap) fn selection_sync_associated_range<'s>(
 
 pub(in crate::context_bootstrap) fn selection_update_composed_boundaries_for_child_removal(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dom_host: &crate::dom::native::DomHost,
     parent: DomHandle,
     removed_child: DomHandle,
@@ -585,7 +585,7 @@ pub(in crate::context_bootstrap) fn selection_update_composed_boundaries_for_chi
 }
 
 fn selection_should_rescope_observable_for_child_removal(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &crate::dom::native::DomHost,
     anchor: Option<(DomHandle, u32)>,
     focus: Option<(DomHandle, u32)>,
@@ -660,7 +660,7 @@ fn selection_shadow_including_descendant_or_self(
 
 fn selection_wrap_boundary_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     wrapped_handle_value(scope, host_ptr, handle)
@@ -840,7 +840,7 @@ fn selection_store_native_record<'s>(
 
 fn selection_dom_handle_for_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     callback_value_dom_handle(scope, object.into()).or_else(|| {

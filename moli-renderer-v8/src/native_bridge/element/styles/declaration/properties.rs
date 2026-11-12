@@ -7,7 +7,7 @@ use crate::{
     document_runtime::DomHandle,
 };
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::values::computed_style_default_value;
 use super::{StyleMode, style_entries};
 
@@ -206,7 +206,7 @@ pub(in crate::native_bridge::element::styles) fn box_shorthand_components(
     }
 }
 
-fn inline_style_has_property(runtime: &JsContextHost, handle: DomHandle, property: &str) -> bool {
+fn inline_style_has_property(runtime: &PageScriptHost, handle: DomHandle, property: &str) -> bool {
     let property = canonical_style_property_name(property);
     style_entries(runtime, handle)
         .iter()
@@ -214,7 +214,7 @@ fn inline_style_has_property(runtime: &JsContextHost, handle: DomHandle, propert
 }
 
 fn style_property_exists(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -256,7 +256,7 @@ pub(in crate::native_bridge::element::styles) fn resolve_known_style_property_na
 }
 
 pub(in crate::native_bridge::element::styles) fn resolve_style_property_name(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     raw_key: &str,

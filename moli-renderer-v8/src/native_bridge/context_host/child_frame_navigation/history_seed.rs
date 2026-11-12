@@ -1,4 +1,4 @@
-use super::super::{ChildBrowsingContextBootstrap, JsContextHost, NavigationHistoryEntrySeed};
+use super::super::{ChildBrowsingContextBootstrap, NavigationHistoryEntrySeed, PageScriptHost};
 use moli_page_types::{
     apply_child_browsing_context_navigation_to_entry_seed as apply_child_navigation_to_seed,
     child_browsing_context_single_entry_seed as page_child_browsing_context_single_entry_seed,
@@ -6,7 +6,7 @@ use moli_page_types::{
 };
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn child_browsing_context_bootstrap_url(
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> Option<Url> {

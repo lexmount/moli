@@ -2,7 +2,7 @@ use super::insertion_plan::TreeInsertionPlan;
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 impl DocumentRuntime {
@@ -51,7 +51,7 @@ impl DocumentRuntime {
     fn preserve_selectedness_for_options_removed_from_select(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         selectedness: &[(DomHandle, bool)],
     ) {
         for &(option, was_selected) in selectedness {
@@ -64,7 +64,7 @@ impl DocumentRuntime {
     pub(super) fn preserve_selectedness_for_insertion_plan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
         if let Some(selectedness) = insertion_plan.option_selectedness_before_insert.as_deref() {

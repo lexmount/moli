@@ -7,12 +7,12 @@ use super::element_state::{
     set_dom_custom_element_state, set_dom_element_prefix,
 };
 
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use crate::dom::native::CustomElementState;
 
 pub(super) fn failed_custom_element_construction_fallback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_handle: DomHandle,
     owner_document: DomHandle,
     explicit_registry_association: Option<CustomElementRegistryAssociation>,

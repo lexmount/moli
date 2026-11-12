@@ -39,7 +39,7 @@ use crate::runtime::RendererRuntimeCommandOutputRecorder;
 use crate::{
     frame_owner_model::FrameRealmId,
     protocol_types::RuntimeBindingRegistration,
-    script_vm::document_isolate::RendererDocumentIsolateHandle,
+    script_vm::document_isolate::RendererIsolateHandle,
     {document_runtime::DomHandle, runtime::RendererCommandTurnOutputRecorder},
 };
 use anyhow::Result;
@@ -321,7 +321,7 @@ impl DocumentInspectorBinding {
 
     pub(super) fn attach_context<'s>(
         &mut self,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         backend: &mut RendererInspectorIsolateBackend,
         context: v8::Local<'s, v8::Context>,
         default_context: v8::Global<v8::Context>,
@@ -400,7 +400,7 @@ impl DocumentInspectorBinding {
 
     pub(super) fn attach_isolated_context<'s>(
         &mut self,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         backend: &mut RendererInspectorIsolateBackend,
         context: v8::Local<'s, v8::Context>,
         registered_context: v8::Global<v8::Context>,
@@ -458,7 +458,7 @@ impl DocumentInspectorBinding {
 
     pub(super) fn attach_child_default_context<'s>(
         &mut self,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         backend: &mut RendererInspectorIsolateBackend,
         context: v8::Local<'s, v8::Context>,
         registered_context: v8::Global<v8::Context>,

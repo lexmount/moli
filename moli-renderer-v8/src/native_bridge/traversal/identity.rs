@@ -1,8 +1,8 @@
 use super::{NodeIteratorSnapshot, TreeWalkerSnapshot};
-use crate::native_bridge::{JsContextHost, runtime_ptr_from_object};
+use crate::native_bridge::{PageScriptHost, runtime_ptr_from_object};
 
 pub(super) struct TraversalSnapshot<S> {
-    pub(super) runtime_ptr: *mut JsContextHost,
+    pub(super) runtime_ptr: *mut PageScriptHost,
     pub(super) id: u32,
     pub(super) state: S,
 }
@@ -40,7 +40,7 @@ pub(super) fn tree_walker_snapshot_from_object<'s>(
 pub(super) fn traversal_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, u32)> {
+) -> Option<(*mut PageScriptHost, u32)> {
     let object = moli_webapi_declare::web_api_object_target(scope, object)?;
     let runtime_ptr = runtime_ptr_from_object(scope, object).ok()?;
     let value = object.get_internal_field(scope, 1)?;

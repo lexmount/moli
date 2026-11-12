@@ -33,7 +33,7 @@ pub(in crate::network_host) fn observe_subresource_request_cookie_report(
 }
 
 pub(in crate::network_host) fn active_subresource_network_partition_key(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<String> {
     owner
@@ -43,7 +43,7 @@ pub(in crate::network_host) fn active_subresource_network_partition_key(
 
 pub(crate) fn effective_subresource_policy_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> crate::types::SubresourcePolicyContext {
     match owner {
@@ -72,7 +72,7 @@ pub(crate) fn effective_subresource_policy_context(
 /// Select request attribution without using a document's mutable base URL.
 pub(in crate::network_host) fn effective_subresource_request_owner(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
 ) -> crate::native_bridge::OwnerDispatchScope {
     let handle = host.active_child_subresource_request_handle().or_else(|| {
         crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
@@ -94,7 +94,7 @@ pub(in crate::network_host) fn effective_subresource_request_owner(
 /// nor the origin used for request security checks. Read it live for every call.
 pub(crate) fn subresource_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<url::Url> {
     match owner {
@@ -111,7 +111,7 @@ pub(crate) fn subresource_api_base_url(
 }
 
 pub(in crate::network_host) fn effective_subresource_referrer_policy(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<String> {
     let document = match owner {

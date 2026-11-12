@@ -98,7 +98,7 @@ impl super::PendingImageLoadEvent {
     }
 }
 
-impl super::JsContextHost {
+impl super::PageScriptHost {
     pub(in crate::native_bridge::context_host) fn visual_resource_generation(&self) -> u64 {
         self.image_resources.visual_generation()
     }

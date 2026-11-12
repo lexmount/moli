@@ -1,7 +1,7 @@
 use crate::{
     document_runtime::DomHandle,
     dom::{forms::InputType, native::Node},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 #[derive(Clone, Copy)]
@@ -16,7 +16,7 @@ pub(in crate::script_vm) struct KeyTargetInfo {
 }
 
 pub(in crate::script_vm) fn key_target_info(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> KeyTargetInfo {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -72,7 +72,7 @@ pub(in crate::script_vm) fn is_space_key(key: &str) -> bool {
 }
 
 pub(in crate::script_vm) fn radio_group_members(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Vec<DomHandle> {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -110,7 +110,7 @@ pub(in crate::script_vm) fn radio_group_members(
 }
 
 pub(in crate::script_vm) fn current_selection_state(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> (u32, u32, String) {
     runtime
@@ -129,7 +129,10 @@ pub(in crate::script_vm) fn current_selection_state(
         .unwrap_or((0, 0, "none".to_owned()))
 }
 
-pub(in crate::script_vm) fn option_is_disabled(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(in crate::script_vm) fn option_is_disabled(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+) -> bool {
     if runtime
         .dom_host()
         .node(handle)

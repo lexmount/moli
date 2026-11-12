@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 
 pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
     RendererPageMiscPlatformApiTaskId,
@@ -20,7 +20,7 @@ pub(super) type MiscPlatformApiTaskState = ExactWindowDocumentTaskLedger<
     LegacyStorageQuotaCallbackTask,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Publish one deprecated-quota callback to the exact calling
     /// Window/Document's miscellaneous-platform task source.
     pub(crate) fn queue_legacy_storage_quota_callback_task(
@@ -97,7 +97,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_misc_platform_api_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         task: LegacyStorageQuotaCallbackTask,
     ) -> PageMiscPlatformApiTargetEffect {

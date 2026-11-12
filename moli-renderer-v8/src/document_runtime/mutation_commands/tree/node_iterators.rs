@@ -1,7 +1,7 @@
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(super) struct NodeIteratorRemovalPlan {
@@ -45,7 +45,7 @@ impl DocumentRuntime {
 
     pub(super) fn apply_node_iterator_pre_remove_plans(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         plans: &[NodeIteratorRemovalPlan],
     ) {
         for plan in plans {
@@ -55,7 +55,7 @@ impl DocumentRuntime {
 
     pub(super) fn apply_node_iterator_pre_remove_plan(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         plan: &NodeIteratorRemovalPlan,
     ) {
         unsafe { &mut *host_ptr }

@@ -32,7 +32,7 @@ pub(in crate::native_bridge) enum ExistingNodeArgument {
 
 pub(in crate::native_bridge) fn live_delegate_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<DomHandle> {
     let object = v8::Global::new(scope, object);
@@ -55,7 +55,7 @@ fn is_detached_node_arg(
 
 fn foreign_identity_arg_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let object = node_backing_object(scope, object)?;
@@ -75,7 +75,7 @@ fn foreign_identity_arg_handle<'s>(
 
 fn materialize_foreign_node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<DomHandle> {
@@ -90,7 +90,7 @@ fn materialize_foreign_node_arg_handle(
 
 fn materialize_foreign_node_arg_handle_for_identity(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<DomHandle> {
@@ -102,7 +102,7 @@ fn materialize_foreign_node_arg_handle_for_identity(
 
 fn materialize_detached_node_arg_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
@@ -117,7 +117,7 @@ fn materialize_detached_node_arg_handle<'s>(
 
 fn resolve_node_argument<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'_, v8::Value>,
 ) -> NodeArgumentResolution<'s> {
     if value.is_null_or_undefined() {
@@ -159,7 +159,7 @@ fn is_node_like_foreign_object(
 
 pub(in crate::native_bridge) fn existing_node_arg(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'_, v8::Value>,
 ) -> ExistingNodeArgument {
     match resolve_node_argument(scope, runtime_ptr, value) {
@@ -190,7 +190,7 @@ pub(in crate::native_bridge) fn existing_node_arg(
 
 pub(in crate::native_bridge) fn node_or_foreign_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
@@ -210,7 +210,7 @@ pub(in crate::native_bridge) fn node_or_foreign_arg_handle(
 
 pub(in crate::native_bridge) fn node_or_existing_detached_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
     if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
@@ -236,7 +236,7 @@ pub(in crate::native_bridge) fn node_or_existing_detached_arg_handle(
 
 pub(crate) fn node_or_foreign_arg_handle_allow_detached(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
@@ -260,7 +260,7 @@ pub(crate) fn node_or_foreign_arg_handle_allow_detached(
 
 pub(in crate::native_bridge) fn node_or_foreign_arg_handle_preserve_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<DomHandle> {

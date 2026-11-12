@@ -123,7 +123,7 @@ pub(in crate::native_bridge) fn node_prepend_callback<'s>(
 
 fn parent_node_insertion_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     args: &v8::FunctionCallbackArguments<'_>,
 ) -> Option<Vec<DomHandle>> {
@@ -138,7 +138,7 @@ fn parent_node_insertion_handles(
 
 fn validate_parent_node_insertion(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     reference_child: Option<DomHandle>,
     inserted: &[DomHandle],
@@ -272,7 +272,7 @@ pub(in crate::native_bridge) fn node_replace_children_callback<'s>(
 
 fn validate_parent_node_replace_children(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     inserted: &[DomHandle],
 ) -> bool {

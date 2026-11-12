@@ -1,7 +1,7 @@
 use super::*;
 
 pub(in crate::native_bridge::element::styles) fn style_property_priority(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> String {
@@ -80,7 +80,7 @@ pub(super) fn canonical_computed_cssom_query_property_name(property: &str) -> Op
 }
 
 pub(in crate::native_bridge::element::styles) fn style_css_text_for_computed(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let _ = (runtime, handle);
@@ -109,7 +109,7 @@ fn specified_color_component_value_is_valid(value: &str) -> bool {
 }
 
 pub(in crate::native_bridge::element::styles) fn style_property_names_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     context: StyleComputationContext,
@@ -129,7 +129,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_names_with_conte
 }
 
 pub(in crate::native_bridge::element::styles) fn style_property_count_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     context: StyleComputationContext,
@@ -143,7 +143,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_count_with_conte
 }
 
 pub(in crate::native_bridge::element::styles) fn style_property_name_at_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     context: StyleComputationContext,
@@ -160,7 +160,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_name_at_with_con
 }
 
 pub(in crate::native_bridge::element::styles) fn style_property_index_exists_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     context: StyleComputationContext,
@@ -176,14 +176,14 @@ pub(in crate::native_bridge::element::styles) fn style_property_index_exists_wit
 }
 
 pub(in crate::native_bridge::element::styles) fn computed_style_applies(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     computed_style_applies_with_observation(runtime, handle, None)
 }
 
 pub(super) fn computed_style_applies_with_observation(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     observation: Option<&dyn RetainedStyleObservation>,
 ) -> bool {

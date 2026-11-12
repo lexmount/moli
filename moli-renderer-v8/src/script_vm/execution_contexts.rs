@@ -105,7 +105,7 @@ impl ScriptVm {
     pub(super) fn with_child_frame_realm_context_scope<T>(
         &mut self,
         execution_context_id: i64,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         let realm_id =
             self.child_frame_owner_realm_id_for_execution_context_id(execution_context_id)?;

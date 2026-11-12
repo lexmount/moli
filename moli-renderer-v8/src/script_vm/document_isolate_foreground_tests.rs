@@ -3,7 +3,7 @@ use std::{pin::pin, time::Duration};
 use crate::{
     page_task_queue::{RendererOwnerWakeSender, RendererPageV8ForegroundTaskSource},
     runtime::{PageId, RendererPageToken},
-    script_vm::RendererDocumentIsolateHandle,
+    script_vm::RendererIsolateHandle,
 };
 
 fn page_source(id: u64) -> RendererPageV8ForegroundTaskSource {
@@ -15,7 +15,7 @@ fn page_source(id: u64) -> RendererPageV8ForegroundTaskSource {
 }
 
 fn evaluate(
-    isolate: &RendererDocumentIsolateHandle,
+    isolate: &RendererIsolateHandle,
     context: &v8::Global<v8::Context>,
     source: &str,
 ) -> String {
@@ -47,10 +47,8 @@ async fn run_wasm_across_page_retirement(retirement: PageSourceRetirement) {
     let mut first = page_source(1);
     let mut second = page_source(2);
     let bootstrap =
-        RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
-            first.sender(),
-        )
-        .unwrap();
+        RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(first.sender())
+            .unwrap();
     let isolate = bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
     drop(bootstrap);
     let membership = first.sender().isolate_membership().unwrap();
@@ -120,7 +118,7 @@ async fn run_wasm_across_page_retirement(retirement: PageSourceRetirement) {
 }
 
 async fn complete_wasm(
-    isolate: &RendererDocumentIsolateHandle,
+    isolate: &RendererIsolateHandle,
     context: &v8::Global<v8::Context>,
     source: &mut RendererPageV8ForegroundTaskSource,
     expected_count: &str,
@@ -169,10 +167,8 @@ async fn retired_isolate_tasks_cannot_run_in_a_rebound_page_source() {
     crate::ensure_v8_for_test();
     let mut source = page_source(1);
     let bootstrap =
-        RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
-            source.sender(),
-        )
-        .unwrap();
+        RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(source.sender())
+            .unwrap();
     let old_isolate = bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
     drop(bootstrap);
     let old_context = old_isolate
@@ -196,19 +192,15 @@ async fn retired_isolate_tasks_cannot_run_in_a_rebound_page_source() {
     .await
     .unwrap();
     assert!(
-        RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
-            source.sender(),
-        )
-        .is_err(),
+        RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(source.sender(),)
+            .is_err(),
         "a source must not enter two live isolates"
     );
     old_isolate.unregister_renderer_document_isolate_platform();
     let retired_tasks = std::iter::from_fn(|| source.pop_front()).collect::<Vec<_>>();
     let bootstrap =
-        RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
-            source.sender(),
-        )
-        .unwrap();
+        RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(source.sender())
+            .unwrap();
     let current = bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
     drop(bootstrap);
     let mut discarded = 0;
@@ -240,7 +232,7 @@ async fn retired_isolate_tasks_cannot_run_in_a_rebound_page_source() {
 }
 
 async fn assert_cpu_profile_survives_isolate_retirement(
-    retire: impl FnOnce(RendererDocumentIsolateHandle),
+    retire: impl FnOnce(RendererIsolateHandle),
 ) {
     crate::ensure_v8_for_test();
     let trace = moli_v8_platform::start_v8_cpu_trace(
@@ -249,10 +241,8 @@ async fn assert_cpu_profile_survives_isolate_retirement(
     .expect("CPU tracing should start before the page is created");
     let source = page_source(1);
     let bootstrap =
-        RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
-            source.sender(),
-        )
-        .unwrap();
+        RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(source.sender())
+            .unwrap();
     let isolate = bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
     drop(bootstrap);
     let context = isolate

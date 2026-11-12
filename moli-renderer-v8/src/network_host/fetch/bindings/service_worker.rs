@@ -7,7 +7,7 @@ use moli_fetch::FetchCancelHandle;
 
 pub(super) fn dispatch_service_worker_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: &PreparedWindowFetchRequest,
 ) -> Option<u64> {

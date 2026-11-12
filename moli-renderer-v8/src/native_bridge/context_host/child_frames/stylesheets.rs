@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentStylesheetAdmission,
@@ -11,7 +11,7 @@ use crate::{
 };
 use futures_util::future::Either;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn accept_child_parser_stylesheet_inputs(
         &mut self,
         child_handle: DomHandle,
@@ -235,13 +235,14 @@ impl JsContextHost {
             for violation in &completion.csp_violations {
                 // Use the existing Page task path: no JavaScript may run while
                 // this completion is still installing CSSOM and releasing blockers.
-                unsafe { &mut *self.runtime }.enqueue_content_security_policy_violation_event_task(
-                    crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
-                        root_owner,
-                        target,
-                        violation.clone(),
-                    ),
-                );
+                unsafe { &mut *self.document_runtime }
+                    .enqueue_content_security_policy_violation_event_task(
+                        crate::page_task_queue::ContentSecurityPolicyViolationEventTask::for_window(
+                            root_owner,
+                            target,
+                            violation.clone(),
+                        ),
+                    );
             }
         }
         self.install_child_parser_stylesheet_result(

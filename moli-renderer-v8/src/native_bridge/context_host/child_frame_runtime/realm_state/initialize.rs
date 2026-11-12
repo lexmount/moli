@@ -12,7 +12,7 @@ use crate::{
         sync_window_location_history_navigation_runtime_surface,
     },
     native_bridge::{
-        JsContextHost, OwnerDispatchScope, WindowExecutionContextOwner,
+        OwnerDispatchScope, PageScriptHost, WindowExecutionContextOwner,
         child_window_surface::{
             bind_materialized_child_window_indexed_db_factory,
             initialize_child_window_realm_environment, rebind_child_window_document_environment,
@@ -30,7 +30,7 @@ use super::super::{
 pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_child_window_realm_state<
     's,
 >(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     init: ChildWindowRealmInit,
@@ -73,7 +73,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
 pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_window_realm_document_state<
     's,
 >(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     rebind: ChildWindowRealmRebind,
@@ -127,7 +127,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
 }
 
 fn bind_document<'s>(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     scope: &mut v8::PinScope<'s, '_>,
     snapshot: &super::model::ChildWindowRealmSnapshot,
     document: v8::Local<'s, v8::Object>,
@@ -137,7 +137,7 @@ fn bind_document<'s>(
 }
 
 fn validate_registered_realm(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     scope: &mut v8::PinScope<'_, '_>,
     init: ChildWindowRealmInit,
 ) -> Result<()> {
@@ -174,12 +174,12 @@ fn bind_window_name(
 }
 
 fn bind_frame_element<'s>(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     handle: crate::document_runtime::DomHandle,
 ) {
-    let host_ptr = host as *mut JsContextHost;
+    let host_ptr = host as *mut PageScriptHost;
     if let Some(frame_element) = host
         .native_bridge_mut()
         .wrap_handle(scope, host_ptr, handle)

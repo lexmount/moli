@@ -11,7 +11,7 @@ use crate::{
     },
     document_runtime::{DomHandle, EventTargetHandle},
     host::EventListenerInspectorSnapshot,
-    native_bridge::{JsContextHost, OwnerDispatchScope, node_runtime_and_handle_from_object},
+    native_bridge::{OwnerDispatchScope, PageScriptHost, node_runtime_and_handle_from_object},
     runtime::{RendererDomDebuggerEventListener, RendererDomDebuggerEventListenersResolution},
     util::v8str,
 };
@@ -46,7 +46,7 @@ impl ScriptVm {
                 let scope = &mut scope.init();
                 let default_context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, default_context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                let host_ptr: *mut PageScriptHost = (*context_host).as_ptr();
                 page_inspector.with_session_and_outbound(
                     inspector,
                     PageInspectorSessionTarget::Frontend(inspector_session_id),
@@ -154,7 +154,7 @@ impl ScriptVm {
 
 fn rooted_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     source_object: v8::Local<'s, v8::Object>,
     source_context: v8::Local<'s, v8::Context>,
     depth: i32,
@@ -208,7 +208,7 @@ fn rooted_event_listener_snapshots<'s>(
 
 fn rooted_node_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     root: DomHandle,
     source_context: v8::Local<'s, v8::Context>,
     depth: i32,
@@ -251,7 +251,7 @@ fn rooted_node_event_listener_snapshots<'s>(
 }
 
 fn host_listener_snapshots(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     target: EventTargetHandle,
 ) -> Vec<EventListenerInspectorSnapshot> {
     match target {
@@ -266,7 +266,7 @@ fn host_listener_snapshots(
 
 fn rooted_registered_event_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     snapshots: Vec<EventListenerInspectorSnapshot>,
     source_context: v8::Local<'s, v8::Context>,
     report_for_all_contexts: bool,
@@ -340,7 +340,7 @@ fn effective_listener_function<'s>(
 #[allow(clippy::too_many_arguments)]
 fn wrap_inspector_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     session: &v8::inspector::V8InspectorSession,
     outbound: &super::inspector::InspectorOutbound,
     next_call_id: &Cell<i32>,

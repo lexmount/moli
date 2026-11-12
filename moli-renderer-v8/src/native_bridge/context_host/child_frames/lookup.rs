@@ -2,7 +2,7 @@ use super::*;
 use crate::dom::native::Node;
 use std::collections::HashSet;
 
-impl JsContextHost {
+impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn child_browsing_context_has_cached_snapshot_for_test(
         &self,

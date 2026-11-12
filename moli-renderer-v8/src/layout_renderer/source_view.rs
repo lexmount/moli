@@ -13,11 +13,11 @@ use crate::{
         flat_children, flat_parent, form_control_data, layout_element_classification, list_data,
         optional_positive_u16_attribute, select_control_data,
     },
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
-    runtime: &'a JsContextHost,
+    runtime: &'a PageScriptHost,
     root: DomHandle,
     document: Option<DomHandle>,
     include_paint_resources: bool,
@@ -26,12 +26,12 @@ pub(super) struct NativeLayoutSourceView<'a> {
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
-    pub(super) fn new(runtime: &'a JsContextHost, root: DomHandle) -> Self {
+    pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
         Self::with_paint_resources(runtime, root, false)
     }
 
     pub(super) fn with_paint_resources(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         root: DomHandle,
         include_paint_resources: bool,
     ) -> Self {
@@ -297,7 +297,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
 }
 
 fn document_text_selections(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
 ) -> HashMap<DomHandle, LayoutTextSelection> {
     let host = runtime.dom_host();

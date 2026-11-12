@@ -2,13 +2,13 @@
 
 use super::bindings::js_string;
 use super::state::AbortRegistration;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::util::context_host_ptr_from_global_bridge;
 
 pub(super) fn invocation_context(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
-) -> Option<(*mut JsContextHost, u64)> {
+) -> Option<(*mut PageScriptHost, u64)> {
     let id = v8::Local::<v8::BigInt>::try_from(args.data())
         .ok()?
         .u64_value()
@@ -46,7 +46,7 @@ pub(super) fn task_context<'s>(
 
 pub(super) fn queue_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     callback: v8::Local<'s, v8::Function>,
 ) {
     unsafe { &mut *host_ptr }.queue_internal_task(scope, callback);

@@ -178,7 +178,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
 }
 
 pub(crate) fn send_link_audit_ping(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     link: crate::document_runtime::DomHandle,
     ping_url: url::Url,
     destination_url: &str,
@@ -336,14 +336,14 @@ struct WindowPingRequestContext {
 
 fn window_ping_request_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
 ) -> Option<WindowPingRequestContext> {
     let execution_context = host.current_runtime_window_execution_context_identity(scope)?;
     window_ping_request_context_for_execution_context(host, execution_context)
 }
 
 fn window_ping_request_context_for_execution_context(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     execution_context: crate::native_bridge::WindowExecutionContextIdentity,
 ) -> Option<WindowPingRequestContext> {
     let owner = execution_context.dispatch_scope();
@@ -411,7 +411,7 @@ fn request_body_text(body: &Option<bytes::Bytes>) -> Option<String> {
 }
 
 fn record_beacon_failure(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     info: PendingSubresourceFetchInfo,
     message: String,
 ) {

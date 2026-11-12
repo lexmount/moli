@@ -3,11 +3,11 @@
 use super::devtools;
 use super::state::RegisteredTool;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use moli_page_types::{RendererWebMcpEvent, RendererWebMcpToolId};
 
 pub(super) fn insert_tool(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     document: DomHandle,
     name: String,
     tool: RegisteredTool,
@@ -33,7 +33,7 @@ pub(super) fn insert_tool(
 }
 
 pub(super) fn take_tool(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     document: DomHandle,
     name: String,
 ) -> Option<RegisteredTool> {

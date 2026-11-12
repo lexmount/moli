@@ -578,7 +578,7 @@ impl ServiceWorkerInternalEventCallbackDispatchEffect {
 
 pub(crate) fn dispatch_service_worker_lifecycle_notification(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
+    host: &mut crate::native_bridge::PageScriptHost,
     notification: crate::types::ServiceWorkerLifecycleNotification,
 ) -> ServiceWorkerInternalEventCallbackDispatchEffect {
     let mut callback_effect =

@@ -257,7 +257,7 @@ impl DocumentRuntime {
     pub(super) fn apply_style_csp_mutation_followups<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         attribute_mutations: &[super::mutation_commands::InlineStyleAttributeCspMutation],
         connected_roots: &[DomHandle],
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
@@ -280,7 +280,7 @@ impl DocumentRuntime {
     fn apply_nonempty_style_csp_mutation_followups<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         attribute_mutations: &[super::mutation_commands::InlineStyleAttributeCspMutation],
         connected_roots: &[DomHandle],
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
@@ -380,7 +380,7 @@ impl DocumentRuntime {
 
     fn set_stylesheet_owner_csp_disposition(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner: DomHandle,
         disposition: super::StylesheetOwnerCspDisposition,
     ) {
@@ -401,7 +401,7 @@ impl DocumentRuntime {
     fn apply_inline_style_attribute_csp_check<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: DomHandle,
         source: Option<&str>,
     ) {
@@ -439,7 +439,7 @@ impl DocumentRuntime {
     pub(crate) fn apply_inline_style_element_csp_check<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner: DomHandle,
     ) {
         if !self.dom_host.is_connected(owner)
@@ -511,7 +511,7 @@ impl DocumentRuntime {
     fn apply_link_style_element_csp_check<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner: DomHandle,
     ) {
         if !self.dom_host.is_connected(owner) {
@@ -1690,7 +1690,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_content_security_policy_violation_event_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
         if let Err(error) =
@@ -1707,7 +1707,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_content_security_policy_violation_event_for_element_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: DomHandle,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
@@ -1729,7 +1729,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_content_security_policy_violation_event_without_report_best_effort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
         if let Err(error) = self.queue_content_security_policy_violation_event_for_target(
@@ -1746,7 +1746,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_content_security_policy_violation_event<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         violation: &DocumentContentSecurityPolicyViolation,
     ) -> anyhow::Result<()> {
         self.queue_content_security_policy_violation_event_for_target(
@@ -1757,7 +1757,7 @@ impl DocumentRuntime {
     fn queue_content_security_policy_violation_event_for_target<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: Option<DomHandle>,
         violation: &DocumentContentSecurityPolicyViolation,
         send_report: bool,
@@ -1838,7 +1838,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_content_security_policy_violation_event_page_task<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task: &crate::page_task_queue::ContentSecurityPolicyViolationEventTask,
     ) -> anyhow::Result<()> {
         if unsafe { &*host_ptr }.current_main_document_task_owner() != Some(task.owner()) {

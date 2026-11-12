@@ -228,7 +228,7 @@ fn traversal_target_entry_still_available<'s>(
 
 pub(crate) fn apply_authorized_history_traversal_task(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     action: PendingHistoryTraversalAction,
 ) {
     match action {

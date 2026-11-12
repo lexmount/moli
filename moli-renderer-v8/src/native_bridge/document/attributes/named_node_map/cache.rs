@@ -26,7 +26,7 @@ fn set_live_named_node_map_cache<'s>(
 
 pub(crate) fn live_named_node_map_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     element: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
     let element = crate::native_bridge::document::canonical_detached_node_object(scope, element)

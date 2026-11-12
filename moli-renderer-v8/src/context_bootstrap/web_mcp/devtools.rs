@@ -2,7 +2,7 @@ use super::bindings::document_owner;
 use super::execution;
 use super::state::{DocumentTools, RegisteredTool, ToolExecutor};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use moli_page_types::{
     DevToolsSessionKey, RendererWebMcpAnnotations, RendererWebMcpEvent, RendererWebMcpObservation,
     RendererWebMcpTool,
@@ -11,7 +11,7 @@ use moli_page_types::{
 use moli_page_types::{RendererWebMcpCommand, RendererWebMcpError};
 
 pub(crate) fn configure_session(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     session: DevToolsSessionKey,
     enabled: bool,
 ) {
@@ -53,7 +53,7 @@ pub(crate) fn configure_session(
 
 pub(crate) fn dispatch_command<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     session: DevToolsSessionKey,
     command: RendererWebMcpCommand,
 ) -> Result<Option<u64>, RendererWebMcpError> {
@@ -126,7 +126,7 @@ pub(crate) fn dispatch_command<'s>(
     }
 }
 
-pub(super) fn document_frame_id(host: &JsContextHost, document: DomHandle) -> Option<String> {
+pub(super) fn document_frame_id(host: &PageScriptHost, document: DomHandle) -> Option<String> {
     let child = host.child_browsing_context_host_for_document_handle(document)?;
     host.frame_owner_frame_id_for_child_handle(child)
         .map(|frame| frame.0)
@@ -191,7 +191,7 @@ pub(super) fn capture_registration_stack(
     (!frames.is_empty()).then(|| serde_json::json!({"callFrames":frames}))
 }
 
-pub(crate) fn emit(host: &JsContextHost, event: RendererWebMcpEvent) {
+pub(crate) fn emit(host: &PageScriptHost, event: RendererWebMcpEvent) {
     let mut sessions = host.native_bridge().web_mcp.enabled_sessions.iter();
     let Some(last) = sessions.next_back() else {
         return;
@@ -212,12 +212,12 @@ pub(crate) fn emit(host: &JsContextHost, event: RendererWebMcpEvent) {
     ));
 }
 
-pub(super) fn observes_tree(host: &JsContextHost, tree: Option<u64>) -> bool {
+pub(super) fn observes_tree(host: &PageScriptHost, tree: Option<u64>) -> bool {
     tree.is_none() && !host.native_bridge().web_mcp.enabled_sessions.is_empty()
 }
 
 pub(super) fn emit_in_tree(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     tree: Option<u64>,
     event: impl FnOnce() -> RendererWebMcpEvent,
 ) {

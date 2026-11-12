@@ -2,7 +2,7 @@ use super::super::util::{throw_type_error, v8_string};
 use super::context_host_ptr_from_global_bridge;
 use super::{initialize_simple_event_target, simple_object_event_set_handler};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{get_private_value, set_private_value, v8str};
 use crate::web_api_interfaces;
@@ -498,8 +498,8 @@ fn text_track_cue_get_cue_as_html_callback<'s>(
 
 fn append_vtt_cue_fragment(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    runtime: &mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
+    runtime: &mut PageScriptHost,
     fragment: DomHandle,
     source: &str,
 ) {
@@ -559,8 +559,8 @@ struct VttCueFragmentNode {
 
 fn flush_vtt_cue_text(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    runtime: &mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
+    runtime: &mut PageScriptHost,
     stack: &[VttCueFragmentNode],
     text: &mut String,
 ) {
@@ -578,8 +578,8 @@ fn flush_vtt_cue_text(
 
 fn apply_vtt_cue_tag(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    runtime: &mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
+    runtime: &mut PageScriptHost,
     stack: &mut Vec<VttCueFragmentNode>,
     raw: &str,
 ) {

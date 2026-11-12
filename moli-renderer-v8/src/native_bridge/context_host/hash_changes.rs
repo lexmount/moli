@@ -4,14 +4,14 @@ use crate::{
     page_task_queue::RendererPageHashChangeData,
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Dispatch an already-authorized `hashchange` in the exact target
     /// LocalDOMWindow. Currentness is decided by the Page arbiter; this method
     /// only resolves/materializes the target's default realm and applies it.
     pub(crate) fn dispatch_authorized_hash_change_delivery(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowTaskTarget,
         data: &RendererPageHashChangeData,
     ) -> bool {

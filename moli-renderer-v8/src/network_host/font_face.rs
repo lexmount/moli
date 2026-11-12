@@ -1,7 +1,7 @@
 use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
 use crate::{
-    native_bridge::{JsContextHost, WindowExecutionContextIdentity},
+    native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
     types::{SubresourceRequestInitiatorType, SubresourceResourceType},
 };
 use anyhow::{Context, Result, anyhow, ensure};
@@ -62,7 +62,7 @@ pub(crate) fn start_font_face_fetch(
         .context("FontFace URL loader is unavailable in this realm")?;
     // SAFETY: the current live realm owns the bridge. No author callback runs
     // while the host is used except its existing CSP notification boundary.
-    let host: &mut JsContextHost = unsafe { &mut *host_ptr };
+    let host: &mut PageScriptHost = unsafe { &mut *host_ptr };
     let identity = request_context
         .filter(|identity| host.window_execution_context_identity_is_current(*identity))
         .context("resource request owner is stale")?;

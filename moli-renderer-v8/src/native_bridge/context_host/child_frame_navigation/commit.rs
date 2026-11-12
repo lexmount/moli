@@ -1,6 +1,6 @@
 use super::super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest,
-    ChildBrowsingContextSnapshot, JsContextHost,
+    ChildBrowsingContextSnapshot, PageScriptHost,
     child_documents::{ChildDocumentCommitResult, ChildDocumentCommitState},
 };
 use crate::native_bridge::context_host::child_documents::ChildDocumentNavigationInitiator;
@@ -52,7 +52,7 @@ impl ChildFrameNavigationCommitTaskRun {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn suppress_pending_child_host_load_before_navigation_commit(&mut self, handle: DomHandle) {
         let _ = self
             .frame_owner_store

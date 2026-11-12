@@ -33,7 +33,7 @@ pub(in crate::native_bridge) fn node_document_active_element_getter_function<'s>
 }
 
 fn retarget_active_element_to_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     active: DomHandle,
     target_document: DomHandle,
 ) -> Option<DomHandle> {

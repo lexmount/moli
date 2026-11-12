@@ -36,7 +36,7 @@ pub(in crate::native_bridge::document) use nodes::{
 pub(in crate::native_bridge::document) use state::{new_detached_state_object, new_map_object};
 
 fn initialize_new_detached_native_node_owner_document(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     owner_document: DomHandle,
     handle: DomHandle,
 ) -> Option<DomHandle> {

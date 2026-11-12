@@ -21,7 +21,7 @@ fn throw_document_body_type_error(scope: &mut v8::PinScope<'_, '_>) {
 
 pub(in crate::native_bridge::document) fn set_document_body_for_native_handle_appending_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::JsContextHost,
+    runtime_ptr: *mut super::PageScriptHost,
     document_handle: super::DomHandle,
     value: v8::Local<'_, v8::Value>,
 ) -> bool {

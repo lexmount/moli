@@ -14,7 +14,7 @@ use moli_fetch::{
 
 pub(crate) fn send_content_security_policy_reports_for_window(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     owner_child_window: Option<DomHandle>,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
@@ -44,7 +44,7 @@ pub(crate) fn send_content_security_policy_reports_for_window(
 
 pub(crate) fn send_content_security_policy_reports_for_lightweight_popup(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     popup_id: u64,
     document_owner: crate::native_bridge::LightweightPopupDocumentOwner,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
@@ -128,7 +128,7 @@ impl WindowCspReportRequestContext {
 
 pub(crate) fn capture_window_csp_report_request_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<WindowCspReportRequestContext> {
     let document_owner = match dispatch_scope {
@@ -159,7 +159,7 @@ pub(crate) fn capture_window_csp_report_request_context(
 }
 
 pub(crate) fn send_content_security_policy_violation_report_from_window_context(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_context: &WindowCspReportRequestContext,
     violation: &crate::document_runtime::DocumentContentSecurityPolicyViolation,
 ) {
@@ -174,7 +174,7 @@ pub(crate) fn send_content_security_policy_violation_report_from_window_context(
 }
 
 fn send_content_security_policy_reports_from_window_context(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_context: &WindowCspReportRequestContext,
     fields: &ContentSecurityPolicyViolationEventFields<'_>,
     report_uri_endpoints: &[String],
@@ -188,7 +188,7 @@ fn send_content_security_policy_reports_from_window_context(
 }
 
 fn send_content_security_policy_report_request(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_context: &WindowCspReportRequestContext,
     request: Request,
 ) {
@@ -272,7 +272,7 @@ fn send_content_security_policy_report_request(
 }
 
 fn dispatch_service_worker_content_security_policy_report(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_context: &WindowCspReportRequestContext,
     info: PendingSubresourceFetchInfo,
     request: Request,
@@ -352,7 +352,7 @@ fn dispatch_service_worker_content_security_policy_report(
 }
 
 fn spawn_content_security_policy_report_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     request_client: ResourceRequestClient,
     request_context: &WindowCspReportRequestContext,
     info: PendingSubresourceFetchInfo,
@@ -426,7 +426,7 @@ fn report_subresource_fetch_info(
 
 fn window_csp_report_request_context_for_identity(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
 ) -> Option<WindowCspReportRequestContext> {
     if !host.window_document_owner_is_current_for_dispatch_scope(
@@ -491,7 +491,7 @@ fn report_request_body_text(request: &Request) -> Option<String> {
 }
 
 fn record_content_security_policy_report_failure(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     info: PendingSubresourceFetchInfo,
     message: String,
 ) {

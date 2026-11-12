@@ -2,9 +2,9 @@ use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
-    JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
+    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
-    child_documents::CompletedFrameOwnerResourceTiming,
+    PageScriptHost, child_documents::CompletedFrameOwnerResourceTiming,
 };
 use crate::{
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
@@ -1135,7 +1135,7 @@ impl ChildBrowsingContextEntry {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn pending_live_child_browsing_context_navigation_snapshot(
         &self,
     ) -> Vec<(DomHandle, ChildBrowsingContextBootstrap)> {

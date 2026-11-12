@@ -50,7 +50,7 @@ pub(crate) fn is_body_window_event_handler_attribute(name: &str) -> bool {
 }
 
 fn is_body_or_frameset_element(
-    runtime: &super::super::JsContextHost,
+    runtime: &super::super::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
@@ -60,7 +60,7 @@ fn is_body_or_frameset_element(
 
 pub(crate) fn invalidate_event_handler_content_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     name: &str,
 ) {

@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use crate::context_bootstrap::NativeSelectionDragSnapshot;
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{DomHost, NativeDom, Node};
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::runtime::{RendererDragData, RendererDragDataItem};
 
 fn empty_data() -> RendererDragData {
@@ -29,7 +29,7 @@ fn string_item(mime_type: &str, data: String) -> RendererDragDataItem {
 
 pub(super) fn selection_drag_data_at_point(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     x: f64,
     y: f64,
@@ -61,7 +61,7 @@ pub(super) fn selection_drag_data_at_point(
     Some(data)
 }
 
-pub(super) fn element_drag_data(runtime: &JsContextHost, source: DomHandle) -> RendererDragData {
+pub(super) fn element_drag_data(runtime: &PageScriptHost, source: DomHandle) -> RendererDragData {
     let mut data = empty_data();
     let host = runtime.dom_host();
     let Some(element) = host.node(source).and_then(Node::as_element) else {
@@ -138,7 +138,7 @@ pub(super) fn element_drag_data(runtime: &JsContextHost, source: DomHandle) -> R
 }
 
 fn resolved_attribute_url(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
     attribute: &str,
 ) -> Option<url::Url> {
@@ -154,7 +154,7 @@ fn resolved_attribute_url(
         .ok()
 }
 
-fn element_html(runtime: &JsContextHost, source: DomHandle) -> Option<String> {
+fn element_html(runtime: &PageScriptHost, source: DomHandle) -> Option<String> {
     let host = runtime.dom_host();
     let document = host.owner_document_handle(source)?;
     let base = runtime.document_base_url_for_handle(document);
@@ -216,7 +216,7 @@ fn inline_container(host: &DomHost, node: DomHandle) -> bool {
         })
 }
 
-fn selected_html(runtime: &JsContextHost, range: &NativeSelectionDragSnapshot) -> Option<String> {
+fn selected_html(runtime: &PageScriptHost, range: &NativeSelectionDragSnapshot) -> Option<String> {
     let host = runtime.dom_host();
     let mut common = range.start;
     while !contains(host, common, range.end) {
@@ -248,7 +248,7 @@ fn selected_html(runtime: &JsContextHost, range: &NativeSelectionDragSnapshot) -
 }
 
 fn clone_selected_node(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     range: &NativeSelectionDragSnapshot,
     node: DomHandle,
     scratch: &mut DomHost,

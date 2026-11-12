@@ -67,7 +67,7 @@ impl DocumentRuntime {
 
     pub(crate) fn apply_parser_dom_mutation_without_window_realm(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         mutation: ParserDomMutation,
     ) {
         let (parent, effects) = match mutation {
@@ -108,7 +108,7 @@ impl DocumentRuntime {
 
     pub(crate) fn apply_parser_mutation_effects_without_window_realm(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         effects: &DomMutationEffects,
     ) {
         self.assert_active_parser_document_incarnation();

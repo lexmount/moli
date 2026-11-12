@@ -14,7 +14,7 @@ use moli_shared_worker::SharedWorkerInstanceId;
 
 use super::ScriptVm;
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     types::{DedicatedWorkerId, PendingSubresourceContinueEvent, SubresourceResourceType},
     worker::{
         WorkerPendingSubresourceFetch, WorkerRuntimeEvent, WorkerToParentMessage,
@@ -58,7 +58,7 @@ impl WorkerHostRecordOwner {
     fn record_pending_fetch(
         self,
         scope: &mut v8::PinScope<'_, '_>,
-        context_host: &Rc<RefCell<JsContextHost>>,
+        context_host: &Rc<RefCell<PageScriptHost>>,
         pending: WorkerPendingSubresourceFetch,
     ) {
         let context = v8::Global::new(scope, scope.get_current_context());
@@ -150,7 +150,7 @@ impl WorkerHostRecordOwner {
 
     fn cancel_pending_fetch(
         self,
-        context_host: &Rc<RefCell<JsContextHost>>,
+        context_host: &Rc<RefCell<PageScriptHost>>,
         fetch_id: u32,
         error_text: String,
     ) {
@@ -401,7 +401,7 @@ impl ScriptVm {
 
     fn apply_worker_host_bridge_record_in_scope(
         scope: &mut v8::PinScope<'_, '_>,
-        context_host: &Rc<RefCell<JsContextHost>>,
+        context_host: &Rc<RefCell<PageScriptHost>>,
         owner: WorkerHostRecordOwner,
         message: WorkerToParentMessage,
     ) -> Result<()> {

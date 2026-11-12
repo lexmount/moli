@@ -1,6 +1,6 @@
 use super::*;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn live_ranges_is_empty(&mut self) -> bool {
         self.range_record_registry.active_is_empty()
     }

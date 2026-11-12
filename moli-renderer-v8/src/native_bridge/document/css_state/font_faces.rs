@@ -8,7 +8,7 @@ use crate::{
         private_string, private_u64, set_private_string, set_private_u64,
     },
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     style_engine::{
         StylesheetFontFaceDescriptor, StylesheetFontFaceProjection,
         StylesheetFontFaceRuleProjection,
@@ -43,7 +43,7 @@ pub(super) enum OwnerFontFaceProjection {
 }
 
 pub(super) fn owner_font_face_projection(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: DomHandle,
 ) -> Option<OwnerFontFaceProjection> {
     #[cfg(test)]
@@ -170,7 +170,7 @@ fn font_face_matches_rule_projection<'s>(
 pub(super) fn sync_document_fonts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let fonts = object_property_as_object(scope, holder, FONTS_SLOT)?;
@@ -188,7 +188,7 @@ pub(super) fn sync_document_fonts<'s>(
 pub(super) fn apply_font_face_owner_projection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: DomHandle,
     refresh: bool,
 ) -> bool {
@@ -206,7 +206,7 @@ pub(super) fn apply_font_face_owner_projection<'s>(
 
 pub(super) fn finish_font_face_owner_projections<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     holder: v8::Local<'s, v8::Object>,
     document: DomHandle,
 ) {
@@ -219,7 +219,7 @@ pub(super) fn finish_font_face_owner_projections<'s>(
 fn set_owner_font_face_contribution<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: DomHandle,
     projection: Option<&OwnerFontFaceProjection>,
 ) {
@@ -286,7 +286,7 @@ fn sync_stylesheet_font_face_wrappers<'s>(
     stylesheet_id: crate::live_stylesheet::StylesheetId,
     projection: &StylesheetFontFaceProjection,
     effective_only: bool,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> Vec<(u64, v8::Local<'s, v8::Object>)> {
     let mut used = vec![false; existing.len()];
@@ -380,7 +380,7 @@ fn connected_owner_contributions<'s>(
 fn rebuild_connected_font_faces<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) {
     let contributions = connected_owner_contributions(scope, fonts);
@@ -415,7 +415,7 @@ fn rebuild_connected_font_faces<'s>(
 
 fn document_adopted_font_faces<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> Vec<v8::Local<'s, v8::Value>> {
     let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {
@@ -468,7 +468,7 @@ fn sync_adopted_stylesheet_font_faces<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sheet: v8::Local<'s, v8::Object>,
     projection: &StylesheetFontFaceProjection,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> Vec<v8::Local<'s, v8::Value>> {
     let existing = get_private_value(scope, sheet, CSS_STYLE_SHEET_FONT_FACE_WRAPPERS_SLOT)

@@ -1,11 +1,11 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::connected_lifecycle::enqueue_disconnected_callback;
 use super::reactions::with_custom_element_reaction_scope;
 use super::traversal::collect_shadow_including_subtree_handles;
 
 pub(crate) fn dispatch_disconnected_callbacks_for_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) {
     if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {
@@ -22,7 +22,7 @@ pub(crate) fn dispatch_disconnected_callbacks_for_subtree(
 
 pub(crate) fn enqueue_disconnected_callbacks_for_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) {
     if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {

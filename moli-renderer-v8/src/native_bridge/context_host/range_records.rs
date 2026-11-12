@@ -70,7 +70,7 @@ pub(super) struct RangeRecord {
     end: RangeBoundaryPoint,
 }
 
-// Shared by all realms in this JsContextHost. Creating another Window must not
+// Shared by all realms in this PageScriptHost. Creating another Window must not
 // invalidate existing wrappers; their weak finalizers retire individual records.
 pub(super) struct RangeRecordRegistry {
     lifetime_token: u64,
@@ -668,12 +668,12 @@ fn is_descendant_of(
     false
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn create_range_record(
         &mut self,
         owner_document: DomHandle,
     ) -> Option<RangeRecordHandle> {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry
             .create_record(dom_host, owner_document)
@@ -684,7 +684,7 @@ impl JsContextHost {
         handle: RangeRecordHandle,
         owner_document: DomHandle,
     ) -> bool {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry
             .reset_record(dom_host, handle, owner_document)
@@ -711,7 +711,7 @@ impl JsContextHost {
         handle: RangeRecordHandle,
         side: RangeBoundarySide,
     ) -> Option<u32> {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry
             .boundary_offset(dom_host, handle, side)
@@ -721,7 +721,7 @@ impl JsContextHost {
         &mut self,
         handle: RangeRecordHandle,
     ) -> Option<((DomHandle, u32), (DomHandle, u32))> {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry
             .boundary_handles(dom_host, handle)
@@ -734,7 +734,7 @@ impl JsContextHost {
         container: DomHandle,
         offset: u32,
     ) -> bool {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry
             .set_boundary(dom_host, handle, side, container, offset)
@@ -748,7 +748,7 @@ impl JsContextHost {
         removed_count: u32,
         inserted_count: u32,
     ) {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         let ids = self
             .range_record_registry
@@ -784,7 +784,7 @@ impl JsContextHost {
         index: u32,
         previous_sibling: Option<DomHandle>,
     ) {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         let ids = self
             .range_record_registry
@@ -821,7 +821,7 @@ impl JsContextHost {
         new_text: DomHandle,
         offset: u32,
     ) {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         let ids = self
             .range_record_registry
@@ -844,7 +844,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn range_record_is_collapsed(&mut self, handle: RangeRecordHandle) -> Option<bool> {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.range_record_registry.is_collapsed(dom_host, handle)
     }

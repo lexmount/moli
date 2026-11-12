@@ -15,7 +15,7 @@ use super::types::{XPATH_NUMBER_TYPE, XPATH_STRING_TYPE};
 
 pub(super) fn evaluate_xpath_over_live_dom<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     expression: &moli_xpath::Expression,
     context_handle: DomHandle,
     requested_result_type: u32,
@@ -60,7 +60,7 @@ pub(super) fn evaluate_xpath_over_live_dom<'s, 'i>(
 
 fn live_xpath_result_node_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: LiveXPathResultNode,
 ) -> Option<v8::Local<'s, v8::Object>> {
     match node {

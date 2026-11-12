@@ -122,7 +122,7 @@ pub(in crate::native_bridge) fn node_import_node_callback<'a>(
 
 fn import_cross_runtime_node_with_shadow_roots(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     node: v8::Local<'_, v8::Object>,
     deep: bool,

@@ -1,4 +1,4 @@
-use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::PageScriptHost};
 
 pub(crate) fn is_shadow_including_rooted_in_document(host: &DomHost, handle: DomHandle) -> bool {
     shadow_including_root_document_handle(host, handle).is_some()
@@ -22,7 +22,7 @@ pub(super) fn shadow_including_root_document_handle(
 }
 
 pub(crate) fn is_shadow_including_rooted_in_browsing_context_document(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let Some(document_handle) = shadow_including_root_document_handle(host.dom_host(), handle)

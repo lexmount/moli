@@ -137,7 +137,7 @@ impl PendingHistoryTraversalAdmissions {
             .collect()
     }
 
-    /// Native retirement cannot run author script while borrowing JsContextHost.
+    /// Native retirement cannot run author script while borrowing PageScriptHost.
     /// Remove callbacks' tokens now; the VM settles the owned batch after the
     /// native stack has returned. No cleanup of a successor runs after events.
     pub(crate) fn retire_owner(&mut self, owner: WindowExecutionContextOwner) {

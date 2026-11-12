@@ -1,5 +1,5 @@
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     page_task_queue::{
@@ -13,7 +13,7 @@ pub(super) type TextTrackDefaultModeState = ExactWindowDocumentTaskLedger<
     DomHandle,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Queue one automatic default-mode application on the shared
     /// DOM-manipulation source. Repeated admission for the same exact track is
     /// coalesced until application; a closed Page route never falls back to a
@@ -87,7 +87,7 @@ impl JsContextHost {
     pub(crate) fn apply_authorized_text_track_default_mode(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task_id: RendererPageTextTrackDefaultModeTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageTextTrackDefaultModeTaskKind,

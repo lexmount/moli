@@ -1,10 +1,10 @@
 use super::existing_upgrade::upgrade_handle_with_immediate_form_lifecycle_if_defined;
 use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(crate) fn initialize_registry_for_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
     registry_key: CustomElementRegistryKey,
 ) -> bool {
@@ -13,7 +13,7 @@ pub(crate) fn initialize_registry_for_subtree(
 
 fn initialize_registry_for_subtree_inner(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
     registry_key: CustomElementRegistryKey,
     ancestor_initialized: bool,

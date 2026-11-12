@@ -249,7 +249,7 @@ pub(crate) fn current_document_referrer_policy<'s>(
 }
 
 pub(crate) fn document_referrer_policy_for_native_document(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<String> {
     runtime

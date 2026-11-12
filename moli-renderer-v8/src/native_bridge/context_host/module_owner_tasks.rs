@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::frame_owner_model::{
     FrameDocumentDynamicImportTerminalPreparedAction, FrameDocumentModuleDependencyFetchTask,
     FrameDocumentModuleScriptTerminalBatchTask, FrameDocumentModulepreloadEventAction,
@@ -7,7 +7,7 @@ use crate::frame_owner_model::{
 use crate::module_runtime::{ModuleLoadError, ModuleLoadStage};
 use crate::page_task_queue::RendererPageChildModuleDependencyFetchStartEnqueue;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn current_main_document_task_owner(&self) -> Option<FrameDocumentTaskOwner> {
         self.frame_owner_store.current_main_document_task_owner()
     }

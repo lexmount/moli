@@ -8,7 +8,7 @@ use super::navigation_and_traversal::{
 };
 
 /// PageVm-local key for one pending history-traversal payload retained by
-/// `JsContextHost`.
+/// `PageScriptHost`.
 ///
 /// The stable Page source carries only this key and immutable execution
 /// identity. V8 Promise resolvers, Navigation API `info`, and entry seeds stay
@@ -84,7 +84,7 @@ impl RendererPageHistoryTraversalOwner {
 }
 
 /// One scheduler-visible history traversal. The actual V8-bearing payload is
-/// retained by `JsContextHost` under `task_id`.
+/// retained by `PageScriptHost` under `task_id`.
 #[derive(Debug)]
 pub(crate) struct RendererPageHistoryTraversalTask {
     owner: RendererPageHistoryTraversalOwner,
@@ -121,7 +121,7 @@ impl RendererPageHistoryTraversalTask {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererPageHistoryTraversalRouteClosed;
 
-/// PageVm-stamped producer route installed atomically on `JsContextHost`.
+/// PageVm-stamped producer route installed atomically on `PageScriptHost`.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageHistoryTraversalSender {
     route: RendererPageNavigationAndTraversalRoute,

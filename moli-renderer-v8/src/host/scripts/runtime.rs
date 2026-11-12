@@ -12,7 +12,7 @@ use crate::{
         host::{
             EventTargetHandle, HostDocumentState, HostEventTargetRegistry, dispatch_host_event,
         },
-        native_bridge::JsContextHost,
+        native_bridge::PageScriptHost,
     },
 };
 use tracing::debug;
@@ -626,7 +626,7 @@ pub(crate) fn dispatch_script_event(
     scripts: &HostScriptScheduler,
     events: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     task: &ScriptEventTask,
 ) -> std::result::Result<(), String> {
     let Some(script_handle) = scripts.script_handle_target(&task.handle) else {

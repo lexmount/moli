@@ -25,7 +25,7 @@ use crate::{
         element_child_box_policy, flat_children, layout_element_classification, select_control_data,
     },
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         element::{StyleObservation, text_control_value},
     },
 };
@@ -43,7 +43,7 @@ enum Work {
 }
 
 pub(crate) fn collect_font_uses(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
     families: &HashSet<String>,
 ) -> FontUses {

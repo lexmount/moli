@@ -96,7 +96,7 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
 pub(crate) fn window_host_ptr(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     // A borrowed or cross-origin accessor executes in another realm. Resolve
     // its receiver's native owner before consulting legacy or ambient bridges.
     receiver
@@ -109,7 +109,7 @@ pub(crate) fn window_host_ptr(
 pub(in crate::context_bootstrap) fn window_current_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
 ) -> Option<OwnerDispatchScope> {
     // The receiver's concrete realm identifies its LocalWindow. An iframe
     // element's marker survives removal and can belong to a replacement Window.
@@ -133,7 +133,7 @@ pub(super) fn window_receiver<'s>(
 
 pub(crate) fn current_window_style_viewport(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> crate::style_engine::StyleViewport {
     let global = scope.get_current_context().global(scope);
     window_child_context_handle(scope, global)

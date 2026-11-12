@@ -4,7 +4,7 @@ use crate::{
     util::v8str,
 };
 
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use super::{TextEditInputType, construct_input_event};
 
 /// The cancelable boundary before an editing default action. Callers must not
@@ -12,7 +12,7 @@ use super::{TextEditInputType, construct_input_event};
 /// state that listeners may have changed.
 pub(crate) fn dispatch_beforeinput(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     input_type: TextEditInputType,
     data: Option<&str>,
@@ -51,7 +51,7 @@ impl NodePublicEventDispatchOutcome {
 
 pub(crate) fn dispatch_public_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
@@ -69,7 +69,7 @@ pub(crate) fn dispatch_public_event<'s>(
 
 fn dispatch_public_event_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event: v8::Local<'s, v8::Object>,
 ) -> std::result::Result<PublicEventDispatchResult, String> {

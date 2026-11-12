@@ -41,7 +41,7 @@ enum HtmlFragmentParserContextMode {
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
     runtime: &'a mut DocumentRuntime,
     scope: &'a mut v8::PinScope<'scope, 'pin>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: DocumentWriteParserMutationTarget,
 }
 
@@ -386,7 +386,7 @@ impl DocumentRuntime {
     pub(crate) fn close_root_document_parser_stream(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> bool {
         if self.root_document_parser.is_none() {
             return false;
@@ -413,7 +413,7 @@ impl DocumentRuntime {
     fn finish_root_document_parser_stream_if_ready(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> bool {
         if self
             .root_document_parser
@@ -494,7 +494,7 @@ impl DocumentRuntime {
 
     pub(crate) fn fragment_context_custom_element_registry_association(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         context_handle: DomHandle,
     ) -> custom_elements::CustomElementRegistryAssociation {
         if self
@@ -509,7 +509,7 @@ impl DocumentRuntime {
 
     fn set_fragment_root_custom_element_registry_association(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
         association: custom_elements::CustomElementRegistryAssociation,
     ) {
@@ -526,7 +526,7 @@ impl DocumentRuntime {
     fn build_fragment_from_html_with_context_mode(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
@@ -641,7 +641,7 @@ impl DocumentRuntime {
     pub(crate) fn build_range_contextual_fragment_from_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
@@ -664,7 +664,7 @@ impl DocumentRuntime {
     pub(crate) fn build_fragment_from_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
@@ -689,7 +689,7 @@ impl DocumentRuntime {
     pub(crate) fn build_unsafe_fragment_from_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
@@ -734,7 +734,7 @@ impl DocumentRuntime {
     fn upgrade_inserted_html_fragment_custom_elements(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_parent: DomHandle,
         roots: &[DomHandle],
     ) -> bool {
@@ -753,7 +753,7 @@ impl DocumentRuntime {
     pub(crate) fn set_inner_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         html: &str,
     ) -> bool {
@@ -829,7 +829,7 @@ impl DocumentRuntime {
     pub(crate) fn set_html_unsafe(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         html: &str,
     ) -> bool {
@@ -882,7 +882,7 @@ impl DocumentRuntime {
     pub(crate) fn set_outer_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         html: &str,
     ) -> bool {
@@ -948,12 +948,17 @@ impl DocumentRuntime {
     pub(crate) fn insert_adjacent_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: DomHandle,
         document_handle: DomHandle,
         context_handle: DomHandle,
         html: &str,
-        insert: impl FnOnce(&mut Self, &mut v8::PinScope<'_, '_>, *mut JsContextHost, DomHandle) -> bool,
+        insert: impl FnOnce(
+            &mut Self,
+            &mut v8::PinScope<'_, '_>,
+            *mut PageScriptHost,
+            DomHandle,
+        ) -> bool,
     ) -> bool {
         let Some(fragment) = self.build_fragment_from_html(
             scope,
@@ -1048,7 +1053,7 @@ impl DocumentRuntime {
 
     fn scan_document_write_script_preloads(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         html: &str,
         reset_scanner: bool,
     ) {
@@ -1176,7 +1181,7 @@ impl DocumentRuntime {
     fn start_document_write_external_script_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         start: DocumentWriteExternalScriptStart,
         insertion: SuspendedDocumentWriteInsertion,
         blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
@@ -1283,7 +1288,7 @@ impl DocumentRuntime {
     fn resume_document_write_continuation(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         continuation: SuspendedDocumentWriteContinuation,
     ) -> bool {
         match continuation {
@@ -1316,7 +1321,7 @@ impl DocumentRuntime {
     fn resume_document_write_continuations(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         mut remaining: VecDeque<SuspendedDocumentWriteContinuation>,
     ) -> bool {
         let mut changed = false;
@@ -1341,7 +1346,7 @@ impl DocumentRuntime {
     fn resume_suspended_document_write_insertion(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         mut insertion: SuspendedDocumentWriteInsertion,
     ) -> bool {
         if insertion.document_incarnation != self.document_incarnation {
@@ -1479,7 +1484,7 @@ impl DocumentRuntime {
     pub(crate) fn complete_document_write_external_script_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         completion: crate::types::DocumentWriteExternalScriptLoadCompletion,
     ) -> super::DocumentWriteExternalScriptLoadApplication {
         let completion_target = completion.target();
@@ -1517,7 +1522,7 @@ impl DocumentRuntime {
     fn finish_document_write_external_script_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         pending: PendingParserInsertion,
     ) -> super::DocumentWriteExternalScriptLoadApplication {
         let PendingParserInsertion {
@@ -1636,7 +1641,7 @@ impl DocumentRuntime {
     fn pump_document_write_parser_step(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         stream: &DocumentStream,
         input: DocumentWriteParserPumpInput<'_>,
     ) -> DocumentWriteParserPumpStep {
@@ -1718,7 +1723,7 @@ impl DocumentRuntime {
 
     fn suspend_document_write_stylesheet_parser_pause(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         parser_bridge: &ParserConnectedScriptBridge,
         stylesheet_owner: DomHandle,
@@ -1747,7 +1752,7 @@ impl DocumentRuntime {
     fn start_document_write_stylesheet_blocked_external_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         parser_bridge: &ParserConnectedScriptBridge,
         node: DomHandle,
@@ -1787,7 +1792,7 @@ impl DocumentRuntime {
     pub(crate) fn resume_document_write_stylesheet_blocked_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> bool {
         self.resume_ready_parser_insertion(scope, host_ptr)
             .is_some()
@@ -1799,7 +1804,7 @@ impl DocumentRuntime {
     fn resume_ready_parser_insertion(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Option<DocumentWriteExternalScriptLoadApplication> {
         let signatures = self.pending_parser_insertion()?.blocking_signatures.clone();
         if self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()) {
@@ -1847,7 +1852,7 @@ impl DocumentRuntime {
     fn finish_stylesheet_blocked_parser_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         pending: PendingParserInsertion,
     ) -> bool {
         let PendingParserInsertion {
@@ -1925,7 +1930,7 @@ impl DocumentRuntime {
     fn run_prepared_document_write_parser_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         parser_bridge: &ParserConnectedScriptBridge,
         node: DomHandle,
@@ -1957,7 +1962,7 @@ impl DocumentRuntime {
     }
     fn queue_document_write_parser_owned_post_parse_script(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         node: DomHandle,
         start_line: u64,
         start_column: u64,
@@ -2087,7 +2092,7 @@ impl DocumentRuntime {
     fn run_prepared_document_write_import_map(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         node: DomHandle,
         start_line: u64,
         start_column: u64,
@@ -2125,7 +2130,7 @@ impl DocumentRuntime {
     fn suspend_document_write_parser_handoff(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         parser_bridge: &ParserConnectedScriptBridge,
         start: Box<DocumentWriteExternalScriptStart>,
@@ -2148,7 +2153,7 @@ impl DocumentRuntime {
     fn handle_document_write_parser_handoff(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         parser_bridge: &ParserConnectedScriptBridge,
         handoff: ParserScriptHandoff,
@@ -2281,7 +2286,7 @@ impl DocumentRuntime {
     fn write_html_via_parser_stream(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         html: &str,
         resume_existing_insertion: bool,
@@ -2414,7 +2419,7 @@ impl DocumentRuntime {
     fn accept_document_write_parser_modulepreloads(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         link_handles: Vec<DomHandle>,
     ) {
         if link_handles.is_empty() {
@@ -2480,7 +2485,7 @@ impl DocumentRuntime {
     pub(crate) fn write_html(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         html: &str,
     ) -> bool {
@@ -2510,7 +2515,7 @@ impl DocumentRuntime {
 
 fn record_document_write_modulepreload_warning(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     message: String,
 ) {
     tracing::warn!(warning = %message, "document.write modulepreload warning");

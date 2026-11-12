@@ -1,7 +1,7 @@
 use crate::{
     context_bootstrap::dispatch_window_promise_rejection_event,
     exception_reporting::log_unhandled_promise_rejection,
-    native_bridge::{JsContextHost, WindowExecutionContextBinding},
+    native_bridge::{PageScriptHost, WindowExecutionContextBinding},
     util::context_host_ptr_from_global_bridge,
 };
 use std::{
@@ -25,14 +25,14 @@ struct PendingPromiseRejection {
 
 #[derive(Clone)]
 pub(crate) struct PromiseRejectDispatchSlot {
-    pub(super) host_weak: Weak<RefCell<JsContextHost>>,
+    pub(super) host_weak: Weak<RefCell<PageScriptHost>>,
     pending_unhandled_rejections: Rc<RefCell<Vec<PendingPromiseRejection>>>,
     reported_unhandled_rejections: Rc<RefCell<Vec<PendingPromiseRejection>>>,
 }
 
 #[derive(Clone)]
 struct PromiseRejectDispatchState {
-    host: Rc<RefCell<JsContextHost>>,
+    host: Rc<RefCell<PageScriptHost>>,
     pending: Rc<RefCell<Vec<PendingPromiseRejection>>>,
     reported: Rc<RefCell<Vec<PendingPromiseRejection>>>,
 }
@@ -71,7 +71,7 @@ fn flush_agent_pending_promise_rejections(scope: &mut v8::PinScope<'_, '_>) -> u
 }
 
 pub(super) fn promise_reject_dispatch_slot(
-    host_rc: Rc<RefCell<JsContextHost>>,
+    host_rc: Rc<RefCell<PageScriptHost>>,
 ) -> PromiseRejectDispatchSlot {
     PromiseRejectDispatchSlot {
         host_weak: Rc::downgrade(&host_rc),
@@ -140,7 +140,7 @@ fn flush_promise_rejection_state(
 ) -> usize {
     let pending = std::mem::take(&mut *state.pending.borrow_mut());
     let pending_len = pending.len();
-    let host_ptr: *mut JsContextHost = (*state.host).as_ptr();
+    let host_ptr: *mut PageScriptHost = (*state.host).as_ptr();
     state
         .reported
         .borrow_mut()
@@ -307,7 +307,7 @@ pub(super) unsafe extern "C" fn promise_reject_callback(message: v8::PromiseReje
     let Some(state) = promise_reject_dispatch_state(scope) else {
         return;
     };
-    let host_ptr: *mut JsContextHost = (*state.host).as_ptr();
+    let host_ptr: *mut PageScriptHost = (*state.host).as_ptr();
 
     match message.get_event() {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {

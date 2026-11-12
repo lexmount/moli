@@ -15,7 +15,7 @@ use crate::{
     },
     document_runtime::DomHandle,
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         document::detached_native_handle_for_runtime,
         node::{node_is_document, node_runtime_and_handle_from_object},
     },
@@ -454,7 +454,7 @@ fn adopted_style_sheets_array_owner<'s>(
 }
 
 fn adopted_style_sheets_owner_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     owner: AdoptedStyleSheetsArrayOwner,
 ) -> Option<DomHandle> {
     match owner {
@@ -582,7 +582,7 @@ fn get_document_style_sheets_for_receiver<'s>(
 fn document_runtime_and_handle_from_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, receiver)
         && node_is_document(unsafe { &*runtime_ptr }, handle)
     {
@@ -618,7 +618,7 @@ pub(in crate::native_bridge) fn document_fonts_getter_function<'s>(
 fn document_fonts_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {

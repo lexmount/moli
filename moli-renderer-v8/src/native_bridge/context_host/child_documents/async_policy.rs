@@ -1,8 +1,8 @@
-use super::super::{ChildBrowsingContextBootstrap, JsContextHost};
+use super::super::{ChildBrowsingContextBootstrap, PageScriptHost};
 use crate::document_runtime::DomHandle;
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host::child_documents) fn child_document_url_requires_async_load(
         &self,
         url: &Url,

@@ -68,7 +68,7 @@ impl Default for CanvasResourceStore {
     }
 }
 
-impl super::JsContextHost {
+impl super::PageScriptHost {
     pub(crate) fn replace_canvas_pixels(
         &mut self,
         element: DomHandle,

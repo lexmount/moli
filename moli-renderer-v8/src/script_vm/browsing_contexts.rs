@@ -111,7 +111,7 @@ impl ScriptVm {
                 // isolate is exclusively borrowed.
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
-                let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                let host_ptr: *mut PageScriptHost = (*context_host).as_ptr();
                 Ok(
                     custom_elements::create_and_construct_parser_custom_element_direct_for_document(
                         scope,

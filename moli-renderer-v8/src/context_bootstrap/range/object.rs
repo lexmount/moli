@@ -316,7 +316,7 @@ fn set_native_range_record_boundary<'s>(
 
 fn dom_handle_for_range_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let object = moli_webapi_declare::web_api_object_target(scope, object)?;

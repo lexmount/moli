@@ -4,7 +4,7 @@ use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::webidl;
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, node_runtime_and_handle_from_object_or_detached},
+    native_bridge::{PageScriptHost, node_runtime_and_handle_from_object_or_detached},
 };
 use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
 use moli_webapi_declare::WebApiObject;
@@ -83,7 +83,7 @@ pub(super) fn canvas_2d_context<'s>(
 
 pub(crate) fn reset_html_canvas_backing_store_for_dimension_assignment<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     namespace: Option<&str>,
     local_name: &str,
@@ -185,7 +185,7 @@ fn ensure_canvas_like_backing_store<'s>(
 fn html_canvas_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let (runtime_ptr, handle) =
         node_runtime_and_handle_from_object_or_detached(scope, canvas).ok()?;
     unsafe { &*runtime_ptr }

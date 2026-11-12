@@ -9,7 +9,7 @@ use moli_webapi_declare::WebApiObject;
 
 use super::{
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{callback_arg_string, serialize_v8_array, v8_string, v8str},
 };
 use crate::{context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT, util::get_private_value};
@@ -113,9 +113,9 @@ struct HostBindingsDeclaration<'scope> {
 
 pub(super) fn install_host_bindings(
     scope: &mut v8::PinScope<'_, '_>,
-    context_host: &mut JsContextHost,
+    context_host: &mut PageScriptHost,
 ) -> Result<()> {
-    let external = v8::External::new(scope, context_host as *mut JsContextHost as *mut c_void);
+    let external = v8::External::new(scope, context_host as *mut PageScriptHost as *mut c_void);
     let global = scope.get_current_context().global(scope);
     HostBindingsDeclaration::new(external)
         .initialize(scope, global)
@@ -124,10 +124,10 @@ pub(super) fn install_host_bindings(
 
 fn context_host_ptr_from_callback_data(
     data: v8::Local<'_, v8::Value>,
-) -> std::result::Result<*mut JsContextHost, String> {
+) -> std::result::Result<*mut PageScriptHost, String> {
     let external = v8::Local::<v8::External>::try_from(data)
         .map_err(|_| "host callback missing external context data".to_owned())?;
-    let host_ptr = external.value() as *mut JsContextHost;
+    let host_ptr = external.value() as *mut PageScriptHost;
     if host_ptr.is_null() {
         return Err("host callback context pointer was null".to_owned());
     }
@@ -156,7 +156,7 @@ fn callback_value_internal_node_reference_token(
 fn callback_value_dom_handle(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     default_document: bool,
 ) -> Option<DomHandle> {
     if value.is_null_or_undefined() {
@@ -171,7 +171,7 @@ fn callback_arg_dom_handle(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
     index: i32,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     default_document: bool,
 ) -> Option<DomHandle> {
     callback_value_dom_handle(scope, args.get(index), host, default_document)
@@ -192,7 +192,7 @@ fn callback_arg_usize(
 fn set_wrapped_handle_or_null(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: Option<DomHandle>,
 ) {
     let Some(handle) = handle else {
@@ -212,7 +212,7 @@ fn set_wrapped_handle_or_null(
 fn set_wrapped_handle_array(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) {
     let mut values = Vec::with_capacity(handles.len());

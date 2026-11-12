@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn computed_shorthand(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> String {

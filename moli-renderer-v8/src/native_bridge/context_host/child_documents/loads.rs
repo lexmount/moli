@@ -1,4 +1,4 @@
-use super::super::{ChildBrowsingContextBootstrap, JsContextHost, OwnerDispatchScope};
+use super::super::{ChildBrowsingContextBootstrap, OwnerDispatchScope, PageScriptHost};
 use super::{
     ChildDocumentNavigationInitiator, PendingChildDocumentNavigation,
     configure_child_document_navigation_request,
@@ -81,7 +81,7 @@ impl AppliedChildDocumentLoadCompletion {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn clear_pending_child_document_loads_for_handle(
         &mut self,
         handle: DomHandle,
@@ -487,8 +487,8 @@ impl JsContextHost {
                     // The protected response never receives a Document when enforcement blocks
                     // it, so there is no target on which to dispatch a DOM event. Keep the
                     // violation observable to DevTools on the embedding frame owner instead.
-                    // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
-                    unsafe { &mut *self.runtime }
+                    // SAFETY: PageScriptHost is owned by the ScriptVm that owns this DocumentRuntime.
+                    unsafe { &mut *self.document_runtime }
                         .record_content_security_policy_inspector_issue(Some(handle), violation);
                     let fields =
                         ContentSecurityPolicyViolationEventFields::from_url_violation(violation);

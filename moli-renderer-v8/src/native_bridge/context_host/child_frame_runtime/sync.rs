@@ -1,4 +1,4 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use super::document_slots::sync_child_document_window_slots;
 use crate::{
     context_bootstrap::{
@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn sync_child_window_origin_slot<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,

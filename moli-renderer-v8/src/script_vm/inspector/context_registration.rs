@@ -2,7 +2,7 @@ use super::{
     context_registry::{DocumentInspectorContextGroupId, DocumentInspectorContextRegistrationId},
     v8_backend::RendererInspectorIsolateBackendHandle,
 };
-use crate::script_vm::document_isolate::RendererDocumentIsolateHandle;
+use crate::script_vm::document_isolate::RendererIsolateHandle;
 use std::{collections::BTreeMap, pin::pin};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,7 +15,7 @@ enum DocumentInspectorContextRegistrationKind {
 
 struct DocumentInspectorContextRegistration {
     context: Option<v8::Global<v8::Context>>,
-    renderer_document_isolate: RendererDocumentIsolateHandle,
+    renderer_document_isolate: RendererIsolateHandle,
     isolate_backend: RendererInspectorIsolateBackendHandle,
     id: DocumentInspectorContextRegistrationId,
     kind: DocumentInspectorContextRegistrationKind,
@@ -23,7 +23,7 @@ struct DocumentInspectorContextRegistration {
 
 impl DocumentInspectorContextRegistration {
     fn new(
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         isolate_backend: RendererInspectorIsolateBackendHandle,
         context: v8::Global<v8::Context>,
         kind: DocumentInspectorContextRegistrationKind,
@@ -81,7 +81,7 @@ pub(super) struct DocumentInspectorContextRegistrations {
 impl DocumentInspectorContextRegistrations {
     pub(super) fn register_default(
         &mut self,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         isolate_backend: RendererInspectorIsolateBackendHandle,
         context_group_id: DocumentInspectorContextGroupId,
         context: v8::Global<v8::Context>,
@@ -107,7 +107,7 @@ impl DocumentInspectorContextRegistrations {
 
     pub(super) fn register_non_default(
         &mut self,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         isolate_backend: RendererInspectorIsolateBackendHandle,
         context: v8::Global<v8::Context>,
         replaced_registration_id: Option<DocumentInspectorContextRegistrationId>,

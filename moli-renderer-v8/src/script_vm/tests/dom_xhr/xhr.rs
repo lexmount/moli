@@ -151,7 +151,7 @@ async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_ini
 fn pending_fetch_continuation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> crate::types::PendingSubresourceContinuation {
     let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
     crate::types::PendingSubresourceContinuation::Fetch(

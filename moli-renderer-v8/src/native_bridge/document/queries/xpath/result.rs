@@ -11,7 +11,7 @@ use std::ffi::c_void;
 #[derive(Clone, Copy)]
 pub(super) enum XPathIteratorMutationState<'s> {
     Live {
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         query_version: u64,
     },
     ObjectTree {
@@ -289,10 +289,10 @@ fn xpath_result_baseline_query_version<'s>(
 fn xpath_result_runtime_ptr<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     result: v8::Local<'s, v8::Object>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     let value = xpath_result_slot(scope, result, XPATH_RESULT_RUNTIME_SLOT)?;
     let external = v8::Local::<v8::External>::try_from(value).ok()?;
-    let runtime_ptr = external.value() as *mut JsContextHost;
+    let runtime_ptr = external.value() as *mut PageScriptHost;
     (!runtime_ptr.is_null()).then_some(runtime_ptr)
 }
 

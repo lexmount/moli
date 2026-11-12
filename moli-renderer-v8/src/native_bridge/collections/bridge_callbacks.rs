@@ -173,7 +173,7 @@ fn bridge_element_list_callback(
     scope: &mut v8::PinScope<'_, '_>,
     args: v8::FunctionCallbackArguments<'_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    lookup: impl FnOnce(&JsContextHost, DomHandle, &str, bool) -> Vec<DomHandle>,
+    lookup: impl FnOnce(&PageScriptHost, DomHandle, &str, bool) -> Vec<DomHandle>,
 ) {
     let Some(root) = callback_arg_dom_handle(scope, &args, 0) else {
         rv.set_null();

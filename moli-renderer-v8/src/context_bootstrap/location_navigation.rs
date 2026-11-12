@@ -827,7 +827,7 @@ pub(crate) fn sandbox_blocks_ancestor_or_top_navigation_from_source<'s>(
 }
 
 fn child_browsing_context_is_ancestor(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     ancestor: crate::document_runtime::DomHandle,
     child: crate::document_runtime::DomHandle,
 ) -> bool {

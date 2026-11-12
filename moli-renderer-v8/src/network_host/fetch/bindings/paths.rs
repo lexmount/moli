@@ -7,7 +7,7 @@ use moli_fetch::{
 
 pub(super) fn record_intercepted_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) -> u64 {
@@ -51,7 +51,7 @@ pub(super) fn record_intercepted_fetch(
 }
 
 pub(super) fn reject_offline_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: PreparedWindowFetchRequest,
 ) -> String {
     let message = "Network emulation offline".to_owned();
@@ -69,7 +69,7 @@ pub(super) fn reject_offline_fetch(
 }
 
 pub(super) fn reject_blocked_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: PreparedWindowFetchRequest,
 ) -> String {
     let message = BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned();
@@ -87,7 +87,7 @@ pub(super) fn reject_blocked_fetch(
 }
 
 pub(super) fn reject_policy_blocked_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: PreparedWindowFetchRequest,
     message: String,
 ) -> String {
@@ -109,7 +109,7 @@ pub(super) use self::reject_policy_blocked_fetch as reject_csp_fetch;
 pub(super) use self::reject_policy_blocked_fetch as reject_url_policy_fetch;
 
 pub(super) fn reject_bad_port_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: PreparedWindowFetchRequest,
 ) -> String {
     debug_assert!(should_request_be_blocked_due_to_bad_port(
@@ -137,7 +137,7 @@ pub(super) fn local_fetch_error_text(error: &LocalUrlError) -> String {
 }
 
 pub(super) fn resolve_local_fetch(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: &PreparedWindowFetchRequest,
 ) -> Result<Option<Response>, LocalUrlError> {
     let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) else {
@@ -185,7 +185,7 @@ pub(super) fn resolve_local_fetch(
 
 pub(super) fn spawn_network_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) -> Result<u64, String> {

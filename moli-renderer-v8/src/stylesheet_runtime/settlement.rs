@@ -12,7 +12,7 @@ use crate::css_resource_urls::{
 
 impl DocumentRuntime {
     pub(crate) fn current_stylesheet_resources(
-        host: &JsContextHost,
+        host: &PageScriptHost,
         root: DomHandle,
     ) -> Option<crate::style_engine::StylesheetResourceSnapshot> {
         let mut reads = crate::native_bridge::element::StyleObservation::new(host);
@@ -21,7 +21,7 @@ impl DocumentRuntime {
 
     pub(crate) fn reconcile_document_web_fonts_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let host = unsafe { &mut *host_ptr };
         host.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
@@ -44,7 +44,7 @@ impl DocumentRuntime {
 
     pub(crate) fn reconcile_web_fonts_for_document_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document: crate::document_runtime::DomHandle,
     ) {
         let host = unsafe { &mut *host_ptr };
@@ -112,7 +112,7 @@ impl DocumentRuntime {
     pub(crate) fn settle_stylesheet_link_clients_in_current_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         clients: Vec<StylesheetLinkClientTerminal>,
     ) {
         if clients.is_empty() {
@@ -155,7 +155,7 @@ impl DocumentRuntime {
     fn apply_stylesheet_link_client_terminals(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         client_terminals: Vec<StylesheetLinkClientTerminal>,
         optional_resource_fetch_mask: crate::protocol_types::OptionalResourceFetchMask,
         css_subresources: &mut Vec<(
@@ -270,7 +270,7 @@ impl DocumentRuntime {
     fn queue_linked_stylesheet_import_csp_violations_in_current_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         import_urls: impl IntoIterator<Item = url::Url>,
     ) {
         let violations = import_urls
@@ -296,7 +296,7 @@ impl DocumentRuntime {
 
     pub(crate) fn start_stylesheet_subresource_fetches_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         resources: Vec<(
             crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
             crate::css_resource_urls::StylesheetLoadBlockingResource,
@@ -353,7 +353,7 @@ impl DocumentRuntime {
 
     pub(crate) fn start_stylesheet_subresource_requests_in_current_scope(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         requests: Vec<(
             crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
             StylesheetSubresourceRequest,
@@ -420,7 +420,7 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn complete_document_web_font(
-        host: &JsContextHost,
+        host: &PageScriptHost,
         document: DomHandle,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) -> Option<StylesheetSubresourceRequest> {

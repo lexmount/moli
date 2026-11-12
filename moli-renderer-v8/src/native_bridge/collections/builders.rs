@@ -154,7 +154,7 @@ struct HtmlAllCollectionPrototypeDeclaration {
 /// Build a static NodeList wrapper from a slice of DOM handles.
 pub(in crate::native_bridge) fn build_node_list_from_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) -> v8::Local<'s, v8::Object> {
     if handles.len() <= STATIC_HANDLE_NODE_LIST_EAGER_LIMIT {
@@ -176,7 +176,7 @@ pub(in crate::native_bridge) fn build_node_list_from_handles<'s>(
 /// Build a live NodeList or HTMLCollection wrapper for a DOM node query.
 pub(in crate::native_bridge) fn build_live_collection_for_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     root: DomHandle,
     collection_kind: CollectionKind,
     query_kind: LiveCollectionQueryKind,
@@ -206,7 +206,7 @@ pub(in crate::native_bridge) fn build_live_collection_for_node<'s>(
 
 pub(in crate::native_bridge) fn build_live_html_children_collection_for_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> v8::Local<'s, v8::Object> {
     build_live_collection_for_node(
@@ -222,7 +222,7 @@ pub(in crate::native_bridge) fn build_live_html_children_collection_for_node<'s>
 
 pub(in crate::native_bridge) fn build_live_child_node_list_for_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> v8::Local<'s, v8::Object> {
     build_live_collection_for_node(
@@ -239,7 +239,7 @@ pub(in crate::native_bridge) fn build_live_child_node_list_for_node<'s>(
 /// Build a static collection (NodeList / HTMLCollection) V8 object from pre-resolved values.
 pub(in crate::native_bridge) fn build_collection_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     items: &[v8::Global<v8::Value>],
     kind: CollectionKind,
 ) -> v8::Local<'s, v8::Object> {
@@ -305,7 +305,7 @@ pub(in crate::native_bridge) fn build_collection_wrapper<'s>(
 
 pub(crate) fn build_static_handle_node_list_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) -> v8::Local<'s, v8::Object> {
     let template = {
@@ -363,7 +363,7 @@ pub(crate) fn build_static_handle_node_list_wrapper<'s>(
 /// Build a live-resolving NodeList or HTMLCollection V8 object (queries DOM on each access).
 pub(in crate::native_bridge) fn build_live_collection_wrapper_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'_, v8::Object>,
     descriptor: LiveCollectionDescriptor,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -379,7 +379,7 @@ pub(in crate::native_bridge) fn build_live_collection_wrapper_for_receiver<'s>(
 /// Build a live collection in the current realm, preserving that realm's cache.
 pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     descriptor: LiveCollectionDescriptor,
 ) -> v8::Local<'s, v8::Object> {
     {
@@ -413,7 +413,7 @@ pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
 
 fn instantiate_live_collection_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     collection_id: u32,
     collection_kind: CollectionKind,
 ) -> v8::Local<'s, v8::Object> {
@@ -440,7 +440,7 @@ fn instantiate_live_collection_wrapper<'s>(
 fn document_all_named_collection_parts(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Option<(*mut JsContextHost, u32)> {
+) -> Option<(*mut PageScriptHost, u32)> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
     let (runtime_ptr, descriptor) = live_collection_descriptor_from_object(scope, object).ok()?;
     if descriptor.collection_kind != CollectionKind::HtmlCollection

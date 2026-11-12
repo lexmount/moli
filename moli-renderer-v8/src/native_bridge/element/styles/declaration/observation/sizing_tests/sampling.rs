@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 const GRID: &str = r#"<div id=target class=sized style="display:grid;grid-template-columns:30px 1fr;grid-template-rows:20px 1fr"></div>"#;
 
-fn inspector_properties(host: &JsContextHost, target: DomHandle) -> BTreeMap<String, String> {
+fn inspector_properties(host: &PageScriptHost, target: DomHandle) -> BTreeMap<String, String> {
     crate::native_bridge::element::computed_style_properties_for_inspector_handle(host, target)
         .unwrap()
         .into_iter()

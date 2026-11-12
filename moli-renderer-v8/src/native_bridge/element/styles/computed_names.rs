@@ -1,13 +1,13 @@
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     style_engine::{computed_longhand_count, computed_longhand_name_at},
 };
 
 use super::declaration::{ComputedStyleRead, StyleComputationContext, computed_style_applies};
 
 pub(super) fn computed_property_count(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> usize {
@@ -22,7 +22,7 @@ pub(super) fn computed_property_count(
 }
 
 pub(super) fn computed_property_name_at(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
     index: usize,
@@ -43,7 +43,7 @@ pub(super) fn computed_property_name_at(
 }
 
 pub(super) fn computed_property_names(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> Vec<String> {

@@ -10,7 +10,9 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
     exception_reporting::V8ExceptionReport,
-    native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity},
+    native_bridge::{
+        PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+    },
     webidl_callback_execution::WebIdlCallbackExecutionOutcome,
     window_webidl_callback::WindowWebIdlCallbackFunction,
 };
@@ -40,7 +42,7 @@ pub(super) struct ScheduledWindowWebIdlCallback {
 impl ScheduledWindowWebIdlCallback {
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         callback: WebIdlCallbackFunction,
         target_receiver: v8::Local<'_, v8::Object>,
         kind: WindowWebIdlCallbackTaskKind,
@@ -98,7 +100,7 @@ impl ScheduledWindowWebIdlCallback {
     pub(super) fn invoke<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         extra_args: &[v8::Global<v8::Value>],
     ) -> WebIdlCallbackExecutionOutcome<v8::Global<v8::Value>, Box<V8ExceptionReport>> {
         let Some(prepared) = self.callback.prepare_execution(scope, host_ptr, None) else {

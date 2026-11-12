@@ -24,7 +24,7 @@ impl DocumentRuntime {
     pub(super) fn handle_details_attribute_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         namespace: Option<&str>,
         local_name: &str,
@@ -50,7 +50,7 @@ impl DocumentRuntime {
     pub(super) fn enforce_details_exclusivity_after_insertion(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &DetailsInsertionPlan,
         reaction_policy: AttributeChangedReactionPolicy,
     ) {
@@ -86,7 +86,7 @@ impl DocumentRuntime {
     fn close_other_open_details_in_group(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         reaction_policy: AttributeChangedReactionPolicy,
     ) {
@@ -108,7 +108,7 @@ impl DocumentRuntime {
     fn close_details_if_group_conflict(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         reaction_policy: AttributeChangedReactionPolicy,
     ) {

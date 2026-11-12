@@ -55,7 +55,7 @@ impl Default for WindowOpfsOwnerState {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn ensure_opfs_owner_state(&mut self) -> &mut WindowOpfsOwnerState {
         self.opfs_owner_state
             .get_or_insert_with(WindowOpfsOwnerState::default)

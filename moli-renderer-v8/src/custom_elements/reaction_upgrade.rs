@@ -2,11 +2,11 @@ use super::form_lifecycle::{
     enqueue_form_association_callback_if_needed, enqueue_form_disabled_callback_if_needed,
 };
 use super::upgrade_handle_if_defined;
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) fn invoke_upgrade_reaction(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let was_upgraded = unsafe { &*host_ptr }

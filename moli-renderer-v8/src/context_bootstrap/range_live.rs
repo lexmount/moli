@@ -4,7 +4,7 @@ use crate::document_runtime::DomHandle;
 
 fn range_container_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     container: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     if let Some(handle) = native_bridge::callback_value_dom_handle(scope, container.into()) {
@@ -88,7 +88,7 @@ pub(super) fn update_live_ranges_for_child_insertion(
 
 pub(super) fn update_live_ranges_for_child_removal(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     _dom_host: &crate::dom::native::DomHost,
     parent: DomHandle,
     removed_child: DomHandle,
@@ -123,7 +123,7 @@ pub(super) fn update_live_ranges_for_detached_child_insertion<'s>(
 
 pub(super) fn update_live_ranges_for_text_split(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original: DomHandle,
     new_text: DomHandle,
     offset: u32,

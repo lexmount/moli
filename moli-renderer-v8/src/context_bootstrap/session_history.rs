@@ -5,7 +5,7 @@ use super::navigation_window::{
     runtime_top_window_owner, runtime_window_dispatch_scope, window_history_for_holder,
 };
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
-use crate::native_bridge::{JsContextHost, NavigationHistoryEntrySeed, OwnerDispatchScope};
+use crate::native_bridge::{NavigationHistoryEntrySeed, OwnerDispatchScope, PageScriptHost};
 use crate::util::context_host_ptr_from_global_bridge;
 use moli_history::{HistoryEntry, HistoryEntryRef};
 use moli_page_types::SessionHistoryCommit;
@@ -22,7 +22,7 @@ pub(super) struct HistoryBinding {
 
 pub(super) fn binding<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     owner: v8::Local<'s, v8::Object>,
 ) -> HistoryBinding {
     let top = runtime_top_window_owner(scope, owner);
@@ -300,7 +300,7 @@ pub(super) fn capture_for_navigation<'s>(
 
 pub(super) fn owner_for_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     context: SessionHistoryContextId,
     popup: Option<u64>,
 ) -> Option<v8::Local<'s, v8::Object>> {

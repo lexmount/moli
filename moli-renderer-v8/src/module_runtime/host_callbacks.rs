@@ -182,7 +182,7 @@ fn dynamic_import_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Url {
     if let Some(base_url) = script_base_url_from_host_defined_options(scope, host_defined_options) {
         return base_url;
@@ -237,7 +237,7 @@ fn dynamic_import_referrer_fetch_metadata(
 fn dynamic_import_base_url_from_compiled_string_resource(
     scope: &mut v8::PinScope<'_, '_>,
     resource_name: v8::Local<'_, v8::Value>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Option<Url> {
     let resource_url = resource_name
         .to_string(scope)

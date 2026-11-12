@@ -839,7 +839,7 @@ pub(crate) fn css_style_sheet_selector_namespace_context<'s>(
 
 pub(crate) fn sync_document_adopted_style_sheet_installations<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     style_document: crate::document_runtime::DomHandle,
     sheets: v8::Local<'s, v8::Object>,
 ) {
@@ -862,7 +862,7 @@ pub(crate) fn sync_document_adopted_style_sheet_installations<'s>(
 
 pub(crate) fn sync_shadow_root_adopted_style_sheet_installations<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     root: crate::document_runtime::DomHandle,
     sheets: v8::Local<'s, v8::Object>,
 ) {

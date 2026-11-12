@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use crate::{
     document_runtime::DomHandle,
     dom::native::Node,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     style_engine::{
         ComputedDisplayKind, ComputedTextTransformKind, ComputedTextWrapModeKind,
         ComputedWhiteSpaceCollapseKind,
@@ -161,7 +161,7 @@ pub(super) struct ElementRenderedState {
 }
 
 impl ElementRenderedState {
-    pub(super) fn read(runtime: &JsContextHost, handle: DomHandle) -> Self {
+    pub(super) fn read(runtime: &PageScriptHost, handle: DomHandle) -> Self {
         let mut scope = StyleObservation::new(runtime);
         Self::read_in_scope(&mut scope, handle)
     }
@@ -296,7 +296,7 @@ pub(super) fn rendered_child_participates_in_flat_tree(
         && rendered_tree_node_is_slotable(runtime, child))
 }
 
-fn rendered_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn rendered_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     if runtime
         .dom_host()
         .node(handle)
@@ -322,14 +322,14 @@ fn rendered_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<Do
     Some(parent)
 }
 
-fn rendered_tree_node_is_slotable(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn rendered_tree_node_is_slotable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
         .is_some_and(|node| node.is_element() || node.is_text())
 }
 
-fn is_active_render_tree_root(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_active_render_tree_root(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     if handle == runtime.document_handle()
         && runtime
             .dom_host()

@@ -27,7 +27,7 @@ use moli_selector::html_directionality;
 use std::collections::{HashMap, HashSet};
 use style::{properties::ComputedValues, servo_arc::Arc as ServoArc, stylesheets::CssRuleType};
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::observation::{
     ComputedStyleRead, PreparedAnonymousStyleContext, RetainedStyleObservation,
     StyleComputationContext, StyleObservation,
@@ -120,7 +120,7 @@ impl<'a> StyleResolutionContext<'a> {
 
     fn computed_property(
         self,
-        runtime: &JsContextHost,
+        runtime: &PageScriptHost,
         handle: DomHandle,
         property: &str,
     ) -> String {
@@ -158,7 +158,7 @@ impl<'a> StyleResolutionContext<'a> {
         )
     }
 
-    fn raw_property(self, runtime: &JsContextHost, handle: DomHandle, property: &str) -> String {
+    fn raw_property(self, runtime: &PageScriptHost, handle: DomHandle, property: &str) -> String {
         if let Some((retained_handle, style)) = self.retained_style
             && retained_handle == handle
         {
@@ -184,12 +184,12 @@ impl<'a> StyleResolutionContext<'a> {
 }
 
 impl<'a> ComputedStyleRead<'a> {
-    pub(crate) fn new(runtime: &'a JsContextHost, handle: DomHandle) -> Self {
+    pub(crate) fn new(runtime: &'a PageScriptHost, handle: DomHandle) -> Self {
         StyleObservation::new_for_element(runtime, handle, None).read(handle)
     }
 
     pub(in crate::native_bridge::element::styles) fn new_with_context(
-        runtime: &'a JsContextHost,
+        runtime: &'a PageScriptHost,
         handle: DomHandle,
         context: StyleComputationContext,
     ) -> Self {

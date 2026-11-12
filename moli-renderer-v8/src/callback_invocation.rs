@@ -4,7 +4,9 @@ use crate::exception_reporting::{
 };
 use crate::{
     host::WINDOW_EVENT_SLOT,
-    native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity},
+    native_bridge::{
+        PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+    },
     util::{get_private_value, set_private_value},
 };
 use moli_webidl_callback::{
@@ -131,7 +133,7 @@ pub(crate) struct CallbackInvocation<'s, 'a> {
     relevant_context: v8::Local<'s, v8::Context>,
     incumbent_context: v8::Local<'s, v8::Context>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
-    host_ptr: Option<*mut JsContextHost>,
+    host_ptr: Option<*mut PageScriptHost>,
     is_callable: bool,
     legacy_event_handler: bool,
     operation_name: &'a str,
@@ -185,7 +187,7 @@ impl<'s, 'a> CallbackInvocation<'s, 'a> {
 
     pub(crate) fn with_execution_context_currentness(
         mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         relevant_identity: Option<WindowExecutionContextIdentity>,
     ) -> Self {
         self.host_ptr = Some(host_ptr);

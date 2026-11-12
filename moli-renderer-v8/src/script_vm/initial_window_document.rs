@@ -116,7 +116,7 @@ impl ScriptVm {
                 );
                 runtime.retain_performance_clock_from_initial_document(&vm.document_runtime);
                 runtime.retain_event_targets_from_initial_document(&mut vm.document_runtime);
-                // JsContextHost and retained native wrappers point into this allocation.
+                // PageScriptHost and retained native wrappers point into this allocation.
                 // Replace its contents while keeping the allocation's address stable.
                 *vm.document_runtime = runtime;
                 vm.post_domcontentloaded_page_task_tx = page_task_tx.page_task_sender();

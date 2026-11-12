@@ -8,7 +8,7 @@ use super::super::node::{
 };
 use super::super::traversal;
 use super::super::{
-    JsContextHost, runtime_ptr_from_object, set_wrapped_handle_or_null_for_receiver,
+    PageScriptHost, runtime_ptr_from_object, set_wrapped_handle_or_null_for_receiver,
     throw_dom_exception,
 };
 use super::{

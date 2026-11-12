@@ -3,7 +3,7 @@ use crate::dom::native::Node;
 use std::net::IpAddr;
 use url::{Host, Url};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn inherit_document_domain_override(&mut self, domain: Rc<RefCell<Option<String>>>) {
         self.document_domain_override = domain;
     }

@@ -1,6 +1,6 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string, v8str};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 use super::{construct_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
@@ -1076,7 +1076,7 @@ pub(in crate::native_bridge::element) fn construct_click_event<'s>(
 
 pub(crate) fn construct_mouse_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event_type: &str,
     coordinates: InputEventCoordinates,
@@ -1092,7 +1092,7 @@ pub(crate) fn construct_mouse_event_for_target<'s>(
 
 pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event_type: &str,
     coordinates: InputEventCoordinates,
@@ -1117,7 +1117,7 @@ pub(crate) fn construct_mouse_event_with_related_target_for_target<'s>(
 
 pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event_type: &str,
     coordinates: InputEventCoordinates,
@@ -1142,7 +1142,7 @@ pub(crate) fn construct_mouse_event_with_detail_for_target<'s>(
 
 pub(crate) fn construct_wheel_event_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     event_type: &str,
     coordinates: InputEventCoordinates,

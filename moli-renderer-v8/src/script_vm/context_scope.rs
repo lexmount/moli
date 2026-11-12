@@ -6,7 +6,7 @@ use super::ScriptVm;
 #[cfg(test)]
 use super::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use crate::document_runtime::DocumentRuntime;
-use crate::{frame_owner_model::FrameRealmId, native_bridge::JsContextHost};
+use crate::{frame_owner_model::FrameRealmId, native_bridge::PageScriptHost};
 
 impl ScriptVm {
     pub(super) fn settle_retired_history_traversals(&mut self) {
@@ -71,7 +71,7 @@ impl ScriptVm {
     pub(super) fn with_context_scope_by_ptr<T>(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         let context_host = self._context_host.clone();
         let result = self
@@ -86,7 +86,7 @@ impl ScriptVm {
                 let scope = &mut v8::ContextScope::new(scope, context);
                 // V8 callbacks are re-entrant. Keep only the owning Rc alive;
                 // a RefCell guard here would make callbacks panic on borrow_mut.
-                let runtime_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                let runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
                 op(scope, runtime_ptr)
             });
         let publication = self.publish_prebootstrapped_isolated_window_contexts();
@@ -100,7 +100,7 @@ impl ScriptVm {
     /// HTML task or a protocol command.
     pub(super) fn with_default_context_scope<T>(
         &mut self,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         let context_ptr = self.ensure_main_world()?.context_ptr();
         self.with_context_scope_by_ptr(context_ptr, op)
@@ -109,7 +109,7 @@ impl ScriptVm {
     /// Update an already-materialized JavaScript surface without creating one.
     pub(super) fn with_current_main_world_scope<T>(
         &mut self,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<Option<T>> {
         let Some(runtime) = self.current_main_world() else {
             return Ok(None);
@@ -123,7 +123,7 @@ impl ScriptVm {
         &mut self,
         op: impl FnOnce(
             &mut v8::PinScope<'_, '_>,
-            *mut JsContextHost,
+            *mut PageScriptHost,
             &mut DocumentRuntime,
         ) -> Result<T>,
     ) -> Result<T> {
@@ -135,7 +135,7 @@ impl ScriptVm {
         &mut self,
         op: impl FnOnce(
             &mut v8::PinScope<'_, '_>,
-            *mut JsContextHost,
+            *mut PageScriptHost,
             &mut DocumentRuntime,
         ) -> Result<T>,
     ) -> Result<Option<T>> {
@@ -151,7 +151,7 @@ impl ScriptVm {
         context_ptr: *const v8::Global<v8::Context>,
         op: impl FnOnce(
             &mut v8::PinScope<'_, '_>,
-            *mut JsContextHost,
+            *mut PageScriptHost,
             &mut DocumentRuntime,
         ) -> Result<T>,
     ) -> Result<T> {
@@ -173,7 +173,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(crate) fn with_default_context_scope_for_test<T>(
         &mut self,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         self.with_default_context_scope(op)
     }
@@ -192,7 +192,7 @@ impl ScriptVm {
     pub(super) fn with_frame_realm_scope<T>(
         &mut self,
         realm_id: FrameRealmId,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         let context_ptr = self.frame_realm_context_ptr(realm_id)?;
         self.with_context_scope_by_ptr(context_ptr, op)
@@ -205,7 +205,7 @@ impl ScriptVm {
     pub(super) fn with_context_scope_by_ptr_and_checkpoint_for_test<T>(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         self.with_context_scope_by_ptr(context_ptr, |scope, runtime_ptr| {
             let result = op(scope, runtime_ptr);
@@ -217,7 +217,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(super) fn with_default_context_scope_and_checkpoint_for_test<T>(
         &mut self,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         self.with_default_context_scope(|scope, runtime_ptr| {
             let result = op(scope, runtime_ptr);
@@ -230,7 +230,7 @@ impl ScriptVm {
     pub(super) fn with_frame_realm_scope_and_checkpoint_for_test<T>(
         &mut self,
         realm_id: FrameRealmId,
-        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut JsContextHost) -> Result<T>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
         self.with_frame_realm_scope(realm_id, |scope, runtime_ptr| {
             let result = op(scope, runtime_ptr);

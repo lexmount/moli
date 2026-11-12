@@ -9,11 +9,11 @@ use crate::native_bridge::node::node_runtime_and_handle_from_object;
 use crate::util::v8_string;
 use moli_webapi_declare::ObjectLiteralDeclaration;
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 
 pub(super) fn document_all_items_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Array>> {
     let runtime = unsafe { &mut *runtime_ptr };
@@ -39,7 +39,7 @@ pub(super) fn document_all_items_array<'s>(
 
 pub(super) fn document_all_named_lookup<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     items: v8::Local<'s, v8::Array>,
 ) -> v8::Local<'s, v8::Object> {

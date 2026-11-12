@@ -395,7 +395,7 @@ impl SelectionRecord {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn create_selection_record(&mut self) -> Option<SelectionRecordHandle> {
         self.selection_record_registry.create_record()
     }
@@ -431,7 +431,7 @@ impl JsContextHost {
         composed_start: (DomHandle, u32),
         composed_end: (DomHandle, u32),
     ) -> bool {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.selection_record_registry.store(
             dom_host,
@@ -461,7 +461,7 @@ impl JsContextHost {
         handle: SelectionRecordHandle,
         role: SelectionBoundaryRole,
     ) -> Option<SelectionBoundarySnapshot> {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.selection_record_registry
             .boundary(dom_host, handle, role)
@@ -474,14 +474,14 @@ impl JsContextHost {
         container: DomHandle,
         offset: u32,
     ) -> bool {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.selection_record_registry
             .set_boundary(dom_host, handle, role, container, offset)
     }
 
     pub(crate) fn selection_record_is_collapsed(&mut self, handle: SelectionRecordHandle) -> bool {
-        let runtime = self.runtime;
+        let runtime = self.document_runtime;
         let dom_host = unsafe { &*runtime }.dom_host();
         self.selection_record_registry
             .is_collapsed(dom_host, handle)

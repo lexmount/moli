@@ -5,7 +5,7 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetSubresourceRequest, StylesheetSubresourceTarget,
     },
     frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-    native_bridge::{JsContextHost, OwnerDispatchScope},
+    native_bridge::{OwnerDispatchScope, PageScriptHost},
     types::SubresourceRequestInitiatorType,
 };
 use anyhow::{Context, Result, ensure};
@@ -23,7 +23,7 @@ pub(crate) enum StylesheetSubresourceFetchStart {
 
 pub(crate) fn start_stylesheet_subresource_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     binding: StylesheetSubresourceLoadDelayBinding,
     request: StylesheetSubresourceRequest,
 ) -> Result<StylesheetSubresourceFetchStart> {
@@ -136,7 +136,7 @@ pub(crate) fn start_stylesheet_subresource_fetch(
 }
 
 fn synchronous_failure_terminal(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     target: StylesheetSubresourceTarget,
 ) -> StylesheetSubresourceFetchStart {
     match target {

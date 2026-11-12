@@ -4,7 +4,7 @@ use super::state::{AbortRegistration, CallbackTool, RegisteredTool, ToolExecutor
 use super::tasks::{queue_task, remove_abort_registration, signal_reason, task_context, task_data};
 use super::{conversion, devtools, execution, registry};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::util::context_host_ptr_from_global_bridge;
 use crate::web_api_interfaces;
 use crate::window_webidl_callback::WindowWebIdlCallbackFunction;
@@ -61,7 +61,7 @@ fn receiver<'s>(
 fn active_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
-) -> Result<(*mut JsContextHost, DomHandle), webidl::WebIdlError> {
+) -> Result<(*mut PageScriptHost, DomHandle), webidl::WebIdlError> {
     check_target(scope, target).map_err(|error| {
         scope.throw_exception(error);
         webidl::WebIdlError::pending_exception(webidl::Context::member("ModelContext", "document"))

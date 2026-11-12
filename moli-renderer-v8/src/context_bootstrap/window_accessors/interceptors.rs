@@ -3,7 +3,7 @@ use crate::document_runtime::DomHandle;
 use crate::native_bridge::named_access::{
     build_window_named_items_collection, window_named_item_handles,
 };
-use crate::native_bridge::{JsContextHost, OwnerDispatchScope};
+use crate::native_bridge::{OwnerDispatchScope, PageScriptHost};
 use crate::util::serialize_v8_iter_array;
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
@@ -15,7 +15,7 @@ fn window_indexed_child_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
     index: u32,
-) -> Option<(*mut JsContextHost, DomHandle, OwnerDispatchScope)> {
+) -> Option<(*mut PageScriptHost, DomHandle, OwnerDispatchScope)> {
     let host_ptr = window_host_ptr(scope, holder)?;
     let host = unsafe { &mut *host_ptr };
     let owner = window_current_dispatch_scope(scope, holder, host)?;

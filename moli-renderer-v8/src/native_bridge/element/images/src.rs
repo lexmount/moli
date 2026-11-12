@@ -1,6 +1,6 @@
 use crate::document_runtime::{DocumentSubresourceCspKind, DomHandle};
 use crate::dom::native::Node;
-use crate::native_bridge::{ImageLoadEventId, JsContextHost, WindowDocumentTaskTarget};
+use crate::native_bridge::{ImageLoadEventId, PageScriptHost, WindowDocumentTaskTarget};
 use crate::page_task_queue::{
     PageImageLoadEventTargetEffect, RendererPageImageLoadEventKind,
     RendererPageImageLoadEventTaskId,
@@ -25,7 +25,7 @@ enum ImageLoadQueueTrigger {
 
 pub(crate) fn queue_image_load_event_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     queue_image_load_event(
@@ -39,7 +39,7 @@ pub(crate) fn queue_image_load_event_if_needed(
 
 pub(crate) fn queue_image_load_event_after_document_adoption(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     queue_image_load_event(
@@ -53,7 +53,7 @@ pub(crate) fn queue_image_load_event_after_document_adoption(
 
 pub(crate) fn queue_image_load_event_if_needed_with_initiator(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     request_initiator_type: SubresourceRequestInitiatorType,
 ) {
@@ -68,7 +68,7 @@ pub(crate) fn queue_image_load_event_if_needed_with_initiator(
 
 pub(crate) fn queue_revealed_lazy_image_loads(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: DomHandle,
 ) {
     let handles = {
@@ -92,7 +92,7 @@ pub(crate) fn queue_revealed_lazy_image_loads(
 
 pub(crate) fn queue_image_load_event_for_loading_change(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     queue_image_load_event(
@@ -106,7 +106,7 @@ pub(crate) fn queue_image_load_event_for_loading_change(
 
 fn queue_image_load_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     trigger: ImageLoadQueueTrigger,
     request_initiator_type: SubresourceRequestInitiatorType,
@@ -265,7 +265,7 @@ fn queue_image_load_event(
     }
 }
 
-pub(crate) fn image_selected_source(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+pub(crate) fn image_selected_source(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     image_selected_source_candidate(runtime, handle).map(|candidate| candidate.url)
 }
 
@@ -276,7 +276,7 @@ struct SelectedImageSource {
 }
 
 fn image_selected_source_candidate(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<SelectedImageSource> {
     let node = runtime.dom_host().node(handle)?;
@@ -320,7 +320,7 @@ fn image_selected_source_candidate(
 }
 
 fn image_selected_picture_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<SelectedImageSource> {
     let parent = runtime.dom_host().node(handle)?.parent_node()?;
@@ -367,7 +367,7 @@ fn image_selected_picture_source(
 }
 
 fn image_load_is_suppressed_for_non_active_parent(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime
@@ -376,14 +376,14 @@ fn image_load_is_suppressed_for_non_active_parent(
         .is_some_and(|node| !node.is_connected() && node.parent_node().is_some())
 }
 
-pub(crate) fn image_selected_source_url(runtime: &JsContextHost, handle: DomHandle) -> String {
+pub(crate) fn image_selected_source_url(runtime: &PageScriptHost, handle: DomHandle) -> String {
     image_selected_resource(runtime, handle)
         .map(|selected| selected.url)
         .unwrap_or_default()
 }
 
 fn image_selected_resource(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<SelectedImageSource> {
     let mut selected = image_selected_source_candidate(runtime, handle)?;
@@ -420,7 +420,7 @@ fn image_selected_resource(
 }
 
 pub(crate) fn image_selected_request_key(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<ImageRequestKey> {
     let selected = image_selected_resource(runtime, handle)?;
@@ -444,7 +444,7 @@ pub(crate) struct ImageAttributeMutationPlan {
 }
 
 pub(crate) fn plan_image_attribute_mutation(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
     next_value: Option<&str>,
@@ -500,7 +500,7 @@ pub(crate) fn plan_image_attribute_mutation(
 
 pub(crate) fn apply_image_attribute_mutation_plan(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     plan: ImageAttributeMutationPlan,
 ) {
     {
@@ -519,7 +519,7 @@ pub(crate) fn apply_image_attribute_mutation_plan(
     }
 }
 
-pub(crate) fn reset_image_load_dispatch(runtime: &mut JsContextHost, handle: DomHandle) {
+pub(crate) fn reset_image_load_dispatch(runtime: &mut PageScriptHost, handle: DomHandle) {
     let _ = runtime.cancel_pending_image_load_event(handle);
     let _ = runtime.retire_image_resource_for_element(handle);
     if let Some(element) = runtime
@@ -531,7 +531,7 @@ pub(crate) fn reset_image_load_dispatch(runtime: &mut JsContextHost, handle: Dom
     }
 }
 
-pub(crate) fn mark_image_load_dispatched(runtime: &mut JsContextHost, handle: DomHandle) {
+pub(crate) fn mark_image_load_dispatched(runtime: &mut PageScriptHost, handle: DomHandle) {
     if let Some(element) = runtime
         .dom_host_mut()
         .node_mut(handle)
@@ -543,7 +543,7 @@ pub(crate) fn mark_image_load_dispatched(runtime: &mut JsContextHost, handle: Do
 
 pub(crate) fn record_image_resource_performance_entry_for_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) {
     let url = image_selected_source_url(runtime, handle);
@@ -560,8 +560,8 @@ pub(crate) fn record_image_resource_performance_entry_for_handle(
 
 pub(crate) fn apply_authorized_image_load_event_in_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &mut JsContextHost,
-    runtime_ptr: *mut JsContextHost,
+    runtime: &mut PageScriptHost,
+    runtime_ptr: *mut PageScriptHost,
     task_id: RendererPageImageLoadEventTaskId,
     target: WindowDocumentTaskTarget,
     kind: RendererPageImageLoadEventKind,
@@ -596,7 +596,7 @@ pub(crate) fn apply_authorized_image_load_event_in_context(
 
 fn dispatch_queued_image_load_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     pending: crate::native_bridge::PendingImageLoadEvent,
     kind: RendererPageImageLoadEventKind,
@@ -630,7 +630,7 @@ fn dispatch_queued_image_load_event(
 }
 
 pub(crate) fn queue_image_load_network_terminal_followup(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     sequence: ImageLoadEventId,
     followup: Option<RendererPageImageLoadEventKind>,
@@ -639,7 +639,7 @@ pub(crate) fn queue_image_load_network_terminal_followup(
 }
 
 fn queue_image_load_terminal_followup_if_ready(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     sequence: ImageLoadEventId,
     followup: Option<RendererPageImageLoadEventKind>,
@@ -662,7 +662,7 @@ fn queue_image_load_terminal_followup_if_ready(
     }
 }
 
-fn connected_empty_src_without_srcset(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn connected_empty_src_without_srcset(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
         node.is_connected()
             && node.as_element().is_some_and(|element| {
@@ -755,7 +755,7 @@ struct ImageSelectionViewport {
     device_pixel_ratio: f64,
 }
 
-fn image_selection_viewport(runtime: &JsContextHost, handle: DomHandle) -> ImageSelectionViewport {
+fn image_selection_viewport(runtime: &PageScriptHost, handle: DomHandle) -> ImageSelectionViewport {
     let viewport = runtime
         .dom_host()
         .owner_document_handle(handle)
@@ -861,7 +861,7 @@ fn parse_source_size_length(length: &str, viewport: ImageSelectionViewport) -> O
     None
 }
 
-fn image_allows_auto_sizes(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn image_allows_auto_sizes(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -870,7 +870,7 @@ fn image_allows_auto_sizes(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"))
 }
 
-fn image_auto_source_size(runtime: &JsContextHost, handle: DomHandle) -> Option<f64> {
+fn image_auto_source_size(runtime: &PageScriptHost, handle: DomHandle) -> Option<f64> {
     let element = runtime.dom_host().node(handle)?.as_element()?;
     if let Some(width) = element
         .attribute("width")
@@ -882,7 +882,7 @@ fn image_auto_source_size(runtime: &JsContextHost, handle: DomHandle) -> Option<
     auto_source_size_from_style(style, parent_auto_size_width(runtime, handle))
 }
 
-fn parent_auto_size_width(runtime: &JsContextHost, handle: DomHandle) -> Option<f64> {
+fn parent_auto_size_width(runtime: &PageScriptHost, handle: DomHandle) -> Option<f64> {
     // Like lazy-load admission above, `sizes=auto` selection must not trigger a
     // layout demand merely to decide which resource to fetch. This compatibility
     // estimate is local to responsive-image selection.
@@ -1046,7 +1046,7 @@ fn image_current_src_value<'s>(
     ))
 }
 
-fn image_current_src_value_for_handle(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn image_current_src_value_for_handle(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let complete = runtime
         .dom_host()
         .node(handle)

@@ -156,7 +156,7 @@ pub(crate) type PageDomManipulationTurnOutcome =
 /// PageVm-stamped producer capability for the shared DOM-manipulation source.
 ///
 /// API-specific typed senders are derived from this family capability. The
-/// atomic JsContextHost capability set therefore grows by task-source class,
+/// atomic PageScriptHost capability set therefore grows by task-source class,
 /// not once for every DOM-manipulation API migrated into the same FIFO.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageDomManipulationSender {

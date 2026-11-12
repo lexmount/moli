@@ -6,12 +6,12 @@ use super::registry_roots::{
 use super::traversal::shadow_including_subtree_handles;
 use super::with_custom_element_reaction_scope;
 use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use std::collections::HashSet;
 
 pub(crate) fn upgrade_existing_definition_for_child(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     child_handle: Option<DomHandle>,
     definition_name: &str,
 ) {
@@ -42,7 +42,7 @@ pub(crate) fn upgrade_existing_definition_for_child(
 
 pub(crate) fn upgrade_existing_definition_for_registry(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     definition_name: &str,
 ) {
@@ -64,7 +64,7 @@ pub(crate) fn upgrade_existing_definition_for_registry(
 }
 
 fn matching_definition_handles_for_registry_in_upgrade_order(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     definition_name: &str,
 ) -> Vec<DomHandle> {
@@ -108,7 +108,7 @@ fn matching_definition_handles_for_registry_in_upgrade_order(
 }
 
 fn collect_matching_definition_handles(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
     definition_name: &str,
     handles: &mut Vec<DomHandle>,

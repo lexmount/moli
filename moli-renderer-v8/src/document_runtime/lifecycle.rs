@@ -155,7 +155,7 @@ impl DocumentRuntime {
     pub(super) fn stylesheet_fetcher_for_owner(
         &self,
         owner: DomHandle,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> crate::stylesheet_blocking::RendererStylesheetFetcher {
         if host_ptr.is_null() {
             return self.stylesheet_fetcher();
@@ -531,7 +531,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_current_main_document_image_load_events(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let handles = (0..self.dom_host.dom().nodes().len())
             .map(crate::document_runtime::DomHandle::new)
@@ -563,7 +563,7 @@ impl DocumentRuntime {
     pub(crate) fn queue_current_main_document_media_loads(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let handles = (0..self.dom_host.dom().nodes().len())
             .map(DomHandle::new)

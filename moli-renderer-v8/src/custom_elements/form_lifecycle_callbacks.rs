@@ -3,12 +3,12 @@ use super::reactions::enter_custom_element_reaction;
 
 use super::super::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, wrapped_handle_value},
+    native_bridge::{PageScriptHost, wrapped_handle_value},
 };
 
 pub(super) fn call_form_associated_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     form: Option<DomHandle>,
 ) {
@@ -43,7 +43,7 @@ pub(super) fn call_form_associated_callback(
 
 pub(super) fn call_form_disabled_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     disabled: bool,
 ) {
@@ -76,7 +76,7 @@ pub(super) fn call_form_disabled_callback(
 
 pub(super) fn call_form_reset_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     if !unsafe { &*host_ptr }
@@ -107,7 +107,7 @@ pub(super) fn call_form_reset_callback(
 
 pub(super) fn call_form_state_restore_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     value: &str,
     mode: super::reaction_types::FormStateRestoreMode,

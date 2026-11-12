@@ -9,7 +9,7 @@ use std::{cell::OnceCell, collections::HashMap};
 
 use moli_layout::LayoutUsedSize;
 
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) enum LayoutSizeReads {
     /// A single element's property batch needs one lookup, not a whole index.
@@ -28,7 +28,7 @@ impl LayoutSizeReads {
 
     pub(super) fn get(
         &self,
-        runtime: &JsContextHost,
+        runtime: &PageScriptHost,
         source_document: Option<DomHandle>,
         handle: DomHandle,
     ) -> Option<LayoutUsedSize> {
@@ -60,20 +60,20 @@ impl LayoutSizeReads {
 }
 
 pub(super) fn used_size_from_layout_snapshot(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<LayoutUsedSize> {
     lookup_size(runtime, size_document(runtime, handle)?, handle)
 }
 
-fn size_document(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn size_document(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     (runtime.layout_policy().uses_real_layout() && runtime.dom_host().is_connected(handle))
         .then(|| runtime.layout_document_for_source(handle))
         .flatten()
 }
 
 fn lookup_size(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     handle: DomHandle,
 ) -> Option<LayoutUsedSize> {

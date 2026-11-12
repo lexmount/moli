@@ -9,7 +9,7 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
     native_bridge::{
-        JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+        PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
         WindowExecutionContextOwner,
     },
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
@@ -24,7 +24,7 @@ pub(super) struct ObserverCallback {
 impl ObserverCallback {
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         observer: v8::Local<'_, v8::Object>,
         callback: WebIdlCallbackFunction,
     ) -> Self {
@@ -40,7 +40,7 @@ impl ObserverCallback {
     pub(super) fn prepare(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Option<PreparedWebIdlCallbackExecution> {
         self.callback
             .prepare_execution(scope, host_ptr, Some(self.observer_identity?))

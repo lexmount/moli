@@ -1,6 +1,6 @@
 use super::{parser_handoff_attributes::set_parser_token_attribute, set_dom_element_prefix};
 use crate::{
-    document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost,
+    document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost,
     parser::ParserCustomElementConstructionHandoff,
 };
 
@@ -16,7 +16,7 @@ pub(super) struct ParserHandoffInsertionPosition {
 
 pub(crate) fn flush_parser_custom_element_handoff_replacements(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     // html5ever keeps appending descendants to the original open-stack
     // placeholder. Move those descendants to the constructor result after each
@@ -39,7 +39,7 @@ pub(crate) fn flush_parser_custom_element_handoff_replacements(
 
 pub(super) fn apply_parser_handoff_token_data_to_constructed_element(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructed: DomHandle,
     handoff: &ParserCustomElementConstructionHandoff,
 ) {
@@ -53,7 +53,7 @@ pub(super) fn apply_parser_handoff_token_data_to_constructed_element(
 
 pub(super) fn restore_failed_parser_handoff_placeholder(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     placeholder: DomHandle,
     handoff: &ParserCustomElementConstructionHandoff,
     insertion_position: ParserHandoffInsertionPosition,
@@ -69,7 +69,7 @@ pub(super) fn restore_failed_parser_handoff_placeholder(
 
 pub(super) fn insert_parser_constructed_element_at_handoff_position(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     insertion_position: ParserHandoffInsertionPosition,
 ) -> bool {
@@ -100,7 +100,7 @@ pub(super) fn insert_parser_constructed_element_at_handoff_position(
 }
 
 pub(super) fn detach_parser_placeholder_from_parent_for_construction(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<ParserHandoffInsertionPosition> {
     let (parent, reference_child) = {

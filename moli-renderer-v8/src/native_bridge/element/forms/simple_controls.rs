@@ -13,7 +13,7 @@ fn button_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLButtonElement", member, "button")
 }
 
@@ -21,7 +21,7 @@ fn button_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_setter_receiver(scope, receiver, "HTMLButtonElement", member, "button")
 }
 
@@ -103,7 +103,7 @@ fn fieldset_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLFieldSetElement", member, "fieldset")
 }
 
@@ -111,7 +111,7 @@ fn fieldset_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_setter_receiver(scope, receiver, "HTMLFieldSetElement", member, "fieldset")
 }
 
@@ -119,7 +119,7 @@ fn meter_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLMeterElement", member, "meter")
 }
 
@@ -127,7 +127,7 @@ fn progress_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLProgressElement", member, "progress")
 }
 
@@ -626,7 +626,7 @@ pub(in crate::native_bridge) fn output_default_value_setter_function<'s>(
 
 use super::owner::node_contains;
 
-fn legend_fieldset_ancestor(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn legend_fieldset_ancestor(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = runtime.dom_host().parent_node(handle);
     while let Some(parent) = current {
         if runtime.dom_host().is_html_element_named(parent, "fieldset") {
@@ -646,7 +646,7 @@ fn meter_values_for_receiver<'s>(
     Some(meter_values(unsafe { &*runtime_ptr }, handle))
 }
 
-fn meter_values(runtime: &JsContextHost, handle: DomHandle) -> MeterElementValues {
+fn meter_values(runtime: &PageScriptHost, handle: DomHandle) -> MeterElementValues {
     let value = element_attribute(runtime, handle, "value");
     let min = element_attribute(runtime, handle, "min");
     let max = element_attribute(runtime, handle, "max");
@@ -672,7 +672,7 @@ fn progress_values_for_receiver<'s>(
     Some(progress_values(unsafe { &*runtime_ptr }, handle))
 }
 
-fn progress_values(runtime: &JsContextHost, handle: DomHandle) -> ProgressElementValues {
+fn progress_values(runtime: &PageScriptHost, handle: DomHandle) -> ProgressElementValues {
     let value = element_attribute(runtime, handle, "value");
     let max = element_attribute(runtime, handle, "max");
     progress_element_values(value.as_deref(), max.as_deref())
@@ -702,7 +702,7 @@ use crate::webidl::finite_double_property_value as finite_double_from_value;
 
 fn set_numeric_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     number: f64,
@@ -981,7 +981,7 @@ pub(in crate::native_bridge) fn button_type_setter_function<'s>(
 
 struct ElementReflectionValue<'s> {
     object: v8::Local<'s, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 }
 
@@ -1016,7 +1016,7 @@ impl<'s> webidl::WebIdlConverter<'s> for ElementReflectionValue<'s> {
 
 fn element_reflection_handle_for_owner(
     scope: &mut v8::PinScope<'_, '_>,
-    owner_runtime_ptr: *mut JsContextHost,
+    owner_runtime_ptr: *mut PageScriptHost,
     reference: ElementReflectionValue<'_>,
 ) -> Option<DomHandle> {
     current_or_live_delegate_node_arg_handle(scope, owner_runtime_ptr, reference.object.into())
@@ -1078,7 +1078,7 @@ fn set_button_element_reflection<'s>(
 fn set_wrapped_button_element_or_null<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source: v8::Local<'s, v8::Object>,
     target: Option<DomHandle>,
 ) {

@@ -8,12 +8,12 @@ use crate::{
 
 use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, RendererPageTaskReadySignal};
 
-/// PageVm-local key for a structured-clone payload retained by JsContextHost.
+/// PageVm-local key for a structured-clone payload retained by PageScriptHost.
 ///
 /// The stable Page source deliberately carries only this key and the exact
 /// LocalWindow target. Transferred ports and V8 clone state remain owned by
 /// the PageVm that accepted the API call, so replacement teardown cannot make
-/// a new JsContextHost clean up an old payload.
+/// a new PageScriptHost clean up an old payload.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RendererPageWindowMessageTaskId(u64);
 

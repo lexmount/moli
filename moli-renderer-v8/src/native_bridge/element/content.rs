@@ -11,7 +11,7 @@ use crate::{
 
 use super::super::node::set_text_content_in_reaction_scope;
 use super::super::{
-    JsContextHost, document::set_detached_text_replacement_value,
+    PageScriptHost, document::set_detached_text_replacement_value,
     node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
 use super::{
@@ -42,7 +42,7 @@ struct GetHtmlArgs<'scope> {
 }
 
 pub(in crate::native_bridge) fn node_direct_text_content(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let dom = runtime.dom_host().dom();
@@ -418,7 +418,7 @@ enum SelectInnerTextTask {
 }
 
 fn append_option_inner_text(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     writer: &mut InnerTextWriter,
 ) {
@@ -437,7 +437,7 @@ fn append_option_inner_text(
 }
 
 fn append_select_descendants(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     inside_optgroup: bool,
     writer: &mut InnerTextWriter,
@@ -501,7 +501,7 @@ fn append_select_descendants(
 }
 
 fn append_select_inner_text(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     select: DomHandle,
     writer: &mut InnerTextWriter,
 ) {
@@ -540,7 +540,7 @@ fn rendered_element_ignores_dom_children(element: &Element) -> bool {
 }
 
 fn append_inner_text(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     style_scope: &mut StyleObservation<'_>,
     root: DomHandle,
     root_style: Option<ElementRenderedStyle>,
@@ -741,7 +741,7 @@ fn append_inner_text(
     }
 }
 
-fn inner_text_source_handles(runtime: &JsContextHost, root: DomHandle) -> Vec<DomHandle> {
+fn inner_text_source_handles(runtime: &PageScriptHost, root: DomHandle) -> Vec<DomHandle> {
     let mut sources = Vec::new();
     let mut pending = vec![root];
     while let Some(handle) = pending.pop() {
@@ -754,7 +754,7 @@ fn inner_text_source_handles(runtime: &JsContextHost, root: DomHandle) -> Vec<Do
 }
 
 fn node_inner_text(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Result<String, moli_layout::LayoutError> {
     let Some(node) = runtime.dom_host().node(handle) else {
@@ -796,7 +796,7 @@ fn node_inner_text(
     Ok(writer.finish())
 }
 
-fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+fn node_inner_html(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     let dom_host = runtime.dom_host();
     if dom_host
         .node_document_is_html_document(handle)
@@ -809,7 +809,7 @@ fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<String>
     }
 }
 
-fn is_element_or_shadow_root_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_element_or_shadow_root_receiver(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)

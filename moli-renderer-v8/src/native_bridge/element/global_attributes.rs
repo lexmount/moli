@@ -5,7 +5,7 @@ use crate::util::v8_string;
 use crate::webidl;
 
 use super::super::{
-    JsContextHost,
+    PageScriptHost,
     document::{MATHML_NS, SVG_NS, XHTML_NS},
     node::{
         node_is_element, node_runtime_and_handle_from_object_or_detached,
@@ -841,7 +841,7 @@ fn content_editable_state_from_attr(raw: &str) -> Option<bool> {
     }
 }
 
-fn element_content_editable_state(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn element_content_editable_state(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = Some(handle);
     while let Some(candidate) = current {
         let Some(node) = runtime.dom_host().node(candidate) else {
@@ -2091,7 +2091,7 @@ pub(in crate::native_bridge) fn node_translate_getter_function<'s>(
     rv.set_bool(element_translate_mode(runtime, handle));
 }
 
-fn element_translate_mode(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn element_translate_mode(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = Some(handle);
     while let Some(candidate) = current {
         if let Some(value) = element_attribute(runtime, candidate, "translate") {
@@ -2264,7 +2264,7 @@ pub(in crate::native_bridge) fn node_spellcheck_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn computed_writing_suggestions_value(runtime: &JsContextHost, handle: DomHandle) -> &'static str {
+fn computed_writing_suggestions_value(runtime: &PageScriptHost, handle: DomHandle) -> &'static str {
     let mut current = Some(handle);
     while let Some(candidate) = current {
         if let Some(value) = runtime
@@ -2574,7 +2574,7 @@ pub(in crate::native_bridge) fn node_inert_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn default_tab_index_for(runtime: &JsContextHost, handle: DomHandle) -> i32 {
+fn default_tab_index_for(runtime: &PageScriptHost, handle: DomHandle) -> i32 {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return -1;
     };

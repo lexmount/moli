@@ -1,7 +1,7 @@
 use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
 use crate::document_runtime::DocumentSubresourceCspKind;
-use crate::native_bridge::{JsContextHost, PendingTextTrackLoadTerminal, TextTrackLoadSequenceId};
+use crate::native_bridge::{PageScriptHost, PendingTextTrackLoadTerminal, TextTrackLoadSequenceId};
 use crate::types::{SubresourceRequestInitiatorType, SubresourceResourceType};
 use anyhow::{Context, Result, ensure};
 use moli_fetch::{RequestCredentialsMode, RequestMode};
@@ -15,7 +15,7 @@ pub(crate) enum TextTrackResourceFetchStart {
 
 pub(crate) fn start_text_track_resource_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     track_handle: crate::document_runtime::DomHandle,
     sequence: TextTrackLoadSequenceId,
 ) -> Result<TextTrackResourceFetchStart> {

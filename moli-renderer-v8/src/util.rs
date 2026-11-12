@@ -1,5 +1,5 @@
 use super::document_runtime::DomHandle;
-use super::native_bridge::JsContextHost;
+use super::native_bridge::PageScriptHost;
 pub use moli_v8_util::{
     array_contains_strict, array_push_value, call_object_method, callback_data_index_value,
     callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
@@ -36,13 +36,13 @@ const SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER: &str = "moli-script-base-url-
 // Document backing alive, while temporary WindowProxy facades remain
 // non-owning and fail closed as soon as the host detaches.
 struct ContextHostPointerSlot {
-    host_ptr: NonNull<JsContextHost>,
+    host_ptr: NonNull<PageScriptHost>,
     host_lifecycle: Rc<Cell<ContextHostLifecycle>>,
     retained_realm_owner: RefCell<Option<RetainedDocumentRealmHostOwner>>,
 }
 
 struct RetainedDocumentRealmHostOwner {
-    host: Option<Rc<RefCell<JsContextHost>>>,
+    host: Option<Rc<RefCell<PageScriptHost>>>,
     deferred_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
     retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
 }
@@ -66,7 +66,7 @@ pub(crate) enum ContextHostLifecycle {
 /// Marks a V8 Context whose native Document host has been retired.
 ///
 /// Navigation can keep the stable WindowProxy while replacing its Context and
-/// `JsContextHost`; final Page close also parks that proxy on a host-free
+/// `PageScriptHost`; final Page close also parks that proxy on a host-free
 /// facade. In both cases retained functions and wrappers can outlive the Rust
 /// host, so every raw-pointer entry point must fail closed before inspecting
 /// embedder data.
@@ -296,7 +296,7 @@ pub(crate) fn materialize_hidden_function_template_prototype<'s>(
 
 // # Why V8 callbacks use `RefCell::as_ptr()` instead of `borrow_mut()`
 //
-// `JsContextHost` is stored as `Rc<RefCell<JsContextHost>>`. Every V8 callback
+// `PageScriptHost` is stored as `Rc<RefCell<PageScriptHost>>`. Every V8 callback
 // needs a `*mut` pointer to call methods on it.
 //
 // The obvious approach — `hrc.borrow_mut()` — panics at runtime because **V8
@@ -652,7 +652,7 @@ pub(super) fn call_global_bridge_method<'s>(
 /// execution.
 pub(super) fn context_host_ptr_from_global_bridge(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     let context = scope.get_current_context();
     if page_context_is_disconnected(context) {
         return None;
@@ -669,14 +669,14 @@ pub(super) fn context_host_ptr_from_global_bridge(
 
 pub(super) fn install_context_host_pointer_slot(
     context: v8::Local<'_, v8::Context>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     host_lifecycle: Rc<Cell<ContextHostLifecycle>>,
 ) {
     let host_ptr =
-        NonNull::new(host_ptr).expect("V8 context JsContextHost pointer should not be null");
+        NonNull::new(host_ptr).expect("V8 context PageScriptHost pointer should not be null");
     assert!(
         host_lifecycle.get() == ContextHostLifecycle::Active,
-        "a retired JsContextHost must not be installed into a V8 context"
+        "a retired PageScriptHost must not be installed into a V8 context"
     );
     let common = Rc::clone(&unsafe { &*host_ptr.as_ptr() }.common);
     crate::common_runtime::CommonRuntimeBinding::install_window(
@@ -688,7 +688,7 @@ pub(super) fn install_context_host_pointer_slot(
     if let Some(existing) = context.get_slot::<ContextHostPointerSlot>() {
         assert!(
             existing.host_ptr == host_ptr && Rc::ptr_eq(&existing.host_lifecycle, &host_lifecycle),
-            "V8 context JsContextHost pointer must not be rebound"
+            "V8 context PageScriptHost pointer must not be rebound"
         );
         return;
     }
@@ -702,7 +702,7 @@ pub(super) fn install_context_host_pointer_slot(
 
 pub(super) fn context_host_ptr_from_context_slot(
     context: v8::Local<'_, v8::Context>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     if page_context_is_disconnected(context) {
         return None;
     }
@@ -713,21 +713,21 @@ pub(super) fn context_host_ptr_from_context_slot(
 
 pub(crate) fn retain_context_host_for_document_realm(
     context: v8::Local<'_, v8::Context>,
-    host: Rc<RefCell<JsContextHost>>,
+    host: Rc<RefCell<PageScriptHost>>,
     deferred_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
 ) {
     let slot = context
         .get_slot::<ContextHostPointerSlot>()
-        .expect("published Document realm must have a JsContextHost pointer slot");
+        .expect("published Document realm must have a PageScriptHost pointer slot");
     let host_ptr = NonNull::new(host.as_ptr())
-        .expect("published Document realm JsContextHost pointer should not be null");
+        .expect("published Document realm PageScriptHost pointer should not be null");
     assert_eq!(
         slot.host_ptr, host_ptr,
-        "published Document realm must retain its installed JsContextHost"
+        "published Document realm must retain its installed PageScriptHost"
     );
     assert!(
         slot.host_lifecycle.get() != ContextHostLifecycle::Destroyed,
-        "destroyed JsContextHost must not gain a retained realm owner"
+        "destroyed PageScriptHost must not gain a retained realm owner"
     );
     let mut retained = slot.retained_realm_owner.borrow_mut();
     if let Some(existing) = retained.as_ref() {
@@ -736,7 +736,7 @@ pub(crate) fn retain_context_host_for_document_realm(
                 .host
                 .as_ref()
                 .is_some_and(|existing| Rc::ptr_eq(existing, &host)),
-            "Document realm JsContextHost owner must not be rebound"
+            "Document realm PageScriptHost owner must not be rebound"
         );
         return;
     }
@@ -787,7 +787,7 @@ pub(crate) fn detach_document_page_context(context: v8::Local<'_, v8::Context>) 
     }
     let slot = context
         .get_slot::<ContextHostPointerSlot>()
-        .expect("detached Document realm must have a JsContextHost pointer slot");
+        .expect("detached Document realm must have a PageScriptHost pointer slot");
     assert!(
         slot.retained_realm_owner.borrow().is_some(),
         "only a retained real Document realm may enter detached state"
@@ -799,11 +799,11 @@ pub(crate) fn detach_document_page_context(context: v8::Local<'_, v8::Context>) 
 /// Convenience wrapper for callbacks that immediately need the host value.
 ///
 /// This has the same re-entrancy caveat as `context_host_ptr_from_global_bridge`:
-/// do not keep the returned `&mut JsContextHost` across V8 calls that can
+/// do not keep the returned `&mut PageScriptHost` across V8 calls that can
 /// synchronously enter JavaScript and re-enter native callbacks.
 pub(super) fn context_host_from_global_bridge<'host>(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<&'host mut JsContextHost> {
+) -> Option<&'host mut PageScriptHost> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     Some(unsafe { &mut *host_ptr })
 }
@@ -836,7 +836,7 @@ pub(crate) fn call_script_visible_function<'s>(
 pub(super) fn context_host_ptr_from_window_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     if page_context_is_disconnected(scope.get_current_context())
         || object
             .get_creation_context(scope)
@@ -847,7 +847,7 @@ pub(super) fn context_host_ptr_from_window_object(
     if let Some(value) = object.get_internal_field(scope, 0)
         && let Ok(external) = v8::Local::<v8::External>::try_from(value)
     {
-        let ptr = external.value() as *mut JsContextHost;
+        let ptr = external.value() as *mut PageScriptHost;
         if !ptr.is_null() {
             return Some(ptr);
         }
@@ -857,14 +857,14 @@ pub(super) fn context_host_ptr_from_window_object(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
     let value = bridge.get_internal_field(scope, 0)?;
     let external = v8::Local::<v8::External>::try_from(value).ok()?;
-    let ptr = external.value() as *mut JsContextHost;
+    let ptr = external.value() as *mut PageScriptHost;
     if ptr.is_null() { None } else { Some(ptr) }
 }
 
 pub(crate) fn context_host_ptr_for_navigation_owner(
     scope: &mut v8::PinScope<'_, '_>,
     owner: v8::Local<'_, v8::Object>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     context_host_ptr_from_global_bridge(scope)
         .or_else(|| context_host_ptr_from_window_object(scope, owner))
         .or_else(|| {
@@ -892,7 +892,7 @@ pub(super) fn node_wrapper_from_handle<'s>(
 /// caller's context just to synchronize a JavaScript view of native state.
 pub(crate) fn with_cached_node_wrapper_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     operation: impl FnOnce(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Object>),
 ) {

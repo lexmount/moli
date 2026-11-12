@@ -566,7 +566,7 @@ pub(crate) use self::worker_host::{
 pub(crate) use self::worker_location_runtime::install_worker_location_runtime_state;
 pub(super) use super::{
     blob,
-    native_bridge::{self, JsContextHost},
+    native_bridge::{self, PageScriptHost},
     util::{
         callback_data_item, context_host_ptr_from_global_bridge, get_private_value,
         object_number_property, set_private_value, throw_range_error, throw_type_error, v8_string,
@@ -585,7 +585,7 @@ const WORKER_CURRENT_SCRIPT_URL_SLOT: &str = "__moliWorkerCurrentScriptUrl";
 
 pub(crate) fn current_child_frame_id_for_runtime_scope(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
 ) -> Option<String> {
     let global = scope.get_current_context().global(scope);
     let owner = self::navigation_window::runtime_window_owner(scope, global);
@@ -1135,7 +1135,7 @@ pub(crate) fn live_ranges_child_insertion(
 
 pub(crate) fn live_ranges_child_removal(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dom_host: &crate::dom::native::DomHost,
     parent: super::document_runtime::DomHandle,
     removed_child: super::document_runtime::DomHandle,
@@ -1163,7 +1163,7 @@ pub(crate) fn live_ranges_detached_child_insertion<'s>(
 
 pub(crate) fn live_ranges_text_split(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original: super::document_runtime::DomHandle,
     new_text: super::document_runtime::DomHandle,
     offset: u32,

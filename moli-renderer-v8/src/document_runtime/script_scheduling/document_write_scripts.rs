@@ -26,7 +26,7 @@ impl DocumentRuntime {
     pub(in crate::document_runtime) fn run_prepared_document_write_connected_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         node: DomHandle,
         mut script: PreparedScript,
         parser_bridge: Option<ParserConnectedScriptBridge>,
@@ -129,7 +129,7 @@ impl DocumentRuntime {
     pub(in crate::document_runtime) fn execute_document_write_immediate_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         node: DomHandle,
         host_script_handle: &str,
         source: String,
@@ -205,7 +205,7 @@ impl DocumentRuntime {
     fn execute_document_write_prepared_script(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         node: DomHandle,
         host_script_handle: &str,
         script: PreparedScript,

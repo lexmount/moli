@@ -5,7 +5,7 @@ use moli_webapi_declare::{BindError, WebApiObject};
 use crate::{
     frame_owner_model::LocalWindowId,
     native_bridge::{
-        JsContextHost, RuntimeBindingExecutionContext, RuntimeObservableContextToken,
+        PageScriptHost, RuntimeBindingExecutionContext, RuntimeObservableContextToken,
         current_runtime_observable_context_token,
     },
     protocol_types::PendingRuntimeBindingCall,
@@ -53,7 +53,7 @@ pub(crate) fn runtime_binding_callback(
     let Ok(host_external) = v8::Local::<v8::External>::try_from(host_value) else {
         return;
     };
-    let host_ptr = host_external.value() as *mut JsContextHost;
+    let host_ptr = host_external.value() as *mut PageScriptHost;
     if host_ptr.is_null() {
         return;
     }

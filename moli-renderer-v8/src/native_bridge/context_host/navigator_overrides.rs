@@ -1,7 +1,7 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use moli_page_types::NavigatorOverrides;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn navigator_overrides(&self) -> &NavigatorOverrides {
         &self.navigator_overrides
     }

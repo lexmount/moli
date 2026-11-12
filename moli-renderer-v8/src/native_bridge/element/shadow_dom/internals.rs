@@ -5,7 +5,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::native::Node,
     native_bridge::{
-        JsContextHost, collections,
+        PageScriptHost, collections,
         identity::{CollectionKind, LiveCollectionQueryKind},
     },
     snapshot_form_data_value,
@@ -615,7 +615,7 @@ pub(crate) fn element_internals_form_value_for_target<'s>(
 
 pub(crate) fn element_internals_validity_for_target_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> FormControlValidity {
     let Some(internals) = element_internals_for_target_handle(scope, runtime_ptr, handle) else {
@@ -626,7 +626,7 @@ pub(crate) fn element_internals_validity_for_target_handle<'s>(
 
 pub(crate) fn element_internals_validation_message_for_target_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let Some(internals) = element_internals_for_target_handle(scope, runtime_ptr, handle) else {
@@ -639,7 +639,7 @@ pub(crate) fn element_internals_validation_message_for_target_handle(
 }
 
 pub(crate) fn element_internals_will_validate_for_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     internals_will_validate(runtime, handle)
@@ -647,7 +647,7 @@ pub(crate) fn element_internals_will_validate_for_handle(
 
 fn element_internals_for_target_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let target = unsafe { &mut *runtime_ptr }
@@ -720,7 +720,7 @@ fn element_internals_states_getter_callback<'s>(
 fn custom_state_set_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     states: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let target = get_private_object(scope, states, ELEMENT_INTERNALS_STATES_TARGET_SLOT)?;
     node_runtime_and_handle_from_object(scope, target).ok()
 }
@@ -751,7 +751,7 @@ fn require_custom_state_set_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     states: v8::Local<'s, v8::Object>,
     member: &str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     custom_state_set_target(scope, states).or_else(|| {
         throw_type_error(
             scope,
@@ -1036,7 +1036,7 @@ fn element_internals_element_reference_value_setter_callback<'s>(
 fn ensure_form_associated_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     internals: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let target = internals_target(scope, internals)?;
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, target) else {
         throw_form_not_supported(scope);
@@ -1322,7 +1322,7 @@ fn validity_bool_property<'s>(
 
 fn validate_set_validity_anchor(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     anchor: v8::Local<'_, v8::Value>,
 ) -> bool {
@@ -1380,7 +1380,7 @@ fn validate_set_validity_anchor(
 }
 
 fn shadow_including_tree_contains(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     handle: DomHandle,
 ) -> bool {
@@ -1403,7 +1403,7 @@ fn shadow_including_tree_contains(
     }
 }
 
-fn internals_will_validate(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn internals_will_validate(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
     };

@@ -15,7 +15,7 @@ use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
 use super::toggle_event::queue_element_toggle_event;
 use super::{
-    JsContextHost, dispatch_public_event, element_attribute, element_has_attribute,
+    PageScriptHost, dispatch_public_event, element_attribute, element_has_attribute,
     remove_reflected_attribute, set_reflected_attribute,
 };
 
@@ -29,13 +29,13 @@ fn canonical_popover_state(raw: &str) -> &'static str {
     }
 }
 
-fn is_manual_popover(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_manual_popover(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_attribute(runtime, handle, "popover")
         .as_deref()
         .is_some_and(|value| canonical_popover_state(value) == "manual")
 }
 
-fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn popover_is_open(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -45,7 +45,7 @@ fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
 
 fn ensure_popover_supported(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if element_has_attribute(runtime, handle, "popover") {
@@ -62,7 +62,7 @@ fn ensure_popover_supported(
 
 fn ensure_popover_connected(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if runtime.dom_host().is_connected(handle) {
@@ -95,7 +95,7 @@ fn construct_popover_toggle_event<'s>(
 
 pub(crate) fn dispatch_popover_removal_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     if let Some(event) =
@@ -116,7 +116,7 @@ pub(crate) fn dispatch_popover_removal_events(
 
 pub(crate) fn dispatch_popover_show_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     source_handle: DomHandle,
 ) {
@@ -125,7 +125,7 @@ pub(crate) fn dispatch_popover_show_events(
 
 pub(crate) fn dispatch_popover_toggle_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     source_handle: DomHandle,
 ) {
@@ -135,7 +135,7 @@ pub(crate) fn dispatch_popover_toggle_events(
 
 fn set_popover_open_state(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     open: bool,
     source: Option<DomHandle>,
@@ -217,7 +217,7 @@ fn set_popover_open_state(
 
 fn autofocus_popover_descendant(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -237,7 +237,7 @@ fn autofocus_popover_descendant(
 }
 
 fn first_light_tree_autofocus_descendant(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
 ) -> Option<DomHandle> {
     let mut stack = runtime.dom_host().child_handles(root).collect::<Vec<_>>();
@@ -261,7 +261,7 @@ fn first_light_tree_autofocus_descendant(
 
 fn restore_popover_focus_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let restore_target = unsafe { &mut *runtime_ptr }.take_popover_focus_restore_target(handle);
@@ -284,7 +284,7 @@ fn restore_popover_focus_if_needed(
 }
 
 fn shadow_including_tree_contains(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     handle: DomHandle,
 ) -> bool {
@@ -308,7 +308,7 @@ fn shadow_including_tree_contains(
 }
 
 fn popover_flat_tree_contains(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     ancestor: DomHandle,
     handle: DomHandle,
 ) -> bool {
@@ -322,7 +322,7 @@ fn popover_flat_tree_contains(
     false
 }
 
-fn popover_flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn popover_flat_tree_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
         return Some(slot);
     }
@@ -347,7 +347,7 @@ fn popover_flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Optio
 
 fn close_open_auto_popovers(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     opening: DomHandle,
     source: Option<DomHandle>,
 ) {
@@ -553,7 +553,7 @@ pub(in crate::native_bridge) fn node_toggle_popover_callback<'s>(
 
 pub(crate) fn perform_popover_invoker_default_action(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     invoker: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
@@ -596,7 +596,7 @@ pub(crate) fn perform_popover_invoker_default_action(
 }
 
 fn popover_invoker_target_for_id(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     invoker: DomHandle,
     id: &str,
 ) -> Option<DomHandle> {

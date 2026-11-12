@@ -1,8 +1,8 @@
-use super::super::{ChildBrowsingContextSnapshot, JsContextHost, NavigationHistoryEntrySeed};
+use super::super::{ChildBrowsingContextSnapshot, NavigationHistoryEntrySeed, PageScriptHost};
 use crate::document_runtime::DomHandle;
 use crate::frame_owner_model::DocumentCreationKind;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn cache_child_browsing_context_snapshot(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

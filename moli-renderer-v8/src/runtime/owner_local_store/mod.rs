@@ -40,7 +40,7 @@ use crate::page_task_queue::{
 };
 use crate::script_vm::{
     DocumentInspectorBinding, PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap,
-    RendererDocumentIsolateHandle, RendererDocumentIsolateReservationAccounting,
+    RendererDocumentIsolateReservationAccounting, RendererIsolateHandle,
     RendererPageScriptEnvironment, RuntimeEvaluateResultMode,
 };
 use crate::{RendererNavigationReplyPolicy, RendererTopLevelNavigationDispatch};
@@ -645,7 +645,7 @@ impl Drop for RendererOwnerLocalPageSlot {
 #[derive(Debug)]
 struct RendererDocumentIsolateReservationEntry {
     id: u64,
-    handle: RendererDocumentIsolateHandle,
+    handle: RendererIsolateHandle,
     /// The stream opens together with the isolate reservation, before that
     /// isolate is attached to a stable Page slot. Until attachment transfers
     /// lifetime ownership to `RendererPageScriptEnvironmentPin`, this entry
@@ -1270,7 +1270,7 @@ impl RendererOwnerLocalStore {
         let v8_foreground_task_sender = page_runtime_task_source
             .v8_foreground_task_sender()
             .ok_or_else(|| anyhow!("owner-reserved Page is missing its V8 foreground source"))?;
-        let bootstrap = RendererDocumentIsolateHandle::new_owner_reserved_page(
+        let bootstrap = RendererIsolateHandle::new_owner_reserved_page(
             v8_foreground_task_sender,
             &owner.owner_state.devtools_target_shutdown_registry,
             owner.owner_state.inspector_io_wake_tx.clone(),

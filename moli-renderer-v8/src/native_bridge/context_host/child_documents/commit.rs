@@ -1,5 +1,5 @@
 use super::super::window_security_tokens::WindowAccessOrigin;
-use super::super::{ChildBrowsingContextSnapshot, JsContextHost};
+use super::super::{ChildBrowsingContextSnapshot, PageScriptHost};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::frame_owner_model::{
     DocumentCreationKind, FrameDocumentInteractiveLifecycleAction,
@@ -39,7 +39,7 @@ impl ChildDocumentWindowCommitPreflight {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn capture_child_document_window_commit_preflight(
         &self,
         handle: DomHandle,

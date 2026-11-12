@@ -105,7 +105,7 @@ pub(in crate::context_bootstrap) fn pending_history_traversal_target_index<'s>(
 
 pub(in crate::context_bootstrap) fn route_history_traversal_task(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     producer: crate::page_task_queue::RendererPageHistoryTraversalProducer,
 ) {
     let task_id = producer.task_id();
@@ -132,7 +132,7 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
 
 pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     traversal: PendingHistoryTraversal,
 ) {
     let plan = history_traversal_target_window(scope, host, traversal.target).and_then(|owner| {
@@ -273,7 +273,7 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
 
 fn history_traversal_target_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     target: crate::native_bridge::WindowTaskTarget,
 ) -> Option<v8::Local<'s, v8::Object>> {
     match target.dispatch_scope() {

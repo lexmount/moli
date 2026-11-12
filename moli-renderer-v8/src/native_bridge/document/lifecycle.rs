@@ -4,7 +4,7 @@ use super::super::node::{
     remove_child_in_reaction_scope,
 };
 use super::{
-    JsContextHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
+    PageScriptHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
     TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
@@ -102,7 +102,7 @@ fn node_document_write_or_writeln_callback<'s>(
         return;
     }
     if implicit_replacement_session {
-        JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
+        PageScriptHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
     }
     for chunk in parsed.text {
         let _ = unsafe { &mut *runtime_ptr }.write_html(scope, runtime_ptr, handle, &chunk);
@@ -114,7 +114,7 @@ fn node_document_write_or_writeln_callback<'s>(
 }
 
 fn current_script_ignores_document_write_without_parser_insertion_point(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
 ) -> bool {
     let Some(current_script) = runtime.current_script_handle() else {
         return false;
@@ -184,16 +184,16 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         }
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
-            JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
+            PageScriptHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
         }
     }
     rv.set(args.this().into());
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn prepare_root_document_replacement(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
     ) {
         let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
@@ -224,7 +224,7 @@ impl JsContextHost {
     /// across descendant retirement callbacks.
     pub(crate) fn set_root_document_content(
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         html: &str,
     ) {
         let document_handle = unsafe { &*host_ptr }.document_handle();
@@ -303,7 +303,7 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
 }
 
 fn detached_html_document_body_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
     let dom = runtime.dom_host().dom();
@@ -314,7 +314,7 @@ fn detached_html_document_body_handle(
 
 pub(in crate::native_bridge) fn set_detached_html_document_body_html(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     html: &str,
 ) -> bool {
@@ -329,7 +329,7 @@ pub(in crate::native_bridge) fn set_detached_html_document_body_html(
 
 pub(in crate::native_bridge) fn append_detached_html_document_body_html(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     html: &str,
 ) -> bool {
@@ -374,7 +374,7 @@ fn editing_command_document<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
     non_html_message: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, document_handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
@@ -453,7 +453,7 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
 
 fn exec_command_insert_text(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     replacement: &str,
 ) -> bool {
     let Some(active) = unsafe { &*runtime_ptr }.active_element_handle() else {
@@ -588,7 +588,7 @@ pub(in crate::native_bridge) fn node_document_query_command_value_callback<'s>(
 
 fn exec_command_select_all<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: v8::Local<'s, v8::Object>,
     document_handle: DomHandle,
 ) -> bool {
@@ -610,7 +610,7 @@ fn exec_command_select_all<'s>(
 }
 
 fn exec_command_select_all_target(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
     let active_modal_dialog = current_modal_dialog(runtime, document_handle);
@@ -633,7 +633,7 @@ fn exec_command_select_all_target(
         .or(Some(document_handle))
 }
 
-fn current_modal_dialog(runtime: &JsContextHost, document: DomHandle) -> Option<DomHandle> {
+fn current_modal_dialog(runtime: &PageScriptHost, document: DomHandle) -> Option<DomHandle> {
     runtime
         .dom_host()
         .dom()
@@ -673,7 +673,7 @@ fn editing_command_value<'s>(
 
 fn exec_command_insert_html(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: &str,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
@@ -684,7 +684,7 @@ fn exec_command_insert_html(
     replace_text_control_selection_for_insert_html(scope, runtime_ptr, target, &insertion_text)
 }
 
-fn exec_command_insert_html_target(runtime: &JsContextHost) -> Option<DomHandle> {
+fn exec_command_insert_html_target(runtime: &PageScriptHost) -> Option<DomHandle> {
     let handle = runtime.active_element_handle()?;
     let element = runtime.dom_host().node(handle)?.as_element()?;
     let accepts_plain_text = element.is_html_textarea()
@@ -700,7 +700,7 @@ fn exec_command_insert_html_target(runtime: &JsContextHost) -> Option<DomHandle>
 
 fn exec_command_delete_selection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: v8::Local<'s, v8::Object>,
     command: &str,
 ) -> bool {
@@ -754,7 +754,7 @@ fn exec_command_delete_selection<'s>(
 
 fn exec_command_delete_text_control(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     command: &str,
 ) -> Option<bool> {
@@ -823,7 +823,7 @@ fn exec_command_delete_text_control(
 
 fn exec_command_delete_non_collapsed_selection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: v8::Local<'s, v8::Object>,
     selection: v8::Local<'s, v8::Object>,
 ) -> bool {
@@ -959,7 +959,7 @@ fn exec_command_delete_range_part<'s>(
     true
 }
 
-fn inert_ancestor_or_self(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn inert_ancestor_or_self(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = Some(handle);
     while let Some(handle) = current {
         if runtime
@@ -975,7 +975,11 @@ fn inert_ancestor_or_self(runtime: &JsContextHost, handle: DomHandle) -> Option<
     None
 }
 
-fn dom_descendant_or_self(runtime: &JsContextHost, ancestor: DomHandle, handle: DomHandle) -> bool {
+fn dom_descendant_or_self(
+    runtime: &PageScriptHost,
+    ancestor: DomHandle,
+    handle: DomHandle,
+) -> bool {
     let mut current = Some(handle);
     while let Some(handle) = current {
         if handle == ancestor {
@@ -987,7 +991,7 @@ fn dom_descendant_or_self(runtime: &JsContextHost, ancestor: DomHandle, handle: 
 }
 
 fn boundary_before_protected_inert_root(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     protected_inert_root: DomHandle,
 ) -> Option<(DomHandle, u32)> {
     let parent = runtime.dom_host().parent_node(protected_inert_root)?;
@@ -999,7 +1003,7 @@ fn boundary_before_protected_inert_root(
 }
 
 fn boundary_after_protected_inert_root(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     protected_inert_root: DomHandle,
 ) -> Option<(DomHandle, u32)> {
     let parent = runtime.dom_host().parent_node(protected_inert_root)?;

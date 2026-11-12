@@ -1,7 +1,7 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::runtime::{RendererPendingDownloadActivation, RendererPendingFileChooserActivation};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn record_pending_file_chooser_activation(
         &mut self,
         mut activation: RendererPendingFileChooserActivation,

@@ -1,11 +1,11 @@
 use super::super::{
-    ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest, JsContextHost,
-    NavigationHistoryEntrySeed,
+    ChildBrowsingContextBootstrap, ChildBrowsingContextNavigationRequest,
+    NavigationHistoryEntrySeed, PageScriptHost,
 };
 use crate::document_runtime::DomHandle;
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn navigate_child_browsing_context_to_url(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

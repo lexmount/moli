@@ -1,7 +1,7 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use crate::{document_runtime::DomHandle, dom::NodeId};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn allocate_child_document_loader_id(
         &self,
     ) -> String {

@@ -5,12 +5,12 @@ use super::registry_roots::is_shadow_including_rooted_in_document;
 use crate::{
     document_runtime::DomHandle,
     dom::native::{CustomElementState, Node},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(super) fn complete_existing_custom_element_upgrade<'s>(
     _scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     definition_name: &str,
 ) {
@@ -25,7 +25,7 @@ pub(super) fn complete_existing_custom_element_upgrade<'s>(
 
 pub(super) fn enqueue_existing_upgrade_callbacks(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     initial_attributes: Vec<PendingInitialAttribute>,
 ) {
@@ -53,7 +53,7 @@ pub(super) fn enqueue_existing_upgrade_callbacks(
 }
 
 pub(super) fn observed_attributes_with_current_values(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     definition_name: &str,
 ) -> Vec<PendingInitialAttribute> {

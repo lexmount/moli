@@ -77,7 +77,7 @@ impl DocumentRuntime {
     pub(crate) fn note_parser_meta_refresh_mutation(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         effects: &DomMutationEffects,
     ) {
         let candidates =
@@ -88,7 +88,7 @@ impl DocumentRuntime {
     pub(super) fn finish_meta_refresh_mutation_candidates(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         candidates: Vec<MetaRefreshMutationCandidate>,
     ) {
         let mut top_level_refreshes = Vec::new();

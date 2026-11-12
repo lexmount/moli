@@ -1,4 +1,4 @@
-use super::{JsContextHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
+use super::{PageScriptHost, WindowExecutionContextIdentity, WindowExecutionContextOwner};
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
 
@@ -87,7 +87,7 @@ impl EventCallbackRegistry {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_target_event_listener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

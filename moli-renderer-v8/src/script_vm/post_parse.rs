@@ -8,7 +8,7 @@ use crate::{
     document_runtime::{DeferredPageTaskLane, DocumentRuntime, DomHandle},
     host::ScriptHandleSource,
     host_bindings::install_host_bindings,
-    native_bridge::{JsContextHost, install_runtime_observable_context_token_for_context},
+    native_bridge::{PageScriptHost, install_runtime_observable_context_token_for_context},
     planning::PreparedScript,
     resource_owner::{ResourceOwnerId, install_resource_owner_for_context},
     script_vm::runtime_bindings::{
@@ -40,7 +40,7 @@ impl ScriptVmContextBootstrap {
     pub(super) fn new_main_default_in_scope<'s>(
         scope: &mut v8::PinScope<'s, '_, ()>,
         global_template: v8::Local<'s, v8::ObjectTemplate>,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         storage_bucket_store: SharedStorageBucketStore,
@@ -64,7 +64,7 @@ impl ScriptVmContextBootstrap {
     pub(super) fn new_main_default(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -90,7 +90,7 @@ impl ScriptVmContextBootstrap {
     pub(super) fn new_isolated(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -122,7 +122,7 @@ impl ScriptVmContextBootstrap {
     pub(super) fn new_child_default(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -151,7 +151,7 @@ impl ScriptVmContextBootstrap {
     fn new_with_mode(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -188,7 +188,7 @@ impl ScriptVmContextBootstrap {
     fn new_in_scope<'s>(
         scope: &mut v8::PinScope<'s, '_, ()>,
         global_template: v8::Local<'s, v8::ObjectTemplate>,
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -198,7 +198,7 @@ impl ScriptVmContextBootstrap {
         reuse_main_window_proxy: bool,
         isolated_world: Option<Rc<crate::native_bridge::IsolatedWindowWorld>>,
     ) -> Result<Self> {
-        let host_ptr: *mut JsContextHost = (*context_host).as_ptr();
+        let host_ptr: *mut PageScriptHost = (*context_host).as_ptr();
         let reusable_window_proxy = match mode {
             WindowContextBootstrapMode::MainDefault if reuse_main_window_proxy => Some(
                 renderer_page_script_environment
@@ -367,7 +367,7 @@ impl ScriptVmContextBootstrap {
         // V8 callbacks invoked during bootstrap can borrow_mut() without contention.
         install_host_bindings(scope, unsafe { &mut *host_ptr })?;
         let global = scope.get_current_context().global(scope);
-        let bridge_ref = JsContextHost::install_into_bridge(&context_host, scope, global)?;
+        let bridge_ref = PageScriptHost::install_into_bridge(&context_host, scope, global)?;
         runtime.install_bridge_ref(bridge_ref);
         let mut realm_registration = PendingWindowRealmBootstrapRegistration::register(
             host_ptr,
@@ -477,7 +477,7 @@ impl ScriptVmContextBootstrap {
 pub(crate) fn bootstrap_child_default_context_in_scope<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     global_template: v8::Local<'s, v8::ObjectTemplate>,
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     resource_owner_id: ResourceOwnerId,
     promise_reject_dispatch: &PromiseRejectDispatchSlot,
     indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -507,7 +507,7 @@ pub(crate) fn bootstrap_child_default_context_in_scope<'s>(
 pub(crate) fn bootstrap_isolated_window_context_in_scope<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     global_template: v8::Local<'s, v8::ObjectTemplate>,
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     resource_owner_id: ResourceOwnerId,
     promise_reject_dispatch: &PromiseRejectDispatchSlot,
     indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -552,14 +552,14 @@ enum WindowContextBootstrapMode {
 }
 
 struct PendingWindowRealmBootstrapRegistration {
-    host: *mut JsContextHost,
+    host: *mut PageScriptHost,
     realm_token: crate::native_bridge::RuntimeObservableContextToken,
     committed: bool,
 }
 
 impl PendingWindowRealmBootstrapRegistration {
     fn register(
-        host: *mut JsContextHost,
+        host: *mut PageScriptHost,
         mode: WindowContextBootstrapMode,
         realm_token: crate::native_bridge::RuntimeObservableContextToken,
     ) -> Result<Option<Self>> {

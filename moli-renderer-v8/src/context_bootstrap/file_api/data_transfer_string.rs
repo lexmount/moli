@@ -9,7 +9,7 @@
 //! existing owners.
 
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{context_host_ptr_from_global_bridge, v8_string},
     webidl,
     window_webidl_callback::WindowWebIdlCallbackFunction,
@@ -45,7 +45,7 @@ pub(crate) struct DataTransferStringCallbackTask {
 impl DataTransferStringCallbackTask {
     pub(crate) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         callback: WebIdlCallbackFunction,
         value: String,
     ) -> Self {
@@ -58,7 +58,7 @@ impl DataTransferStringCallbackTask {
     pub(crate) fn invoke(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> DataTransferStringCallbackTaskEffect {
         let Some(callback) = self.callback.prepare_execution(scope, host_ptr, None) else {
             return DataTransferStringCallbackTaskEffect::CallbackNotInvoked;

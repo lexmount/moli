@@ -2,7 +2,7 @@ use super::workers::WorkerExecutionState;
 use super::*;
 use crate::dom::native::Node;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn document_has_browsing_context(&self, document: DomHandle) -> bool {
         // A detached iframe compatibility window can be a document's defaultView
         // without registering a browsing context. Check the native association.

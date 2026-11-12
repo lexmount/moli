@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn create_element_wrapper_for_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: crate::document_runtime::DomHandle,
     local_name: &str,
     is_name: Option<&str>,
@@ -30,7 +30,7 @@ pub(super) fn create_element_wrapper_for_document<'s>(
 }
 
 pub(super) fn create_element_ns_for_document(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: crate::document_runtime::DomHandle,
     namespace: Option<&str>,
     qualified_name: &str,
@@ -44,7 +44,7 @@ pub(super) fn create_element_ns_for_document(
 }
 
 pub(super) fn create_element_with_parts_for_document(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: crate::document_runtime::DomHandle,
     namespace: Option<&str>,
     prefix: Option<&str>,
@@ -61,7 +61,7 @@ pub(super) fn create_element_with_parts_for_document(
 }
 
 pub(super) fn registry_association_for_create_element(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: crate::document_runtime::DomHandle,
     explicit_registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
 ) -> custom_elements::CustomElementRegistryAssociation {
@@ -71,7 +71,7 @@ pub(super) fn registry_association_for_create_element(
 }
 
 pub(super) fn registry_association_has_autonomous_definition(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     registry_association: custom_elements::CustomElementRegistryAssociation,
     local_name: &str,
 ) -> bool {

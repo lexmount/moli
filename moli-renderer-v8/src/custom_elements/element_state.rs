@@ -6,11 +6,11 @@ use dom::ElementState as StyloElementState;
 
 use super::super::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, document::XHTML_NS},
+    native_bridge::{PageScriptHost, document::XHTML_NS},
 };
 
 pub(super) fn create_element_with_owner_document(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner_document: DomHandle,
     local_name: &str,
 ) -> Option<DomHandle> {
@@ -25,7 +25,7 @@ pub(super) fn create_element_with_owner_document(
 }
 
 pub(super) fn set_dom_custom_element_state(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     state: CustomElementState,
 ) {
@@ -67,7 +67,7 @@ fn custom_element_state_matches_defined_pseudo(element: &crate::dom::native::Ele
 }
 
 pub(super) fn set_dom_custom_element_is_name(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     is_name: &str,
 ) {
@@ -80,7 +80,7 @@ pub(super) fn set_dom_custom_element_is_name(
 }
 
 pub(super) fn set_dom_element_prefix(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     prefix: Option<String>,
 ) {
@@ -93,7 +93,7 @@ pub(super) fn set_dom_element_prefix(
 }
 
 pub(super) fn definition_name_for_handle(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     if unsafe { &*host_ptr }
@@ -120,7 +120,7 @@ pub(super) fn definition_name_for_handle(
 }
 
 pub(crate) fn is_form_associated_custom_element_handle(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let Some(custom_elements) = host.custom_elements_for_node_handle(handle) else {
@@ -144,7 +144,7 @@ pub(crate) fn is_form_associated_custom_element_handle(
 }
 
 pub(crate) fn preserves_custom_element_identity(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     unsafe { &*host_ptr }

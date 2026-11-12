@@ -1,4 +1,4 @@
-use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
+use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
 use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
 use moli_web_mime::{
@@ -6,7 +6,7 @@ use moli_web_mime::{
 };
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn apply_page_csp_bypass_to_child_snapshot(
         &self,
         mut snapshot: ChildBrowsingContextSnapshot,

@@ -1,5 +1,5 @@
 use super::{
-    ImageDecodeRequestId, ImageDecodeRetirementOutcome, JsContextHost, OwnerDispatchScope,
+    ImageDecodeRequestId, ImageDecodeRetirementOutcome, OwnerDispatchScope, PageScriptHost,
     PendingImageDecodeRequest, PendingImageDecodeRequestState, RuntimeObservableContextToken,
 };
 use crate::{
@@ -14,7 +14,7 @@ enum ImageDecodeCompletion {
     Reject,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_image_decode_request(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -333,7 +333,7 @@ fn active_window_dispatch_scope(scope: &mut v8::PinScope<'_, '_>) -> OwnerDispat
     OwnerDispatchScope::Top
 }
 
-fn image_source_can_decode(runtime: &JsContextHost, handle: DomHandle, source: &str) -> bool {
+fn image_source_can_decode(runtime: &PageScriptHost, handle: DomHandle, source: &str) -> bool {
     if source.is_empty() {
         return false;
     }

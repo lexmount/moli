@@ -1,4 +1,4 @@
-use super::super::{ChildParserClassicScriptCandidate, JsContextHost};
+use super::super::{ChildParserClassicScriptCandidate, PageScriptHost};
 use crate::{
     StylesheetBlockingReadView, StylesheetElementRead,
     content_security_policy::ContentSecurityPolicyScriptElementRequest,
@@ -56,7 +56,7 @@ impl ChildLiveDocumentParserStartResult {
 }
 
 struct ChildFrameLiveParserOwner<'a, 'scope, 'pin> {
-    host: &'a mut JsContextHost,
+    host: &'a mut PageScriptHost,
     scope: &'a mut v8::PinScope<'scope, 'pin>,
     child_document_handle: DomHandle,
     document_owner: Option<FrameDocumentOwner>,
@@ -76,7 +76,7 @@ impl ParserMutationEffectsOwner for ChildParserMutationEffects {
         effects.stylesheet_owners().changes().to_vec()
     }
 
-    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
+    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut PageScriptHost) {
         if !self.reaction_queue_active {
             custom_elements::push_parser_custom_element_reaction_queue(host_ptr);
             self.reaction_queue_active = true;
@@ -86,7 +86,7 @@ impl ParserMutationEffectsOwner for ChildParserMutationEffects {
     fn finish_parser_mutation_effects(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         prepared: Self::Prepared,
     ) {
         unsafe { &mut *host_ptr }.sync_child_browsing_context_subtree(scope, self.document_handle);
@@ -100,7 +100,7 @@ impl ParserMutationEffectsOwner for ChildParserMutationEffects {
 
 impl<'a, 'scope, 'pin> ChildFrameLiveParserOwner<'a, 'scope, 'pin> {
     fn new(
-        host: &'a mut JsContextHost,
+        host: &'a mut PageScriptHost,
         scope: &'a mut v8::PinScope<'scope, 'pin>,
         child_document_handle: DomHandle,
     ) -> Self {
@@ -207,8 +207,8 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
         if self.targets_current_document() {
             // Register parser declarations before the parser can run a later
             // script, using the same path as script-created declarations.
-            let host_ptr = self.host as *mut JsContextHost;
-            let runtime = unsafe { &mut *self.host.runtime };
+            let host_ptr = self.host as *mut PageScriptHost;
+            let runtime = unsafe { &mut *self.host.document_runtime };
             runtime.note_parser_meta_refresh_mutation(self.scope, host_ptr, &effects);
             runtime
                 .process_connected_meta_content_security_policies(effects.tree().connected_roots());
@@ -574,7 +574,7 @@ impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .host
             .child_browsing_context_relevant_context(self.scope, child_handle)?;
         let scope = &mut v8::ContextScope::new(self.scope, context);
-        let host_ptr = self.host as *mut JsContextHost;
+        let host_ptr = self.host as *mut PageScriptHost;
         custom_elements::create_and_construct_parser_custom_element_direct_for_document(
             scope,
             host_ptr,
@@ -634,7 +634,7 @@ enum ScriptDisposition {
     AdmissionFailed { script_handle: DomHandle },
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn suspend_live_child_parser(parser: &mut DocumentParserSession, cause: ParserSuspensionCause) {
         let _ = parser.suspend(cause);
     }
@@ -1402,7 +1402,7 @@ impl JsContextHost {
                     return true;
                 }
                 LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(handoff) => {
-                    let host_ptr = self as *mut JsContextHost;
+                    let host_ptr = self as *mut PageScriptHost;
                     let _ =
                         custom_elements::construct_parser_created_autonomous_element_from_handoff(
                             scope, host_ptr, &handoff,
@@ -1564,7 +1564,7 @@ impl JsContextHost {
         mut job: FrameScriptJob,
     ) -> anyhow::Result<()> {
         let child_handle = self.frame_owner_child_handle_for_script_job(&job);
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         let allowed = {
             let script_scope = &mut v8::ContextScope::new(scope, script_context);
             crate::native_bridge::element::prepare_inline_classic_frame_script_job_for_execution(
@@ -1668,7 +1668,7 @@ impl JsContextHost {
         let _ = self
             .dom_host_mut()
             .set_script_already_started(*node_id, true);
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         let source = {
             let script_scope = &mut v8::ContextScope::new(scope, script_context);
             crate::native_bridge::element::inline_script_source_for_execution(

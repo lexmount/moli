@@ -1,4 +1,4 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::connected_lifecycle::enqueue_connected_callback;
 use super::form_lifecycle::{
     enqueue_form_association_callback_if_needed, enqueue_form_disabled_callback_if_needed,
@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 pub(crate) fn enqueue_connected_and_form_callbacks_for_already_upgraded_subtrees(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     roots: &[DomHandle],
 ) -> bool {
     let host = unsafe { &*host_ptr };

@@ -8,7 +8,7 @@
 //! the selected Page-task dispatcher owns checkpoint and runtime follow-up.
 
 use crate::{
-    native_bridge::JsContextHost, util::context_host_ptr_from_global_bridge, webidl,
+    native_bridge::PageScriptHost, util::context_host_ptr_from_global_bridge, webidl,
     window_webidl_callback::WindowWebIdlCallbackFunction,
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
@@ -45,7 +45,7 @@ pub(crate) struct FileEntryFileCallbackTask {
 impl FileEntryFileCallbackTask {
     pub(crate) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         callback: WebIdlCallbackFunction,
         file: v8::Local<'_, v8::Object>,
     ) -> Self {
@@ -58,7 +58,7 @@ impl FileEntryFileCallbackTask {
     pub(crate) fn invoke(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> FileEntryFileCallbackTaskEffect {
         let Some(callback) = self.callback.prepare_execution(scope, host_ptr, None) else {
             return FileEntryFileCallbackTaskEffect::CallbackNotInvoked;

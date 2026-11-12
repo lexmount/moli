@@ -4,7 +4,7 @@ use super::*;
 
 pub(crate) struct ScriptVmCapturedDocumentEnvironment {
     environment: Option<ScriptVmInitialDocumentEnvironment>,
-    isolate: RendererDocumentIsolateHandle,
+    isolate: RendererIsolateHandle,
 }
 
 impl ScriptVmInitialDocumentEnvironment {
@@ -24,7 +24,7 @@ impl ScriptVmCapturedDocumentEnvironment {
 
     pub(super) fn new(
         environment: ScriptVmInitialDocumentEnvironment,
-        isolate: RendererDocumentIsolateHandle,
+        isolate: RendererIsolateHandle,
     ) -> Self {
         Self {
             environment: Some(environment),
@@ -423,7 +423,7 @@ impl ScriptVm {
         &mut self,
         preserve_navigation_referrer: bool,
     ) -> Result<ScriptVmInitialDocumentEnvironment> {
-        let capture = |host: &mut crate::native_bridge::JsContextHost, security_token| {
+        let capture = |host: &mut crate::native_bridge::PageScriptHost, security_token| {
             let origin = host
                 .current_main_document_resource_loader()
                 .expect("a live Document has a resource authority")

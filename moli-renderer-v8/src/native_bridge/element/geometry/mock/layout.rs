@@ -2,7 +2,7 @@ use crate::document_runtime::DomHandle;
 use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use std::time::Instant;
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::super::super::styles::{ComputedStyleRead, iframe_handle_viewport};
 use super::super::client_rect::{ClientRect, zero_client_rect};
 use crate::native_bridge::element::raw_inline_style_property_value;
@@ -12,7 +12,7 @@ const CHILD_DOCUMENT_VISIBLE_FLOW_ORIGIN_PX: f64 = 1.0;
 const MOCK_FLOW_COUNT_LIMIT: usize = 4096;
 const HIT_TEST_CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
-fn viewport_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
+fn viewport_client_rect(runtime: &PageScriptHost, handle: DomHandle) -> ClientRect {
     let child_viewport = runtime
         .dom_host()
         .owner_document_handle(handle)
@@ -88,11 +88,11 @@ fn default_child_frame_client_rect() -> ClientRect {
 // Public consumers reach this contract only through the Mock branch in
 // `geometry/provider.rs`; the default OnDemand branch performs a fresh complete
 // layout pass and copies owned answers.
-fn is_mock_rendered_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_mock_rendered_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.cached_mock_rendered_element(handle, uncached_is_mock_rendered_element)
 }
 
-fn uncached_is_mock_rendered_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn uncached_is_mock_rendered_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(node) = runtime.dom_host().node(handle) else {
         return false;
     };
@@ -108,7 +108,7 @@ fn uncached_is_mock_rendered_element(runtime: &JsContextHost, handle: DomHandle)
     )
 }
 
-fn is_geometry_target_in_flat_tree(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_geometry_target_in_flat_tree(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = handle;
     loop {
         let Some(parent) = runtime
@@ -138,14 +138,14 @@ fn is_geometry_target_in_flat_tree(runtime: &JsContextHost, handle: DomHandle) -
     }
 }
 
-fn geometry_node_is_slotable_for_flat_tree(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn geometry_node_is_slotable_for_flat_tree(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
         .is_some_and(|node| node.is_element() || node.is_text())
 }
 
-fn is_viewport_mock_root(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_viewport_mock_root(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
         runtime.dom_host().is_connected(handle)
             && (node.is_document()
@@ -156,11 +156,11 @@ fn is_viewport_mock_root(runtime: &JsContextHost, handle: DomHandle) -> bool {
     })
 }
 
-fn element_attribute(runtime: &JsContextHost, handle: DomHandle, name: &str) -> Option<String> {
+fn element_attribute(runtime: &PageScriptHost, handle: DomHandle, name: &str) -> Option<String> {
     runtime.dom_host().get_attribute(handle, name)
 }
 
-fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn element_is_hidden_input(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -173,11 +173,11 @@ fn element_is_hidden_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         })
 }
 
-fn element_suppresses_mock_layout_subtree(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn element_suppresses_mock_layout_subtree(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_is_hidden_input(runtime, handle) || scroll_layout_display(runtime, handle) == "none"
 }
 
-fn scroll_layout_display(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn scroll_layout_display(runtime: &PageScriptHost, handle: DomHandle) -> String {
     ComputedStyleRead::new(runtime, handle)
         .property("display")
         .trim()
@@ -209,24 +209,24 @@ fn class_has_fill_available_shell_hints(class: &str) -> bool {
     fills_available_height && is_container_like
 }
 
-fn element_class(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+fn element_class(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     element_attribute(runtime, handle, "class")
 }
 
-fn has_explicit_viewport_shell_hint(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn has_explicit_viewport_shell_hint(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_class(runtime, handle)
         .as_deref()
         .is_some_and(is_explicit_viewport_shell_class)
 }
 
-fn has_fill_available_shell_hint(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn has_fill_available_shell_hint(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_class(runtime, handle)
         .as_deref()
         .is_some_and(class_has_fill_available_shell_hints)
 }
 
 fn parent_chain_has_viewport_shell_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     max_depth: usize,
 ) -> bool {
@@ -255,7 +255,7 @@ fn parent_chain_has_viewport_shell_context(
 }
 
 fn has_near_viewport_root_ancestor(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     max_depth: usize,
 ) -> bool {
@@ -274,7 +274,7 @@ fn has_near_viewport_root_ancestor(
     false
 }
 
-fn is_viewport_mock_shell(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_viewport_mock_shell(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     if !is_mock_rendered_element(runtime, handle) {
         return false;
     }
@@ -285,12 +285,12 @@ fn is_viewport_mock_shell(runtime: &JsContextHost, handle: DomHandle) -> bool {
         && parent_chain_has_viewport_shell_context(runtime, handle, 6)
 }
 
-fn is_viewport_mock_box(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_viewport_mock_box(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     is_viewport_mock_root(runtime, handle) || is_viewport_mock_shell(runtime, handle)
 }
 
 fn previous_mock_rendered_flow_count(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     count_limit: usize,
 ) -> usize {
@@ -331,11 +331,11 @@ fn previous_mock_rendered_flow_count(
         .min(count_limit)
 }
 
-fn mock_flow_top(runtime: &JsContextHost, handle: DomHandle) -> f64 {
+fn mock_flow_top(runtime: &PageScriptHost, handle: DomHandle) -> f64 {
     runtime.cached_mock_flow_top(handle, uncached_mock_flow_top)
 }
 
-fn uncached_mock_flow_top(runtime: &JsContextHost, handle: DomHandle) -> f64 {
+fn uncached_mock_flow_top(runtime: &PageScriptHost, handle: DomHandle) -> f64 {
     let mut path = Vec::new();
     let mut current = Some(handle);
     while let Some(node) = current {
@@ -363,7 +363,7 @@ fn uncached_mock_flow_top(runtime: &JsContextHost, handle: DomHandle) -> f64 {
     (count as f64) * MOCK_FLOW_STEP_PX
 }
 
-fn child_document_visible_flow_top(runtime: &JsContextHost, handle: DomHandle, top: f64) -> f64 {
+fn child_document_visible_flow_top(runtime: &PageScriptHost, handle: DomHandle, top: f64) -> f64 {
     if top != 0.0 {
         return top;
     }
@@ -380,7 +380,7 @@ fn child_document_visible_flow_top(runtime: &JsContextHost, handle: DomHandle, t
     CHILD_DOCUMENT_VISIBLE_FLOW_ORIGIN_PX
 }
 
-fn mock_flow_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn mock_flow_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let parent = runtime.dom_host().dom().parent_node(handle)?;
     if runtime.dom_host().is_shadow_root(parent) {
         return runtime.dom_host().shadow_root_host(parent);
@@ -388,7 +388,7 @@ fn mock_flow_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHan
     Some(parent)
 }
 
-fn mock_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
+fn mock_client_rect(runtime: &PageScriptHost, handle: DomHandle) -> ClientRect {
     if runtime
         .dom_host()
         .node(handle)
@@ -427,7 +427,7 @@ fn mock_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
 }
 
 pub(in crate::native_bridge) fn compute_mock_offset_parent(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let trace_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
@@ -438,12 +438,12 @@ pub(in crate::native_bridge) fn compute_mock_offset_parent(
     parent
 }
 
-fn mock_offset_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn mock_offset_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let _ = (runtime, handle);
     None
 }
 
-pub(crate) fn compute_mock_client_rect(runtime: &JsContextHost, handle: DomHandle) -> ClientRect {
+pub(crate) fn compute_mock_client_rect(runtime: &PageScriptHost, handle: DomHandle) -> ClientRect {
     let trace_started = moli_trace::cdp_nav_timing_enabled().then(Instant::now);
     let rect = runtime.cached_mock_client_rect(handle, mock_client_rect);
     if let Some(trace_started) = trace_started {
@@ -452,7 +452,7 @@ pub(crate) fn compute_mock_client_rect(runtime: &JsContextHost, handle: DomHandl
     rect
 }
 
-fn mock_text_layout_client_rect(runtime: &JsContextHost, handle: DomHandle) -> Option<ClientRect> {
+fn mock_text_layout_client_rect(runtime: &PageScriptHost, handle: DomHandle) -> Option<ClientRect> {
     let node = runtime.dom_host().node(handle)?;
     if !node.is_text()
         || node.data_value().is_none_or(str::is_empty)
@@ -485,7 +485,7 @@ fn mock_text_layout_client_rect(runtime: &JsContextHost, handle: DomHandle) -> O
 }
 
 pub(super) fn mock_layout_client_rect_for_node(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<ClientRect> {
     let node = runtime.dom_host().node(handle)?;
@@ -505,21 +505,21 @@ pub(super) fn mock_layout_client_rect_for_node(
 }
 
 pub(crate) fn compute_mock_intersection_client_rect(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> ClientRect {
     runtime.cached_mock_client_rect(handle, mock_client_rect)
 }
 
 pub(crate) fn compute_mock_intersection_scrollport_client_rect(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> ClientRect {
     runtime.cached_mock_client_rect(handle, mock_client_rect)
 }
 
 fn mock_rendered_subtree_count(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     count_limit: usize,
 ) -> usize {
@@ -543,7 +543,7 @@ fn mock_rendered_subtree_count(
     count
 }
 
-fn mock_flow_step_count(runtime: &JsContextHost, handle: DomHandle) -> usize {
+fn mock_flow_step_count(runtime: &PageScriptHost, handle: DomHandle) -> usize {
     let Some(value) = raw_inline_style_property_value(runtime, handle, "height") else {
         return 1;
     };
@@ -563,10 +563,10 @@ fn mock_flow_step_count(runtime: &JsContextHost, handle: DomHandle) -> usize {
 }
 
 fn document_elements_in_hit_order(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
 ) -> Vec<DomHandle> {
-    fn visit(runtime: &JsContextHost, node: DomHandle, out: &mut Vec<DomHandle>) {
+    fn visit(runtime: &PageScriptHost, node: DomHandle, out: &mut Vec<DomHandle>) {
         let Some(entry) = runtime.dom_host().node(node) else {
             return;
         };
@@ -584,7 +584,7 @@ fn document_elements_in_hit_order(
 }
 
 pub(crate) fn mock_hit_test_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
     x: f64,
     y: f64,
@@ -593,7 +593,7 @@ pub(crate) fn mock_hit_test_handle(
 }
 
 fn hit_test_shadow_root_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     shadow_root: DomHandle,
     x: f64,
     y: f64,
@@ -636,7 +636,7 @@ fn hit_test_shadow_root_handle(
 }
 
 fn mock_hit_test_handle_with_child_frames(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document_handle: DomHandle,
     x: f64,
     y: f64,

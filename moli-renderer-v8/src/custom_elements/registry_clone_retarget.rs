@@ -8,11 +8,11 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     dom::native::{Element, Node},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(crate) fn registry_association_retargets_for_import_clone(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     source_root: DomHandle,
     clone_root: DomHandle,
     target_document: DomHandle,
@@ -32,7 +32,7 @@ pub(crate) fn registry_association_retargets_for_import_clone(
 }
 
 pub(crate) fn registry_association_retargets_for_clone(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     source_root: DomHandle,
     clone_root: DomHandle,
 ) -> Vec<RegistryAssociationRetarget> {
@@ -60,7 +60,7 @@ pub(crate) fn registry_association_retargets_for_clone(
 }
 
 fn collect_registry_association_retargets_for_import_clone(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     source: DomHandle,
     clone: DomHandle,
     target_document: DomHandle,
@@ -106,7 +106,7 @@ fn collect_registry_association_retargets_for_import_clone(
 }
 
 fn collect_registry_association_retargets_for_clone(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     source: DomHandle,
     clone: DomHandle,
     target_document: DomHandle,

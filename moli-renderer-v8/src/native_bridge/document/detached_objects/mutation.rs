@@ -234,7 +234,7 @@ struct LiveNativeNodeSnapshot {
 }
 
 fn live_native_node_snapshot(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<LiveNativeNodeSnapshot> {
     let dom_host = unsafe { &*runtime_ptr }.dom_host();
@@ -612,7 +612,7 @@ fn adopt_live_node_as_detached_with_parent<'s>(
 
 fn live_native_child_node_objects<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
     let child_handles = unsafe { &*runtime_ptr }

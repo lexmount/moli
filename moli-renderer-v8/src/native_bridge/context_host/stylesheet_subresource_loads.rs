@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::{FrameDocumentTaskOwner, StylesheetSubresourceLoadDelayBinding},
@@ -15,7 +15,7 @@ impl StylesheetSubresourceLoadDelaySettlement {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn accept_current_stylesheet_subresource_load_delay_for_document(
         &mut self,
         document: DomHandle,

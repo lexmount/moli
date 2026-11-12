@@ -21,7 +21,7 @@ pub(crate) enum MouseReleaseFollowUp {
     },
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn mouse_press_handle(&self) -> Option<DomHandle> {
         self.mouse_input.press.map(|press| press.handle)
     }

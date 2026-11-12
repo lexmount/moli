@@ -28,7 +28,7 @@ impl ChildFrameOwnerElementKind {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn child_browsing_context_initial_live_bootstrap(
         attribute_bootstrap: &ChildBrowsingContextBootstrap,
     ) -> ChildBrowsingContextBootstrap {

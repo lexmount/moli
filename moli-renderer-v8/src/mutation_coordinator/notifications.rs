@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::{
     dom::native::{DomHost, DomMutationEffects},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     observer_runtime,
     style_engine::StyleMutationEffect,
 };
@@ -18,7 +18,7 @@ pub(crate) struct MutationNotificationTimings {
 /// does not need a DocumentRuntime or prepare scripts for any document owner.
 pub(crate) fn notify_dom_mutation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
 ) -> MutationNotificationTimings {
@@ -47,7 +47,7 @@ pub(crate) fn notify_dom_mutation(
 /// Style and resource identity notifications do not require a Window realm.
 /// No wrappers, MutationObservers or WebMCP scripts exist before that realm.
 pub(crate) fn notify_native_dom_mutation(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
 ) -> MutationNotificationTimings {

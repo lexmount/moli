@@ -12,7 +12,7 @@ use moli_webapi_declare::WebApiObject;
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
-    native_bridge::JsContextHost, page_task_queue::RendererPageMiscPlatformApiTaskKind,
+    native_bridge::PageScriptHost, page_task_queue::RendererPageMiscPlatformApiTaskKind,
     util::context_host_ptr_from_global_bridge, webidl,
     window_webidl_callback::WindowWebIdlCallbackFunction,
 };
@@ -164,7 +164,7 @@ pub(crate) enum LegacyStorageQuotaCallbackTaskEffect {
 impl LegacyStorageQuotaCallbackTask {
     pub(crate) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         callback: WebIdlCallbackFunction,
         outcome: LegacyStorageQuotaCallbackOutcome,
     ) -> Self {
@@ -177,7 +177,7 @@ impl LegacyStorageQuotaCallbackTask {
     pub(crate) fn invoke(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> LegacyStorageQuotaCallbackTaskEffect {
         let Some(identity) = self.callback.relevant_identity() else {
             return LegacyStorageQuotaCallbackTaskEffect::CallbackNotInvoked;

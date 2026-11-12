@@ -10,7 +10,7 @@ use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::DomMutationEffects,
     mutation_coordinator::RuntimeMutationOptions,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     parser::ParserDomMutation,
 };
 
@@ -18,7 +18,7 @@ impl DocumentRuntime {
     pub(crate) fn apply_parser_dom_mutation_to_live_dom_host(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         mutation: ParserDomMutation,
     ) {
         match mutation {
@@ -45,7 +45,7 @@ impl DocumentRuntime {
     fn apply_parser_append_child_to_live_dom_host(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) {
@@ -78,7 +78,7 @@ impl DocumentRuntime {
     fn apply_parser_insert_before_to_live_dom_host(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
@@ -113,7 +113,7 @@ impl DocumentRuntime {
     fn apply_parser_tree_mutation_followups(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: TreeInsertionPlan<'_>,
         effects: DomMutationEffects,
     ) {
@@ -150,7 +150,7 @@ impl DocumentRuntime {
     pub(super) fn dispatch_parser_tree_insertion_side_effects_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
@@ -203,7 +203,7 @@ impl DocumentRuntime {
     fn enqueue_parser_tree_insertion_reactions_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
         let lifecycle_quiescent =
@@ -288,7 +288,7 @@ impl DocumentRuntime {
     fn apply_parser_remove_child_to_live_dom_host(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         parent: DomHandle,
         child: DomHandle,
     ) {

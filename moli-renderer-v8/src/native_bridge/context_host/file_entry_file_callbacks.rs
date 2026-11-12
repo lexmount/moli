@@ -8,7 +8,7 @@ use crate::{
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 
 pub(super) type FileEntryFileCallbackState = ExactWindowDocumentTaskLedger<
     RendererPageFileEntryFileCallbackTaskId,
@@ -16,7 +16,7 @@ pub(super) type FileEntryFileCallbackState = ExactWindowDocumentTaskLedger<
     FileEntryFileCallbackTask,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Queue one `FileSystemFileEntry.file()` success callback on the exact
     /// calling Window/Document and the shared DOM-manipulation source.
     pub(crate) fn queue_file_entry_file_callback_task(
@@ -95,7 +95,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_file_entry_file_callback(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         callback: FileEntryFileCallbackTask,
     ) -> PageFileEntryFileCallbackTargetEffect {

@@ -4,7 +4,7 @@ use super::devtools::document_frame_id;
 use super::state::DocumentTools;
 use super::{api, events};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{JsContextHost, WindowDocumentOwner};
+use crate::native_bridge::{PageScriptHost, WindowDocumentOwner};
 use crate::util::{context_host_ptr_from_global_bridge, get_private_object, set_private_value};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -121,7 +121,7 @@ pub(super) fn model_context_for_document<'s>(
 
 fn bind_document_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     target: v8::Local<'s, v8::Object>,
     owner: WindowDocumentOwner,
@@ -160,7 +160,7 @@ fn bind_document_target<'s>(
 }
 
 pub(super) fn document_owner(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
 ) -> Option<WindowDocumentOwner> {
     if document == host.document_handle() {
@@ -181,7 +181,7 @@ pub(super) fn document_owner(
         .map(WindowDocumentOwner::Frame)
 }
 
-pub(super) fn document_frame_tree(host: &JsContextHost, document: DomHandle) -> Option<u64> {
+pub(super) fn document_frame_tree(host: &PageScriptHost, document: DomHandle) -> Option<u64> {
     let mut current = document;
     loop {
         if let Some(popup) = host.lightweight_popup_id_for_document_handle(current) {
@@ -194,7 +194,7 @@ pub(super) fn document_frame_tree(host: &JsContextHost, document: DomHandle) -> 
 
 fn document_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
     context: v8::Local<'s, v8::Context>,
 ) -> v8::Local<'s, v8::Object> {
@@ -221,7 +221,7 @@ pub(super) fn document_for_target<'s>(
 pub(super) fn check_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
-) -> Result<(*mut JsContextHost, DomHandle), v8::Local<'s, v8::Value>> {
+) -> Result<(*mut PageScriptHost, DomHandle), v8::Local<'s, v8::Value>> {
     if !web_api_interfaces::ModelContext::is_instance(scope, target) {
         return Err(v8::Exception::type_error(
             scope,

@@ -196,7 +196,7 @@ impl DocumentRuntime {
     pub(crate) fn host_dispatch_script_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task: &ScriptEventTask,
     ) -> std::result::Result<(), String> {
         dispatch_script_event(

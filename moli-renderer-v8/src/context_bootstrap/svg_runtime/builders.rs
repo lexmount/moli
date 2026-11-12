@@ -1402,7 +1402,7 @@ pub(super) fn svg_geometry_element<'s>(
 }
 
 pub(super) fn svg_geometry_element_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<SvgGeometryElement> {
     let local_name = runtime
@@ -1458,7 +1458,7 @@ pub(super) fn svg_geometry_element_for_handle(
 }
 
 fn svg_computed_path_data(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<String> {
     let computed =
@@ -1472,7 +1472,7 @@ fn svg_computed_path_data(
 }
 
 fn svg_geometry_length_attribute_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
 ) -> f64 {
@@ -1487,7 +1487,7 @@ fn svg_geometry_length_attribute_for_handle(
 }
 
 fn svg_geometry_rect_radius_attribute_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
     fallback_attribute: &str,
@@ -1500,7 +1500,7 @@ fn svg_geometry_rect_radius_attribute_for_handle(
 }
 
 fn svg_geometry_optional_length_attribute_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
 ) -> Option<f64> {
@@ -1535,7 +1535,7 @@ pub(super) fn svg_graphics_bounding_box<'s>(
 }
 
 fn svg_bbox_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     transform: SvgMatrixComponents,
     referenced: bool,
@@ -1614,7 +1614,7 @@ fn svg_bbox_for_handle(
 }
 
 fn svg_image_dimensions(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> (f64, f64) {
     let width =
@@ -1638,7 +1638,7 @@ fn svg_image_dimensions(
 }
 
 fn svg_text_bounding_box(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     transform: SvgMatrixComponents,
 ) -> Option<SvgGeometryBox> {
@@ -1702,7 +1702,7 @@ fn svg_text_bounding_box(
 }
 
 fn svg_text_root(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<crate::document_runtime::DomHandle> {
     let mut current = Some(handle);
@@ -1717,7 +1717,7 @@ fn svg_text_root(
 }
 
 fn svg_inherited_text_position(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     text_root: crate::document_runtime::DomHandle,
     attribute: &str,
@@ -1738,12 +1738,12 @@ fn svg_inherited_text_position(
 }
 
 fn svg_text_characters_before(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     root: crate::document_runtime::DomHandle,
     target: crate::document_runtime::DomHandle,
 ) -> Option<usize> {
     fn visit(
-        runtime: &crate::native_bridge::JsContextHost,
+        runtime: &crate::native_bridge::PageScriptHost,
         current: crate::document_runtime::DomHandle,
         target: crate::document_runtime::DomHandle,
         count: &mut usize,
@@ -1779,7 +1779,7 @@ fn svg_rendered_text_character_count(text: &str) -> usize {
 }
 
 fn svg_use_bounding_box(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     transform: SvgMatrixComponents,
     reference_stack: &mut Vec<crate::document_runtime::DomHandle>,
@@ -1804,7 +1804,7 @@ fn svg_use_bounding_box(
 }
 
 fn svg_transform_for_handle(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> SvgMatrixComponents {
     runtime
@@ -1821,7 +1821,7 @@ fn svg_transform_for_handle(
 }
 
 fn svg_bbox_has_non_rendered_ancestor(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
     let mut current = Some(handle);
@@ -1849,7 +1849,7 @@ fn svg_local_name_is_non_rendered_container(local_name: &str) -> bool {
 }
 
 fn svg_element_has_display_none(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
     crate::native_bridge::element::computed_style_property_for_handle(runtime, handle, "display")
@@ -4053,7 +4053,7 @@ fn svg_length_owner_attribute<'s>(
 }
 
 fn svg_length_numeric_context(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     unit: SvgLengthUnit,
     connected: bool,
@@ -4092,7 +4092,7 @@ fn svg_length_numeric_context(
 }
 
 fn svg_computed_pixel_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     property: &str,
 ) -> Option<f64> {
@@ -4103,7 +4103,7 @@ fn svg_computed_pixel_value(
 }
 
 fn svg_length_percentage_basis(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute: &str,
 ) -> f64 {
@@ -4122,7 +4122,7 @@ fn svg_length_percentage_basis(
 }
 
 fn svg_nearest_viewport_dimensions(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<(f64, f64)> {
     let dom = runtime.dom_host();

@@ -32,9 +32,7 @@ use crate::script_vm::{
     ScriptVmBootstrapError, ScriptVmDefaultWorldBootstrap,
 };
 #[cfg(test)]
-use crate::script_vm::{
-    PostParseLifecycleAdvance, PostParsePageOwnedTask, RendererDocumentIsolateHandle,
-};
+use crate::script_vm::{PostParseLifecycleAdvance, PostParsePageOwnedTask, RendererIsolateHandle};
 use crate::script_vm::{PreparedScriptExecutionOutcome, RendererDocumentIsolateBootstrap};
 use crate::types::ScriptErrorConstructorKind;
 use crate::types::ScriptSkipReason;
@@ -1569,7 +1567,7 @@ impl PageVmRuntimeHooks {
                         )
                     })?;
                 let renderer_document_isolate_bootstrap = residence.with_owner_runtime(|| {
-                    RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
+                    RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(
                         v8_foreground_task_sender,
                     )
                 });

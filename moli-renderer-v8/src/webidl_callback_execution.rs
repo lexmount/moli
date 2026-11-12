@@ -11,7 +11,7 @@ use crate::{
         CallbackExceptionLogLevel, V8ExceptionReport, invoke_callback_with_report,
     },
     host::report_event_callback_exception,
-    native_bridge::{JsContextHost, WindowExecutionContextIdentity},
+    native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
     v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
     worker::dispatch_current_worker_callback_exception,
 };
@@ -47,7 +47,7 @@ impl PreparedWebIdlCallbackExecution {
     pub(crate) fn window(
         scope: &mut v8::PinScope<'_, '_>,
         callback: PreparedWebIdlCallbackFunction,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner_identity: Option<WindowExecutionContextIdentity>,
         callback_identity: WindowExecutionContextIdentity,
     ) -> Option<Self> {

@@ -165,7 +165,7 @@ fn idl_exposed_autofill_value(raw: Option<&str>, wears_autofill_anchor_mantle: b
 }
 
 pub(crate) fn autocomplete_field_name(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;

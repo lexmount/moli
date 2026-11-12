@@ -1,4 +1,4 @@
-use super::super::{JsContextHost, OwnerDispatchScope, lightweight_popup_id_from_window};
+use super::super::{OwnerDispatchScope, PageScriptHost, lightweight_popup_id_from_window};
 use super::WindowExecutionContextBinding;
 use crate::{
     context_bootstrap::{CHILD_BROWSING_CONTEXT_HANDLE_SLOT, is_window_receiver},
@@ -32,7 +32,7 @@ impl WindowOperationReceiver {
     pub(crate) fn capture_and_authorize<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         receiver: v8::Local<'s, v8::Object>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
     ) -> Result<Self, WindowOperationReceiverCaptureError> {
         let marked_scope = marked_window_dispatch_scope(scope, receiver);
         if marked_scope.is_none() && !is_window_receiver(scope, receiver) {
@@ -112,7 +112,7 @@ impl WindowOperationReceiver {
     /// conversion. It never looks up a replacement binding by child handle.
     pub(crate) fn resolve_live_binding(
         self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
     ) -> Option<WindowExecutionContextBinding> {
         self.binding_at_capture
             .filter(|binding| binding.is_current(host))

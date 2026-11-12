@@ -8,7 +8,7 @@ use super::state::{
 use super::tasks::{invocation_context, queue_task, remove_abort_registration, signal_reason};
 use super::{declarative, devtools};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use moli_page_types::{
     RendererWebMcpEvent, RendererWebMcpObservation, RendererWebMcpResult, RendererWebMcpToolId,
 };
@@ -52,7 +52,7 @@ fn register_caller_abort<'s>(
 
 fn queue_delivery(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     delivery: PendingDelivery,
 ) {
@@ -77,7 +77,7 @@ fn queue_delivery(
 
 fn complete_for_caller(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     pending: &mut PendingInvocation,
     result: CallerResult,
@@ -103,7 +103,7 @@ fn complete_for_caller(
 
 pub(super) fn reject_unavailable_tool<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     caller_document: DomHandle,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     signal: Option<v8::Local<'s, v8::Object>>,
@@ -170,7 +170,7 @@ fn delivery_callback<'s>(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_invocation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     caller_document: DomHandle,
     document: DomHandle,
     name: String,
@@ -395,7 +395,7 @@ enum InvocationExecutor {
 
 pub(super) fn await_response<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     promise: v8::Local<'s, v8::Promise>,
 ) {
@@ -494,7 +494,7 @@ fn cancel_callback<'s>(
 
 pub(super) fn cancel_invocation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
 ) -> bool {
     // Take before dispatching author abort callbacks: late settlements and
@@ -527,7 +527,7 @@ pub(super) enum InvocationAbortCause {
 // boundary preserves cancel's cleanup -> CDP -> caller rejection ordering.
 pub(super) fn abort_taken_invocation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     mut pending: PendingInvocation,
     cause: InvocationAbortCause,
 ) {
@@ -548,7 +548,7 @@ pub(super) fn abort_taken_invocation(
 
 fn abort_target(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     pending: &PendingInvocation,
 ) {
     let signal = v8::Local::new(scope, &pending.signal);
@@ -683,7 +683,7 @@ fn rejected_callback<'s>(
 
 pub(super) fn finish_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
 ) {
     let Some(mut pending) = take_active_invocation(unsafe { &mut *host_ptr }, id) else {
@@ -706,7 +706,7 @@ pub(super) fn finish_navigation(
 
 pub(super) fn finish_error(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     message: &str,
 ) {
@@ -715,7 +715,7 @@ pub(super) fn finish_error(
 
 fn finish_failure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     message: &str,
     exception: Option<v8::Local<'s, v8::Value>>,
@@ -763,7 +763,7 @@ fn finish_failure<'s>(
 
 pub(super) fn cleanup_invocation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     pending: &mut PendingInvocation,
 ) {
     declarative::invocation::finish_activity(unsafe { &mut *host_ptr }, pending);
@@ -772,6 +772,6 @@ pub(super) fn cleanup_invocation(
 
 // The target owns its pending record until completion or its cancellation task.
 // A caller rejection does not prevent an earlier target reaction from finishing.
-fn take_active_invocation(host: &mut JsContextHost, id: u64) -> Option<PendingInvocation> {
+fn take_active_invocation(host: &mut PageScriptHost, id: u64) -> Option<PendingInvocation> {
     host.native_bridge_mut().web_mcp.pending.remove(&id)
 }

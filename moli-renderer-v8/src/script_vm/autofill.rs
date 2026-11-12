@@ -82,7 +82,7 @@ fn inferred_credit_card_field(identity: &str) -> Option<CreditCardField> {
 }
 
 fn credit_card_field(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> Option<CreditCardField> {
     if let Some(token) = autocomplete_field_name(runtime, handle)
@@ -111,7 +111,7 @@ fn name_component(name: &str, field: CreditCardField) -> String {
 }
 
 fn expiry_year_for_control(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     year: &str,
 ) -> String {
@@ -136,7 +136,7 @@ fn expiry_year_for_control(
 }
 
 fn credit_card_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     card: &RendererAutofillCreditCard,
 ) -> Option<String> {
@@ -158,7 +158,7 @@ fn credit_card_value(
 }
 
 fn control_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
@@ -179,7 +179,7 @@ fn control_value(
 
 fn fill_credit_card_control(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     card: &RendererAutofillCreditCard,
 ) -> bool {
@@ -229,7 +229,7 @@ fn fill_credit_card_control(
 
 fn fill_credit_card(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     anchor: DomHandle,
     card: &RendererAutofillCreditCard,
 ) -> RendererAutofillTriggerOutcome {

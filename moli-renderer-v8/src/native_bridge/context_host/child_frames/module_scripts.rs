@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     detached_event_target::dispatch_detached_simple_event,
     document_runtime::DomHandle,
@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_current_child_document_import_map(
         &mut self,
         child_handle: DomHandle,
@@ -831,7 +831,7 @@ impl JsContextHost {
         }
 
         let _ = self.child_browsing_context_document_wrapper(scope, child_handle);
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         let Some(target) = self
             .native_bridge_mut()
             .wrap_handle(scope, host_ptr, link_handle)

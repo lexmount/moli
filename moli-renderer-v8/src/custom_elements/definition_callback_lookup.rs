@@ -1,11 +1,11 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::definition::CustomElementStore;
 
 impl CustomElementStore {
     pub(super) fn lifecycle_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         callback_name: &str,
     ) -> Option<v8::Local<'s, v8::Function>> {
@@ -23,7 +23,7 @@ impl CustomElementStore {
     pub(super) fn attribute_changed_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
@@ -34,7 +34,7 @@ impl CustomElementStore {
     pub(super) fn form_associated_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
@@ -45,7 +45,7 @@ impl CustomElementStore {
     pub(super) fn form_disabled_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
@@ -56,7 +56,7 @@ impl CustomElementStore {
     pub(super) fn form_reset_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;
@@ -67,7 +67,7 @@ impl CustomElementStore {
     pub(super) fn form_state_restore_callback_for_handle<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Function>> {
         let definition = self.definition_for_handle(host_ptr, handle)?;

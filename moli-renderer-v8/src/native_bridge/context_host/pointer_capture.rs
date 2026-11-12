@@ -1,6 +1,6 @@
 use super::*;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn set_pointer_capture_active(&mut self, pointer_id: i32, active: bool) {
         if active {
             self.active_pointer_capture_ids.insert(pointer_id);

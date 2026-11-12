@@ -85,7 +85,7 @@ fn run_cleanup(cleanup: &SharedFinalizerCleanup) {
 /// Attach a finalizer to the page or worker context owning `object`.
 ///
 /// Owner discovery happens before the weak handle is created. The registry is
-/// then mutated only after the V8 call returns, so no `JsContextHost` or worker
+/// then mutated only after the V8 call returns, so no `PageScriptHost` or worker
 /// `RefCell` borrow is held across a potentially re-entrant V8 operation.
 pub(crate) fn track_context_owned_v8_finalizer(
     scope: &mut v8::PinScope<'_, '_>,
@@ -124,7 +124,7 @@ mod tests {
             CommonRuntimeBinding::install_window(
                 context,
                 &common,
-                std::ptr::NonNull::<crate::native_bridge::JsContextHost>::dangling().as_ptr(),
+                std::ptr::NonNull::<crate::native_bridge::PageScriptHost>::dangling().as_ptr(),
                 &lifecycle,
             );
             let scope = &mut v8::ContextScope::new(scope, context);

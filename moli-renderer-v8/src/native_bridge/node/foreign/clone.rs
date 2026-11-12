@@ -38,7 +38,7 @@ fn foreign_live_script_already_started(
 }
 
 fn append_cloned_child_without_mutation_effects(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
 ) -> bool {
@@ -49,7 +49,7 @@ fn append_cloned_child_without_mutation_effects(
 
 pub(super) fn clone_js_node_like_into_document(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     object: v8::Local<'_, v8::Object>,
     deep: bool,
@@ -157,7 +157,7 @@ pub(super) fn clone_js_node_like_into_document(
 
 fn clone_js_element_into_document(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     object: v8::Local<'_, v8::Object>,
     deep: bool,

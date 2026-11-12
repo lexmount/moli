@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomHost, NativeDom, Node, NodeData},
@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub(super) fn text_control_text_from_html(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     target: DomHandle,
     markup: &str,
 ) -> String {
