@@ -1145,10 +1145,10 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> DomMutationEffects {
         let _guard = self.enter_structural_mutation();
-        if preserve_state {
+        if is_atomic_move {
             self.dom_host
                 .insert_before_preserving_state_effects(parent, child, reference_child)
         } else {
@@ -1171,10 +1171,10 @@ impl DocumentRuntime {
         &mut self,
         parent: DomHandle,
         child: DomHandle,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> DomMutationEffects {
         let _guard = self.enter_structural_mutation();
-        if preserve_state {
+        if is_atomic_move {
             self.dom_host
                 .remove_child_preserving_state_effects(parent, child)
         } else {

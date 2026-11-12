@@ -57,7 +57,7 @@ impl DocumentRuntime {
         child: DomHandle,
         insertion_roots: &[DomHandle],
         reference_child: Option<DomHandle>,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> Option<DomDebuggerTreeInsertionEffects> {
         let host = unsafe { &mut *host_ptr };
         if !host.has_dom_debugger_dom_breakpoints() {
@@ -75,7 +75,7 @@ impl DocumentRuntime {
                     parent,
                     child,
                     reference_child,
-                    preserve_state,
+                    is_atomic_move,
                 ),
                 prepublished_removals: Vec::new(),
             });
@@ -99,7 +99,7 @@ impl DocumentRuntime {
             insertion_roots,
             &mut effects,
             &mut prepublished_removals,
-            preserve_state,
+            is_atomic_move,
         ) {
             return Some(DomDebuggerTreeInsertionEffects {
                 effects,
@@ -113,7 +113,7 @@ impl DocumentRuntime {
                 parent,
                 root,
                 reference_child,
-                preserve_state,
+                is_atomic_move,
             );
             if !inserted.did_change() {
                 return Some(DomDebuggerTreeInsertionEffects {
@@ -143,7 +143,7 @@ impl DocumentRuntime {
         insertion_roots: &[DomHandle],
         effects: &mut DomMutationEffects,
         prepublished_removals: &mut Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
-        preserve_state: bool,
+        is_atomic_move: bool,
     ) -> bool {
         for &root in insertion_roots {
             let Some(old_parent) = self.dom_host.parent_node(root) else {
@@ -154,7 +154,7 @@ impl DocumentRuntime {
             let removed = self.remove_child_effects_in_structural_scope_with_state_preservation(
                 old_parent,
                 root,
-                preserve_state,
+                is_atomic_move,
             );
             if !removed.did_change() {
                 return false;
