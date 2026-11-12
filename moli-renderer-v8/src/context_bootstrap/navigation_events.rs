@@ -620,7 +620,7 @@ pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) = construct_original_event(scope, "beforeunload") else {
+    let Some(event) = super::construct_original_before_unload_event(scope) else {
         return;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "beforeunload", event);

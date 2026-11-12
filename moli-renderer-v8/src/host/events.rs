@@ -161,6 +161,33 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
     event: v8::Local<'s, v8::Object>,
     arguments: &[v8::Local<'s, v8::Value>],
 ) -> Option<v8::Global<v8::Value>> {
+    invoke_prepared_event_callback_with_return_conversion(
+        scope,
+        host_ptr,
+        invocation_target_in_shadow_tree,
+        event_type,
+        callback_name,
+        callback,
+        target,
+        event,
+        arguments,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_prepared_event_callback_with_return_conversion<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    invocation_target_in_shadow_tree: bool,
+    event_type: &str,
+    callback_name: &str,
+    callback: crate::native_bridge::PreparedEventCallback,
+    target: EventTargetHandle,
+    event: v8::Local<'s, v8::Object>,
+    arguments: &[v8::Local<'s, v8::Value>],
+    before_unload_handler: bool,
+) -> Option<v8::Global<v8::Value>> {
     let receiver = event_target_receiver(scope, host_ptr, target, event);
     let has_event_argument = arguments.len() == 1 && arguments[0].strict_equals(event.into());
     let (receiver, event) = {
@@ -228,6 +255,7 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
         receiver,
         (!invocation_target_in_shadow_tree).then_some(event),
         arguments,
+        before_unload_handler,
     )
 }
 
@@ -241,6 +269,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     receiver: v8::Local<'s, v8::Value>,
     current_event: Option<v8::Local<'s, v8::Object>>,
     arguments: &[v8::Local<'s, v8::Value>],
+    before_unload_handler: bool,
 ) -> Option<v8::Global<v8::Value>> {
     let relevant_identity = callback.relevant_identity();
     let invocation = CallbackInvocation::new(
@@ -259,13 +288,26 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     } else {
         invocation
     };
-    match CallbackInvoker::invoke(
+    let invocation = if before_unload_handler {
+        invocation.with_legacy_event_handler()
+    } else {
+        invocation
+    };
+    match CallbackInvoker::invoke_with_return_conversion(
         scope,
         "event listener",
         "host event listener threw",
         crate::exception_reporting::CallbackExceptionLogLevel::Debug,
         callback_name,
         invocation,
+        before_unload_handler,
+        |scope, value| {
+            if before_unload_handler {
+                convert_before_unload_event_handler_result(scope, value)
+            } else {
+                Ok(value)
+            }
+        },
     ) {
         CallbackInvocationOutcome::Returned(value) => Some(value),
         CallbackInvocationOutcome::Threw(report) => {
@@ -280,6 +322,43 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
             None
         }
         CallbackInvocationOutcome::Retired => None,
+    }
+}
+
+fn convert_before_unload_event_handler_result<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Global<v8::Value>,
+) -> Result<v8::Global<v8::Value>, Box<crate::exception_reporting::V8ExceptionReport>> {
+    let local = v8::Local::new(scope, &value);
+    if local.is_null_or_undefined() {
+        return Ok(value);
+    }
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    match local.to_string(&scope) {
+        Some(value) => {
+            let value: v8::Local<v8::Value> = value.into();
+            Ok(v8::Global::new(&scope, value))
+        }
+        None if scope.has_caught() => {
+            let exception = scope.exception();
+            let message = scope.message();
+            let stack_trace = scope.stack_trace();
+            Err(Box::new(
+                crate::exception_reporting::build_event_handler_exception_report(
+                    &mut scope,
+                    exception,
+                    message,
+                    stack_trace,
+                ),
+            ))
+        }
+        None => {
+            // A terminated conversion has no nullable DOMString to apply.
+            // Leave termination reporting to the execution owner.
+            let value: v8::Local<v8::Value> = v8::undefined(&scope).into();
+            Ok(v8::Global::new(&scope, value))
+        }
     }
 }
 
@@ -324,7 +403,7 @@ fn invoke_event_handler_property<'s>(
                 None
             } else {
                 match target {
-                EventTargetHandle::Window if matches!(event_type, "load" | "pageshow") => Some(
+                EventTargetHandle::Window if matches!(event_type, "load" | "pageshow" | "beforeunload") => Some(
                     crate::native_bridge::element::compile_window_body_event_attribute(
                         scope, host_ptr, event_type,
                     ),
@@ -463,7 +542,7 @@ fn invoke_event_handler_property<'s>(
         return;
     }
 
-    let returned = invoke_prepared_event_callback(
+    let returned = invoke_prepared_event_callback_with_return_conversion(
         scope,
         host_ptr,
         invocation_target_in_shadow_tree,
@@ -473,13 +552,20 @@ fn invoke_event_handler_property<'s>(
         target,
         event,
         &[event.into()],
+        target == EventTargetHandle::Window && event_type == "beforeunload",
     );
     if temporary {
         unsafe { &mut *host_ptr }.release_event_callback(callback_id);
     }
     if let Some(returned) = returned {
         let returned = v8::Local::new(scope, returned);
-        if returned.is_boolean() && !returned.boolean_value(scope) {
+        if target == EventTargetHandle::Window && event_type == "beforeunload" {
+            if let Ok(value) = v8::Local::<v8::String>::try_from(returned) {
+                crate::context_bootstrap::apply_before_unload_event_handler_return_value(
+                    scope, event, value,
+                );
+            }
+        } else if returned.is_boolean() && !returned.boolean_value(scope) {
             let _ = crate::context_bootstrap::event_backing(scope, event).set(
                 scope,
                 v8str(scope, "defaultPrevented").into(),
