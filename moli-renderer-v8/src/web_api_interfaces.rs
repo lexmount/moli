@@ -555,6 +555,7 @@ interfaces! {
     SVGTransform;
     SVGTransformList;
     SVGUseElement: SVGGraphicsElement;
+    Scheduling;
     Screen: EventTarget;
     ScreenOrientation: EventTarget;
     SecurityPolicyViolationEvent: Event;

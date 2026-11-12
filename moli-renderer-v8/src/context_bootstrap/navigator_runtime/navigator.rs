@@ -30,6 +30,7 @@ use super::media_capabilities::{
 };
 use super::media_devices::{build_media_devices_object, install_media_devices_template_bindings};
 use super::navigator_subobjects::{NavigatorSubobject, ensure_navigator_subobject};
+use super::scheduling::{build_scheduling_object, install_scheduling_template_bindings};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
 use crate::util::{
@@ -76,6 +77,7 @@ const NAVIGATOR_RUNTIME_DATA_KEYS: &[&str] = &[
     "mediaCapabilities",
     "credentials",
     "mediaSession",
+    "scheduling",
 ];
 const WORKER_NAVIGATOR_INSTALLED_SLOT: &str = "__moliWorkerNavigatorInstalled";
 const WORKER_NAVIGATOR_MATERIALIZING_SLOT: &str = "__moliWorkerNavigatorMaterializing";
@@ -196,6 +198,8 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
     media_capabilities: (),
     #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 34), receiver = web_api_interfaces::Navigator::is_instance)]
     media_session: (),
+    #[webapi(accessor_property, getter = navigator_runtime_data_getter_callback, data = callback_data_index_value(scope, 35))]
+    scheduling: (),
     #[webapi(accessor_property, getter = navigator_cookie_enabled_getter_callback, receiver = web_api_interfaces::Navigator::is_instance)]
     cookie_enabled: (),
 }
@@ -578,6 +582,9 @@ struct WindowNavigatorBackingDeclaration<'scope, 'profile> {
     media_capabilities: v8::Local<'scope, v8::Value>,
     #[webapi(data_property, enumerable)]
     credentials: v8::Local<'scope, v8::Value>,
+
+    #[webapi(data_property, enumerable)]
+    scheduling: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -850,6 +857,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_media_capabilities_template_bindings(scope, template, interface_name);
     super::credentials::install(scope, template, interface_name);
     super::media_session::install(scope, template, interface_name);
+    install_scheduling_template_bindings(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MediaDevices" | "MediaDeviceInfo" | "InputDeviceInfo" => {
@@ -1080,6 +1088,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
                 || navigator_geolocation_secure_context_available(scope, owner_child, owner_popup);
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
+        NavigatorSubobject::Scheduling => build_scheduling_object(scope)?.into(),
     };
     Ok(value)
 }
@@ -1254,6 +1263,7 @@ fn build_window_navigator_backing_for_owner<'s>(
         geolocation: v8::undefined(scope).into(),
         media_capabilities: v8::undefined(scope).into(),
         credentials: v8::undefined(scope).into(),
+        scheduling: v8::undefined(scope).into(),
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))

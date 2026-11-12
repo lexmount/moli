@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_navigator_does_not_expose_window_scheduling() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        format!(
+            "try {{ postMessage({}); }} catch (error) {{ postMessage(String(error)); }} close();",
+            include_str!("../../../../tests/fixtures/navigator-scheduling.js")
+        ),
+        "https://scheduling-worker.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker Scheduling exposure probe should settle")
+        .expect("worker should return the exposure result");
+    assert_eq!(expect_post_json(message), r#""worker-ok""#);
+}
+
+#[tokio::test]
 async fn worker_compression_streams_roundtrip_all_formats() {
     ensure_v8();
     let mut handle = spawn_worker(
