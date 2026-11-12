@@ -229,8 +229,11 @@ fn embedded_attribute_resumption_applies_the_same_policy_as_ordinary_elements() 
         entries: vec![(owner, document, "about:blank".into())],
         ..Default::default()
     };
-    struct Policy(NativeNodeId, [Attribute; 2]);
+    struct Policy(NativeNodeId, [Attribute; 2], bool);
     impl HtmlSerializationPolicy for Policy {
+        fn has_filters(&self) -> bool {
+            self.2
+        }
         fn include_attribute(&self, _: NativeNodeId, a: &Attribute) -> bool {
             !a.name_matches("onload")
         }
@@ -238,12 +241,13 @@ fn embedded_attribute_resumption_applies_the_same_policy_as_ordinary_elements() 
             if node == self.0 { &self.1 } else { &[] }
         }
     }
-    let policy = Policy(
+    let mut policy = Policy(
         owner,
         [
             Attribute::new("title".into(), String::new(), None, "new & value".into()),
             Attribute::new("data-extra".into(), String::new(), None, "last".into()),
         ],
+        true,
     );
     let output = host
         .get_html_for_export(root, &|_| true, Some(&policy), Some(&docs), None)
@@ -259,4 +263,12 @@ fn embedded_attribute_resumption_applies_the_same_policy_as_ordinary_elements() 
         "{output}"
     );
     assert!(!output.contains("remove") && !output.contains("stale"));
+    policy.2 = false;
+    let output = host
+        .get_html_for_export(root, &|_| true, Some(&policy), Some(&docs), None)
+        .unwrap();
+    assert!(output.contains("onload=\"remove\""));
+    assert!(output.contains("title=\"new &amp; value\""));
+    assert!(output.contains("data-extra=\"last\""));
+    assert!(!output.contains("stale"));
 }

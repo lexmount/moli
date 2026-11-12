@@ -31,6 +31,13 @@ pub struct HtmlSerializationInsertion<'a> {
 /// Read-only output rules. No rule changes the source nodes or their attributes.
 /// Ordinary Web serialization does not install a policy.
 pub trait HtmlSerializationPolicy {
+    /// Whether `include_node` or `include_attribute` can exclude content.
+    /// Insertion, attribute overrides and shadow metadata still apply when
+    /// false. The conservative default preserves existing filter callbacks.
+    fn has_filters(&self) -> bool {
+        true
+    }
+
     /// Excluding a node excludes its entire subtree.
     fn include_node(&self, _node: &Node) -> bool {
         true
