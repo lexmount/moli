@@ -16,8 +16,8 @@ pub enum PaintCaptureRegion {
     Viewport,
     /// The complete document content extent computed by this layout pass.
     FullDocument,
-    /// The complete document for vector printing. The PDF backend applies
-    /// page/work budgets instead of the full-document bitmap dimension limit.
+    /// The complete document for vector printing, independent of the
+    /// full-document bitmap dimension limit.
     PrintDocument,
     /// One explicit page-coordinate rectangle.
     PageClip { rect: LayoutRect, scale: f32 },

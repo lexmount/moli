@@ -3,12 +3,9 @@ use moli_layout::*;
 use super::PdfError;
 
 // Validate owned commands before passing coordinates to Krilla (or a local
-// raster fallback). Resource identities, operation counts and scope depths are
-// checked by the shared paint validator.
+// raster fallback). Resource identities and scope balance are checked by the
+// shared paint validator.
 pub(super) fn validate(snapshot: &PaintSnapshot) -> Result<(), PdfError> {
-    if snapshot.links.len() > 100_000 {
-        return Err(PdfError::ResourceLimit);
-    }
     for link in &snapshot.links {
         if link.before_fragment > snapshot.fragments.len()
             || !rect(link.rect)

@@ -123,6 +123,30 @@ fn pagination_and_ranges_do_not_duplicate_or_leak_text() {
     ));
 }
 #[test]
+fn selected_page_of_a_large_document_preserves_text() {
+    let mut snapshot =
+        PaintSnapshot::new(PaintViewport::new(300, 30_000_600, 1.0), PaintColor::WHITE);
+    let last_page = 100_001;
+    let run = text(
+        &mut snapshot,
+        "Last page",
+        last_page as f32 * 300.0 + 40.0,
+        false,
+    );
+    snapshot.push_fragment(PaintFragment::GlyphRun(run));
+    let doc = document(
+        &snapshot,
+        &PdfOptions {
+            page_ranges: vec![last_page..=last_page],
+            ..options()
+        },
+    );
+
+    assert_eq!(doc.get_pages().len(), 1);
+    assert_eq!(extracted(&doc, &[1]), "Last page");
+}
+
+#[test]
 fn shadows_masks_and_filtered_text_have_one_semantic_copy() {
     use moli_layout::{PaintBlendMode, PaintCompositeMode, PaintFilter, PaintTextShadow};
     let mut snapshot = snapshot();
