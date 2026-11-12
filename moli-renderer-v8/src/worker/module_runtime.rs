@@ -462,7 +462,7 @@ impl WorkerModulePendingBootstrap {
     pub(super) fn resume(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        completion: WorkerModuleGraphFetchCompletion,
+        completion: &WorkerModuleGraphFetchCompletion,
     ) -> WorkerModuleBootstrapResume {
         let fetch_id = completion.fetch_id();
         let WorkerModulePendingBootstrapState::Fetch(pending_requests) = &mut self.state else {
@@ -783,20 +783,39 @@ pub(super) fn run_next_worker_dynamic_module_import(
     }
 }
 
-pub(super) fn worker_dynamic_module_import_waits_for_fetch(
+pub(super) fn register_worker_module_graph_fetches(
     scope: &mut v8::PinScope<'_, '_>,
-    fetch_id: WorkerModuleGraphFetchId,
+    requests: WorkerModuleGraphFetchBatch,
+) -> Option<WorkerModuleGraphFetchBatch> {
+    let context = scope.get_current_context();
+    let graph = context
+        .get_slot::<RefCell<WorkerModuleGraph>>()
+        .expect("worker module graph is installed before scheduling fetches");
+    graph.borrow_mut().register_fetches(requests)
+}
+
+pub(super) fn complete_worker_module_graph_fetch(
+    scope: &mut v8::PinScope<'_, '_>,
+    completion: &WorkerModuleGraphFetchCompletion,
 ) -> bool {
     let context = scope.get_current_context();
-    let Some(dynamic_imports) = context.get_slot::<RefCell<WorkerDynamicModuleResolver>>() else {
+    let Some(graph) = context.get_slot::<RefCell<WorkerModuleGraph>>() else {
         return false;
     };
-    dynamic_imports.borrow().pending_imports.iter().any(|job| {
-        matches!(
-            &job.state,
-            WorkerDynamicModuleImportJobState::Fetch(requests) if requests.contains_fetch_id(fetch_id)
-        )
-    })
+    let Some(request) = graph.borrow_mut().take_fetch(completion.fetch_id()) else {
+        return false;
+    };
+    match &completion.result {
+        Ok(source) => {
+            // The module map owns compile results even after the importing
+            // graph has failed. Waiters observe the cached native exception.
+            let _ = cache_worker_module_fetched_source(scope, &graph, &request, source);
+        }
+        Err(message) => graph
+            .borrow_mut()
+            .mark_source_fetch_failed(&request.key, message.clone()),
+    }
+    true
 }
 
 pub(super) fn worker_has_pending_dynamic_module_imports(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -805,6 +824,9 @@ pub(super) fn worker_has_pending_dynamic_module_imports(scope: &mut v8::PinScope
         return false;
     };
     !dynamic_imports.borrow().pending_imports.is_empty()
+        || context
+            .get_slot::<RefCell<WorkerModuleGraph>>()
+            .is_some_and(|graph| !graph.borrow().pending_fetches.is_empty())
 }
 
 pub(super) fn worker_has_runnable_dynamic_module_imports(scope: &mut v8::PinScope<'_, '_>) -> bool {
@@ -821,7 +843,7 @@ pub(super) fn worker_has_runnable_dynamic_module_imports(scope: &mut v8::PinScop
 
 pub(super) fn resume_worker_dynamic_module_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    completion: WorkerModuleGraphFetchCompletion,
+    completion: &WorkerModuleGraphFetchCompletion,
 ) -> Option<WorkerDynamicModuleImportAdvance> {
     let context = scope.get_current_context();
     let dynamic_imports = context.get_slot::<RefCell<WorkerDynamicModuleResolver>>()?;
@@ -1120,7 +1142,9 @@ fn advance_worker_dynamic_module_import(
                 )?
             }
             WorkerModuleDependencyLoad::NeedFetch(_) => {
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
+                let existing_fetch_id = graph.borrow().pending_fetch_id(&module_key);
+                let fetch_id = existing_fetch_id
+                    .unwrap_or_else(|| reserve_worker_module_graph_fetch_id(scope));
                 return Ok(WorkerDynamicModuleImportAdvance::NeedFetches(
                     WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
                         fetch_id,
@@ -1163,18 +1187,15 @@ fn job_finish_fetch(
     scope: &mut v8::PinScope<'_, '_>,
     job: &mut WorkerDynamicModuleImportJob,
     request: &WorkerModuleGraphFetchRequest,
-    completion: WorkerModuleGraphFetchCompletion,
+    completion: &WorkerModuleGraphFetchCompletion,
 ) -> WorkerDynamicModuleImportResult<()> {
     let context = scope.get_current_context();
     let graph = context
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .ok_or_else(|| "worker module graph is not available".to_owned())?;
-    let fetched_source = match completion.result {
+    let fetched_source = match &completion.result {
         Ok(source) => source,
         Err(message) => {
-            graph
-                .borrow_mut()
-                .mark_source_fetch_failed(&request.key, message.clone());
             return Err(format!(
                 "Failed to dynamically import module worker dependency `{}`: {message}",
                 request.url()
@@ -1182,15 +1203,7 @@ fn job_finish_fetch(
             .into());
         }
     };
-    let referrer_policy = fetched_source.effective_referrer_policy(request.referrer_policy());
-    let target_entry = ensure_worker_module_entry(
-        scope,
-        &graph,
-        fetched_source.source(),
-        request.key.clone(),
-        fetched_source.final_url().clone(),
-        referrer_policy,
-    )?;
+    let target_entry = cache_worker_module_fetched_source(scope, &graph, request, fetched_source)?;
     if let Some(parent_entry) = request.parent_entry {
         graph.borrow_mut().add_dependency(
             parent_entry,
@@ -1220,7 +1233,7 @@ fn job_resume_fetch_with_pending_keys(
     scope: &mut v8::PinScope<'_, '_>,
     job: &mut WorkerDynamicModuleImportJob,
     request: &WorkerModuleGraphFetchRequest,
-    completion: WorkerModuleGraphFetchCompletion,
+    completion: &WorkerModuleGraphFetchCompletion,
     pending_keys: HashSet<WorkerModuleKey>,
 ) -> WorkerDynamicModuleImportResult<WorkerDynamicModuleImportAdvance> {
     let has_pending_requests = !pending_keys.is_empty();
@@ -1560,27 +1573,24 @@ impl WorkerModuleBootstrapJob {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         request: &WorkerModuleGraphFetchRequest,
-        completion: WorkerModuleGraphFetchCompletion,
+        completion: &WorkerModuleGraphFetchCompletion,
     ) -> WorkerModuleBootstrapResult<()> {
-        let fetched_source = match completion.result {
+        let fetched_source = match &completion.result {
             Ok(source) => source,
             Err(message) => {
                 return Err(Box::new(worker_bootstrap_error(
                     scope,
                     request.initiator_url.as_str(),
-                    &message,
+                    message,
                     WorkerParentErrorEventKind::Event,
                 )));
             }
         };
-        let referrer_policy = fetched_source.effective_referrer_policy(request.referrer_policy());
-        let target_entry = ensure_worker_module_entry(
+        let target_entry = cache_worker_module_fetched_source(
             scope,
             &self.runtime.graph,
-            fetched_source.source(),
-            request.key.clone(),
-            fetched_source.final_url().clone(),
-            referrer_policy,
+            request,
+            fetched_source,
         )?;
         self.runtime.graph.borrow_mut().add_dependency(
             request
@@ -1597,7 +1607,7 @@ impl WorkerModuleBootstrapJob {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         request: &WorkerModuleGraphFetchRequest,
-        completion: WorkerModuleGraphFetchCompletion,
+        completion: &WorkerModuleGraphFetchCompletion,
         pending_keys: HashSet<WorkerModuleKey>,
     ) -> WorkerModuleAdvance {
         if let Err(error) = self.finish_fetch(scope, request, completion) {
@@ -1796,6 +1806,8 @@ struct WorkerModuleGraph {
     root_referrer_policy: Option<String>,
     failed_source_fetches: HashMap<WorkerModuleKey, String>,
     failed_compiles: HashMap<WorkerModuleKey, WorkerBootstrapError>,
+    // Fetch ownership survives failure of any individual importing graph.
+    pending_fetches: HashMap<WorkerModuleKey, WorkerModuleGraphFetchRequest>,
     records: Vec<WorkerModuleRecord>,
     entries_by_key: HashMap<WorkerModuleKey, usize>,
     module_to_entries: HashMap<i32, Vec<usize>>,
@@ -1916,6 +1928,7 @@ impl WorkerModuleGraph {
             root_referrer_policy,
             failed_source_fetches: HashMap::new(),
             failed_compiles: HashMap::new(),
+            pending_fetches: HashMap::new(),
             records: Vec::new(),
             entries_by_key: HashMap::new(),
             module_to_entries: HashMap::new(),
@@ -1948,6 +1961,39 @@ impl WorkerModuleGraph {
 
     fn source_fetch_failure(&self, key: &WorkerModuleKey) -> Option<String> {
         self.failed_source_fetches.get(key).cloned()
+    }
+
+    fn pending_fetch_id(&self, key: &WorkerModuleKey) -> Option<WorkerModuleGraphFetchId> {
+        self.pending_fetches
+            .get(key)
+            .map(|request| request.fetch_id)
+    }
+
+    fn register_fetches(
+        &mut self,
+        requests: WorkerModuleGraphFetchBatch,
+    ) -> Option<WorkerModuleGraphFetchBatch> {
+        let mut new_requests = Vec::new();
+        for request in requests.requests {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                self.pending_fetches.entry(request.key.clone())
+            {
+                entry.insert(request.clone());
+                new_requests.push(request);
+            }
+        }
+        (!new_requests.is_empty()).then(|| WorkerModuleGraphFetchBatch::new(new_requests))
+    }
+
+    fn take_fetch(
+        &mut self,
+        fetch_id: WorkerModuleGraphFetchId,
+    ) -> Option<WorkerModuleGraphFetchRequest> {
+        let key = self
+            .pending_fetches
+            .iter()
+            .find_map(|(key, request)| (request.fetch_id == fetch_id).then(|| key.clone()))?;
+        self.pending_fetches.remove(&key)
     }
 
     fn compile_error(&self, key: &WorkerModuleKey) -> Option<Box<WorkerBootstrapError>> {
@@ -2163,6 +2209,23 @@ enum WorkerModuleGraphBuild {
     NeedFetches(WorkerModuleGraphFetchBatch),
 }
 
+fn cache_worker_module_fetched_source(
+    scope: &mut v8::PinScope<'_, '_>,
+    graph: &Rc<RefCell<WorkerModuleGraph>>,
+    request: &WorkerModuleGraphFetchRequest,
+    source: &WorkerModuleFetchedSource,
+) -> WorkerModuleBootstrapResult<usize> {
+    let referrer_policy = source.effective_referrer_policy(request.referrer_policy());
+    ensure_worker_module_entry(
+        scope,
+        graph,
+        source.source(),
+        request.key.clone(),
+        source.final_url().clone(),
+        referrer_policy,
+    )
+}
+
 fn ensure_worker_module_entry(
     scope: &mut v8::PinScope<'_, '_>,
     graph: &Rc<RefCell<WorkerModuleGraph>>,
@@ -2313,6 +2376,14 @@ fn resolve_worker_module_dependency(
     if let Some(error) = graph.borrow().compile_error(&dependency_key) {
         return Err(error);
     }
+    if let Some(message) = graph.borrow().source_fetch_failure(&dependency_key) {
+        return Err(Box::new(worker_bootstrap_error(
+            scope,
+            dependency_url.as_str(),
+            &message,
+            WorkerParentErrorEventKind::Event,
+        )));
+    }
     let (dependency_key, dependency_source) =
         match load_worker_static_module_dependency(dependency_url, dependency_key.module_type)
             .map_err(|message| {
@@ -2359,7 +2430,9 @@ fn resolve_worker_module_dependency(
                 if !pending_keys.insert(dependency_key.clone()) {
                     return Ok(WorkerModuleGraphBuild::Ready);
                 }
-                let fetch_id = reserve_worker_module_graph_fetch_id(scope);
+                let existing_fetch_id = graph.borrow().pending_fetch_id(&dependency_key);
+                let fetch_id = existing_fetch_id
+                    .unwrap_or_else(|| reserve_worker_module_graph_fetch_id(scope));
                 let referrer_policy = graph.borrow().referrer_policy(entry).map(str::to_owned);
                 return Ok(WorkerModuleGraphBuild::NeedFetches(
                     WorkerModuleGraphFetchBatch::single(WorkerModuleGraphFetchRequest::new(
