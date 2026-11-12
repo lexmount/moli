@@ -1,5 +1,6 @@
 use super::super::NativeDom;
 use super::super::node::{NativeNodeId, Node, NodeData};
+use super::attributes::{EffectiveAttributes, EmbeddedAttribute};
 use super::{
     HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlInsertionPoint, HtmlSerializationError,
     HtmlSerializationInsertion, HtmlSerializationLimitExceeded, HtmlSerializationPolicy,
@@ -500,23 +501,16 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             self.out.attribute(attribute);
                         }
                     } else {
-                        for attribute in element.attributes() {
+                        let attributes =
+                            EffectiveAttributes::new(id, element.attributes(), overrides, filter);
+                        let mut index = 0;
+                        loop {
                             if self.out.limit_exceeded() {
                                 return Ok(());
                             }
-                            let output = replacement_attribute(attribute, overrides);
-                            if filter.is_none_or(|p| p.include_attribute(id, output)) {
-                                self.out.attribute(output);
-                            }
-                        }
-                    }
-                    for attribute in overrides {
-                        if !element
-                            .attributes()
-                            .iter()
-                            .any(|a| attribute_key_eq(a, attribute))
-                            && filter.is_none_or(|p| p.include_attribute(id, attribute))
-                        {
+                            let Some(attribute) = attributes.next(&mut index, false) else {
+                                break;
+                            };
                             self.out.attribute(attribute);
                         }
                     }
@@ -608,34 +602,28 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             .options
             .policy
             .filter(|_| POLICY && self.options.filtering);
-        while state.next_attribute < element.attributes().len() + overrides.len() {
-            let index = state.next_attribute;
-            state.next_attribute += 1;
-            let attribute = if let Some(attribute) = element.attributes().get(index) {
-                replacement_attribute(attribute, overrides)
-            } else {
-                let attribute = &overrides[index - element.attributes().len()];
-                if element
-                    .attributes()
-                    .iter()
-                    .any(|a| attribute_key_eq(a, attribute))
-                {
-                    continue;
-                }
-                attribute
-            };
-            if attribute.namespace().is_empty() && attribute.local_name() == "srcdoc" {
-                state.wrote_srcdoc = true;
-                self.start_embedded(state)?;
+        let attributes =
+            EffectiveAttributes::new(state.owner, element.attributes(), overrides, filter);
+        loop {
+            if self.out.limit_exceeded() {
                 return Ok(());
             }
-            if attribute.namespace().is_empty() && attribute.local_name() == "data-moli-frame-url" {
-                state.wrote_url = true;
-                self.out.push_str(" data-moli-frame-url=\"");
-                self.out.attribute_value(&state.embedded.url);
-                self.out.push('"');
-            } else if filter.is_none_or(|p| p.include_attribute(state.owner, attribute)) {
-                self.out.attribute(attribute);
+            let Some(attribute) = attributes.next(&mut state.next_attribute, true) else {
+                break;
+            };
+            match EmbeddedAttribute::for_attribute(attribute) {
+                Some(EmbeddedAttribute::Srcdoc) => {
+                    state.wrote_srcdoc = true;
+                    self.start_embedded(state)?;
+                    return Ok(());
+                }
+                Some(EmbeddedAttribute::FrameUrl) => {
+                    state.wrote_url = true;
+                    self.out.push_str(" data-moli-frame-url=\"");
+                    self.out.attribute_value(&state.embedded.url);
+                    self.out.push('"');
+                }
+                None => self.out.attribute(attribute),
             }
         }
         if !state.wrote_srcdoc {
@@ -674,18 +662,6 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
     }
 }
 
-fn attribute_key_eq(a: &super::super::Attribute, b: &super::super::Attribute) -> bool {
-    a.namespace() == b.namespace() && a.local_name() == b.local_name()
-}
-fn replacement_attribute<'a>(
-    attribute: &'a super::super::Attribute,
-    overrides: &'a [super::super::Attribute],
-) -> &'a super::super::Attribute {
-    overrides
-        .iter()
-        .find(|a| attribute_key_eq(a, attribute))
-        .unwrap_or(attribute)
-}
 #[inline(always)]
 fn serialize_attribute<S: HtmlSerializationSink>(attribute: &super::super::Attribute, out: &mut S) {
     out.push(' ');

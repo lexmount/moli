@@ -361,3 +361,105 @@ fn namespaced_frame_attributes_do_not_replace_the_null_namespace_export_values()
         );
     }
 }
+
+#[test]
+fn effective_attribute_order_and_filtering_match_with_and_without_embedded_documents() {
+    struct Policy {
+        owner: NativeNodeId,
+        overrides: Vec<Attribute>,
+        filtering: bool,
+    }
+    impl HtmlSerializationPolicy for Policy {
+        fn has_filters(&self) -> bool {
+            self.filtering
+        }
+        fn attribute_overrides(&self, node: NativeNodeId) -> &[Attribute] {
+            if node == self.owner {
+                &self.overrides
+            } else {
+                &[]
+            }
+        }
+        fn include_attribute(&self, _: NativeNodeId, attribute: &Attribute) -> bool {
+            assert!(self.filtering, "inactive filters must not be called");
+            attribute.value() != "drop"
+        }
+    }
+    for existing_srcdoc in [false, true] {
+        let mut host = host();
+        let root = host.document_handle();
+        let owner = child(&mut host, root, "iframe");
+        assert!(host.set_attribute(owner, "title", "old"));
+        assert!(host.set_attribute(owner, "data-removed", "drop"));
+        if existing_srcdoc {
+            assert!(host.set_attribute(owner, "srcdoc", "stale"));
+        }
+        assert!(host.set_attribute_ns(owner, Some("urn:code"), Some("before"), "code", "old"));
+        assert!(host.set_attribute(owner, "data-after", "kept"));
+        let document = host.create_detached_html_document();
+        let b = child(&mut host, document, "b");
+        text(&mut host, b, "live");
+        let docs = Documents {
+            entries: vec![(owner, document, "about:blank".into())],
+            ..Default::default()
+        };
+        let mut policy = Policy {
+            owner,
+            overrides: vec![
+                Attribute::new("title".into(), "".into(), None, "new & title".into()),
+                Attribute::new(
+                    "code".into(),
+                    "urn:code".into(),
+                    Some("after".into()),
+                    "new".into(),
+                ),
+                Attribute::new("srcdoc".into(), "".into(), None, "override".into()),
+                Attribute::new("data-added-drop".into(), "".into(), None, "drop".into()),
+                Attribute::new("code".into(), "".into(), None, "plain".into()),
+                Attribute::new("data-extra".into(), "".into(), None, "last".into()),
+            ],
+            filtering: true,
+        };
+        let before = host.dom().serialize_document();
+        for filtering in [true, false] {
+            policy.filtering = filtering;
+            for embedded in [false, true] {
+                let output = host
+                    .get_html_for_export(
+                        root,
+                        &|_| true,
+                        Some(&policy),
+                        embedded.then_some(&docs as &dyn HtmlEmbeddedDocumentProvider),
+                        None,
+                    )
+                    .unwrap();
+                let srcdoc = if embedded {
+                    " srcdoc=\"&lt;b&gt;live&lt;/b&gt;\""
+                } else {
+                    " srcdoc=\"override\""
+                };
+                let mut expected = "<iframe title=\"new &amp; title\"".to_owned();
+                if !filtering {
+                    expected.push_str(" data-removed=\"drop\"");
+                }
+                if existing_srcdoc {
+                    expected.push_str(srcdoc);
+                }
+                expected.push_str(" after:code=\"new\" data-after=\"kept\"");
+                if !existing_srcdoc {
+                    expected.push_str(srcdoc);
+                }
+                if !filtering {
+                    expected.push_str(" data-added-drop=\"drop\"");
+                }
+                expected.push_str(" code=\"plain\" data-extra=\"last\"");
+                if embedded {
+                    expected.push_str(" data-moli-frame-url=\"about:blank\"");
+                }
+                expected.push_str("></iframe>");
+                assert_eq!(output, expected);
+                assert_eq!(host.dom().serialize_document(), before);
+            }
+        }
+    }
+}
