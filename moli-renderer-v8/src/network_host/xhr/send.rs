@@ -27,7 +27,7 @@ use super::*;
 use crate::runtime::RendererPageContextCancelReason;
 use crossbeam_channel::{after, bounded, never, select};
 use moli_fetch::{FetchCancelHandle, RequestMode};
-use std::{thread, time::Duration};
+use std::time::Duration;
 
 pub(super) fn xhr_send_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -354,29 +354,24 @@ fn send_synchronous_network_xhr(
         return;
     }
 
-    let spawn_result = thread::Builder::new()
-        .name("lm-sync-xhr-fetch".to_owned())
-        .spawn(move || {
-            let runtime_result = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to build sync XHR fetch runtime: {error}"));
-            let result = match runtime_result {
-                Ok(runtime) => runtime.block_on(fetch_browser_subresource_with_preflight_headers(
-                    loader,
-                    request,
-                    Some(worker_cancel_handle),
-                    preflight_headers,
-                )),
-                Err(error) => Err(error),
-            };
+    prepared
+        .resource_loader
+        .request_client()
+        .resource_task_runner()
+        .spawn(async move {
+            let result = fetch_browser_subresource_with_preflight_headers(
+                loader,
+                request,
+                Some(worker_cancel_handle),
+                preflight_headers,
+            )
+            .await;
             let _ = response_tx.send(result);
         });
 
-    let result = match spawn_result {
-        Ok(_) => select! {
+    let result = select! {
             recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("sync XHR fetch thread dropped response channel".to_owned())
+                Err("sync XHR resource task dropped response channel".to_owned())
             }),
             recv(timeout_rx) -> _ => {
                 let timeout = xhr_timeout.expect("never channel should not fire without xhr timeout");
@@ -424,8 +419,6 @@ fn send_synchronous_network_xhr(
                 apply_xhr_abort(scope, xhr);
                 return;
             }
-        },
-        Err(error) => Err(format!("failed to spawn sync XHR fetch thread: {error}")),
     };
 
     let result = result.and_then(|response| {

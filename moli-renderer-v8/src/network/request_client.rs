@@ -78,6 +78,10 @@ impl ResourceRequestClient {
         Self::new_with_cookie_store(config, new_shared_browser_cookie_store())
     }
 
+    pub(crate) fn resource_task_runner(&self) -> super::RendererResourceTaskRunner {
+        self.resource_runtime.task_runner()
+    }
+
     pub fn memory_cache_diagnostics(&self) -> SharedMemoryResourceCacheDiagnostics {
         self.resource_runtime.memory_cache_diagnostics()
     }

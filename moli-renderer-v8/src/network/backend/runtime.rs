@@ -65,6 +65,7 @@ pub struct BrowserResourceRuntimeOwner {
     runtime_id: u64,
     runtime: ArcWeak<BrowserResourceRuntimeInner>,
     fetch_owner: FetchClient,
+    resource_executor: Option<tokio::runtime::Runtime>,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -146,6 +147,7 @@ struct BrowserResourceRuntimeInner {
     id: u64,
     owner_root_id: AtomicU64,
     client: FetchClientHandle,
+    task_runner: crate::network::RendererResourceTaskRunner,
     memory_cache: Mutex<SharedMemoryResourceCache>,
     disk_pool: Option<DiskPool>,
     parkable_images: ParkableImageManager,
@@ -162,6 +164,19 @@ impl BrowserResourceRuntimeOwner {
         config: &FetchConfig,
         cookie_store: SharedBrowserCookieStore,
     ) -> BrowserResourceRuntimeOwnerRegistration {
+        // A browser-scoped resource executor keeps Send loading futures moving
+        // when a renderer or Worker synchronously waits. Its sole lifetime owner
+        // stays here, outside all cloneable request/Document handles.
+        let resource_executor = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(crate::tokio_blocking_budget::tokio_blocking_thread_budget())
+            .thread_name("moli-resources")
+            .enable_all()
+            .build()
+            .expect("browser resource executor should initialize");
+        let task_runner = crate::network::RendererResourceTaskRunner::from_tokio_handle(
+            resource_executor.handle().clone(),
+        );
         let fetch_owner = FetchClient::new(config, cookie_store);
         let runtime_id = NEXT_BROWSER_RESOURCE_RUNTIME_ID
             .fetch_add(1, Ordering::Relaxed)
@@ -179,6 +194,7 @@ impl BrowserResourceRuntimeOwner {
                 id: runtime_id,
                 owner_root_id: AtomicU64::new(0),
                 client: fetch_owner.handle(),
+                task_runner,
                 memory_cache: Mutex::new(SharedMemoryResourceCache::default()),
                 parkable_images,
                 disk_pool,
@@ -191,6 +207,7 @@ impl BrowserResourceRuntimeOwner {
             runtime_id,
             runtime: Arc::downgrade(&runtime.inner),
             fetch_owner,
+            resource_executor: Some(resource_executor),
             _thread_affine: PhantomData,
         };
         BrowserResourceRuntimeOwnerRegistration {
@@ -217,6 +234,10 @@ impl BrowserResourceRuntime {
 
     fn owner_root_id(&self) -> u64 {
         self.inner.owner_root_id.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn task_runner(&self) -> crate::network::RendererResourceTaskRunner {
+        self.inner.task_runner.clone()
     }
 
     pub fn cookie_store(&self) -> SharedBrowserCookieStore {
@@ -381,11 +402,27 @@ impl BrowserResourceRuntimeOwner {
     }
 
     pub fn join(&mut self) -> FetchRuntimeJoinReport {
-        self.fetch_owner.join()
+        let report = self.fetch_owner.join();
+        if let Some(executor) = self.resource_executor.take() {
+            // Owners can be disposed from an embedding Tokio runtime. Cancel
+            // outstanding Send futures without blocking or dropping a runtime
+            // inside another runtime's async context.
+            executor.shutdown_background();
+        }
+        report
     }
 
     fn runtime_is_gone(&self) -> bool {
         self.runtime.upgrade().is_none()
+    }
+}
+
+impl Drop for BrowserResourceRuntimeOwner {
+    fn drop(&mut self) {
+        self.fetch_owner.request_shutdown();
+        if let Some(executor) = self.resource_executor.take() {
+            executor.shutdown_background();
+        }
     }
 }
 

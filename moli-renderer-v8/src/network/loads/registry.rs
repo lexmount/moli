@@ -204,13 +204,14 @@ impl ResourceLoadRegistry {
     ) -> Arc<ResourceLoadRegistration> {
         let id = ResourceLoadId::next();
         let browser_runtime = request_client.browser_resource_runtime();
+        let task_runner = request_client.resource_task_runner();
         Arc::new(ResourceLoadRegistration {
             id,
             kind,
             disposition,
             request_client,
             browser_runtime,
-            task_runner: self.inner.task_runner.clone(),
+            task_runner,
             lifecycle: Mutex::new(ResourceLoadLifecycle {
                 auth_retry_budget: moli_fetch::AuthRetryBudget::default(),
                 cancel_handle,
