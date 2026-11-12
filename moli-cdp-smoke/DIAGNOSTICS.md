@@ -1,0 +1,85 @@
+# Optional live-site diagnostics
+
+These collectors are **not** CI smoke tests or assertions that a commercial
+detector must accept automation. They keep failures and missing verdicts as
+evidence instead of retrying until a site returns a desired result.
+
+Run from `moli-cdp-smoke` with its Python dependencies installed (`uv sync`).
+Use a fresh output directory for every invocation. Each collector starts its
+own browser, uses a disposable context, enables CDP Runtime/Page/Network,
+leaves identity and site scripts untouched, and terminates its browser.
+Browser traffic is direct, with TLS verification left enabled. On Linux use
+`xvfb-run -a` for **headed** Chromium, not `--headless`.
+
+## Fingerprint Pro: a real Windows baseline
+
+Run this on Windows, with a native Chrome installation:
+
+```powershell
+uv run python -m moli_cdp_smoke.diagnostics.fingerprint_identity `
+  --engine chromium `
+  --binary 'C:\Program Files\Google\Chrome\Application\chrome.exe' `
+  --require-windows --output windows-fp-baseline
+```
+
+`--require-windows` refuses Linux/macOS hosts. Changing a UA on Linux is not
+a Windows baseline. The collector records host OS, binary SHA-256, browser
+version and native Navigator/UA-CH values; it does not set UA overrides.
+Record the Windows version and installed font environment when comparing
+results. Browser-version and machine differences are potential confounders,
+not evidence that a single identity field caused a commercial verdict.
+
+For Moli, keep the same command but use `--engine moli`, its local binary,
+and omit `--require-windows` when running on Linux. Moli retains its own
+default identity; the collector never replaces it with the host identity.
+
+`result.json` selects the final event API's bot/tampering/score fields, VM
+classification and ML score, developer-tools/incognito signals, and high-activity/
+rare-device signals. Tampering details retain only `anti_detect_browser` and
+`anomaly_score`. Keep these components separate: a lower total caused by different
+visitor history does not establish a renderer improvement. An explicit allowlist
+also selects device attributes; identifiers, activity histories and arbitrary
+additional details are omitted. No API reply within the fixed
+12-second post-navigation window means **no valid verdict**. Identity reads
+happen after that window. Responses are not intercepted or rewritten.
+
+## DeviceAndBrowser demo login: request, response, and UI
+
+```sh
+uv run python -m moli_cdp_smoke.diagnostics.device_browser_behavior \
+  --engine moli --binary ../target/release/moli --output behavior-moli
+
+xvfb-run -a uv run python -m moli_cdp_smoke.diagnostics.device_browser_behavior \
+  --engine chromium --binary /usr/bin/chromium --output behavior-chromium
+```
+
+This uses only the site's demo form with dummy credentials: wait 20 seconds,
+click/type using the original survey's fixed 80 ms delay, then click Login.
+No human-behavior simulation or page event listener is injected. The baseline
+is frozen 20 seconds after submission. An optional `--extra-wait` (default 40
+seconds) produces a separate extended observation, never a replacement for
+the baseline.
+
+The collector correlates only the form's `POST /fingerprint_bot_test` with
+response headers, loading completion/failure, parsed verdict, and `#jsonResult`.
+Other network-fingerprint services are not mistaken for the final verdict.
+It retains a whitelist of interaction booleans/counts/timing summaries, not
+credentials, opaque fingerprints or raw stack traces. A submitted request
+with no headers is `headers_pending`, not a failed assertion, bot verdict,
+or evidence that the renderer failed to show a received response.
+
+Tests cover terminal-state classification, allowlists, unrelated probes and
+the immutability of a baseline when a later response arrives. Site responses
+can change; retain both observations even if neither supplies a verdict.
+
+## Evidence handling
+
+Keep `environment.json` and `result.json` with the investigation. Do not
+commit unreviewed raw artifacts: `server.log` can contain URLs and third-party
+script diagnostics. Even selected fingerprints describe a device and should
+not be published indiscriminately. The collectors omit visitor IDs, cookies,
+IP addresses and opaque SDK tokens from their structured reports.
+
+The native Windows guard, result URL selection and structured-report
+allowlists have local unit tests. Actual Windows launch and site results must
+still be verified on Windows; a passing Linux unit test is not that evidence.
