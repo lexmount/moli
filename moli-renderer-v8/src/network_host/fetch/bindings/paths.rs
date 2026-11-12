@@ -191,28 +191,7 @@ pub(super) fn spawn_network_fetch(
 ) -> Result<u64, String> {
     let cache_mode = prepared.cache_mode();
     let loader = prepared.resource_loader.request_client().clone();
-    let mut request = Request::new_browser(
-        &prepared.method,
-        prepared.resolved_url.clone(),
-        prepared.body.clone(),
-        prepared.request_headers.clone(),
-        prepared.request_origin.clone(),
-    )
-    .with_initiator_url(&prepared.document_url)
-    .with_request_mode(prepared.request_mode)
-    .with_credentials_mode(prepared.credentials_mode)
-    .with_network_partition_key(prepared.network_partition_key.clone())
-    .with_redirect_mode(prepared.redirect_mode)
-    .with_cache_mode(cache_mode)
-    .with_fetch_priority_hint(prepared.priority)
-    .with_fetch_referrer(&prepared.referrer)
-    .map_err(|error| error.to_string())?;
-    if let Some(metadata) = window_fetch_script_metadata(&prepared) {
-        request = request.with_script_fetch_metadata(metadata);
-    }
-    request = request
-        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
-        .with_subframe_context(prepared.frame_id.is_some());
+    let request = native_window_fetch_request(&prepared)?;
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -286,6 +265,34 @@ pub(super) fn spawn_network_fetch(
         request_body_text(&prepared.body),
     );
     Ok(internal_id)
+}
+
+pub(super) fn native_window_fetch_request(
+    prepared: &PreparedWindowFetchRequest,
+) -> Result<Request, String> {
+    let mut request = Request::new_browser(
+        &prepared.method,
+        prepared.resolved_url.clone(),
+        prepared.body.clone(),
+        prepared.request_headers.clone(),
+        prepared.request_origin.clone(),
+    )
+    .with_initiator_url(&prepared.document_url)
+    .with_request_mode(prepared.request_mode)
+    .with_credentials_mode(prepared.credentials_mode)
+    .with_network_partition_key(prepared.network_partition_key.clone())
+    .with_redirect_mode(prepared.redirect_mode)
+    .with_cache_mode(prepared.cache_mode())
+    .with_fetch_priority_hint(prepared.priority)
+    .with_fetch_referrer(&prepared.referrer)
+    .map_err(|error| error.to_string())?;
+    if let Some(metadata) = window_fetch_script_metadata(prepared) {
+        request = request.with_script_fetch_metadata(metadata);
+    }
+    request = request
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+        .with_subframe_context(prepared.frame_id.is_some());
+    Ok(request)
 }
 
 fn window_fetch_script_metadata(

@@ -2,11 +2,13 @@ use super::*;
 use crate::native_bridge::{JsContextHost, throw_dom_exception};
 use crate::network_host::{
     BLOCKED_BY_CLIENT_ERROR_TEXT, active_subresource_network_partition_key,
-    effective_subresource_policy_context, local_url_response, merge_subresource_request_headers,
+    effective_subresource_policy_context, effective_subresource_referrer_policy,
+    local_url_response, merge_subresource_request_headers,
     observe_subresource_request_cookie_report, resolve_context_url, spawn_async_subresource_fetch,
 };
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+    service_worker_fetch_request_metadata,
 };
 use crate::types::{
     PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceResourceType,
@@ -44,6 +46,8 @@ struct PreparedEventSourceRequest {
     owner: crate::native_bridge::OwnerDispatchScope,
     resource_loader: crate::network::context::DocumentResourceLoader,
     document_url: url::Url,
+    referrer_source: Option<url::Url>,
+    document_referrer_policy: Option<String>,
     request_origin: moli_url::WebOrigin,
     resolved_url: url::Url,
     request_headers: moli_fetch::RequestHeaders,
@@ -363,6 +367,8 @@ fn prepare_event_source_request<'s>(
         owner,
         resource_loader,
         document_url,
+        referrer_source: host.document_referrer_source_url_for_dispatch_scope(owner),
+        document_referrer_policy: effective_subresource_referrer_policy(host, owner),
         request_origin,
         resolved_url,
         request_headers,
@@ -389,6 +395,7 @@ fn dispatch_service_worker_event_source<'s>(
         &prepared.document_url,
         &prepared.resolved_url,
     )?;
+    let native_request = build_event_source_request(prepared).ok()?;
 
     let cancel_handle = FetchCancelHandle::new();
     let registered = register_event_source_request(
@@ -410,10 +417,7 @@ fn dispatch_service_worker_event_source<'s>(
         prepared.credentials_mode,
         RequestRedirectMode::Follow,
         None,
-        ServiceWorkerFetchRequestMetadata {
-            cache: "no-store".to_owned(),
-            ..ServiceWorkerFetchRequestMetadata::default()
-        },
+        service_worker_fetch_request_metadata(&native_request),
     );
     let dispatch = ServiceWorkerFetchDispatch {
         internal_id: registered.internal_id,
@@ -453,26 +457,35 @@ fn dispatch_service_worker_event_source<'s>(
 }
 
 fn build_event_source_request(prepared: &PreparedEventSourceRequest) -> Result<Request, String> {
-    Request::new(
+    let request = Request::new(
         "GET",
         prepared.resolved_url.as_str(),
         None,
         prepared.request_headers.clone(),
     )
-    .map_err(|error| error.to_string())
-    .map(|request| {
-        request
-            .with_initiator_url(&prepared.document_url)
-            .with_request_origin(prepared.request_origin.clone())
-            .with_request_mode(RequestMode::Cors)
-            .with_credentials_mode(prepared.credentials_mode)
-            .with_network_partition_key(prepared.network_partition_key.clone())
-            .with_redirect_mode(RequestRedirectMode::Follow)
-            .with_cache_mode(RequestCacheMode::NoStore)
-            .with_browser_request_metadata(BrowserRequestMetadata::EventSource)
-            .with_subframe_context(prepared.frame_id.is_some())
-            .without_request_timeout()
-    })
+    .map_err(|error| error.to_string())?
+    .with_fetch_referrer(
+        prepared
+            .referrer_source
+            .as_ref()
+            .map_or("", url::Url::as_str),
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(request
+        .with_initiator_url(&prepared.document_url)
+        .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+            document_referrer_policy: prepared.document_referrer_policy.clone(),
+            ..Default::default()
+        })
+        .with_request_origin(prepared.request_origin.clone())
+        .with_request_mode(RequestMode::Cors)
+        .with_credentials_mode(prepared.credentials_mode)
+        .with_network_partition_key(prepared.network_partition_key.clone())
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_cache_mode(RequestCacheMode::NoStore)
+        .with_browser_request_metadata(BrowserRequestMetadata::EventSource)
+        .with_subframe_context(prepared.frame_id.is_some())
+        .without_request_timeout())
 }
 
 struct RegisteredEventSourceRequest {

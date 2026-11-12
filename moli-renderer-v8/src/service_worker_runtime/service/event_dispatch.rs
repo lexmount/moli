@@ -261,6 +261,13 @@ impl ServiceWorkerRuntimeService {
             .with_credentials_mode(request.credentials_mode)
             .with_redirect_mode(request.redirect_mode)
             .with_fetch_priority_hint(request.priority)
+            .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+                referrer_policy: (!request.metadata.referrer_policy.is_empty())
+                    .then(|| request.metadata.referrer_policy.clone()),
+                ..Default::default()
+            })
+            .with_fetch_referrer(&request.metadata.referrer)
+            .expect("service worker requests retain a validated Fetch referrer")
         };
         self.dispatch_controlled_fetch_request(dispatch, native_request)
     }

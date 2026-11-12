@@ -21,6 +21,8 @@ pub(super) fn dispatch_service_worker_fetch(
         &prepared.resolved_url,
     )?;
 
+    let native_request = super::paths::native_window_fetch_request(prepared).ok()?;
+
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -91,12 +93,8 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.redirect_mode,
         prepared.priority,
         ServiceWorkerFetchRequestMetadata {
-            cache: prepared.cache.clone(),
-            referrer: prepared.referrer.clone(),
-            referrer_policy: prepared.referrer_policy.clone(),
-            integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
-            use_cors_preflight: false,
+            ..crate::service_worker_runtime::service_worker_fetch_request_metadata(&native_request)
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
