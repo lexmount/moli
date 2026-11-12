@@ -4764,6 +4764,85 @@ async fn websocket_cdp_dynamic_page_pending_runtime_command_does_not_block_later
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_loading_stops_parsing_a_streaming_document() {
+    let release_tail = Arc::new(tokio::sync::Notify::new());
+    let release_for_route = Arc::clone(&release_tail);
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().route(
+            "/stream",
+            get(move || {
+                let release = Arc::clone(&release_for_route);
+                async move {
+                    let body = futures_util::stream::unfold(0, move |state| {
+                        let release = Arc::clone(&release);
+                        async move {
+                            match state {
+                                0 => Some((
+                                    Ok::<_, std::io::Error>("<html><body><p id=prefix>prefix</p>"),
+                                    1,
+                                )),
+                                1 => {
+                                    release.notified().await;
+                                    Some((Ok("<p id=tail>tail</p></body></html>"), 2))
+                                }
+                                _ => None,
+                            }
+                        }
+                    });
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html")],
+                        axum::body::Body::from_stream(body),
+                    )
+                }
+            }),
+        ),
+        "stop-loading-streaming",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target_id).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    let navigation = send_cdp_command(
+        &mut page,
+        2,
+        "Page.navigate",
+        None,
+        json!({"url": format!("http://{fixture_addr}/stream")}),
+    )
+    .await;
+    assert!(response_by_id(&navigation, 2)["error"].is_null());
+    timeout(Duration::from_secs(5), async {
+        while evaluate_window_name_probe(&mut page, 3, "!!document.getElementById('prefix')").await
+            != json!(true)
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the streamed prefix is parsed");
+    send_cdp_command(&mut page, 4, "Page.stopLoading", None, json!({})).await;
+    release_tail.notify_one();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut page,
+            5,
+            "[document.readyState, !!document.getElementById('tail')]"
+        )
+        .await,
+        json!(["complete", false])
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_matches_chromium_browser_attach_access_modes() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut browser, _) = connect_async(

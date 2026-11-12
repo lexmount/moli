@@ -1945,6 +1945,14 @@ impl PageVm {
         self.document_lifecycle.drain_live_events()
     }
 
+    /// Whether `Page.stopLoading` stopped the current Document's loading.
+    pub(in crate::runtime) fn document_loading_was_stopped(&self) -> bool {
+        self.document_lifecycle
+            .current_snapshot()
+            .terminated
+            .is_some_and(|stamp| stamp.reason == RendererDocumentTerminationReason::Stopped)
+    }
+
     pub(super) fn stop_document_lifecycle(&mut self) -> Result<()> {
         let _ = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),
