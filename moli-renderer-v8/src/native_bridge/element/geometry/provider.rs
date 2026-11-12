@@ -59,7 +59,7 @@ pub(crate) fn observable_geometry_batch(
     published_geometry_batch(runtime, document, batch)
 }
 
-/// Style sampling never initializes layout as a side effect.
+/// Answers from the published layout only; callers initialize layout first.
 fn published_geometry_batch(
     runtime: &PageScriptHost,
     document: DomHandle,

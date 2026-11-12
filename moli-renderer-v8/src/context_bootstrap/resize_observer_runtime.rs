@@ -398,7 +398,9 @@ fn build_resize_observer_entries<'s>(
             &moli_layout::LayoutQueryBatch::new(queries),
         ) {
             Ok(answers) => answers,
-            Err(moli_layout::LayoutError::NoLayoutSnapshot) => continue,
+            Err(
+                moli_layout::LayoutError::NoLayoutSnapshot | moli_layout::LayoutError::NoLayoutRoot,
+            ) => continue,
             Err(error) => return Err(error),
         };
         let mut answers = answers.answers.into_iter();
