@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use moli_header_field::HeaderFields;
 use url::Url;
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct PreparedWebSocketRequest {
     pub url: Url,
-    pub headers: http::HeaderMap,
+    pub headers: HeaderFields,
 }
 
 pub(crate) fn prepare_websocket_request(
@@ -25,7 +26,7 @@ pub(crate) fn prepare_websocket_request(
         return Err("WebSocket URL must use ws or wss and include a host".to_owned());
     }
     reject_blocked_websocket_port(&url)?;
-    let mut headers = http::HeaderMap::new();
+    let mut headers = HeaderFields::default();
     apply_connect_context_headers(&mut headers, context)
         .map_err(|error| format!("failed to build WebSocket handshake headers: {error}"))?;
     apply_subprotocol_header(&mut headers, protocols)?;
@@ -38,7 +39,7 @@ pub(crate) fn prepare_websocket_request(
 }
 
 fn apply_subprotocol_header(
-    headers: &mut http::HeaderMap,
+    headers: &mut HeaderFields,
     protocols: &[String],
 ) -> Result<(), String> {
     if protocols.is_empty() {
@@ -47,25 +48,19 @@ fn apply_subprotocol_header(
     validate_subprotocols(protocols)
         .map_err(|error| format!("failed to build WebSocket subprotocol header: {error}"))?;
     let value = protocols.join(", ");
-    let value = value
-        .parse()
-        .map_err(|error| format!("failed to build WebSocket subprotocol header: {error}"))?;
-    headers.insert(http::header::SEC_WEBSOCKET_PROTOCOL, value);
-    Ok(())
+    insert_header_if_absent(headers, "Sec-WebSocket-Protocol", &value)
+        .map_err(|error| format!("failed to build WebSocket subprotocol header: {error}"))
 }
 
-fn apply_cookie_header(
-    headers: &mut http::HeaderMap,
-    context: &ConnectOptions,
-) -> Result<(), String> {
+fn apply_cookie_header(headers: &mut HeaderFields, context: &ConnectOptions) -> Result<(), String> {
     let Some(cookie_header) = context.cookie_header.as_deref() else {
         return Ok(());
     };
-    insert_header_if_absent(headers, http::header::COOKIE, cookie_header)
+    insert_header_if_absent(headers, "Cookie", cookie_header)
         .map_err(|error| format!("failed to build WebSocket cookie header: {error}"))
 }
 
-fn apply_basic_auth_header(headers: &mut http::HeaderMap, url: &Url) -> Result<(), String> {
+fn apply_basic_auth_header(headers: &mut HeaderFields, url: &Url) -> Result<(), String> {
     if url.username().is_empty() && url.password().is_none() {
         return Ok(());
     }
@@ -75,7 +70,7 @@ fn apply_basic_auth_header(headers: &mut http::HeaderMap, url: &Url) -> Result<(
         .map(percent_decode_userinfo_component)
         .unwrap_or_default();
     let value = format!("Basic {}", encode_basic_auth(&username, &password));
-    insert_header_if_absent(headers, http::header::AUTHORIZATION, &value)
+    insert_header_if_absent(headers, "Authorization", &value)
         .map_err(|error| format!("failed to build WebSocket basic auth header: {error}"))
 }
 

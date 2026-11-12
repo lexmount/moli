@@ -1,32 +1,32 @@
+use moli_header_field::HeaderFields;
+
 use crate::ConnectOptions;
 
 pub(crate) fn apply_connect_context_headers(
-    headers: &mut http::HeaderMap,
+    headers: &mut HeaderFields,
     context: &ConnectOptions,
 ) -> Result<(), http::header::InvalidHeaderValue> {
-    // Embedding-provided headers may intentionally override browser defaults
-    // such as Origin/User-Agent, but never protocol-control handshake fields.
-    for (name, _) in &context.extra_headers {
-        if !is_websocket_control_header(name) {
-            headers.remove(name);
-        }
-    }
+    // Preserve explicit field spelling, bytes, order and duplicates. Embedding
+    // fields may override browser defaults, but never protocol-control fields.
+    let mut extra_headers = HeaderFields::default();
     for (name, value) in &context.extra_headers {
         if is_websocket_control_header(name) {
             continue;
         }
-        let Ok(name) = http::header::HeaderName::from_bytes(name.as_bytes()) else {
+        if http::header::HeaderName::from_bytes(name.as_bytes()).is_err() {
             continue;
-        };
-        headers.append(name, http::HeaderValue::from_bytes(value)?);
+        }
+        http::HeaderValue::from_bytes(value)?;
+        extra_headers.push((name.clone(), value.clone()));
     }
-    insert_header_if_absent(headers, http::header::ORIGIN, &context.origin)?;
-    insert_header_if_absent(headers, http::header::USER_AGENT, &context.user_agent)?;
+    headers.overlay(extra_headers);
+    insert_header_if_absent(headers, "Origin", &context.origin)?;
+    insert_header_if_absent(headers, "User-Agent", &context.user_agent)?;
     Ok(())
 }
 
-pub(crate) fn header_map_entries(headers: &http::HeaderMap) -> moli_header_field::HeaderFields {
-    moli_header_field::HeaderFields::from_bytes(
+pub(crate) fn header_map_entries(headers: &http::HeaderMap) -> HeaderFields {
+    HeaderFields::from_bytes(
         headers
             .iter()
             .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
@@ -34,35 +34,17 @@ pub(crate) fn header_map_entries(headers: &http::HeaderMap) -> moli_header_field
     )
 }
 
-/// HeaderMap lowercases names, but Chromium sends these browser-generated
-/// fields with this spelling on HTTP/1.1. Apply it only at the request boundary;
-/// response headers and observation dictionaries retain their existing format.
-pub(crate) fn request_header_entries(headers: &http::HeaderMap) -> moli_header_field::HeaderFields {
-    moli_header_field::HeaderFields::from_bytes(
-        headers
-            .iter()
-            .map(|(name, value)| {
-                let name = match name.as_str() {
-                    "origin" => "Origin",
-                    "user-agent" => "User-Agent",
-                    "cookie" => "Cookie",
-                    "authorization" => "Authorization",
-                    "sec-websocket-protocol" => "Sec-WebSocket-Protocol",
-                    name => name,
-                };
-                (name.to_owned(), value.as_bytes().to_vec())
-            })
-            .collect(),
-    )
-}
-
 pub(crate) fn insert_header_if_absent(
-    headers: &mut http::HeaderMap,
-    name: http::header::HeaderName,
+    headers: &mut HeaderFields,
+    name: &str,
     value: &str,
 ) -> Result<(), http::header::InvalidHeaderValue> {
-    if !headers.contains_key(&name) {
-        headers.insert(name, value.parse()?);
+    if !headers
+        .iter()
+        .any(|(field, _)| field.eq_ignore_ascii_case(name))
+    {
+        let value: http::HeaderValue = value.parse()?;
+        headers.push((name.to_owned(), value.as_bytes().to_vec()));
     }
     Ok(())
 }
