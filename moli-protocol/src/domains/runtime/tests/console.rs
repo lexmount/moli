@@ -1162,7 +1162,7 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
                         (
                             [(CONTENT_TYPE.as_str(), "text/html; charset=utf-8")],
                             format!(
-                                "<!doctype html><html><title>start</title><body>start<script>setTimeout(() => location.href = '{}', 0);</script></body></html>",
+                                "<!doctype html><html><title>start</title><body>start<script>function armAuthNavigation() {{ setTimeout(() => location.href = '{}', 0); }}</script></body></html>",
                                 auth_url
                             ),
                         )
@@ -1175,9 +1175,9 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
     });
 
     let start_url = format!("http://{start_addr}/start");
-    // A ready timer can start navigation while Runtime.enable is executing.
-    // Keep setup on the local lane and release the destination response only
-    // after Runtime observation is installed, without relying on a delay.
+    // Runtime observation is a prerequisite, not part of the navigation under
+    // test. Arm the zero-delay timer only after it is installed; otherwise the
+    // timer can move the source Page into a navigation handoff during setup.
     tokio::task::LocalSet::new()
         .run_until(async {
             let mut ctx = TestContext::new();
@@ -1189,6 +1189,13 @@ async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_con
                 .set_target_url(start_url));
             ctx.enable_background_navigation_scheduler_for_test();
             let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_700).await;
+            ctx.process_async(json!({
+                "id": 20_701,
+                "method": "Runtime.evaluate",
+                "params": {"expression": "armAuthNavigation(); 'armed'", "returnByValue": true}
+            })).await;
+            let armed = take_response_by_id(&mut ctx, 20_701);
+            assert_eq!(armed["result"]["result"]["value"], json!("armed"), "timer arming response: {armed}");
             ctx.sent.clear();
             auth_commit_ready.notify_one();
 
