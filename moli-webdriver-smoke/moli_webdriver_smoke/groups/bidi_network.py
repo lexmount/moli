@@ -56,6 +56,26 @@ class _BidiNetworkConnection:
         assert_equal(result["type"], "success", f"{self.name}: script completion: {result!r}")
         return result["result"]
 
+    async def pipeline(self, commands: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+        ids = []
+        for method, params in commands:
+            self.command_id += 1
+            ids.append(self.command_id)
+            await self.websocket.send(json.dumps({"id": self.command_id, "method": method, "params": params}))
+        responses: dict[int, dict[str, Any]] = {}
+        try:
+            async with asyncio.timeout(10):
+                while len(responses) < len(ids):
+                    message = json.loads(await self.websocket.recv())
+                    self.events.append(message)
+                    if message.get("id") in ids:
+                        command_id = message["id"]
+                        assert_true(command_id not in responses, f"{self.name}: duplicate reply: {message!r}")
+                        responses[command_id] = message
+        except TimeoutError as error:
+            raise RuntimeError(f"{self.name}: pipeline timed out; ids={ids!r}; replies={responses!r}; events={self.events!r}") from error
+        return [responses[command_id] for command_id in ids]
+
     async def wait_event(self, method: str, matches: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
         try:
             async with asyncio.timeout(10):
@@ -130,6 +150,14 @@ async def run_bidi_network_group(
     results: list[dict[str, Any]],
     continue_on_failure: bool = False,
 ) -> None:
+    for query in ("realms", "evaluate", "call"):
+        name = f"bidi_pending_admission_{query}_close"
+        try:
+            await _run_pending_admission_close(target, fixture, results, name, query)
+        except Exception as error:
+            if not continue_on_failure:
+                raise
+            record_failure(results, "bidi-network", name, error)
     for isolated in (False, True):
         for operation in ("complete", "close", "replace"):
             name = f"bidi_pending_navigation_{'isolated' if isolated else 'shared'}_{operation}"
@@ -236,6 +264,73 @@ def _held_navigation() -> Iterator[tuple[str, threading.Event, threading.Event]]
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+async def _run_pending_admission_close(
+    target: WebDriverTarget,
+    fixture: str,
+    results: list[dict[str, Any]],
+    name: str,
+    query: str,
+) -> None:
+    # A query of the blocked Page must leave the socket able to receive the
+    # command that cancels its navigation. This is deliberately pipelined;
+    # sequential command() calls cannot expose admission blocking the socket.
+    with _held_navigation() as (held, arrived, release):
+        async with _bidi_connection(target, name, initial_url=f"{fixture}/webdriver/basic") as (bidi, capabilities):
+            try:
+                a = (await bidi.command("browsingContext.getTree", {}))["contexts"][0]["context"]
+                b = (await bidi.command("browsingContext.create", {"type": "tab", "background": True}))["context"]
+                await bidi.command("browsingContext.navigate", {
+                    "context": b, "url": f"{fixture}/webdriver/frame", "wait": "complete",
+                })
+                await bidi.command("session.subscribe", {
+                    "events": ["network.beforeRequestSent", "browsingContext.contextDestroyed"],
+                    "contexts": [a, b],
+                })
+                assert_equal(await bidi.evaluate(a, f"location.href={json.dumps(held)};42"),
+                             {"type": "number", "value": 42}, f"{name}: navigation initiated")
+                await bidi.wait_event("network.beforeRequestSent", lambda p: p["request"]["url"] == held)
+                assert_true(await asyncio.to_thread(arrived.wait, 10), f"{name}: A's request arrived")
+                command = {
+                    "realms": ("script.getRealms", {"context": a, "type": "window"}),
+                    "evaluate": ("script.evaluate", {
+                        "target": {"context": a}, "expression": "42", "awaitPromise": False,
+                    }),
+                    "call": ("script.callFunction", {
+                        "target": {"context": a}, "functionDeclaration": "() => 42", "awaitPromise": False,
+                    }),
+                }[query]
+                responses = await bidi.pipeline([
+                    command, ("browsingContext.close", {"context": a}), ("browsingContext.getTree", {}),
+                ])
+                assert_true(not release.is_set(), f"{name}: control commands finish while HTTP is blocked")
+                assert_equal(responses[1]["type"], "success", f"{name}: close: {responses!r}")
+                assert_equal(responses[2]["type"], "success", f"{name}: getTree: {responses!r}")
+                # Chrome can finish getRealms before close using the old realm.
+                # An unfinished script can instead fail when its context goes.
+                if responses[0]["type"] == "error":
+                    assert_equal(responses[0]["error"], "no such frame", f"{name}: closed-context query")
+                else:
+                    assert_equal(responses[0]["type"], "success", f"{name}: query terminal result")
+                    if query == "realms":
+                        assert_true(any(r.get("context") == a for r in responses[0]["result"]["realms"]),
+                                    f"{name}: original Page's realm")
+                    else:
+                        assert_equal(responses[0]["result"]["result"], {"type": "number", "value": 42},
+                                     f"{name}: original script result")
+                # Pipelined commands may complete out of order. Only a query
+                # sent after close has replied must observe that A is gone.
+                tree = (await bidi.command("browsingContext.getTree", {}))["contexts"]
+                assert_true(all(c["context"] != a for c in tree), f"{name}: closed A absent")
+                assert_equal(await bidi.evaluate(b, "6 * 7"), {"type": "number", "value": 42},
+                             f"{name}: B usable and the pending Runtime slot released")
+                for response in responses:
+                    assert_equal(sum(e.get("id") == response["id"] for e in bidi.events), 1,
+                                 f"{name}: each pipelined command replies once")
+                record(results, name, {"capabilities": capabilities, "responses": responses, "events": bidi.events})
+            finally:
+                release.set()
 
 
 async def _run_pending_navigation(
