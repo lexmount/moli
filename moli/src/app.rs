@@ -260,6 +260,15 @@ pub async fn run_cli_with_config<W: Write>(
             let storage_partition =
                 Arc::new(StoragePartitionState::open(config.browser.profile_dir())?);
             storage_partition.import_cookies(load_cookie_state_cookies(&config)?)?;
+            if args.cookie_jar.is_some() {
+                // serve() drains cookie producers and closes the databases.
+                // Load the jar while SQLite is open so the final export can
+                // snapshot its in-memory state after that drain, even if the
+                // session never visits a page or calls a Cookie API.
+                storage_partition
+                    .cookies()
+                    .context("failed to prepare cookie jar export")?;
+            }
             let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
                 config.server.clone(),
                 Arc::clone(&storage_partition),
