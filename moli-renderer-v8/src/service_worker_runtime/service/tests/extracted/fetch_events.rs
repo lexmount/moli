@@ -1,6 +1,115 @@
 use super::*;
 
 #[test]
+fn fetch_event_client_ids_snapshot_replaced_documents_before_worker_start() {
+    for lifecycle in [
+        ServiceWorkerVersionLifecycleState::Activated,
+        ServiceWorkerVersionLifecycleState::Activating,
+    ] {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        let document_url = url("https://example.test/app/page.html");
+        let request_url = url("https://example.test/app/resource");
+        insert_registered_version(
+            &service,
+            registration_id,
+            version_id,
+            url("https://example.test/app/worker.js"),
+            url("https://example.test/app/"),
+            [document_url.clone()],
+        );
+        let source = client_id_for_document(&service, &document_url);
+        let resulting =
+            register_client_for_test(&service, url("https://example.test/app/result.html"));
+        let storage_key = service
+            .inner
+            .state
+            .lock()
+            .live_clients
+            .get(&source)
+            .unwrap()
+            .storage_key
+            .clone();
+        for id in [source, resulting] {
+            assert!(service.update_client_document_with_storage_key(
+                id,
+                url("about:blank"),
+                storage_key.clone(),
+                ServiceWorkerClientFrameType::TopLevel,
+                None
+            ));
+            assert!(service.update_client_document_with_storage_key(
+                id,
+                document_url.clone(),
+                storage_key.clone(),
+                ServiceWorkerClientFrameType::TopLevel,
+                None
+            ));
+        }
+        let expected_source = service.client_exposed_id(source).unwrap();
+        let expected_resulting = service.client_exposed_id(resulting).unwrap();
+        assert_ne!(expected_source, service_worker_exposed_client_id(source));
+        assert_ne!(
+            expected_resulting,
+            service_worker_exposed_client_id(resulting)
+        );
+        let run = exact_version_run(&service, version_id);
+        {
+            let mut state = service.inner.state.lock();
+            let version = state.versions.get_mut(&version_id).unwrap();
+            version.lifecycle_state = lifecycle;
+            version.running_state = ServiceWorkerVersionRunningState::Starting {
+                host: new_loading_test_host(version_id, &run),
+            };
+        }
+        let mut request = test_fetch_request(source, request_url.clone());
+        request.resulting_client_id = Some(resulting);
+        request.destination = ServiceWorkerRequestDestination::Document;
+        let completion = async_subresource_completion_queue();
+        let job = test_fetch_job(
+            &service,
+            42,
+            version_id,
+            &run,
+            source,
+            document_url.clone(),
+            request_url,
+            completion.sender(),
+            moli_fetch::FetchCancelHandle::new(),
+        );
+        assert!(service.dispatch_controlled_fetch_job(job, request).is_ok());
+        // Later lifecycle changes must not rewrite IDs already sent to the worker.
+        service.unregister_client(source);
+        assert!(service.update_client_document_with_storage_key(
+            resulting,
+            url("about:blank"),
+            storage_key,
+            ServiceWorkerClientFrameType::TopLevel,
+            None
+        ));
+        assert_ne!(
+            service.client_exposed_id(resulting).unwrap(),
+            expected_resulting
+        );
+        let state = service.inner.state.lock();
+        let version = state.versions.get(&version_id).unwrap();
+        let event = if lifecycle == ServiceWorkerVersionLifecycleState::Activating {
+            version.pending_activation_fetch_events.front().unwrap()
+        } else {
+            let ServiceWorkerPendingStartEvent::Fetch(event) =
+                version.pending_start_events.front().unwrap()
+            else {
+                panic!("expected fetch")
+            };
+            event
+        };
+        assert_eq!(event.client_ids.client_id, expected_source);
+        assert_eq!(event.client_ids.resulting_client_id, expected_resulting);
+    }
+}
+
+#[test]
 fn controlled_fetch_inserts_accept_before_queuing_and_preserves_author_values() {
     use crate::types::SubresourceResourceType as Resource;
     use ServiceWorkerRequestDestination as Destination;
@@ -1039,6 +1148,7 @@ fn restart_start_failure_rejects_pending_fetch_job() {
                 running_state: ServiceWorkerVersionRunningState::Starting { host },
                 pending_start_events: VecDeque::from([ServiceWorkerPendingStartEvent::Fetch(
                     ServiceWorkerFetchEvent {
+                        client_ids: Default::default(),
                         event_id,
                         owner: test_run_owner(version_id, &run),
                         request: ServiceWorkerFetchRequest {
@@ -1750,6 +1860,7 @@ fn abort_controlled_fetch_removes_pending_start_event() {
         };
         version.pending_start_events = VecDeque::from([ServiceWorkerPendingStartEvent::Fetch(
             ServiceWorkerFetchEvent {
+                client_ids: Default::default(),
                 event_id,
                 owner: test_run_owner(version_id, &run),
                 request: test_fetch_request(client_id, request_url),
@@ -2217,6 +2328,7 @@ fn empty_fetch_handler_pending_start_fetch_falls_back_after_worker_start() {
         version.running_state = ServiceWorkerVersionRunningState::Starting { host };
         version.pending_start_events = VecDeque::from([ServiceWorkerPendingStartEvent::Fetch(
             ServiceWorkerFetchEvent {
+                client_ids: Default::default(),
                 event_id,
                 owner: test_run_owner(version_id, &run),
                 request,
@@ -2797,6 +2909,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                 running_state: ServiceWorkerVersionRunningState::Running { host: active_host },
                 pending_start_events: VecDeque::from([ServiceWorkerPendingStartEvent::Fetch(
                     ServiceWorkerFetchEvent {
+                        client_ids: Default::default(),
                         event_id: pending_event_id,
                         owner: test_run_owner(active_version_id, &active_run),
                         request: ServiceWorkerFetchRequest {
@@ -2819,6 +2932,7 @@ fn activating_new_worker_fails_replaced_active_fetch_and_pending_start_events() 
                     },
                 )]),
                 pending_activation_fetch_events: VecDeque::from([ServiceWorkerFetchEvent {
+                    client_ids: Default::default(),
                     event_id: activation_wait_event_id,
                     owner: test_run_owner(active_version_id, &active_run),
                     request: ServiceWorkerFetchRequest {

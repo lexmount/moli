@@ -1412,6 +1412,13 @@ async fn service_worker_claim_dispatches_controllerchange_to_dedicated_worker_cl
                     serde_json::json!(expected_service_worker_url)
                 );
                 assert_eq!(result["controllerState"], serde_json::json!("activated"));
+                assert!(
+                    matches!(
+                        result["controllerStateAtChange"].as_str(),
+                        Some("activating" | "activated")
+                    ),
+                    "controllerchange must expose an active controller: {result:?}"
+                );
                 let events = result["events"]
                     .as_array()
                     .expect("worker controllerchange events should be an array");

@@ -444,15 +444,32 @@ async fn spawn_service_worker_worker_controllerchange_server() -> (String, JoinH
                         const container = navigator.serviceWorker;
                         const initialControllerIsNull = container.controller === null;
                         const events = [];
-                        function postControllerChange(label, event) {
+                        async function postControllerChange(label, event) {
                             events.push(label + ":" + event.type);
                             if (events.length < 2) {
                                 return;
                             }
                             const controller = container.controller;
+                            const controllerStateAtChange = controller && controller.state;
+                            if (controller) {
+                                await new Promise((resolve, reject) => {
+                                    const changed = () => {
+                                        if (controller.state === "activated") {
+                                            controller.removeEventListener("statechange", changed);
+                                            resolve();
+                                        } else if (controller.state === "redundant") {
+                                            controller.removeEventListener("statechange", changed);
+                                            reject(new Error("controller became redundant before activation"));
+                                        }
+                                    };
+                                    controller.addEventListener("statechange", changed);
+                                    changed();
+                                });
+                            }
                             postMessage(JSON.stringify({
                                 initialControllerIsNull,
                                 events,
+                                controllerStateAtChange,
                                 controllerScriptURL: controller && controller.scriptURL,
                                 controllerState: controller && controller.state
                             }));
