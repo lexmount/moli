@@ -38,6 +38,7 @@ fn transaction_collection_defers_registry_mutation_and_keeps_retained_state() {
                 .transactions
                 .get_mut(&id)
                 .unwrap()
+                .status
                 .finished = true;
             release_indexed_db_transaction_dispatch_refs(scope, transaction);
             transactions.push((id, v8::Weak::new(scope, transaction)));
@@ -115,7 +116,7 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
             let request = v8::Object::new(scope);
             register_indexed_db_wrapper(scope, request, IndexedDbWrapperKind::Request, None);
             let null = v8::null(scope);
-            register_indexed_db_request_lifecycle(scope, request, null.into(), null.into(), false);
+            register_indexed_db_request_lifecycle(scope, request, null.into(), null.into());
             let cursor = v8::Object::new(scope);
             register_indexed_db_wrapper(scope, cursor, IndexedDbWrapperKind::Cursor, None);
             register_indexed_db_cursor_lifecycle(
@@ -135,12 +136,7 @@ fn cursor_collection_releases_snapshots_without_borrowing_the_runtime_table() {
                 "moli.IndexedDb.gcTestRequest",
                 request.into(),
             );
-            assert!(set_indexed_db_typed_slot_value(
-                scope,
-                request,
-                INDEXED_DB_REQUEST_RESULT_SLOT,
-                cursor.into()
-            ));
+            set_request_value(scope, request, IndexedDbRequestValue::Result, cursor.into());
             let state = indexed_db_cursor_state(scope, cursor).unwrap();
             snapshots.push(Rc::downgrade(&state.entries));
             cursors.push(v8::Weak::new(scope, cursor));

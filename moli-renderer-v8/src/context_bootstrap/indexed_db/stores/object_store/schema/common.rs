@@ -1,5 +1,8 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::indexed_db_object_store_is_deleted;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_object_store_is_deleted, indexed_db_transaction_status,
+};
+
 use moli_indexeddb::IndexedDbError;
 
 pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_common<'s>(
@@ -28,9 +31,7 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_versionchange_commo
     {
         return Err(invalid());
     }
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
         return Err(IndexedDbError::TransactionInactive(
             "The version change transaction is not active".into(),
         ));

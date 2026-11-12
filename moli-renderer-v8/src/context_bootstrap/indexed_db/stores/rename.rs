@@ -1,10 +1,11 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_index_is_deleted, indexed_db_transaction_mode,
+    indexed_db_index_is_deleted, indexed_db_transaction_mode, indexed_db_transaction_status,
     object_store_info_from_database_metadata, rename_indexed_db_index,
     rename_indexed_db_object_store, schedule_schema_failure, schedule_schema_operation,
     typed_state::sql::indexed_db_request_sql_client,
 };
+
 use moli_indexeddb::{IndexedDbError, IndexedDbName, TransactionMode, sqlite::service::Command};
 
 fn name_value<'s>(
@@ -89,9 +90,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_name_setter<'s>(
         if indexed_db_transaction_mode(scope, transaction) != Some(TransactionMode::VersionChange) {
             return Err(invalid());
         }
-        if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-            .unwrap_or(false)
-        {
+        if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
             return Err(IndexedDbError::TransactionInactive(
                 "The upgrade is not active".into(),
             ));

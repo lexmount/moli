@@ -1,5 +1,8 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::IndexedDbCursorIteration;
+use crate::context_bootstrap::indexed_db::{
+    IndexedDbCursorIteration, IndexedDbRequestValue, set_indexed_db_request_cursor_position,
+    set_request_value,
+};
 
 pub(super) fn enqueue_cursor_iteration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -26,19 +29,13 @@ pub(in crate::context_bootstrap::indexed_db) fn store_cursor_iteration_result<'s
     next_position: Option<usize>,
 ) -> Option<()> {
     let request = cursor_request(scope, cursor)?;
-    set_indexed_db_slot_value(
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_PENDING_CURSOR_SLOT,
+        IndexedDbRequestValue::PendingCursor,
         cursor.into(),
     );
-    let position = next_position.map_or(-1.0, |position| position as f64);
-    set_indexed_db_slot_value(
-        scope,
-        request,
-        INDEXED_DB_PENDING_CURSOR_POSITION_SLOT,
-        v8::Number::new(scope, position).into(),
-    );
+    set_indexed_db_request_cursor_position(scope, request, next_position);
     let result = if next_position.is_some() {
         cursor.into()
     } else {

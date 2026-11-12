@@ -1,5 +1,6 @@
 use super::start::enqueue_transaction_start_task;
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_transaction_status;
 
 pub(in crate::context_bootstrap::indexed_db) fn enqueue_ready_transaction_starts(
     scope: &mut v8::PinScope<'_, '_>,
@@ -15,9 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn enqueue_ready_transaction_starts
         let Ok(transaction) = v8::Local::<v8::Object>::try_from(value) else {
             continue;
         };
-        if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
-        {
+        if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished) {
             continue;
         }
         let Some(request) =

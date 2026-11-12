@@ -173,6 +173,6 @@ fn create_request_object_in_current_context<'s>(
         IndexedDbWrapperKind::Request
     };
     register_indexed_db_wrapper_with_owner(scope, request, kind, owner, storage_scope);
-    register_indexed_db_request_lifecycle(scope, request, source, transaction_value, false);
+    register_indexed_db_request_lifecycle(scope, request, source, transaction_value);
     Some(request)
 }

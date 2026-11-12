@@ -1,16 +1,16 @@
 use super::{
-    CursorDirection, INDEXED_DB_TRANSACTION_ACTIVE_SLOT, INDEXED_DB_TRANSACTION_STARTED_SLOT,
-    IdbKeyRangeQuery, IndexOptions, IndexedDbCursorOpenOperation, IndexedDbTransactionOperation,
-    KeyPath, ObjectStoreKey, TransactionHandle, compare_idb_keys, create_index_object,
-    create_key_range_object, create_request_object, dom_exception_value,
+    CursorDirection, IdbKeyRangeQuery, IndexOptions, IndexedDbCursorOpenOperation,
+    IndexedDbTransactionOperation, KeyPath, ObjectStoreKey, TransactionHandle, compare_idb_keys,
+    create_index_object, create_key_range_object, create_request_object, dom_exception_value,
     index_info_from_store_metadata, indexed_db_index_info, indexed_db_index_object_store,
     indexed_db_object_store_database, indexed_db_object_store_transaction, key_in_range,
-    object_bool_property, parse_cursor_direction, parse_cursor_direction_with_context,
-    parse_idb_key, parse_idb_key_path, parse_key_or_range, parse_key_range_from_value,
-    parse_optional_count, prepare_object_store_write, queue_transaction_request,
-    remove_database_index_metadata, request_error_object, schedule_transaction_operation,
-    set_database_index_metadata, submit_cursor_open_operation, transaction_handle_from_value,
+    parse_cursor_direction, parse_cursor_direction_with_context, parse_idb_key, parse_idb_key_path,
+    parse_key_or_range, parse_key_range_from_value, parse_optional_count,
+    prepare_object_store_write, queue_transaction_request, remove_database_index_metadata,
+    request_error_object, schedule_transaction_operation, set_database_index_metadata,
+    submit_cursor_open_operation, transaction_handle_from_value,
 };
+use crate::context_bootstrap::indexed_db::indexed_db_transaction_status;
 use crate::webidl;
 
 mod attributes;
@@ -34,9 +34,7 @@ fn create_operation_request<'s>(
     source: v8::Local<'s, v8::Object>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",

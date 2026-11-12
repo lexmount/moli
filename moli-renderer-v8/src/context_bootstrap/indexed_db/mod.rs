@@ -1,9 +1,6 @@
 use super::{
     array_contains_strict, context_host_ptr_from_global_bridge, global_constructor_prototype,
-    object_bool_property as public_object_bool_property,
-    object_number_property as public_object_number_property,
-    object_property_as_object as public_object_property_as_object,
-    object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,
+    throw_type_error, v8_string, v8str,
 };
 use crate::util::{new_null_prototype_object, private_key, set_private_value};
 
@@ -16,7 +13,6 @@ mod install;
 mod operation_state;
 mod record;
 mod runtime;
-mod slots;
 mod state;
 mod storage_bucket;
 mod stores;
@@ -85,12 +81,7 @@ pub(crate) fn create_sql_upgrade_for_test<'s>(
     )?;
     typed_state::sql::configure_sql_transaction(scope, transaction, client, handle).ok()?;
     typed_state::sql::ensure_sql_transaction_rollback(scope, transaction).ok()?;
-    set_indexed_db_slot_value(
-        scope,
-        database,
-        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
-        transaction.into(),
-    );
+    set_indexed_db_database_upgrade_transaction(scope, database, Some(transaction));
     save_indexed_db_upgrade_metadata(scope, database, metadata.version);
     set_indexed_db_database_version(scope, database, version);
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
@@ -111,7 +102,7 @@ pub(crate) fn sql_transaction_started_for_test(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
 ) -> bool {
-    object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT).unwrap_or(false)
+    indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.started)
 }
 
 use self::backend::*;
@@ -122,7 +113,6 @@ pub(crate) use self::event_target::dispatch_indexed_db_event_callback;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
-use self::slots::*;
 use self::storage_bucket::validate_storage_bucket_scope;
 use self::stores::*;
 use self::tasks::*;
@@ -168,141 +158,12 @@ pub use self::state::{
 pub(in crate::context_bootstrap) use self::storage_bucket::scoped_storage_bucket_indexed_db_factory;
 pub use moli_indexeddb::{IndexedDbName, Key, ObjectStoreOptions, TransactionMode};
 
-fn is_indexed_db_private_slot(slot: &str) -> bool {
-    slot.starts_with("moli.IndexedDb.")
-}
-
-fn indexed_db_private_slot_fallback_allowed(slot: &str) -> bool {
-    if slot.starts_with("moli.IndexedDb.runtime.") {
-        return true;
-    }
-    matches!(
-        slot,
-        INDEXED_DB_TYPED_STATE_ID_SLOT | INDEXED_DB_TYPED_TASK_ID_SLOT
-    )
-}
-
-use self::set_indexed_db_slot_value as define_non_enumerable_value_property;
-
-fn define_non_enumerable_bool_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &'static str,
-    value: bool,
-) {
-    debug_assert!(is_indexed_db_private_slot(key));
-    let value = v8::Boolean::new(scope, value);
-    if set_indexed_db_typed_slot_value(scope, object, key, value.into()) {
-        return;
-    }
-    if !indexed_db_private_slot_fallback_allowed(key) {
-        return;
-    }
-    set_private_value(scope, object, key, value.into());
-}
-
-fn set_indexed_db_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    debug_assert!(is_indexed_db_private_slot(key));
-    if set_indexed_db_typed_slot_value(scope, object, key, value) {
-        return;
-    }
-    if !indexed_db_private_slot_fallback_allowed(key) {
-        return;
-    }
-    set_private_value(scope, object, key, value);
-}
-
-fn indexed_db_private_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let key = private_key(scope, key)?;
-    let value = object.get_private(scope, key)?;
-    if value.is_undefined() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn object_hidden_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    debug_assert!(is_indexed_db_private_slot(key));
-    if let Some(value) = indexed_db_typed_slot_value(scope, object, key) {
-        return Some(value);
-    }
-    if !indexed_db_private_slot_fallback_allowed(key) {
-        return None;
-    }
-    indexed_db_private_value(scope, object, key)
-}
-
-fn object_property_as_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if is_indexed_db_private_slot(key) {
-        object_hidden_value(scope, object, key)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    } else {
-        public_object_property_as_object(scope, object, key)
-    }
-}
-
 fn indexed_db_request_transaction_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'_, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    object_hidden_value(scope, request, INDEXED_DB_REQUEST_TRANSACTION_SLOT)
+    request_value(scope, request, IndexedDbRequestValue::Transaction)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn object_bool_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<bool> {
-    if is_indexed_db_private_slot(key) {
-        object_hidden_value(scope, object, key).map(|value| value.boolean_value(scope))
-    } else {
-        public_object_bool_property(scope, object, key)
-    }
-}
-
-fn object_number_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<f64> {
-    if is_indexed_db_private_slot(key) {
-        object_hidden_value(scope, object, key)?.number_value(scope)
-    } else {
-        public_object_number_property(scope, object, key)
-    }
-}
-
-fn object_string_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<String> {
-    if is_indexed_db_private_slot(key) {
-        object_hidden_value(scope, object, key)
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-    } else {
-        public_object_string_property(scope, object, key)
-    }
 }
 
 pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '_>) {

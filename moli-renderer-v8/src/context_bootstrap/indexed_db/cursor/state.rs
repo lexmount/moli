@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_transaction_status;
 
 pub(in crate::context_bootstrap::indexed_db) fn cursor_request_and_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -59,9 +60,7 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_active_transaction<'s>(
     cursor: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let (_, transaction) = cursor_request_and_transaction(scope, cursor)?;
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -143,8 +142,7 @@ impl<'s> CursorMutation<'s> {
         cursor: v8::Local<'s, v8::Object>,
     ) -> Option<v8::Local<'s, v8::Object>> {
         // A serialization getter may have aborted the transaction.
-        if !object_bool_property(scope, self.transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-            .unwrap_or(false)
+        if !indexed_db_transaction_status(scope, self.transaction).is_some_and(|state| state.active)
         {
             throw_cursor_mutation_error(
                 scope,

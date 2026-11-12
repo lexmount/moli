@@ -1,13 +1,14 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::set_indexed_db_request_error_pending;
+use crate::context_bootstrap::indexed_db::{
+    IndexedDbRequestReadyState, indexed_db_request_ready_state,
+    set_indexed_db_request_error_pending, update_indexed_db_transaction_status,
+};
 
 fn release_request_dispatch_refs<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) {
-    if object_string_property(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT).as_deref()
-        == Some("pending")
-    {
+    if indexed_db_request_ready_state(scope, request) == Some(IndexedDbRequestReadyState::Pending) {
         return;
     }
     release_indexed_db_request_dispatch_refs(scope, request);
@@ -26,19 +27,12 @@ fn request_finished<'s>(scope: &mut v8::PinScope<'s, '_>, request: v8::Local<'s,
     let Some(transaction) = indexed_db_request_transaction_object(scope, request) else {
         return;
     };
-    let pending = object_number_property(scope, transaction, INDEXED_DB_TRANSACTION_PENDING_SLOT)
-        .unwrap_or(0.0);
-    let next_pending = (pending - 1.0).max(0.0);
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_PENDING_SLOT,
-        v8::Number::new(scope, next_pending).into(),
-    );
-    if next_pending == 0.0
-        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
-    {
+    let should_commit = update_indexed_db_transaction_status(scope, transaction, |state| {
+        state.pending = state.pending.saturating_sub(1);
+        state.pending == 0 && !state.finished
+    })
+    .unwrap_or(false);
+    if should_commit {
         enqueue_transaction_commit_task(scope, transaction);
     }
 }

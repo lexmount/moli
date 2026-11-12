@@ -1,5 +1,7 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::INDEXED_DB_DATABASE_CLOSED_SLOT;
+use crate::context_bootstrap::indexed_db::{
+    IndexedDbRequestValue, indexed_db_database_is_closed, request_value, set_request_value,
+};
 
 pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn enqueue_committed_upgrade_open<
     's,
@@ -8,10 +10,10 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn enqueue_committ
     request: v8::Local<'s, v8::Object>,
     database: v8::Local<'s, v8::Object>,
 ) {
-    define_non_enumerable_value_property(
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_PENDING_RESULT_SLOT,
+        IndexedDbRequestValue::PendingResult,
         database.into(),
     );
     enqueue_request_task(scope, "open-success", request);
@@ -24,14 +26,14 @@ pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) fn flush_open_succ
     let Some(request) = indexed_db_request_dispatch_task_request(scope, task) else {
         return;
     };
-    let Some(database) = object_hidden_value(scope, request, INDEXED_DB_PENDING_RESULT_SLOT)
+    let Some(database) = request_value(scope, request, IndexedDbRequestValue::PendingResult)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
         return;
     };
-    if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
+    if indexed_db_database_is_closed(scope, database) {
         let error = dom_exception_value(scope, "The database open was aborted.", "AbortError");
-        define_non_enumerable_value_property(scope, request, INDEXED_DB_PENDING_ERROR_SLOT, error);
+        set_request_value(scope, request, IndexedDbRequestValue::PendingError, error);
         flush_request_error_task(scope, task);
         return;
     }

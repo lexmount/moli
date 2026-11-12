@@ -1,6 +1,8 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::typed_state::IndexedDbTaskId;
-use crate::context_bootstrap::indexed_db::typed_state::sql::flush_indexed_db_sql_task;
+use crate::context_bootstrap::indexed_db::{
+    typed_state::IndexedDbTaskId, typed_state::sql::flush_indexed_db_sql_task,
+};
+
 use crate::util::context_host_ptr_from_global_bridge;
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_task_callback(

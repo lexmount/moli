@@ -1,4 +1,7 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_transaction_status, update_indexed_db_transaction_status,
+};
 use crate::structured_clone::{
     HOST_OBJECT_TAG_DOM_EXCEPTION, HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR,
     read_dom_exception_payload, read_quota_exceeded_error_payload, write_dom_exception_payload,
@@ -553,28 +556,16 @@ pub(in crate::context_bootstrap::indexed_db) fn serialize_js_value_for_transacti
     transaction: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<IndexedDbValue> {
-    let inactive = v8::Boolean::new(scope, false).into();
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        inactive,
-    );
+    let _ = update_indexed_db_transaction_status(scope, transaction, |state| state.active = false);
     v8::tc_scope!(let scope, scope);
     let serialized = serialize_js_value(scope, value);
     if scope.can_continue() {
         let exception = scope.exception();
         scope.reset();
-        if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
-        {
-            let active = v8::Boolean::new(scope, true).into();
-            set_indexed_db_slot_value(
-                scope,
-                transaction,
-                INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-                active,
-            );
+        if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished) {
+            let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+                state.active = true
+            });
         }
         if let Some(exception) = exception {
             scope.throw_exception(exception);

@@ -1,5 +1,7 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::indexed_db_object_store_is_deleted;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_object_store_is_deleted, indexed_db_transaction_status,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn object_store_active_transaction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -15,9 +17,7 @@ pub(in crate::context_bootstrap::indexed_db) fn object_store_active_transaction<
         return None;
     }
     let transaction = indexed_db_object_store_transaction(scope, source)?;
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",

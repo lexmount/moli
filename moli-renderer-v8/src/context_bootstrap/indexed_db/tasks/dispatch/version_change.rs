@@ -1,6 +1,7 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::INDEXED_DB_DATABASE_CLOSED_SLOT;
-use crate::context_bootstrap::indexed_db::indexed_db_version_change_task_payload;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_database_is_closed, indexed_db_version_change_task_payload,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_version_change_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -18,7 +19,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_version_change_task<'s>(
             scope, completion,
         );
     }
-    if object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false) {
+    if indexed_db_database_is_closed(scope, database) {
         return;
     }
     let _ =

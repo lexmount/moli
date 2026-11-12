@@ -1,22 +1,20 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    IndexedDbRequestValue, set_request_value, update_indexed_db_transaction_status,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn queue_transaction_request(
     scope: &mut v8::PinScope<'_, '_>,
     transaction: v8::Local<'_, v8::Object>,
     request: v8::Local<'_, v8::Object>,
 ) {
-    let pending = object_number_property(scope, transaction, INDEXED_DB_TRANSACTION_PENDING_SLOT)
-        .unwrap_or(0.0);
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_PENDING_SLOT,
-        v8::Number::new(scope, pending + 1.0).into(),
-    );
-    set_indexed_db_slot_value(
+    let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+        state.pending = state.pending.saturating_add(1);
+    });
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_TRANSACTION_SLOT,
+        IndexedDbRequestValue::Transaction,
         transaction.into(),
     );
 }
