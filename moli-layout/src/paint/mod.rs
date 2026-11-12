@@ -631,11 +631,8 @@ fn push_clip_node<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let node = &projection.clip_chain[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[node.coordinate_space.index()]
-            .paint
-            .local_transform(),
-    );
+    let paint_space = projection.coordinate_spaces[node.coordinate_space.index()]
+        .paint_space(snapshot.viewport_to_surface);
     let shape = node.owner.map_or(PaintShape::Rect(node.rect), |owner| {
         let layout_box = &projection.world.boxes[owner.index()];
         let border_radii = layout_box.style.border_radii(
@@ -655,6 +652,16 @@ fn push_clip_node<N>(
             ),
         )
     });
+    // Overflow edges share the box's snapped paint geometry. Fractional clips
+    // otherwise blend an edge differently when atomic paint ordering keeps a
+    // background and its text in one clip layer instead of reopening it.
+    let snapped = node
+        .owner
+        .and_then(|_| paint_space.pixel_snapped_box_shape(shape.clone()));
+    let (shape, transform) = match snapped {
+        Some(shape) => (shape, paint_space.property_transform()),
+        None => (shape, paint_space.local_transform()),
+    };
     snapshot.push_fragment(PaintFragment::PushClip { shape, transform });
 }
 

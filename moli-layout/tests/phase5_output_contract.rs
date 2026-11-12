@@ -1736,6 +1736,88 @@ fn scrollbar_hit_test_honors_the_same_ancestor_clip_as_paint() {
 }
 
 #[test]
+fn fractional_overflow_clip_matches_its_background_paint_edges() {
+    for display in [LayoutDisplay::Block, LayoutDisplay::Grid] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("clipper", vec![2]),
+            Node::element("content", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        let background = PaintColor::new(0.0, 1.0, 1.0, 1.0);
+        styles.0.insert(
+            1,
+            ResolvedLayoutStyle::synthetic(
+                display,
+                Style {
+                    size: Size {
+                        width: length(200.4),
+                        height: length(100.4),
+                    },
+                    margin: Rect {
+                        top: length(0.25),
+                        left: length(0.25),
+                        ..Rect::zero()
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Hidden,
+                    },
+                    ..Style::default()
+                },
+                background,
+            ),
+        );
+        styles.0.insert(
+            2,
+            ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(300.0),
+                        height: length(200.0),
+                    },
+                    ..Style::default()
+                },
+                PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            ),
+        );
+        let output = build_with_request(
+            &source,
+            &mut styles,
+            LayoutPassRequest::with_paint(
+                LayoutViewport::new(320, 240, 1.0),
+                LayoutFlushReason::Test,
+            ),
+        );
+        let snapshot = output.paint_snapshot().unwrap();
+        let (background_rect, _, background_transform) = snapshot
+            .fragments
+            .iter()
+            .filter_map(PaintFragment::solid_fill)
+            .find(|(_, color, _)| *color == background)
+            .unwrap();
+        let clips = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                PaintFragment::PushClip { shape, transform } if shape.bounds().width < 320.0 => {
+                    Some((shape.bounds(), *transform))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!clips.is_empty());
+        assert!(clips.iter().all(|(rect, transform)| {
+            *rect == background_rect && *transform == background_transform
+        }));
+    }
+}
+
+#[test]
 fn adjacent_paint_units_share_their_common_overflow_clip_chain() {
     let source = Source(vec![
         Node::element("root", vec![1]),
