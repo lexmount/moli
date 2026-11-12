@@ -6,6 +6,7 @@ mod graph_fetch_store;
 mod host_callbacks;
 mod import_attributes;
 mod import_map;
+mod json;
 mod modulator;
 mod owner_ids;
 mod parser_tree_registry;
@@ -46,6 +47,7 @@ pub(crate) use self::dynamic_resolver::{
 };
 pub(crate) use self::import_attributes::{import_attributes_key, module_request_attributes};
 pub(crate) use self::import_map::ImportMapRegistryState;
+pub(crate) use self::json::{json_module_exception_source_url, parse_json_module};
 pub(crate) use self::modulator::{
     NativeDocumentModulator, NativeFrameDocumentDependencyFetchBuildFailure,
 };
