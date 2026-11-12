@@ -1977,10 +1977,6 @@ fn anchor_click_default_action(
         && let Ok(url) = url::Url::parse(&resolved)
         && same_document_fragment_target(runtime.host_document().url(), &url)
     {
-        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, &url) {
-            throw_activation_layout_error(scope, "scrolling to fragment", error);
-            return None;
-        }
         let global = scope.get_current_context().global(scope);
         if let Some(location) = global
             .get(scope, v8str(scope, "location").into())
@@ -2197,7 +2193,7 @@ pub(crate) fn scroll_to_url_fragment_or_top(
     Ok(())
 }
 
-fn scroll_to_document_fragment_target(
+pub(crate) fn scroll_to_document_fragment_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     target_url: &url::Url,
