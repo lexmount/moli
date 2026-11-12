@@ -1608,7 +1608,7 @@ impl CdpScheduler {
         }
     }
 
-    pub(crate) async fn drain_inflight_background_navigation_before_internal_command(
+    async fn drain_inflight_background_navigation_before_internal_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: &AutomationCommand,

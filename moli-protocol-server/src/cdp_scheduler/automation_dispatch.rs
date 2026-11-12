@@ -4,7 +4,7 @@ use moli_protocol::{
     AutomationCommandTaskStep, CompletedCdpCommandDispatch, OwnedProtocolWaitFailure,
     OwnedProtocolWaitTask, PendingAutomationCommandDispatch,
     automation::{AutomationCommand, DevToolsError, DevToolsErrorKind},
-    conn::BackgroundProtocolEvent,
+    conn::{BackgroundProtocolEvent, PendingAutomationCommandAdmission},
 };
 use tokio::{
     sync::mpsc,
@@ -184,19 +184,41 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
         command: AutomationCommand,
-    ) -> AutomationCommandProgress {
+    ) -> Result<AutomationCommandProgress, Box<PendingAutomationCommandAdmission>> {
         let step = self
             .state
-            .with_state(|state| state.start_automation_command_dispatch(command))
-            .expect("live protocol actor state");
-        self.advance_automation_command_step(
-            receivers,
-            sender,
-            step,
-            ProtocolOutputSequence::empty(),
-            0,
-        )
-        .await
+            .with_state(|state| state.start_runtime_command_with_navigation_admission(command))
+            .expect("live protocol actor state")?;
+        Ok(self
+            .advance_automation_command_step(
+                receivers,
+                sender,
+                step,
+                ProtocolOutputSequence::empty(),
+                0,
+            )
+            .await)
+    }
+
+    pub(crate) async fn resume_owned_automation_command_admission(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        sender: &mpsc::UnboundedSender<AutomationWorkflowReady>,
+        pending: Box<PendingAutomationCommandAdmission>,
+    ) -> Result<AutomationCommandProgress, Box<PendingAutomationCommandAdmission>> {
+        let step = self
+            .state
+            .with_state(|state| state.resume_runtime_command_admission(pending))
+            .expect("live protocol actor state")?;
+        Ok(self
+            .advance_automation_command_step(
+                receivers,
+                sender,
+                step,
+                ProtocolOutputSequence::empty(),
+                0,
+            )
+            .await)
     }
 
     pub(crate) fn route_devtools_runtime_protocol_output(

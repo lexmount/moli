@@ -8,6 +8,7 @@ mod events_and_network;
 mod input;
 mod navigation;
 mod network_and_storage;
+mod runtime_admission;
 mod script_preload_channels;
 mod script_runtime;
 mod sessions_and_subscriptions;

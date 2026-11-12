@@ -1261,6 +1261,9 @@ async fn classic_session_runtime_loop(
                     }
                     _ = receivers.state_events_ready.notified() => {
                         scheduler.apply_protocol_state_events();
+                        if !attached.actor.resume_pending_runtime_admission(&mut scheduler, &mut receivers).await {
+                            detach_bidi = true;
+                        }
                     }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {

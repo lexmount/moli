@@ -369,6 +369,21 @@ impl ProtocolWorkflowState<'_> {
         self.connection.start_automation_command_dispatch(command)
     }
 
+    pub fn start_runtime_command_with_navigation_admission(
+        self,
+        command: AutomationCommand,
+    ) -> Result<AutomationCommandTaskStep, Box<PendingAutomationCommandAdmission>> {
+        self.connection
+            .start_runtime_command_with_navigation_admission(command)
+    }
+
+    pub fn resume_runtime_command_admission(
+        self,
+        pending: Box<PendingAutomationCommandAdmission>,
+    ) -> Result<AutomationCommandTaskStep, Box<PendingAutomationCommandAdmission>> {
+        self.connection.resume_runtime_command_admission(pending)
+    }
+
     pub fn start_automation_command_dispatch_with_background_command_id(
         self,
         command: AutomationCommand,

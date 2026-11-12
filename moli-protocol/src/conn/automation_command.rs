@@ -1,5 +1,7 @@
+mod admission;
 mod dispatch;
 mod workflow;
+pub use admission::PendingAutomationCommandAdmission;
 pub(crate) use dispatch::AutomationCommandResult;
 pub use dispatch::{
     AutomationCommandTaskStep, CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,

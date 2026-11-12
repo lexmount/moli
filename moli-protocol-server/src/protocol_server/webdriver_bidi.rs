@@ -26,7 +26,7 @@ use moli_protocol::{
         FrontendProtocol, NavigationFrameEvent, NavigationFrameEventKind, NavigationLifecycleEvent,
         webdriver_bidi_navigation_id_from_loader_id,
     },
-    conn::RuntimeInspectorResponseReady,
+    conn::{PendingAutomationCommandAdmission, RuntimeInspectorResponseReady},
 };
 use moli_protocol_webdriver_bidi::{
     BidiCommandOutcome, BidiConnectionState, BidiDevToolsCommandDispatch, BidiErrorCode,
@@ -176,6 +176,9 @@ async fn handle_bidi_session_socket_local(
             }
             _ = receivers.state_events_ready.notified() => {
                 scheduler.apply_protocol_state_events();
+                if !actor.resume_pending_runtime_admission(&mut scheduler, &mut receivers).await {
+                    break;
+                }
             }
             maybe_message = actor.socket.recv() => {
                 let Some(message) = maybe_message else {
@@ -361,7 +364,7 @@ impl BidiSocketActor {
         let Some(pending) = self.pending_runtime_command.take() else {
             return;
         };
-        if let Some(runtime_pending) = pending.pending {
+        if let Some(BidiPendingRuntimeStage::Executing(runtime_pending)) = pending.stage {
             let _output = scheduler
                 .cancel_devtools_runtime_command(receivers, runtime_pending)
                 .await;
@@ -405,7 +408,7 @@ impl BidiSocketActor {
         session_registry: &SharedBidiSessionRegistry,
         message: Result<Message, axum::Error>,
     ) -> bool {
-        handle_bidi_socket_message(
+        if !handle_bidi_socket_message(
             &mut self.socket,
             scheduler,
             receivers,
@@ -416,6 +419,32 @@ impl BidiSocketActor {
             &mut self.pending_runtime_command,
             &self.runtime_workflow_ready_tx,
             message,
+        )
+        .await
+        {
+            return false;
+        }
+        self.resume_pending_runtime_admission(scheduler, receivers)
+            .await
+    }
+
+    pub(in crate::protocol_server) async fn resume_pending_runtime_admission(
+        &mut self,
+        scheduler: &mut CdpScheduler,
+        receivers: &mut CdpSchedulerEventReceivers,
+    ) -> bool {
+        if !matches!(
+            self.pending_runtime_command
+                .as_ref()
+                .and_then(|command| command.stage.as_ref()),
+            Some(BidiPendingRuntimeStage::WaitingForDocument(_))
+        ) {
+            return true;
+        }
+        self.advance_pending_runtime_command_after_protocol_output(
+            scheduler,
+            receivers,
+            ProtocolOutputSequence::empty(),
         )
         .await
     }
@@ -491,11 +520,8 @@ impl BidiSocketActor {
         receivers: &mut CdpSchedulerEventReceivers,
         ready: AutomationWorkflowReady,
     ) -> bool {
-        if self
-            .pending_runtime_command
-            .as_ref()
-            .and_then(|pending| pending.pending.as_ref())
-            .is_none_or(|pending| pending.command_id() != ready.command_id())
+        if !matches!(self.pending_runtime_command.as_ref().and_then(|command| command.stage.as_ref()),
+            Some(BidiPendingRuntimeStage::Executing(pending)) if pending.command_id() == ready.command_id())
         {
             return true;
         }
@@ -559,11 +585,49 @@ impl BidiSocketActor {
             )
             .await;
         };
-        let pending = pending_command
-            .pending
+        let stage = pending_command
+            .stage
             .take()
-            .expect("pending runtime command should carry scheduler state");
-        let progress = scheduler.route_devtools_runtime_protocol_output(pending, output);
+            .expect("a pending Runtime command retains its stage");
+        let progress = match stage {
+            BidiPendingRuntimeStage::WaitingForDocument(admission) => {
+                // No renderer call exists yet, so these facts belong to their
+                // original owners, not to the waiting Runtime command.
+                let sent = send_bidi_protocol_output(
+                    &mut self.socket,
+                    scheduler,
+                    receivers,
+                    &mut self.bidi,
+                    output,
+                    None,
+                    &mut self.pending_navigation_response,
+                )
+                .await;
+                let resumed = if sent {
+                    scheduler
+                        .resume_owned_automation_command_admission(
+                            receivers,
+                            &self.runtime_workflow_ready_tx,
+                            admission,
+                        )
+                        .await
+                } else {
+                    Err(admission)
+                };
+                match resumed {
+                    Ok(progress) => progress,
+                    Err(admission) => {
+                        pending_command.stage =
+                            Some(BidiPendingRuntimeStage::WaitingForDocument(admission));
+                        self.pending_runtime_command = Some(pending_command);
+                        return sent;
+                    }
+                }
+            }
+            BidiPendingRuntimeStage::Executing(pending) => {
+                scheduler.route_devtools_runtime_protocol_output(pending, output)
+            }
+        };
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
             .await
     }
@@ -577,10 +641,9 @@ impl BidiSocketActor {
         let Some(mut pending_command) = self.pending_runtime_command.take() else {
             return true;
         };
-        let pending = pending_command
-            .pending
-            .take()
-            .expect("the Runtime command retains its original owner");
+        let Some(BidiPendingRuntimeStage::Executing(pending)) = pending_command.stage.take() else {
+            unreachable!("the matching Runtime notification requires an executing command");
+        };
         let progress = scheduler
             .complete_automation_workflow_ready(
                 receivers,
@@ -618,7 +681,7 @@ impl BidiSocketActor {
                 pending,
                 protocol_output,
             } => {
-                pending_command.pending = Some(pending);
+                pending_command.stage = Some(BidiPendingRuntimeStage::Executing(pending));
                 let sent = send_bidi_protocol_output(
                     &mut self.socket,
                     scheduler,
@@ -1102,7 +1165,7 @@ async fn complete_and_send_bidi_pending_runtime_command(
         command_params,
         command_channel,
         pending_navigation_candidate,
-        pending: _,
+        stage: _,
         completion,
     } = pending;
     let mut command_output =
@@ -1484,8 +1547,13 @@ struct BidiPendingRuntimeCommand {
     command_params: Option<serde_json::Value>,
     command_channel: Option<String>,
     pending_navigation_candidate: Option<BidiPendingNavigationResponse>,
-    pending: Option<Box<PendingAutomationExecution>>,
+    stage: Option<BidiPendingRuntimeStage>,
     completion: BidiDevToolsCommandCompletion,
+}
+
+enum BidiPendingRuntimeStage {
+    WaitingForDocument(Box<PendingAutomationCommandAdmission>),
+    Executing(Box<PendingAutomationExecution>),
 }
 
 struct BidiDevToolsCommandCompletion {
@@ -2083,29 +2151,9 @@ async fn start_bidi_automation_command(
         &dispatch.command,
         AutomationCommand::EvaluateScript(_) | AutomationCommand::CallFunction(_)
     );
-    // A context-targeted Runtime command needs that Page's adopted Document.
-    // Realm lookup instead searches available Pages, without inheriting the
-    // navigation of an unrelated or currently active Page.
-    let admission = if bidi_automation_command_uses_deferred_runtime_progress(&dispatch.command)
-        && dispatch.command.context().target_id.is_some()
-    {
-        scheduler
-            .drain_inflight_background_navigation_before_internal_command(
-                receivers,
-                &dispatch.command,
-                dispatch.command.context(),
-            )
-            .await
-            .map(BidiDevToolsEventSources::from_protocol_output)
-            .map_err(|failure| {
-                BidiRendererOutputTransportFailure::from_renderer(
-                    BidiDevToolsEventSources::default(),
-                    failure,
-                )
-            })
-    } else {
-        drain_ready_bidi_background_navigation(scheduler, receivers).await
-    };
+    // Consume ready facts here; Document readiness belongs to the pending
+    // command and must not hold the socket's command-admission turn.
+    let admission = drain_ready_bidi_background_navigation(scheduler, receivers).await;
     let mut event_sources = match admission {
         Ok(event_sources) => event_sources,
         Err(failure) => {
@@ -2144,7 +2192,7 @@ async fn start_bidi_automation_command(
         previous_target_discovery,
     };
     if bidi_automation_command_uses_deferred_runtime_progress(&dispatch.command) {
-        return match scheduler
+        let (stage, protocol_output) = match scheduler
             .start_owned_automation_command_progress(
                 receivers,
                 runtime_response_ready_tx,
@@ -2152,30 +2200,35 @@ async fn start_bidi_automation_command(
             )
             .await
         {
-            AutomationCommandProgress::Complete(execution) => BidiDevToolsCommandStart::Complete(
-                complete_bidi_automation_command_execution(
-                    scheduler, receivers, completion, *execution,
-                )
-                .await,
-            ),
-            AutomationCommandProgress::Pending {
+            Ok(AutomationCommandProgress::Complete(execution)) => {
+                return BidiDevToolsCommandStart::Complete(
+                    complete_bidi_automation_command_execution(
+                        scheduler, receivers, completion, *execution,
+                    )
+                    .await,
+                );
+            }
+            Ok(AutomationCommandProgress::Pending {
                 pending,
                 protocol_output,
-            } => {
-                let mut completion = completion;
-                completion
-                    .event_sources
-                    .extend_protocol_output(protocol_output);
-                BidiDevToolsCommandStart::PendingRuntime(Box::new(BidiPendingRuntimeCommand {
-                    command_method: None,
-                    command_params: None,
-                    command_channel: None,
-                    pending_navigation_candidate: None,
-                    pending: Some(pending),
-                    completion,
-                }))
-            }
+            }) => (BidiPendingRuntimeStage::Executing(pending), protocol_output),
+            Err(admission) => (
+                BidiPendingRuntimeStage::WaitingForDocument(admission),
+                ProtocolOutputSequence::empty(),
+            ),
         };
+        let mut completion = completion;
+        completion
+            .event_sources
+            .extend_protocol_output(protocol_output);
+        return BidiDevToolsCommandStart::PendingRuntime(Box::new(BidiPendingRuntimeCommand {
+            command_method: None,
+            command_params: None,
+            command_channel: None,
+            pending_navigation_candidate: None,
+            stage: Some(stage),
+            completion,
+        }));
     }
     let execution = scheduler
         .execute_automation_command_with_external_load_wait_and_protocol_messages_background_command_id(
