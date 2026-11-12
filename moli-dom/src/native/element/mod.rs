@@ -74,6 +74,17 @@ pub struct Element {
 }
 
 impl Element {
+    pub(crate) fn native_node_references(&self) -> Vec<NativeNodeId> {
+        self.rare_data.native_node_references()
+    }
+
+    pub(crate) fn remap_native_node_references(
+        &mut self,
+        handles: &std::collections::HashMap<NativeNodeId, NativeNodeId>,
+    ) {
+        self.rare_data.remap_native_node_references(handles);
+    }
+
     pub fn new_html(local_name: &str) -> Self {
         Self::new(
             local_name.to_ascii_lowercase(),
