@@ -173,7 +173,6 @@ impl PageScriptHost {
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
         let reserved_service_worker_client =
             self.pending_reserved_service_worker_top_level_client_for_navigation(&url);
-        let navigation_initiator = Some(self.document_navigation_initiator());
         self.pending_top_level_navigation = Some(PendingTopLevelNavigation::Location(Box::new(
             PendingLocationNavigation {
                 handoff,
@@ -187,7 +186,7 @@ impl PageScriptHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
-                navigation_initiator,
+                navigation_initiator: None,
                 initial_document_environment: None,
                 entry_seed,
                 reserved_service_worker_client,
@@ -198,11 +197,51 @@ impl PageScriptHost {
         self.handoff_ordinary_page_turn_navigation(handoff);
     }
 
-    /// The page Document as the initiator of its own location navigation, so
-    /// its referrer policy (Referrer-Policy header or `<meta name=referrer>`,
-    /// or the activating hyperlink's own policy) applies to the request.
-    /// Navigations from another realm replace this with their own source.
-    fn document_navigation_initiator(&self) -> crate::runtime::RendererNavigationInitiator {
+    /// Marks the page Document as the initiator of the just-recorded
+    /// navigation, so its referrer policy (Referrer-Policy header or
+    /// `<meta name=referrer>`), or `link_policy` from the activating
+    /// hyperlink, applies to the request. Reloads and traversals do not call
+    /// this; navigations from another realm set their own source instead.
+    pub(crate) fn set_pending_location_navigation_document_initiator(
+        &mut self,
+        link_policy: Option<String>,
+    ) {
+        let initiator = self.document_navigation_initiator(link_policy);
+        if let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        {
+            pending.navigation_initiator = Some(initiator);
+        }
+    }
+
+    /// A hyperlink's own referrer policy: `rel=noreferrer`, else its
+    /// `referrerpolicy` attribute. Other elements have none.
+    pub(crate) fn hyperlink_referrer_policy(
+        &self,
+        source_handle: crate::document_runtime::DomHandle,
+    ) -> Option<String> {
+        let element = self
+            .dom_host()
+            .node(source_handle)
+            .and_then(crate::dom::native::Node::as_element)?;
+        if !(element.is_html_element("a") || element.is_html_element("area")) {
+            return None;
+        }
+        if element.attribute("rel").is_some_and(|rel| {
+            rel.split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("noreferrer"))
+        }) {
+            return Some("no-referrer".to_owned());
+        }
+        element
+            .attribute("referrerpolicy")
+            .and_then(crate::referrer_policy::normalize_referrer_policy)
+    }
+
+    fn document_navigation_initiator(
+        &self,
+        link_policy: Option<String>,
+    ) -> crate::runtime::RendererNavigationInitiator {
         let top = crate::native_bridge::OwnerDispatchScope::Top;
         let url = self
             .document_referrer_source_url_for_dispatch_scope(top)
@@ -211,7 +250,7 @@ impl PageScriptHost {
             .document_resource_loader_for_dispatch_scope(top)
             .map(|loader| loader.fetch_context().request_origin())
             .unwrap_or_else(|| moli_url::WebOrigin::from_url(&url));
-        let policy = self.hyperlink_referrer_policy.clone().or_else(|| {
+        let policy = link_policy.or_else(|| {
             crate::context_bootstrap::document_referrer_policy_for_native_document(
                 self,
                 self.document_handle(),

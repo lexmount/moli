@@ -1045,9 +1045,6 @@ pub(crate) struct PageScriptHost {
     /// entering V8. Only effects created synchronously inside that dispatch
     /// may copy this value; it is never inferred from later Page work.
     active_runtime_command_cause: Option<crate::runtime::RendererRuntimeCommandCausalIdentity>,
-    /// A hyperlink's own `referrerpolicy` / `rel=noreferrer` while its
-    /// activation runs; it overrides the Document policy for that navigation.
-    pub(crate) hyperlink_referrer_policy: Option<String>,
     /// True only while V8 Inspector is synchronously dispatching a protocol
     /// command. DebugEvaluate can expose StackFrame objects whose location
     /// accessors are invalid, so callbacks use this scope to avoid probing them.

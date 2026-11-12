@@ -1613,3 +1613,22 @@ fn history_native_fragment_navigation_preserves_structured_navigation_state() {
     .unwrap();
     assert_eq!(vm.eval("String(history.state.value === 5n && navigation.currentEntry.getState().get('value') === 9n && retained.getState().get('value') === 9n)").unwrap(), "true");
 }
+
+#[test]
+fn location_navigations_record_a_document_initiator_but_reloads_do_not() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval("location.href = '/next'; 'queued'").unwrap();
+    let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+    assert_eq!(
+        pending
+            .navigation_initiator
+            .map(|initiator| initiator.url().to_string()),
+        Some("https://example.com/base".to_owned())
+    );
+    vm.eval("location.reload(); 'queued'").unwrap();
+    let pending = vm.take_pending_location_navigation_with_seed().unwrap();
+    assert!(
+        pending.navigation_initiator.is_none(),
+        "a reload keeps the entry's referrer, so it must not record a new initiator"
+    );
+}

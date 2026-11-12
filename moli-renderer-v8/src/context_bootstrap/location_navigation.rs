@@ -702,6 +702,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     );
     if let Some((initiator, environment)) = navigation_source {
         unsafe { &mut *host_ptr }.set_pending_location_navigation_source(initiator, environment);
+    } else if !matches!(kind, LocationNavigationKind::Reload) {
+        let link_policy = source_element
+            .and_then(|element| {
+                crate::native_bridge::node_runtime_and_handle_from_object(scope, element).ok()
+            })
+            .and_then(|(runtime, handle)| unsafe { &*runtime }.hyperlink_referrer_policy(handle));
+        unsafe { &mut *host_ptr }.set_pending_location_navigation_document_initiator(link_policy);
     }
 }
 

@@ -138,6 +138,22 @@ fn fixture_response(request: &IncomingRequest) -> (u16, String, String) {
                     meta("no-referrer")
                 ),
             ),
+            "unsafe-link" => (
+                String::new(),
+                format!(
+                    "{}<a id=l referrerpolicy=unsafe-url href={target}>go</a>{click}",
+                    meta("no-referrer")
+                ),
+            ),
+            // The link's own policy must not leak into a navigation that a
+            // navigate handler starts instead of it.
+            "navigate-handler" => (
+                String::new(),
+                format!(
+                    "{}<a id=l referrerpolicy=unsafe-url href={target}>go</a><script>navigation.addEventListener('navigate', e => {{ if (e.destination.url.endsWith('case=navigate-handler')) {{ e.preventDefault(); location.href = '/nav-target?case=navigate-handler-redirect'; }} }})</script>{click}",
+                    meta("no-referrer"),
+                ),
+            ),
             "meta-form" => (
                 String::new(),
                 format!(
@@ -1034,6 +1050,8 @@ async fn top_level_navigations_apply_the_document_and_link_referrer_policy() -> 
         ("origin-link", Some(format!("{origin}/"))),
         ("meta-location", None),
         ("meta-form", None),
+        ("unsafe-link", Some(source("unsafe-link"))),
+        ("navigate-handler", None),
     ] {
         browser
             .fetch_with_wait_until(
@@ -1043,9 +1061,13 @@ async fn top_level_navigations_apply_the_document_and_link_referrer_policy() -> 
             )
             .await?;
         let requests = server.requests.lock();
+        let path = match case {
+            "navigate-handler" => "/nav-target?case=navigate-handler-redirect".to_owned(),
+            _ => format!("/nav-target?case={case}"),
+        };
         let target = requests
             .iter()
-            .find(|request| request.path == format!("/nav-target?case={case}"))
+            .find(|request| request.path == path)
             .unwrap_or_else(|| panic!("{case}: no navigation request in {requests:?}"));
         assert_eq!(target.referrer, expected, "{case}");
     }
