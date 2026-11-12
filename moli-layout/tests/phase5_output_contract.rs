@@ -4558,3 +4558,144 @@ fn wrapped_trailing_spaces_do_not_expand_scrollable_overflow() {
         }
     }
 }
+
+#[test]
+fn nested_sticky_projection_roundtrips_clamps_and_preserves_frozen_queries() {
+    let mut source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", vec![3, 5]),
+        Node::element("parent-sticky", vec![4]),
+        Node::element("child-sticky", vec![]),
+        Node::element("normal-sibling", vec![]),
+    ]);
+    let mut styles = Styles(HashMap::from([
+        (0, fixed_size(LayoutDisplay::Block, 320.0, 240.0)),
+        (
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(120.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Hidden,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            ),
+        ),
+        (
+            2,
+            resolved(
+                LayoutDisplay::Flex,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(600.0),
+                    },
+                    flex_direction: taffy::FlexDirection::Column,
+                    ..Style::default()
+                },
+            ),
+        ),
+        (
+            3,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(100.0),
+                        height: length(300.0),
+                    },
+                    margin: Rect {
+                        top: length(84.0),
+                        ..Rect::zero()
+                    },
+                    inset: Rect {
+                        top: length(10.0),
+                        ..Rect::auto()
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Sticky),
+        ),
+        (
+            4,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(30.0),
+                        height: length(30.0),
+                    },
+                    inset: Rect {
+                        top: length(30.0),
+                        ..Rect::auto()
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Sticky),
+        ),
+        (5, fixed_size(LayoutDisplay::Block, 200.0, 100.0)),
+    ]));
+    let initial = build(&source, &mut styles);
+    let initial_parent = initial.client_rects_for_source(3);
+    let initial_child = initial.client_rects_for_source(4);
+    let sibling_offset = initial
+        .element_metrics_for_source(5)
+        .unwrap()
+        .offset_position;
+    let mut clamped = None;
+    for (requested, parent_y, child_y) in [
+        (0.0, 84.0, 84.0),
+        (100.0, 10.0, 30.0),
+        (10_000.0, -180.0, 30.0),
+        (480.0, -180.0, 30.0),
+        (100.0, 10.0, 30.0),
+        (0.0, 84.0, 84.0),
+    ] {
+        source.0[1].scroll.y = requested;
+        let output = build(&source, &mut styles);
+        assert_close(
+            output.client_rects_for_source(3)[0].bounding_rect().y,
+            parent_y,
+        );
+        assert_close(
+            output.client_rects_for_source(4)[0].bounding_rect().y,
+            child_y,
+        );
+        assert_eq!(
+            output
+                .element_metrics_for_source(5)
+                .unwrap()
+                .offset_position,
+            sibling_offset
+        );
+        assert!(
+            output.paint_snapshot().is_none(),
+            "query-only projection must stay paint-free"
+        );
+        let hit = output
+            .hit_test(LayoutPoint::new(5.0, child_y + 5.0), false)
+            .unwrap();
+        assert_eq!(hit.source, 4);
+        if requested == 10_000.0 {
+            clamped = Some(output.client_rects_for_source(4));
+        } else if requested == 480.0 {
+            assert_eq!(Some(output.client_rects_for_source(4)), clamped);
+        }
+        // Publishing a new pass cannot mutate an older retained tree.
+        assert_eq!(initial.client_rects_for_source(3), initial_parent);
+        assert_eq!(initial.client_rects_for_source(4), initial_child);
+        if requested == 0.0 {
+            assert_eq!(output.client_rects_for_source(3), initial_parent);
+            assert_eq!(output.client_rects_for_source(4), initial_child);
+        }
+    }
+}
