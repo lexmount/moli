@@ -123,7 +123,15 @@ Promise.all(Array.from({ length: 129 }, (_, index) => new Promise((resolve, reje
     }))
     .await;
 
-    let response = wait_for_response_by_id_async(&mut ctx, None, 3_020).await;
+    // Resource completions and their Renderer publications are separate
+    // inputs. Their interleaving must not consume a fixed polling budget.
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "connected stylesheet Runtime response",
+        |message| message["id"] == json!(3_020),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 3_020);
     assert_eq!(
         response["result"]["result"]["value"],
         json!(129),
