@@ -26,6 +26,7 @@ mod main_document_task_owner;
 mod main_native_module_task;
 mod main_parser_continuation;
 mod media_element_event;
+mod service_worker_query;
 mod webtransport;
 pub(crate) use webtransport::{
     PageWebTransportTargetEffect, PageWebTransportTurnAction, PageWebTransportTurnOutcome,
@@ -488,6 +489,12 @@ pub(crate) use self::service_worker_internal::{
     PageServiceWorkerInternalTurnOutcome, RendererPageServiceWorkerInternalSender,
     RendererPageServiceWorkerInternalTask, RendererServiceWorkerInternalTask,
     ServiceWorkerInternalCallbackEffect,
+};
+pub(crate) use self::service_worker_query::{
+    PageServiceWorkerQueryTargetEffect, PageServiceWorkerQueryTurnAction,
+    PageServiceWorkerQueryTurnOutcome, RendererPageServiceWorkerQueryOwner,
+    RendererPageServiceWorkerQuerySender, RendererPageServiceWorkerQueryTask,
+    RendererPageServiceWorkerQueryTaskId, RendererPageServiceWorkerQueryTaskKind,
 };
 pub(crate) use self::service_worker_tasks::RendererPageServiceWorkerTaskSender;
 #[cfg(test)]

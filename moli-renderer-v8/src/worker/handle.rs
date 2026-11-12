@@ -138,6 +138,11 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerRegistrationTask(
         Box<crate::service_worker_runtime::ServiceWorkerRegistrationTask>,
     ),
+    /// Settle a successful container lookup in a later worker task.
+    ServiceWorkerRegistrationQueryResult {
+        request_id: u64,
+        result: Box<crate::types::ServiceWorkerRegistrationQueryResult>,
+    },
     ServiceWorkerUnregisterResult {
         request_id: u64,
         result: bool,

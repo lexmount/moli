@@ -725,6 +725,7 @@ use main_world::MainWorld;
 mod native_drag_data;
 mod promise_rejection_task;
 mod script_preparation_error;
+mod service_worker_query;
 pub(crate) use inspector::dispatch_inspector_io_owner_wake;
 #[cfg(feature = "devtools")]
 pub(crate) use inspector::dispatch_inspector_main_owner_wake;
