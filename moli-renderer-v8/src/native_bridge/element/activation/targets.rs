@@ -10,7 +10,7 @@ use crate::{
     util::v8str,
 };
 
-use super::super::super::JsContextHost;
+use super::super::super::PageScriptHost;
 
 /// A browsing-context keyword whose meaning is fixed by HTML.
 ///
@@ -44,7 +44,7 @@ impl SpecialBrowsingContextTarget {
 // Resolve keywords from the native form Document, independently of the realm
 // from which its submission method was called. Both GET and POST use this.
 pub(in crate::native_bridge) fn form_navigation_target_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: crate::document_runtime::DomHandle,
     target_name: Option<&str>,
 ) -> Option<crate::document_runtime::DomHandle> {
@@ -85,7 +85,7 @@ fn navigate_target_window_location(
 
 fn queue_top_level_location_navigation(
     _scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     resolved_url: &str,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
@@ -97,7 +97,7 @@ fn queue_top_level_location_navigation(
 
 fn queue_popup_target_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     resolved_url: &str,
     exposes_opener: bool,
@@ -137,7 +137,7 @@ struct HyperlinkPopupRelations {
 }
 
 fn hyperlink_popup_relations(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source_handle: DomHandle,
     target_name: &str,
 ) -> HyperlinkPopupRelations {
@@ -176,7 +176,7 @@ struct HyperlinkPopupCreator<'s> {
 
 fn hyperlink_popup_creator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
 ) -> Option<HyperlinkPopupCreator<'s>> {
     let runtime = unsafe { &mut *runtime_ptr };
@@ -216,7 +216,7 @@ fn hyperlink_popup_creator<'s>(
 
 fn navigate_hyperlink_popup_target(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     target_name: &str,
     resolved_url: &str,
@@ -424,7 +424,7 @@ fn navigate_hyperlink_popup_target(
 
 fn hyperlink_javascript_url_allowed_by_csp(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     resolved_url: &str,
 ) -> bool {
@@ -444,7 +444,7 @@ fn hyperlink_javascript_url_allowed_by_csp(
 
 pub(in crate::native_bridge) fn browsing_context_window_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let runtime = unsafe { &*runtime_ptr };
@@ -466,7 +466,7 @@ pub(in crate::native_bridge) fn browsing_context_window_for_dispatch_scope<'s>(
 
 fn browsing_context_dispatch_scope_for_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
 ) -> Option<crate::native_bridge::OwnerDispatchScope> {
     let runtime = unsafe { &*runtime_ptr };
@@ -532,7 +532,7 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
 
 pub(super) fn navigate_hyperlink_source_browsing_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     resolved_url: &str,
 ) -> bool {
@@ -564,7 +564,7 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
 
 pub(crate) fn navigate_target_browsing_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: Option<&str>,
     resolved_url: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
@@ -628,7 +628,7 @@ pub(crate) fn navigate_target_browsing_context<'s>(
 
 pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_handle: DomHandle,
     target_name: Option<&str>,
     resolved_url: &str,
@@ -729,7 +729,7 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
 
 pub(crate) fn navigate_named_iframe_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     resolved_url: &str,
     source_element: Option<v8::Local<'s, v8::Object>>,
@@ -746,7 +746,7 @@ pub(crate) fn navigate_named_iframe_target<'s>(
 
 pub(in crate::native_bridge) fn named_iframe_target_handle_for_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     source_document: Option<DomHandle>,
 ) -> Option<DomHandle> {
@@ -766,7 +766,7 @@ pub(in crate::native_bridge) fn named_iframe_target_handle_for_navigation(
 
 pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     resolved_url: &str,
     source_document: Option<DomHandle>,
@@ -808,7 +808,7 @@ pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
 
 pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_from_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     resolved_url: &str,
     source_document: Option<DomHandle>,
@@ -861,7 +861,7 @@ fn urls_refer_to_same_document(current: &url::Url, target: &url::Url) -> bool {
 
 pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_request(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     source_document: Option<DomHandle>,
     request: ChildBrowsingContextNavigationRequest,

@@ -3,12 +3,12 @@ use crate::dom::native::Node;
 use moli_encoding::{encode_url_query_for_legacy_web, form_output_encoding_for_label};
 use url::Url;
 
-use super::super::super::JsContextHost;
+use super::super::super::PageScriptHost;
 use super::super::element_attribute;
 use super::super::set_reflected_attribute;
 
 pub(in crate::native_bridge::element) fn resolve_url_like_attribute(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> String {
@@ -38,7 +38,7 @@ pub(in crate::native_bridge::element) fn resolve_url_like_attribute(
 }
 
 pub(in crate::native_bridge::element) fn parsed_url_like_attribute(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> Option<Url> {
@@ -62,7 +62,7 @@ pub(in crate::native_bridge::element) fn should_block_dangling_markup_subresourc
 }
 
 pub(in crate::native_bridge) fn parse_url_with_document_query_encoding(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     base: &Url,
     value: &str,
@@ -75,7 +75,7 @@ pub(in crate::native_bridge) fn parse_url_with_document_query_encoding(
 }
 
 fn document_query_encoding_for_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<&'static encoding_rs::Encoding> {
     let document_handle = document_handle_for_url_context(runtime, handle)?;
@@ -89,7 +89,7 @@ fn document_query_encoding_for_handle(
     form_output_encoding_for_label(character_set).filter(|encoding| *encoding != encoding_rs::UTF_8)
 }
 
-fn url_base_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Url {
+fn url_base_for_handle(runtime: &PageScriptHost, handle: DomHandle) -> Url {
     let document_handle = document_handle_for_url_context(runtime, handle);
 
     document_handle
@@ -112,7 +112,7 @@ fn url_base_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Url {
 }
 
 fn document_handle_for_url_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     runtime.dom_host().owner_document_handle(handle)
@@ -120,7 +120,7 @@ fn document_handle_for_url_context(
 
 pub(in crate::native_bridge::element) fn set_resolved_url_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     url: &Url,

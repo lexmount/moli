@@ -4,7 +4,7 @@ use moli_layout::{
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutViewport,
 };
 
-use super::JsContextHost;
+use super::PageScriptHost;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
     css_resource_urls::{
@@ -57,7 +57,7 @@ pub(crate) struct LayoutSnapshotCacheObservability {
     pub(crate) cached: Option<(DomHandle, moli_layout::LayoutTreeRetentionMetrics)>,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn set_layout_policy(&mut self, policy: moli_page_types::LayoutPolicy) {
         if !policy.uses_real_layout() {
             self.document_layout_state.get_mut().clear_latest_layout();
@@ -782,7 +782,7 @@ impl JsContextHost {
     }
 }
 
-impl GeometryProvider for JsContextHost {
+impl GeometryProvider for PageScriptHost {
     type NodeId = DomHandle;
 
     fn answer(

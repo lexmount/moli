@@ -509,7 +509,7 @@ fn detached_surface_runtime_and_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     bridge: v8::Local<'s, v8::Object>,
     element: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, element) {
         return Some((runtime_ptr, handle));
     }
@@ -610,7 +610,7 @@ fn sync_detached_surface_remove_attribute<'s>(
 }
 
 fn detached_iframe_navigation_attribute_changed(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> bool {

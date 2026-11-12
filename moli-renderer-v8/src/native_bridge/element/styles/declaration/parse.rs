@@ -10,7 +10,7 @@ use crate::{
     util::get_private_value,
 };
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::super::super::{set_reflected_style_attribute_with_inline_base_url, style_string};
 use super::super::STYLE_DECLARATION_BASE_URL_SLOT;
 use super::properties::{

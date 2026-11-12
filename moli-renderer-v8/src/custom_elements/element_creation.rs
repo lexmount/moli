@@ -5,11 +5,11 @@ use super::element_state::{
     set_dom_custom_element_state, set_dom_element_prefix,
 };
 use crate::dom::native::CustomElementState;
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(crate) fn create_element_for_document_local_name_is_and_registry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner_document: DomHandle,
     local_name: &str,
     is_name: Option<&str>,

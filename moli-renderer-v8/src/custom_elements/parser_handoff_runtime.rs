@@ -12,13 +12,13 @@ use super::{
     report_custom_element_construction_failure,
 };
 use crate::{
-    native_bridge::{JsContextHost, document::XHTML_NS},
+    native_bridge::{PageScriptHost, document::XHTML_NS},
     parser::ParserCustomElementConstructionHandoff,
 };
 
 pub(crate) fn construct_parser_created_autonomous_element_from_handoff(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handoff: &ParserCustomElementConstructionHandoff,
 ) -> bool {
     let placeholder = handoff.placeholder;

@@ -247,7 +247,7 @@ async fn drain_pending_page_child_frame_work_for_test(
 
 fn register_pending_window_xhr_for_test(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
+    host: &mut crate::native_bridge::PageScriptHost,
     cancel_handle: moli_fetch::FetchCancelHandle,
 ) -> (
     u64,
@@ -299,7 +299,7 @@ enum PendingWindowFetchTestStage {
 
 fn register_pending_window_fetch_for_test(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
+    host: &mut crate::native_bridge::PageScriptHost,
     keepalive: bool,
     stage: PendingWindowFetchTestStage,
 ) -> (
@@ -465,7 +465,7 @@ fn register_pending_window_fetch_for_test(
 
 fn register_pending_window_fetch_with_connect_policy_for_test(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
+    host: &mut crate::native_bridge::PageScriptHost,
     keepalive: bool,
     policy: crate::document_runtime::DocumentPolicyContainer,
     request_url: Url,
@@ -2053,7 +2053,7 @@ fn test_trusted_key_dispatch_callback(
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
-    let runtime_ptr = external.value() as *mut crate::native_bridge::JsContextHost;
+    let runtime_ptr = external.value() as *mut crate::native_bridge::PageScriptHost;
     if runtime_ptr.is_null() {
         rv.set(v8::Boolean::new(scope, false).into());
         return;

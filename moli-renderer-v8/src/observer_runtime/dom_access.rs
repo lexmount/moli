@@ -2,7 +2,7 @@ use std::ptr::NonNull;
 
 use crate::{
     dom::native::{DomHost, DomMutationEffects, NativeNodeId},
-    native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextOwner},
+    native_bridge::{PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextOwner},
 };
 use moli_webidl_callback::WebIdlCallbackFunction;
 
@@ -24,31 +24,31 @@ pub(crate) struct ObserverStoreAccessToken {
 
 const OBSERVER_STORE_ACCESS: ObserverStoreAccessToken = ObserverStoreAccessToken { _private: () };
 
-/// The only raw `JsContextHost` reborrow boundary in the observer runtime.
+/// The only raw `PageScriptHost` reborrow boundary in the observer runtime.
 ///
 /// Each operation returns an owned value (`bool`, handles, options, entries, or
 /// a check batch). The higher-ranked closure prevents a host reference from
 /// escaping a phase, while `&mut self` prevents nested reborrows through this
 /// façade. No closure passed here may call page JavaScript or a V8 callback.
 struct ObserverHostAccess {
-    host: NonNull<JsContextHost>,
+    host: NonNull<PageScriptHost>,
 }
 
 impl ObserverHostAccess {
-    fn new(host_ptr: *mut JsContextHost) -> Self {
+    fn new(host_ptr: *mut PageScriptHost) -> Self {
         Self {
             host: NonNull::new(host_ptr).expect("observer host pointer must be non-null"),
         }
     }
 
-    fn read<R>(&mut self, read: impl for<'host> FnOnce(&'host JsContextHost) -> R) -> R {
+    fn read<R>(&mut self, read: impl for<'host> FnOnce(&'host PageScriptHost) -> R) -> R {
         // SAFETY: `ObserverHostAccess` stays private to this module. Its
         // higher-ranked closure cannot return a reference tied to the host,
         // and `&mut self` prevents a nested access while this borrow is live.
         unsafe { read(self.host.as_ref()) }
     }
 
-    fn mutate<R>(&mut self, mutate: impl for<'host> FnOnce(&'host mut JsContextHost) -> R) -> R {
+    fn mutate<R>(&mut self, mutate: impl for<'host> FnOnce(&'host mut PageScriptHost) -> R) -> R {
         // SAFETY: see `read`. Every call ends before another access phase or
         // any page/V8 callback is entered.
         unsafe { mutate(self.host.as_mut()) }
@@ -72,7 +72,7 @@ fn request_task_with_access(
 
 pub(super) fn init_mutation_observer(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     callback: WebIdlCallbackFunction,
 ) {
@@ -85,7 +85,7 @@ pub(super) fn init_mutation_observer(
 
 pub(super) fn observe_mutation_target(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     target: NativeNodeId,
     options: MutationObserverOptions,
@@ -103,7 +103,7 @@ pub(super) fn observe_mutation_target(
 
 pub(super) fn disconnect_mutation_observer(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
@@ -119,7 +119,7 @@ pub(super) fn disconnect_mutation_observer(
 
 pub(super) fn take_mutation_records<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Array>> {
     let records = ObserverHostAccess::new(host_ptr)
@@ -129,7 +129,7 @@ pub(super) fn take_mutation_records<'s>(
 
 pub(crate) fn queue_mutation_records(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
 ) {
@@ -155,7 +155,7 @@ pub(crate) fn queue_mutation_records(
 }
 
 pub(crate) fn coalesce_child_list_replacement_records(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: NativeNodeId,
     added_nodes: &[NativeNodeId],
     removed_nodes: &[NativeNodeId],
@@ -175,7 +175,7 @@ pub(crate) fn coalesce_child_list_replacement_records(
 
 pub(super) fn flush_mutation_observers(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     let deliveries = access.mutate(|host| {
@@ -189,16 +189,16 @@ pub(super) fn flush_mutation_observers(
     // observe(), disconnect(), takeRecords(), or mutate the DOM reentrantly.
     invoke_mutation_deliveries(scope, host_ptr, deliveries);
 
-    access.mutate(JsContextHost::end_mutation_observer_delivery);
+    access.mutate(PageScriptHost::end_mutation_observer_delivery);
     dispatch_pending_slotchange_events(&mut access, scope, host_ptr);
 }
 
 pub(crate) fn flush_slotchange_microtask(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
-    if access.read(JsContextHost::has_scheduled_mutation_delivery) {
+    if access.read(PageScriptHost::has_scheduled_mutation_delivery) {
         access.mutate(|host| host.defer_slotchange_flush(scope));
         return;
     }
@@ -208,9 +208,9 @@ pub(crate) fn flush_slotchange_microtask(
 fn dispatch_pending_slotchange_events(
     access: &mut ObserverHostAccess,
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
-    let slots = access.mutate(JsContextHost::take_pending_slotchange_slots);
+    let slots = access.mutate(PageScriptHost::take_pending_slotchange_slots);
     for slot in slots {
         if !access.read(|host| host.dom_host().is_html_element_named(slot, "slot")) {
             continue;
@@ -227,18 +227,18 @@ fn dispatch_pending_slotchange_events(
         // No host reference is live while event listeners execute.
         let _ = crate::native_bridge::element::dispatch_public_event(scope, host_ptr, slot, event);
     }
-    if !access.read(JsContextHost::has_scheduled_mutation_delivery) {
+    if !access.read(PageScriptHost::has_scheduled_mutation_delivery) {
         access.mutate(|host| host.promote_deferred_slotchange_events(scope));
     }
 }
 
-pub(super) fn is_intersection_root(host_ptr: *mut JsContextHost, root: NativeNodeId) -> bool {
+pub(super) fn is_intersection_root(host_ptr: *mut PageScriptHost, root: NativeNodeId) -> bool {
     ObserverHostAccess::new(host_ptr).read(|host| node_is_intersection_root(host.dom_host(), root))
 }
 
 pub(super) fn init_intersection_observer(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     callback: WebIdlCallbackFunction,
     options: IntersectionObserverOptions,
@@ -251,7 +251,7 @@ pub(super) fn init_intersection_observer(
 }
 
 pub(crate) fn retire_execution_context_owner(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     owner: WindowExecutionContextOwner,
 ) -> usize {
     let (retired, mutation_records_enabled) = {
@@ -265,7 +265,7 @@ pub(crate) fn retire_execution_context_owner(
 }
 
 pub(crate) fn retire_context_token(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     context_token: RuntimeObservableContextToken,
 ) -> usize {
     let (retired, mutation_records_enabled) = {
@@ -280,7 +280,7 @@ pub(crate) fn retire_context_token(
 
 pub(super) fn observe_intersection_target(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     target: NativeNodeId,
 ) -> bool {
@@ -300,7 +300,7 @@ pub(super) fn observe_intersection_target(
 
 pub(super) fn unobserve_intersection_target(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     target: NativeNodeId,
 ) -> bool {
@@ -316,7 +316,7 @@ pub(super) fn unobserve_intersection_target(
 
 pub(super) fn disconnect_intersection_observer(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) {
     ObserverHostAccess::new(host_ptr).store(|store| {
@@ -326,7 +326,7 @@ pub(super) fn disconnect_intersection_observer(
 
 pub(super) fn take_intersection_records<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Array>> {
     let (entries, options) = ObserverHostAccess::new(host_ptr)
@@ -338,7 +338,7 @@ pub(super) fn take_intersection_records<'s>(
 
 pub(crate) fn queue_intersection_checks(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
@@ -378,7 +378,7 @@ fn queue_intersection_checks_with_dom(
 
 pub(super) fn flush_intersection_checks(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     access.store(|store| store.begin_task(ObserverTask::IntersectionCheck));
@@ -387,7 +387,7 @@ pub(super) fn flush_intersection_checks(
 
 pub(super) fn flush_intersection_observers(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let deliveries = ObserverHostAccess::new(host_ptr).store(|store| {
         store.begin_task(ObserverTask::IntersectionDelivery);

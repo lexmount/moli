@@ -105,7 +105,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_native_event_in_scope(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         event: NativeEventDispatch<'_>,
     ) -> std::result::Result<(), String> {
         let wrapper = if event.target == EventTargetHandle::Window {

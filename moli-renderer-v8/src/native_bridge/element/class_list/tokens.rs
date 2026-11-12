@@ -2,7 +2,7 @@ use super::*;
 use indexmap::IndexSet;
 
 pub(super) fn class_list_tokens(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     kind: DomTokenListKind,
 ) -> Vec<String> {
@@ -20,7 +20,7 @@ pub(super) fn class_list_tokens(
 
 pub(super) fn set_class_list_tokens(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     kind: DomTokenListKind,
     tokens: &[String],

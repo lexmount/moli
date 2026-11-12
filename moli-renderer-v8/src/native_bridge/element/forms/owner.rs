@@ -4,7 +4,7 @@ use crate::native_bridge::document::detached_form_owner_object;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 
 pub(crate) fn form_associated_form_owner(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
@@ -15,7 +15,7 @@ pub(crate) fn form_associated_form_owner(
 }
 
 fn custom_element_form_owner(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &crate::dom::native::Element,
 ) -> Option<DomHandle> {
@@ -51,7 +51,7 @@ fn custom_element_form_owner(
 use moli_dom::native::is_builtin_reassociateable_form_associated_element as has_reflected_builtin_form_owner;
 
 fn form_associated_reflected_form_owner(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
@@ -79,7 +79,7 @@ fn form_associated_reflected_form_owner(
     form_associated_form_owner(runtime, handle)
 }
 
-pub(crate) fn is_valid_submit_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn is_valid_submit_button(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -96,7 +96,7 @@ pub(crate) fn is_valid_submit_button(runtime: &JsContextHost, handle: DomHandle)
 }
 
 pub(crate) fn form_control_is_effectively_disabled(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if runtime
@@ -131,7 +131,7 @@ pub(crate) fn form_control_is_effectively_disabled(
 }
 
 fn disabled_attribute_applies_to_control(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -143,7 +143,7 @@ fn disabled_attribute_applies_to_control(
             ))
 }
 
-fn option_is_disabled_by_optgroup(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn option_is_disabled_by_optgroup(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     if !runtime
         .dom_host()
         .node(handle)
@@ -171,7 +171,7 @@ fn option_is_disabled_by_optgroup(runtime: &JsContextHost, handle: DomHandle) ->
 }
 
 fn control_is_in_first_legend(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     control: DomHandle,
     fieldset: DomHandle,
 ) -> bool {
@@ -188,7 +188,11 @@ fn control_is_in_first_legend(
     false
 }
 
-pub(super) fn node_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
+pub(super) fn node_contains(
+    runtime: &PageScriptHost,
+    ancestor: DomHandle,
+    node: DomHandle,
+) -> bool {
     let mut current = Some(node);
     while let Some(handle) = current {
         if handle == ancestor {

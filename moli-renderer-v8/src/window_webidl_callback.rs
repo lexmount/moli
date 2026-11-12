@@ -12,7 +12,7 @@ use moli_webidl_callback::WebIdlCallbackFunction;
 
 use crate::{
     native_bridge::{
-        JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+        PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
         WindowExecutionContextOwner,
     },
     webidl_callback_execution::PreparedWebIdlCallbackExecution,
@@ -30,7 +30,7 @@ pub(crate) enum WindowWebIdlCallbackFunction {
 impl WindowWebIdlCallbackFunction {
     pub(crate) fn new(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         callback: WebIdlCallbackFunction,
     ) -> Self {
         let relevant_context = callback.relevant_context(scope);
@@ -51,7 +51,7 @@ impl WindowWebIdlCallbackFunction {
     pub(crate) fn prepare_execution(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner_identity: Option<WindowExecutionContextIdentity>,
     ) -> Option<PreparedWebIdlCallbackExecution> {
         let Self::Live {

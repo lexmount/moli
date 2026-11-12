@@ -1,4 +1,4 @@
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 
 use super::super::{
     context_bootstrap::{
@@ -23,7 +23,7 @@ pub(super) enum ConstructionFailure<'s> {
 
 pub(super) fn report_custom_element_construction_failure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructor: Option<v8::Local<'s, v8::Function>>,
     failure: ConstructionFailure<'s>,
 ) {

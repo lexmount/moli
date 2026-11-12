@@ -1,4 +1,4 @@
-use super::{ACTIVE_CHILD_WINDOW_HANDLE_SLOT, ENTERED_CHILD_WINDOW_HANDLE_SLOT, JsContextHost};
+use super::{ACTIVE_CHILD_WINDOW_HANDLE_SLOT, ENTERED_CHILD_WINDOW_HANDLE_SLOT, PageScriptHost};
 use crate::{
     document_runtime::DomHandle,
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
@@ -48,7 +48,7 @@ pub(crate) fn defer_active_child_window_restore<'s>(
 
 pub(crate) fn restore_deferred_active_child_window_scope_if_present(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
 ) -> bool {
     let Some(previous) = host.take_deferred_active_child_window_restore() else {
         return false;

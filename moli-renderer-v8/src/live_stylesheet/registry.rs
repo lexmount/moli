@@ -78,7 +78,7 @@ impl LiveStylesheetRegistry {
             .get(&key)
             .and_then(StdWeak::upgrade);
         if let Some(shared_contents) = shared_contents {
-            // The registry belongs to one JsContextHost and therefore one
+            // The registry belongs to one PageScriptHost and therefore one
             // author-lock domain. Assert that invariant before reusing parsed
             // contents so an accidental cross-engine call fails at the owner.
             {
@@ -141,7 +141,7 @@ impl LiveStylesheetRegistry {
         shared_contents: StdArc<SharedStylesheetContents>,
         shared_lock: SharedRwLock,
     ) -> LiveStylesheetRef {
-        // Shared contents are scoped to one JsContextHost author lock. Reading
+        // Shared contents are scoped to one PageScriptHost author lock. Reading
         // through the destination lock makes an accidental cross-domain use
         // fail at the ownership boundary before the stylesheet is installed.
         {

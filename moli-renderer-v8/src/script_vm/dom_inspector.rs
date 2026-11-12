@@ -7,7 +7,7 @@ use crate::native_bridge::element::{
     focus_live_element_for_inspector, mutate_live_element_attribute_for_inspector,
 };
 use crate::native_bridge::{
-    JsContextHost, node_runtime_and_handle_from_object, validate_element_name,
+    PageScriptHost, node_runtime_and_handle_from_object, validate_element_name,
 };
 use crate::parser::{HtmlParser, XmlParser};
 use crate::runtime::{
@@ -66,7 +66,7 @@ fn first_element_in_subtree(document: &NativeDom, root: DomHandle) -> Option<Dom
 }
 
 fn parsed_inspector_attributes(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     text: &str,
 ) -> Option<Vec<Attribute>> {
@@ -132,7 +132,7 @@ fn parsed_inspector_attributes(
 
 fn clone_element_attributes(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: DomHandle,
     attributes: &[Attribute],
 ) -> bool {
@@ -173,7 +173,7 @@ fn clone_element_attributes(
 
 fn create_renamed_element(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner_document: DomHandle,
     name: &str,
     is_html_document: bool,
@@ -207,7 +207,7 @@ fn create_renamed_element(
 
 fn move_node_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     node: DomHandle,
     target: DomHandle,
     insert_before: Option<DomHandle>,
@@ -259,7 +259,7 @@ fn move_node_for_inspector(
 
 fn set_attributes_as_text_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     node: DomHandle,
     text: &str,
     name: Option<&str>,
@@ -339,7 +339,7 @@ fn set_attributes_as_text_for_inspector(
 
 fn set_node_name_for_inspector(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     node: DomHandle,
     name: &str,
 ) -> DomInspectorEditOutcome {
@@ -430,7 +430,7 @@ fn set_node_name_for_inspector(
 
 fn run_dom_inspector_edit(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     edit: DomInspectorEdit,
 ) -> DomInspectorEditOutcome {
     match edit {

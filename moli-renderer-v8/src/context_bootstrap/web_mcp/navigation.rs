@@ -3,12 +3,12 @@
 use super::devtools;
 use super::state::FormInvocationState;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{JsContextHost, WindowDocumentOwner};
+use crate::native_bridge::{PageScriptHost, WindowDocumentOwner};
 use moli_page_types::{RendererWebMcpEvent, RendererWebMcpNavigation, RendererWebMcpResult};
 
 use crate::frame_owner_model::FrameDocumentNavigationLoadBinding;
 
-pub(crate) fn form_invocation(host: &JsContextHost, form: DomHandle) -> Option<u64> {
+pub(crate) fn form_invocation(host: &PageScriptHost, form: DomHandle) -> Option<u64> {
     let store = &host.native_bridge().web_mcp;
     let id = store.pending_form_id(form)?;
     let active = store.pending[&id].form.as_ref()?;
@@ -21,7 +21,7 @@ pub(crate) fn form_invocation(host: &JsContextHost, form: DomHandle) -> Option<u
     .then_some(id)
 }
 
-fn mark_navigating(host: &mut JsContextHost, id: u64) {
+fn mark_navigating(host: &mut PageScriptHost, id: u64) {
     host.native_bridge_mut()
         .web_mcp
         .pending
@@ -34,7 +34,7 @@ fn mark_navigating(host: &mut JsContextHost, id: u64) {
 }
 
 fn navigation_invocation(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     form: DomHandle,
 ) -> Option<RendererWebMcpNavigation> {
     let id = form_invocation(host, form)?;
@@ -50,7 +50,7 @@ fn navigation_invocation(
     })
 }
 
-pub(crate) fn bind_root_navigation(host: &mut JsContextHost, form: DomHandle) {
+pub(crate) fn bind_root_navigation(host: &mut PageScriptHost, form: DomHandle) {
     if let Some(id) = navigation_invocation(host, form)
         && host.bind_pending_web_mcp_navigation(id.clone())
     {
@@ -58,7 +58,7 @@ pub(crate) fn bind_root_navigation(host: &mut JsContextHost, form: DomHandle) {
     }
 }
 
-pub(crate) fn bind_child_navigation(host: &mut JsContextHost, form: DomHandle, child: DomHandle) {
+pub(crate) fn bind_child_navigation(host: &mut PageScriptHost, form: DomHandle, child: DomHandle) {
     let Some(id) = navigation_invocation(host, form) else {
         return;
     };
@@ -72,7 +72,7 @@ pub(crate) fn bind_child_navigation(host: &mut JsContextHost, form: DomHandle, c
     mark_navigating(host, id.invocation_id);
 }
 
-pub(crate) fn cancel_child_navigation(host: &mut JsContextHost, child: DomHandle) {
+pub(crate) fn cancel_child_navigation(host: &mut PageScriptHost, child: DomHandle) {
     if let Some((_, id)) = host
         .native_bridge_mut()
         .web_mcp
@@ -84,7 +84,7 @@ pub(crate) fn cancel_child_navigation(host: &mut JsContextHost, child: DomHandle
 }
 
 pub(crate) fn commit_child_navigation(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     child: DomHandle,
     binding: Option<FrameDocumentNavigationLoadBinding>,
     owner: WindowDocumentOwner,
@@ -109,7 +109,7 @@ pub(crate) fn commit_child_navigation(
 }
 
 pub(crate) fn receive_navigation(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     owner: WindowDocumentOwner,
     id: RendererWebMcpNavigation,
 ) {
@@ -118,7 +118,7 @@ pub(crate) fn receive_navigation(
 }
 
 fn receive_navigation_from_origin(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     owner: WindowDocumentOwner,
     id: RendererWebMcpNavigation,
     origin: url::Origin,
@@ -152,12 +152,12 @@ pub(crate) fn failure_event(id: RendererWebMcpNavigation) -> RendererWebMcpEvent
     }
 }
 
-pub(crate) fn fail_navigation(host: &JsContextHost, id: RendererWebMcpNavigation) {
+pub(crate) fn fail_navigation(host: &PageScriptHost, id: RendererWebMcpNavigation) {
     devtools::emit(host, failure_event(id));
 }
 
 pub(crate) fn complete_navigation(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     document: DomHandle,
     owner: WindowDocumentOwner,
 ) {

@@ -435,7 +435,7 @@ impl DocumentRuntime {
         prepared: PreparedConnectedStyleLoad,
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
         event_admission: ConnectedStyleLoadEventAdmission,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> ConnectedStyleLoadPrimeResult {
         assert!(
             event_admission.matches_plan(prepared.event_plan),
@@ -555,7 +555,7 @@ impl DocumentRuntime {
 
     fn settle_connected_style_load_binding(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         binding: Option<MainDocumentStyleLoadEventBinding>,
         reason: &'static str,
     ) -> bool {
@@ -581,7 +581,7 @@ impl DocumentRuntime {
 
     fn settle_connected_style_load_admission(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         admission: Option<ConnectedStyleLoadEventAdmission>,
         reason: &'static str,
     ) -> bool {
@@ -664,7 +664,7 @@ impl DocumentRuntime {
         &mut self,
         handle: DomHandle,
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
     ) -> ConnectedStyleLoadPrimeResult {
         if self.current_document_resource_loader().is_some()
@@ -715,7 +715,7 @@ impl DocumentRuntime {
 
     pub(in crate::document_runtime) fn prime_pending_connected_style_loads_for_owner(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> ConnectedStyleLoadPrimeResult {
         let pending_loads = std::mem::take(&mut self.stylesheet_lifecycle.pending_connected_loads);
         let mut result = std::mem::take(&mut self.pending_connected_style_load_prime_result);
@@ -739,7 +739,7 @@ impl DocumentRuntime {
         &mut self,
         handle: DomHandle,
         inline_source: Option<Arc<crate::style_engine::OwnerStyleSheetSource>>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         event_admission: Option<ConnectedStyleLoadEventAdmission>,
     ) -> ConnectedStyleLoadPrimeResult {
         let mut result = ConnectedStyleLoadPrimeResult::default();
@@ -1200,7 +1200,7 @@ impl DocumentRuntime {
         source: InlineStyleImportSource,
         urls: Vec<Url>,
         load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let handle = source.owner();
         let roots = self.connected_style_import_roots(&source, host_ptr);
@@ -1304,7 +1304,7 @@ impl DocumentRuntime {
     fn connected_style_import_roots(
         &self,
         source: &InlineStyleImportSource,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Vec<ConnectedStyleImportRoot> {
         if host_ptr.is_null() {
             return Vec::new();
@@ -1322,7 +1322,7 @@ impl DocumentRuntime {
         owner: DomHandle,
         stylesheet: crate::live_stylesheet::LiveStylesheetRef,
         root_is_external_resource: bool,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let urls = stylesheet
             .pending_import_requests_in_graph()
@@ -1380,7 +1380,7 @@ impl DocumentRuntime {
 
     pub(crate) fn prime_document_lifecycle_processing_for_owner(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> ConnectedStyleLoadPrimeResult {
         self.prime_pending_connected_style_loads_for_owner(host_ptr)
     }
@@ -1459,7 +1459,7 @@ impl DocumentRuntime {
 
     pub(crate) fn apply_inline_cssom_source_change_after_invalidation(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner: DomHandle,
     ) {
         self.queue_stylesheet_source_css_projection(owner);
@@ -1470,7 +1470,7 @@ impl DocumentRuntime {
 
     pub(crate) fn apply_linked_cssom_source_change(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         owner: DomHandle,
     ) {
         self.queue_stylesheet_source_css_projection(owner);
@@ -1492,7 +1492,7 @@ impl DocumentRuntime {
     pub(crate) fn apply_pending_stylesheet_source_css_projections(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let owners = std::mem::take(&mut self.pending_stylesheet_source_css_projection_owners);
         for owner in owners {
@@ -1557,7 +1557,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_pending_style_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         ready: ReadyConnectedStyleLoad,
     ) -> bool {
         self.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
@@ -1570,7 +1570,7 @@ impl DocumentRuntime {
     /// Complete native load bookkeeping even when no script realm or event listener exists.
     pub(crate) fn consume_pending_style_load(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         ready: &ReadyConnectedStyleLoad,
     ) -> bool {
         let native_modulepreload = match ready.operation() {
@@ -1601,7 +1601,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_preload_like_link_error_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) {
         self.dispatch_style_or_link_load_event(scope, host_ptr, handle, false);
@@ -1610,7 +1610,7 @@ impl DocumentRuntime {
     fn dispatch_style_or_link_load_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         load_succeeded: bool,
     ) {
@@ -1641,7 +1641,7 @@ impl DocumentRuntime {
 
     fn native_modulepreload_style_result(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         client: &Arc<NativeModulepreloadLinkClient>,
     ) -> Option<bool> {
         if client.key().kind() != crate::module_runtime::ModuleKind::Css {

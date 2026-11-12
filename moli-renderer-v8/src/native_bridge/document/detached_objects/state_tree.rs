@@ -175,7 +175,7 @@ fn detached_set_owner_document_inner<'s>(
 
 pub(super) fn owner_document_native_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     owner_document: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     detached_native_handle_for_runtime(scope, runtime_ptr, owner_document).or_else(|| {
@@ -296,7 +296,7 @@ fn detached_sync_children_projection<'s>(
 
 pub(crate) fn detached_native_handle_for_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let node = node_backing_object(scope, node)?;
@@ -466,7 +466,7 @@ fn detached_state_node_type<'s>(
 
 pub(crate) fn detached_native_object_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     unsafe { &*runtime_ptr }.dom_host().node(handle)?;
@@ -501,7 +501,7 @@ pub(crate) fn detached_native_object_for_handle<'s>(
 
 pub(crate) fn paired_detached_native_object_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     unsafe { &*runtime_ptr }.dom_host().node(handle)?;
@@ -559,7 +559,7 @@ fn detached_native_owner_document_object<'s>(
 }
 
 fn detached_native_node_is_element(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<bool> {
     unsafe { &*runtime_ptr }
@@ -606,7 +606,7 @@ pub(in crate::native_bridge::document) fn detached_native_mutation_child_node_ob
 
 fn detached_native_child_node_objects_for_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     child_handles: Vec<DomHandle>,
 ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
     let mut children = Vec::with_capacity(child_handles.len());
@@ -925,7 +925,7 @@ pub(crate) fn remove_detached_native_attribute_ns_appending_to_current_reaction_
 
 fn clear_detached_iframe_context_before_navigation_attribute_change<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     element: v8::Local<'s, v8::Object>,
     handle: DomHandle,
     name: &str,
@@ -951,7 +951,7 @@ fn clear_detached_iframe_context_before_navigation_attribute_change<'s>(
 pub(in crate::native_bridge::document) fn detached_native_element_runtime_and_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
     unsafe { &*runtime_ptr }
@@ -1185,7 +1185,7 @@ pub(in crate::native_bridge) fn detached_record_tree_mutation<'s>(
 
 pub(crate) fn detached_record_native_tree_mutations(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     dom_host: &DomHost,
     effects: &DomMutationEffects,
 ) {

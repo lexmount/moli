@@ -5,7 +5,7 @@ use crate::{
 
 use super::*;
 
-pub(super) fn character_data_string(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+pub(super) fn character_data_string(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     runtime
         .dom_host()
         .node(handle)
@@ -14,7 +14,7 @@ pub(super) fn character_data_string(runtime: &JsContextHost, handle: DomHandle) 
 }
 
 pub(super) fn character_data_utf16_units(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<Vec<u16>> {
     runtime.character_data_utf16_units(handle)

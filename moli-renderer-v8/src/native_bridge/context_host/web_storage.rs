@@ -1,6 +1,6 @@
 //! Active LocalWindows retain their localStorage area; dirty batches retain it
 //! independently until commit. Storage wrappers need no native IDs or finalizers.
-use super::{JsContextHost, WindowExecutionContextOwner};
+use super::{PageScriptHost, WindowExecutionContextOwner};
 use moli_web_storage::{WebStorageAreaLease, WebStorageMutationError};
 
 pub(super) struct WindowStorageArea {
@@ -8,7 +8,7 @@ pub(super) struct WindowStorageArea {
     _lease: WebStorageAreaLease,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn ensure_local_storage_area(
         &mut self,
         owner: WindowExecutionContextOwner,

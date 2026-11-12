@@ -5,7 +5,7 @@ use super::state::{FormInvocationState, RegisteredTool, ToolExecutor, ToolMetada
 use super::tasks::queue_task;
 use super::{events, execution, registry};
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use crate::util::context_host_ptr_from_global_bridge;
 
 use crate::dom::native::{DomHost, DomMutationEffects, Node};
@@ -16,7 +16,7 @@ mod schema;
 
 pub(crate) fn note_mutation(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     dom: &DomHost,
     effects: &DomMutationEffects,
 ) {
@@ -275,7 +275,7 @@ fn schema_attribute(name: &str) -> bool {
 
 // Keep discovery outside V8: pages without declarative tools must not acquire
 // another realm entry while completing unrelated parser or resource work.
-pub(crate) fn prepare_registration_task(host: &mut JsContextHost) -> bool {
+pub(crate) fn prepare_registration_task(host: &mut PageScriptHost) -> bool {
     let document = host.document_handle();
     let owner = document_owner(host, document);
     let needs_initial_scan = host.native_bridge().web_mcp.initialized_form_owner != owner;
@@ -307,7 +307,7 @@ pub(crate) fn prepare_registration_task(host: &mut JsContextHost) -> bool {
 /// Queue the task after `prepare_registration_task` returned true.
 pub(crate) fn queue_registration_task(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     unsafe { &mut *host_ptr }
         .native_bridge_mut()
@@ -370,7 +370,7 @@ struct FormTool {
 
 fn form_tools(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document: DomHandle,
     forms: impl IntoIterator<Item = DomHandle>,
 ) -> Vec<FormTool> {
@@ -426,7 +426,7 @@ fn form_tools(
 
 fn synchronize_document(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     affected_forms: HashSet<DomHandle>,
 ) {

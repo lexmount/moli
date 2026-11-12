@@ -1,7 +1,7 @@
-use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageScriptHost};
 
 pub(super) fn reset_parser_failed_custom_element_construction_artifacts(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let parent = unsafe { &*host_ptr }

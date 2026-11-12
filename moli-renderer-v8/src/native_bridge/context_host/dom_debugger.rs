@@ -6,7 +6,7 @@ use moli_page_types::{
 };
 use serde_json::{Value, json};
 
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     document_runtime::{DevToolsDomPrepublishedRemoval, DomHandle, EventTargetHandle},
     frame_owner_model::DocumentId,
@@ -288,7 +288,7 @@ impl DomDebuggerState {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn has_dom_debugger_dom_breakpoints(&self) -> bool {
         !self.dom_debugger_state.dom_breakpoints.is_empty()
     }

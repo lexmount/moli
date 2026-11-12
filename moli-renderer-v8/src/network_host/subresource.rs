@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    native_bridge::{JsContextHost, OwnerDispatchScope},
+    native_bridge::{OwnerDispatchScope, PageScriptHost},
     network::context::{DocumentResourceLoader, SubresourceRequestEnvironment},
     service_worker_runtime::{
         ServiceWorkerClientId, ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
@@ -96,7 +96,7 @@ pub(super) struct PreparedSubresourceFetch {
 impl PreparedSubresourceFetch {
     pub(super) fn prepare(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         owner: OwnerDispatchScope,
         resource_loader: &DocumentResourceLoader,
         environment: SubresourceRequestEnvironment,
@@ -173,7 +173,7 @@ impl PreparedSubresourceFetch {
         }
     }
 
-    pub(super) fn dispatch(self, host: &JsContextHost, internal_id: u64) {
+    pub(super) fn dispatch(self, host: &PageScriptHost, internal_id: u64) {
         let SubresourceFetchRegistration::Direct(cancel_handle) = self.registration else {
             return;
         };
@@ -214,7 +214,7 @@ impl SubresourceRequestDispatch {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn dispatch(
         self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         internal_id: u64,
         loader: ResourceRequestClient,
         task_runner: crate::network::RendererResourceTaskRunner,

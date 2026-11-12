@@ -1,4 +1,4 @@
-use super::super::{JsContextHost, OwnerDispatchScope, WindowExecutionContextOwner};
+use super::super::{OwnerDispatchScope, PageScriptHost, WindowExecutionContextOwner};
 use crate::{
     context_bootstrap::{ResourcePerformanceEntry, record_resource_performance_entry},
     document_runtime::DomHandle,
@@ -63,7 +63,7 @@ impl CompletedFrameOwnerResourceTiming {
         }
     }
 
-    fn parent_owner_is_current(&self, host: &JsContextHost) -> bool {
+    fn parent_owner_is_current(&self, host: &PageScriptHost) -> bool {
         match self.target.parent {
             FrameDocumentDescendantLoadParent::MainDocument => host
                 .frame_owner_store
@@ -84,7 +84,7 @@ impl CompletedFrameOwnerResourceTiming {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn pending_frame_owner_resource_timing(
         &self,
         handle: DomHandle,

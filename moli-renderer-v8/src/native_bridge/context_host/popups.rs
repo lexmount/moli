@@ -1,6 +1,6 @@
 mod renderer_owned;
 
-use super::{JsContextHost, NavigationHistoryEntrySeed};
+use super::{NavigationHistoryEntrySeed, PageScriptHost};
 use crate::content_security_policy::ContentSecurityPolicy;
 use crate::web_api_interfaces;
 use crate::{
@@ -540,7 +540,7 @@ impl LightweightPopupStorageScope {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn lightweight_popup_record(
         &self,
         popup_id: u64,
@@ -675,7 +675,7 @@ impl JsContextHost {
     pub(crate) fn open_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
         target_name: &str,
@@ -753,7 +753,7 @@ impl JsContextHost {
     pub(crate) fn create_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
         target_name: &str,
@@ -2149,7 +2149,7 @@ impl JsContextHost {
         };
         self.pending_history_traversal_admissions
             .retire_owner(execution_context_owner);
-        let retired_timer_count = unsafe { &mut *self.runtime }
+        let retired_timer_count = unsafe { &mut *self.document_runtime }
             .cancel_window_execution_context_timers(execution_context_owner);
         let retired_webcrypto_count =
             self.retire_webcrypto_execution_context_owner(execution_context_owner);
@@ -3068,7 +3068,7 @@ impl JsContextHost {
                 self.lightweight_popup_scripting_enabled(popup_id),
             ),
         )?;
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         let document_base_url = lightweight_popup_parsed_document_base_url(
             host_ptr,
             scope,
@@ -3208,7 +3208,7 @@ impl JsContextHost {
                 let Ok(script_url) = Url::options().base_url(Some(base_url)).parse(src) else {
                     continue;
                 };
-                if let Some(violation) = unsafe { &*self.runtime }
+                if let Some(violation) = unsafe { &*self.document_runtime }
                     .script_element_request_csp_report_only_violation_for_document(
                         &continuation.document_url,
                         &continuation.response_content_security_report_only_policies,
@@ -3224,7 +3224,7 @@ impl JsContextHost {
                         return LightweightPopupClassicScriptAdvance::Completed(body_activity);
                     }
                 }
-                if let Some(violation) = unsafe { &*self.runtime }
+                if let Some(violation) = unsafe { &*self.document_runtime }
                     .script_element_request_csp_violation_for_document(
                         Some(continuation.document_handle),
                         &continuation.document_url,
@@ -3270,7 +3270,7 @@ impl JsContextHost {
                 continue;
             }
             if script_src.is_none()
-                && let Some(violation) = unsafe { &*self.runtime }
+                && let Some(violation) = unsafe { &*self.document_runtime }
                     .inline_script_csp_report_only_violation_for_document(
                         &continuation.document_url,
                         &continuation.response_content_security_report_only_policies,
@@ -3286,7 +3286,7 @@ impl JsContextHost {
                 }
             }
             if script_src.is_none()
-                && let Some(violation) = unsafe { &*self.runtime }
+                && let Some(violation) = unsafe { &*self.document_runtime }
                     .inline_script_csp_violation_for_document(
                         Some(continuation.document_handle),
                         &continuation.document_url,
@@ -3340,7 +3340,7 @@ impl JsContextHost {
         };
         let current_script = crate::native_bridge::document::detached_native_object_for_handle(
             scope,
-            self as *mut JsContextHost,
+            self as *mut PageScriptHost,
             script,
         );
         if let Err(error) = self.execute_lightweight_popup_window_script_source(
@@ -3589,7 +3589,7 @@ impl JsContextHost {
         let mut event_dispatch_attempted = false;
         let redirect_status =
             crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect;
-        if let Some(violation) = unsafe { &*self.runtime }
+        if let Some(violation) = unsafe { &*self.document_runtime }
             .script_element_request_csp_report_only_violation_for_document_with_redirect_status(
                 document_url,
                 response_content_security_report_only_policies,
@@ -3604,7 +3604,7 @@ impl JsContextHost {
                 scope, popup_id, &violation,
             );
         }
-        if let Some(violation) = unsafe { &*self.runtime }
+        if let Some(violation) = unsafe { &*self.document_runtime }
             .script_element_request_csp_violation_for_document_with_redirect_status(
                 document_handle,
                 document_url,
@@ -4403,7 +4403,7 @@ pub(crate) fn defer_active_lightweight_popup_restore<'s>(
 
 pub(crate) fn restore_deferred_active_lightweight_popup_scope_if_present(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
 ) -> bool {
     let Some(previous) = host.take_deferred_active_lightweight_popup_restore() else {
         return false;
@@ -4667,7 +4667,7 @@ fn lightweight_popup_initial_base_url(target_url: &Url, creator_base_url: Url) -
 }
 
 fn lightweight_popup_parsed_document_base_url<'s>(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
     fallback: &Url,
@@ -5007,7 +5007,7 @@ fn lightweight_popup_location_href<'s>(
 fn lightweight_popup_document_handle_for_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let handle = crate::native_bridge::document::detached_native_handle_for_runtime(
         scope, host_ptr, document,

@@ -4,7 +4,7 @@ use crate::dom::native::Node;
 use crate::webidl;
 
 use super::super::super::{
-    JsContextHost, document, throw_dom_exception, validate_attribute_name,
+    PageScriptHost, document, throw_dom_exception, validate_attribute_name,
     validate_qualified_name_and_namespace,
 };
 use super::super::{
@@ -31,7 +31,7 @@ fn throw_invalid_attribute_name(scope: &mut v8::PinScope<'_, '_>) {
 use super::getters::element_method_receiver;
 
 pub(super) fn attribute_target_for_remove_name(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> Option<(Option<String>, String)> {

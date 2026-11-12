@@ -35,7 +35,7 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use super::{
     context_bootstrap::{build_dom_rect_object, throw_dom_exception_value},
     native_bridge::document::detached_native_handle_for_runtime,
-    native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
+    native_bridge::{PageScriptHost, callback_value_dom_handle, wrapped_handle_value},
     native_bridge::{
         compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
     },
@@ -808,7 +808,7 @@ impl ObserverStore {
     fn collect_mutation_deliveries<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Vec<MutationObserverDelivery<'s>> {
         let mut deliveries = Vec::new();
         let mut ids: Vec<_> = self.mutation_observers.keys().copied().collect();
@@ -837,7 +837,7 @@ impl ObserverStore {
     fn collect_intersection_deliveries<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Vec<IntersectionObserverDelivery<'s>> {
         let mut deliveries = Vec::new();
         for state in self.intersection_observers.values_mut() {
@@ -902,7 +902,7 @@ struct IntersectionObserverDelivery<'s> {
 
 fn invoke_mutation_deliveries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     deliveries: Vec<MutationObserverDelivery<'s>>,
 ) {
     for delivery in deliveries {
@@ -927,7 +927,7 @@ fn invoke_mutation_deliveries<'s>(
 
 fn invoke_intersection_deliveries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     deliveries: Vec<IntersectionObserverDelivery<'s>>,
 ) {
     for delivery in deliveries {
@@ -1335,7 +1335,7 @@ pub(super) fn intersection_observer_take_records_callback(
 
 fn build_mutation_records_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     records: &[QueuedMutationRecord],
 ) -> v8::Local<'s, v8::Array> {
     let values = records
@@ -1351,7 +1351,7 @@ fn build_mutation_records_array<'s>(
 
 fn build_intersection_entries_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     options: &IntersectionObserverOptions,
     entries: &[QueuedIntersectionEntry],
 ) -> v8::Local<'s, v8::Array> {
@@ -1369,7 +1369,7 @@ fn build_intersection_entries_array<'s>(
 
 fn build_intersection_entry_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     options: &IntersectionObserverOptions,
     entry: QueuedIntersectionEntry,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -1443,7 +1443,7 @@ fn create_rect_object<'s>(
 
 fn wrap_node_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: NativeNodeId,
 ) -> Option<v8::Local<'s, v8::Object>> {
     wrapped_handle_value(scope, host_ptr, handle)
@@ -1578,7 +1578,7 @@ fn normalize_intersection_thresholds(
 
 fn define_intersection_observer_slots(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     observer: v8::Local<'_, v8::Object>,
     options: &IntersectionObserverOptions,
 ) -> Option<()> {
@@ -1712,7 +1712,7 @@ impl IntersectionRectData {
 }
 
 fn rect_from_intersection_geometry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: NativeNodeId,
 ) -> IntersectionRectData {
     let rect = compute_mock_intersection_client_rect(runtime, handle);
@@ -1766,7 +1766,7 @@ fn rootless_target_has_hidden_class_hint(dom_host: &DomHost, target: NativeNodeI
         })
 }
 
-fn scrollport_rect(runtime: &JsContextHost, handle: NativeNodeId) -> IntersectionRectData {
+fn scrollport_rect(runtime: &PageScriptHost, handle: NativeNodeId) -> IntersectionRectData {
     let rect = compute_mock_intersection_scrollport_client_rect(runtime, handle);
     IntersectionRectData::new(rect.left, rect.top, rect.width, rect.height)
 }
@@ -1786,7 +1786,7 @@ fn node_establishes_scroll_clip(
 
 fn clip_intersection_by_scroll_ancestors(
     cache: &mut RootlessIntersectionGeometryCache,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     target: NativeNodeId,
     stop_root: Option<NativeNodeId>,
@@ -1813,7 +1813,7 @@ fn clip_intersection_by_scroll_ancestors(
 
 fn clip_bounds_by_scroll_ancestors(
     cache: &mut RootlessIntersectionGeometryCache,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     target: NativeNodeId,
     stop_root: Option<NativeNodeId>,
@@ -2057,7 +2057,7 @@ fn rootless_content_flow_top(
 
 fn rootless_intersection_target_rect(
     cache: &mut RootlessIntersectionGeometryCache,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     target: NativeNodeId,
     root_rect: IntersectionRectData,
@@ -2124,7 +2124,7 @@ fn queue_intersection_entry(
 }
 
 fn mock_intersection_entry_metrics(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     dom_host: &DomHost,
     target: NativeNodeId,
     options: &IntersectionObserverOptions,

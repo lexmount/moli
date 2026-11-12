@@ -16,7 +16,7 @@ use super::{
     document_runtime::DomHandle,
     exception_reporting::{V8ExceptionReport, build_event_handler_exception_report},
     native_bridge::CALLBACK_ERROR_WINDOW_HANDLE_SLOT,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{v8_string, v8str},
 };
 

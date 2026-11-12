@@ -35,7 +35,7 @@ struct ChildWindowRetirement {
     local_window: Option<crate::frame_owner_model::LocalWindowId>,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Stop every outgoing Document in this subtree from admitting another
     /// browsing context before cancellation dispatches author callbacks.
     pub(crate) fn disable_subframe_loading_for_document_subtree(

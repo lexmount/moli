@@ -489,7 +489,7 @@ fn window_receiver_child_handle<'s>(
 
 fn entered_window_dispatch_scope(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> OwnerDispatchScope {
     // The HTML entry settings object follows the context that entered the
     // script or microtask, not the borrowed Window method's native realm.
@@ -508,7 +508,7 @@ fn entered_window_dispatch_scope(
 
 pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Url {
     let entry_scope = entered_window_dispatch_scope(scope, host);
     match entry_scope {
@@ -531,7 +531,7 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
 
 fn window_open_entered_document_url(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Url {
     if let Some(handle) = entered_child_window_handle(scope) {
         return host.document_url_for_child_context(handle);
@@ -549,7 +549,7 @@ fn window_open_entered_document_url(
 
 fn window_open_entered_policy_container<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
     entered_window: v8::Local<'s, v8::Object>,
 ) -> DocumentPolicyContainer {
     // Use the same creator Window that supplies the opener and its origin;
@@ -571,7 +571,7 @@ fn window_open_entered_policy_container<'s>(
 
 fn window_open_entered_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Option<v8::Local<'s, v8::Object>> {
     match host.entered_owner_dispatch_scope(scope) {
         crate::native_bridge::OwnerDispatchScope::Top => {
@@ -624,7 +624,7 @@ fn navigate_window_open_self<'s>(
 
 fn existing_named_child_window_for_window_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     target_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {

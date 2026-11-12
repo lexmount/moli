@@ -74,7 +74,7 @@ fn selection_modify_target_in_editing_host<'s>(
 }
 
 fn native_selection_modify_target_in_editing_host(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
     offset: u32,
@@ -142,7 +142,7 @@ fn native_selection_modify_target_in_editing_host(
 }
 
 fn native_selection_modify_target_from_editing_boundary(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
     offset: u32,
@@ -170,7 +170,7 @@ fn native_selection_modify_target_from_editing_boundary(
 }
 
 fn next_editable_text_position_after_boundary(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
     offset: u32,
@@ -200,7 +200,7 @@ fn next_editable_text_position_after_boundary(
 }
 
 fn previous_editable_text_position_before_boundary(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
     offset: u32,
@@ -234,7 +234,7 @@ fn previous_editable_text_position_before_boundary(
 }
 
 fn first_editable_text_in_following_siblings(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     first: DomHandle,
 ) -> Option<DomHandle> {
@@ -249,7 +249,7 @@ fn first_editable_text_in_following_siblings(
 }
 
 fn last_editable_text_in_preceding_siblings(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     first: DomHandle,
 ) -> Option<DomHandle> {
@@ -267,7 +267,7 @@ fn last_editable_text_in_preceding_siblings(
 }
 
 fn first_editable_text_descendant(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
 ) -> Option<DomHandle> {
@@ -290,7 +290,7 @@ fn first_editable_text_descendant(
 }
 
 fn last_editable_text_descendant(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
 ) -> Option<DomHandle> {
@@ -314,7 +314,7 @@ fn last_editable_text_descendant(
 }
 
 fn node_belongs_to_editing_host(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     editing_host: DomHandle,
     node: DomHandle,
 ) -> bool {
@@ -322,7 +322,7 @@ fn node_belongs_to_editing_host(
 }
 
 fn child_handle_at_offset(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     node: DomHandle,
     offset: u32,
 ) -> Option<DomHandle> {

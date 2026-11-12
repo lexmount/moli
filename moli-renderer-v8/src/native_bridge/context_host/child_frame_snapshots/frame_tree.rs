@@ -1,4 +1,4 @@
-use super::super::{ChildBrowsingContextBootstrap, JsContextHost, child_frames::WebStorageScope};
+use super::super::{ChildBrowsingContextBootstrap, PageScriptHost, child_frames::WebStorageScope};
 use super::ChildBrowsingContextFrameSnapshot;
 use url::Url;
 
@@ -9,7 +9,7 @@ pub(in crate::native_bridge::context_host::child_frame_snapshots) fn child_brows
     bootstrap.security_origin_inherited() || moli_url::is_about_blank(url)
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn child_browsing_context_child_frame_count(
         &mut self,
         handle: crate::document_runtime::DomHandle,

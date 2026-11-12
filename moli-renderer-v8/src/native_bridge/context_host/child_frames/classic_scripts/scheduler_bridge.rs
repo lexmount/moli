@@ -1,11 +1,11 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::{
     document_runtime::DomHandle, document_script_scheduler::FrameDocumentReadyActionRoute,
     frame_owner_model::FrameDocumentClassicScriptSourceLoadTask,
     page_task_queue::RendererPageChildClassicScriptSourceLoadTarget,
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn queue_child_classic_script_source_load_task(
         &mut self,
         handle: DomHandle,

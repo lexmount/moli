@@ -99,7 +99,7 @@ fn reported_exception_details<'s>(
 
 pub(crate) fn dispatch_window_report_error_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     message: &str,
     filename: Option<&str>,
 ) -> std::result::Result<(), String> {
@@ -129,7 +129,7 @@ pub(crate) fn dispatch_window_report_error_message<'s>(
 
 pub(crate) fn dispatch_window_error_event_with_details<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     message: &str,
     filename: &str,
     lineno: u32,

@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::page_task_queue::RendererTopLevelNavigationHandoff;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererDocumentLifecycleIdentity,
@@ -95,7 +95,7 @@ pub(crate) enum PendingTopLevelNavigation {
     HistoryTraversal(RendererPendingTopLevelHistoryTraversal),
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn record_session_history_update(
         &mut self,
         update: moli_page_types::SessionHistoryUpdate,

@@ -5,7 +5,7 @@ use crate::native_bridge::document::{detached_native_handle_for_runtime, is_attr
 
 fn required_tree_insertion_node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     value: v8::Local<'_, v8::Value>,
     invalid_type_message: &'static str,
@@ -26,7 +26,7 @@ fn required_tree_insertion_node_arg_handle(
 fn set_original_node_arg_or_wrapped_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'s, v8::Value>,
     handle: DomHandle,
 ) {
@@ -181,7 +181,7 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
 
 pub(crate) fn validate_pre_insert_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference_child: Option<DomHandle>,
@@ -218,7 +218,7 @@ pub(crate) fn validate_pre_insert_handles(
 
 fn validate_pre_insert_parent_and_ancestor(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
 ) -> bool {
@@ -233,7 +233,7 @@ fn validate_pre_insert_parent_and_ancestor(
 
 fn validate_pre_insert_node_type_and_document(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference_child: Option<DomHandle>,
@@ -263,7 +263,7 @@ fn validate_pre_insert_node_type_and_document(
     true
 }
 
-pub(super) fn node_can_contain_children(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn node_can_contain_children(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
         matches!(
             node.node_type(),
@@ -290,7 +290,7 @@ fn node_type_is_text_like(node_type: NodeType) -> bool {
 }
 
 pub(super) fn pre_insert_validation_handles(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Vec<DomHandle> {
     if runtime
@@ -362,7 +362,7 @@ pub(in crate::native_bridge) fn node_move_before_callback(
 
 fn node_move_before_after_argument_validation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference_child: Option<DomHandle>,
@@ -417,7 +417,7 @@ fn node_move_before_after_argument_validation(
 
 use self::node_can_contain_children as node_move_before_is_valid_parent;
 
-fn node_move_before_is_valid_child(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn node_move_before_is_valid_child(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().node(handle).is_some_and(|node| {
         matches!(
             node.node_type(),
@@ -431,7 +431,7 @@ fn node_move_before_is_valid_child(runtime: &JsContextHost, handle: DomHandle) -
 }
 
 pub(super) fn node_is_host_including_inclusive_ancestor(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     ancestor: DomHandle,
     node: DomHandle,
 ) -> bool {
@@ -441,7 +441,7 @@ pub(super) fn node_is_host_including_inclusive_ancestor(
 }
 
 fn node_move_before_shadow_including_root(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let mut root = runtime.dom_host().root_node_handle(handle)?;

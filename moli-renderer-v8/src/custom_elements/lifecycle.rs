@@ -4,12 +4,12 @@ use super::super::{
     document_runtime::DomHandle,
     exception_reporting::{CallbackExceptionLogLevel, invoke_callback_with_report},
     host::report_event_listener_exception,
-    native_bridge::{JsContextHost, wrapped_handle_value},
+    native_bridge::{PageScriptHost, wrapped_handle_value},
 };
 
 pub(super) fn invoke_custom_element_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     callback_name: &str,
     callback: v8::Local<'s, v8::Function>,
     receiver: v8::Local<'s, v8::Value>,
@@ -37,7 +37,7 @@ pub(super) fn invoke_custom_element_callback<'s>(
 
 pub(crate) fn call_lifecycle_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     callback_name: &str,
 ) {
@@ -71,7 +71,7 @@ pub(crate) fn call_lifecycle_callback(
 
 pub(super) fn custom_element_callback_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     wrapped_handle_value(scope, host_ptr, handle)

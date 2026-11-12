@@ -743,14 +743,14 @@ pub(in crate::context_bootstrap) fn resolve_worker_script_url(
 }
 
 pub(in crate::context_bootstrap) fn document_query_encoding_override(
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Option<&'static encoding_rs::Encoding> {
     form_output_encoding_for_label(host.document_character_set())
         .filter(|encoding| *encoding != encoding_rs::UTF_8)
 }
 
 pub(in crate::context_bootstrap) fn worker_constructor_base_url(
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Url {
     host.active_child_subresource_request_handle()
         .and_then(|handle| host.child_browsing_context_base_url(handle))
@@ -763,7 +763,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_base_url(
 
 pub(in crate::context_bootstrap) fn worker_creator_secure_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
     child_handle: Option<DomHandle>,
 ) -> bool {
     // Loaded lightweight popups share the opener's V8 realm, but have their

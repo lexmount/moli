@@ -103,7 +103,7 @@ pub(super) fn inline_style_declaration_state_from_css_text(
 }
 
 pub(super) fn inline_style_declaration_state_for_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     base_url: Option<&url::Url>,
 ) -> CssInlineStyleDeclarationState {

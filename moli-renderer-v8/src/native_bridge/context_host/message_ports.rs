@@ -1,7 +1,7 @@
 use super::*;
 use crate::types::MessagePortId;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn message_port_registry(&self) -> SharedMessagePortRegistry {
         self.message_port_registry.clone()
     }

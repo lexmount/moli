@@ -3,14 +3,14 @@ use super::super::{
     filters::{TraversalFilterResult, traversal_filter_result},
 };
 use super::shared::{next_preorder_node, node_is_inside_root, previous_preorder_node};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 #[cfg(test)]
 use std::collections::HashSet;
 
 pub(in crate::native_bridge::traversal) fn node_iterator_next_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &NodeIteratorSnapshot,
 ) -> Result<(Option<DomHandle>, DomHandle, bool), ()> {
     iterator_traverse_step(scope, runtime_ptr, IteratorDirection::Forward, state)
@@ -18,7 +18,7 @@ pub(in crate::native_bridge::traversal) fn node_iterator_next_node(
 
 pub(in crate::native_bridge::traversal) fn node_iterator_previous_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &NodeIteratorSnapshot,
 ) -> Result<(Option<DomHandle>, DomHandle, bool), ()> {
     iterator_traverse_step(scope, runtime_ptr, IteratorDirection::Backward, state)
@@ -32,7 +32,7 @@ enum IteratorDirection {
 
 fn iterator_traverse_step(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     direction: IteratorDirection,
     state: &NodeIteratorSnapshot,
 ) -> Result<(Option<DomHandle>, DomHandle, bool), ()> {
@@ -93,7 +93,7 @@ fn iterator_traverse_step(
 
 fn find_accepted_node_from(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &NodeIteratorSnapshot,
     direction: IteratorDirection,
     mut candidate: Option<DomHandle>,

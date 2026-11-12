@@ -1,7 +1,7 @@
 use moli_page_types::DomScrollIntoViewRect;
 
 use crate::{
-    document_runtime::DomHandle, native_bridge::JsContextHost,
+    document_runtime::DomHandle, native_bridge::PageScriptHost,
     scroll_options::ScrollLogicalPosition as ScrollIntoViewAlignment,
 };
 
@@ -64,7 +64,7 @@ fn aligned_scroll_position(
 
 pub(crate) fn scroll_node_into_view_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
@@ -83,7 +83,7 @@ pub(crate) fn scroll_node_into_view_if_needed(
 
 pub(super) fn scroll_node_into_view(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
     horizontal: ScrollIntoViewAlignment,
@@ -104,7 +104,7 @@ pub(super) fn scroll_node_into_view(
 
 fn scroll_node_into_view_with_params(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     relative_rect: Option<DomScrollIntoViewRect>,
     params: ScrollIntoViewParams,
@@ -138,7 +138,7 @@ fn scroll_node_into_view_with_params(
 
 pub(crate) fn scroll_node_into_view_at_center(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
     scroll_node_into_view_with_params(
@@ -156,7 +156,7 @@ pub(crate) fn scroll_node_into_view_at_center(
 
 pub(crate) fn scroll_node_into_view_at_start(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Result<Option<bool>, moli_layout::LayoutError> {
     scroll_node_into_view_with_params(
@@ -177,7 +177,7 @@ pub(crate) fn scroll_node_into_view_at_start(
 /// frame, then continue with the frame owner.
 fn perform_bubbling_scroll_into_view(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     mut geometry: moli_layout::LayoutScrollIntoViewGeometry<DomHandle>,
     params: ScrollIntoViewParams,

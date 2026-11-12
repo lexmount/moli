@@ -1,4 +1,4 @@
-use super::super::{JsContextHost, PendingWindowMessageEndpoint};
+use super::super::{PageScriptHost, PendingWindowMessageEndpoint};
 use crate::{
     context_bootstrap::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
@@ -678,7 +678,7 @@ pub(crate) fn caller_can_access_window<'s>(
     contexts_can_script_access(scope, accessing, accessed)
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn refresh_child_window_access_surfaces_after_origin_mutation(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -803,7 +803,7 @@ struct CrossOriginWindowLocationAccessorDeclaration {
     location: (),
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn install_default_world_state_for_child_window(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -1504,7 +1504,7 @@ impl JsContextHost {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn child_performance_navigation_type(&self, handle: DomHandle) -> String {
         self.child_browsing_contexts
             .get(&handle)
@@ -2444,7 +2444,7 @@ fn cross_origin_location_navigate<'s>(
 }
 
 fn cross_origin_location_target_is_fragment_navigation(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     handle: DomHandle,
     target: &url::Url,
 ) -> bool {

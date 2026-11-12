@@ -10,7 +10,7 @@ use crate::{
 
 pub(super) fn pair_foreign_node_with_live_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     foreign: v8::Local<'_, v8::Object>,
     live_handle: DomHandle,
 ) -> Option<()> {
@@ -19,7 +19,7 @@ pub(super) fn pair_foreign_node_with_live_handle(
 
 pub(super) fn pair_foreign_node_with_live_handle_for_identity(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     foreign: v8::Local<'_, v8::Object>,
     live_handle: DomHandle,
 ) -> Option<()> {
@@ -28,7 +28,7 @@ pub(super) fn pair_foreign_node_with_live_handle_for_identity(
 
 fn pair_foreign_node_with_live_handle_inner(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     foreign: v8::Local<'_, v8::Object>,
     live_handle: DomHandle,
     attach_live_delegate: bool,
@@ -77,7 +77,7 @@ fn pair_foreign_node_with_live_handle_inner(
 
 fn foreign_node_type_matches_live_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     foreign: v8::Local<'_, v8::Object>,
     live_handle: DomHandle,
 ) -> bool {

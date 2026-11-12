@@ -115,7 +115,7 @@ fn font_face_set_document_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
 ) -> Option<(
-    *mut crate::native_bridge::JsContextHost,
+    *mut crate::native_bridge::PageScriptHost,
     crate::document_runtime::DomHandle,
 )> {
     let document = get_private_value(scope, fonts, DOCUMENT_FONT_FACE_SET_OWNER)
@@ -156,7 +156,7 @@ fn reconcile_document_font_face_set_ready<'s>(
 
 pub(crate) fn settle_document_font_face_set_ready(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) {
     let host = unsafe { &*host_ptr };

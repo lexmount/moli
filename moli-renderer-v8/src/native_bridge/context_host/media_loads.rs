@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, MediaLoadSequenceId, PendingMediaLoadNetworkState, PendingMediaLoadOwner,
+    MediaLoadSequenceId, PageScriptHost, PendingMediaLoadNetworkState, PendingMediaLoadOwner,
     PendingMediaLoadSequence,
 };
 use crate::{
@@ -23,7 +23,7 @@ pub(crate) enum PendingMediaLoadTerminalFollowup {
     Failed,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_pending_media_load_sequence(
         &mut self,
         media_handle: DomHandle,

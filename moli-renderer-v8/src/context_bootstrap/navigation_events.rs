@@ -567,7 +567,7 @@ pub(super) fn cancel_active_navigation_event<'s>(
 
 pub(super) fn dispatch_popstate_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     child_handle: Option<crate::document_runtime::DomHandle>,
     state: v8::Local<'s, v8::Value>,
 ) {

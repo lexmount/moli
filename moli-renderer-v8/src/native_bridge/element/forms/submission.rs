@@ -23,7 +23,7 @@ use url::Url;
 /// and must never fall through to ordinary character insertion.
 pub(crate) fn perform_implicit_submission_from_control(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     control: DomHandle,
     modifiers: u8,
 ) -> Option<RendererInputDispatchOutcome> {
@@ -54,7 +54,7 @@ pub(crate) fn perform_implicit_submission_from_control(
     ))
 }
 
-fn input_blocks_implicit_submission(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn input_blocks_implicit_submission(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -81,7 +81,7 @@ fn input_blocks_implicit_submission(runtime: &JsContextHost, handle: DomHandle) 
 
 fn perform_implicit_form_submission(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     modifiers: u8,
 ) -> RendererInputDispatchOutcome {
@@ -163,7 +163,7 @@ struct FormRequestSubmitArgs<'s> {
 
 fn wrap_handle_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: Option<DomHandle>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     crate::native_bridge::bridge::wrapped_handle_value(scope, runtime_ptr, handle?)
@@ -171,7 +171,7 @@ fn wrap_handle_value<'s>(
 
 fn wrap_handle_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     crate::native_bridge::bridge::wrapped_handle_value(scope, runtime_ptr, handle)
@@ -180,7 +180,7 @@ fn wrap_handle_object<'s>(
 
 pub(crate) fn submit_form_with_submit_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
@@ -207,7 +207,7 @@ pub(crate) fn submit_form_with_submit_event(
 }
 
 fn form_is_connected_or_in_detached_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
 ) -> bool {
     let dom_host = runtime.dom_host();
@@ -222,7 +222,7 @@ fn form_is_connected_or_in_detached_document(
 
 fn submit_form_with_submit_event_inner(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
@@ -285,7 +285,7 @@ fn submit_form_with_submit_event_inner(
 }
 
 fn form_submission_skips_constraint_validation(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     submitter_handle: Option<DomHandle>,
 ) -> bool {
@@ -393,7 +393,7 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
 
 fn dispatch_form_reset_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     receiver: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
@@ -502,7 +502,7 @@ pub(in crate::native_bridge) fn form_submit_callback<'s>(
 
 pub(in crate::native_bridge) fn reset_form_default_action(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     callback_timing: FormAssociatedResetCallbackTiming,
 ) -> bool {
@@ -573,7 +573,7 @@ pub(in crate::native_bridge) fn reset_form_default_action(
 
 pub(in crate::native_bridge) fn submit_form_default_action(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     user_initiated: bool,
@@ -788,7 +788,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
 
 fn form_sandbox_blocks_target_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source_document: Option<DomHandle>,
     target_name: Option<&str>,
 ) -> bool {
@@ -817,7 +817,7 @@ fn form_sandbox_blocks_target_navigation(
 
 fn submit_dialog_form(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
 ) -> bool {
@@ -832,7 +832,7 @@ fn submit_dialog_form(
     close_dialog_element(scope, runtime_ptr, dialog, result.as_deref())
 }
 
-fn nearest_ancestor_dialog(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn nearest_ancestor_dialog(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = runtime.dom_host().parent_node(handle);
     while let Some(parent) = current {
         if runtime.dom_host().is_html_element_named(parent, "dialog") {
@@ -844,7 +844,7 @@ fn nearest_ancestor_dialog(runtime: &JsContextHost, handle: DomHandle) -> Option
 }
 
 fn dialog_submission_result(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     submitter: Option<DomHandle>,
 ) -> Option<String> {
     let Some(submitter) = submitter else {
@@ -874,7 +874,7 @@ enum FormSubmissionMethod {
 
 fn submit_form_to_popup_browsing_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     popup_id: u64,
@@ -957,7 +957,7 @@ fn submit_form_to_popup_browsing_context(
 
 fn dispatch_named_iframe_form_navigation_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target_name: &str,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
@@ -1004,7 +1004,7 @@ fn dispatch_named_iframe_form_navigation_event(
 
 fn submit_post_form_to_top_level_browsing_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     resolved_url: Url,
@@ -1056,7 +1056,7 @@ fn submit_post_form_to_top_level_browsing_context(
 
 fn submit_post_form_to_child_browsing_context(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     target_document: DomHandle,
@@ -1120,7 +1120,7 @@ fn submit_post_form_to_child_browsing_context(
 
 fn build_form_submission_request(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     action: String,
@@ -1181,7 +1181,7 @@ fn build_form_submission_request(
 
 fn serialize_form_submission_entries(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
     submission_encoding: &'static encoding_rs::Encoding,
@@ -1220,7 +1220,7 @@ fn rewrite_charset_entries_for_submission(
 }
 
 fn selected_form_submission_encoding(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
 ) -> &'static encoding_rs::Encoding {
     form_submission_encoding(
@@ -1230,7 +1230,7 @@ fn selected_form_submission_encoding(
 }
 
 fn resolve_form_submission_action(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
 ) -> String {
@@ -1248,7 +1248,7 @@ fn resolve_form_submission_action(
         .unwrap_or_else(|| form_owner_document_url(runtime, form_handle))
 }
 
-fn form_owner_document_url(runtime: &JsContextHost, form_handle: DomHandle) -> String {
+fn form_owner_document_url(runtime: &PageScriptHost, form_handle: DomHandle) -> String {
     runtime
         .dom_host()
         .node(form_handle)
@@ -1264,7 +1264,7 @@ fn form_owner_document_url(runtime: &JsContextHost, form_handle: DomHandle) -> S
 }
 
 fn resolve_form_submission_method(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
 ) -> &'static str {
@@ -1277,7 +1277,7 @@ fn resolve_form_submission_method(
 }
 
 fn resolve_form_submission_enctype(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
 ) -> &'static str {
@@ -1348,7 +1348,7 @@ fn normalize_form_submission_pairs(entries: Vec<(String, String)>) -> Vec<(Strin
         .collect()
 }
 
-fn build_form_reset_plan(runtime: &JsContextHost, handle: DomHandle) -> Option<FormResetPlan> {
+fn build_form_reset_plan(runtime: &PageScriptHost, handle: DomHandle) -> Option<FormResetPlan> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
     match element.local_name() {
         "input" => {

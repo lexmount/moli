@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, MediaLoadSequenceId, PendingMediaTextTrackGate,
+    MediaLoadSequenceId, PageScriptHost, PendingMediaTextTrackGate,
     PendingTextTrackLoadNetworkState, PendingTextTrackLoadSequence, TextTrackLoadSequenceId,
 };
 use crate::{
@@ -57,7 +57,7 @@ impl PendingMediaCanPlayFollowup {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn current_pending_text_track_load_task(
         &self,
         task_id: RendererPageTextTrackLoadTaskId,
@@ -107,7 +107,7 @@ impl JsContextHost {
     pub(crate) fn apply_authorized_text_track_load_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task_id: RendererPageTextTrackLoadTaskId,
         target: super::WindowDocumentTaskTarget,
         kind: RendererPageTextTrackLoadTaskKind,

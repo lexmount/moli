@@ -12,7 +12,7 @@ fn slotchange_microtask_callback(
     crate::observer_runtime::flush_slotchange_microtask(scope, host_ptr);
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn initialize_native_bridge_bindings(
         &mut self,
         scope: &mut v8::PinScope<'_, '_, ()>,
@@ -293,7 +293,7 @@ impl JsContextHost {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn new(
         runtime: &mut DocumentRuntime,
         mut frame_owner_store: FrameOwnerStore,
@@ -346,7 +346,7 @@ impl JsContextHost {
         let mut host = Self {
             session_histories: Default::default(),
             pending_history_traversal_admissions: Default::default(),
-            runtime: runtime as *mut DocumentRuntime,
+            document_runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
@@ -1318,8 +1318,8 @@ impl JsContextHost {
     }
 
     pub(crate) fn queue_native_dynamic_module_evaluation_fulfilled(&mut self, reaction_id: u64) {
-        let import_owner =
-            unsafe { &*self.runtime }.native_dynamic_module_evaluation_reaction_owner(reaction_id);
+        let import_owner = unsafe { &*self.document_runtime }
+            .native_dynamic_module_evaluation_reaction_owner(reaction_id);
         let Some(import_owner) = import_owner else {
             tracing::debug!(
                 reaction_id,
@@ -1340,8 +1340,8 @@ impl JsContextHost {
         reaction_id: u64,
         reason: v8::Global<v8::Value>,
     ) {
-        let import_owner =
-            unsafe { &*self.runtime }.native_dynamic_module_evaluation_reaction_owner(reaction_id);
+        let import_owner = unsafe { &*self.document_runtime }
+            .native_dynamic_module_evaluation_reaction_owner(reaction_id);
         let Some(import_owner) = import_owner else {
             tracing::debug!(
                 reaction_id,
@@ -1405,7 +1405,7 @@ impl JsContextHost {
     pub(crate) fn set_character_data_utf16_units(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         units: &[u16],
     ) -> bool {
@@ -1415,7 +1415,7 @@ impl JsContextHost {
     pub(crate) fn set_character_data_utf16_units_for_edit(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         units: &[u16],
     ) -> bool {
@@ -1425,7 +1425,7 @@ impl JsContextHost {
     fn set_character_data_utf16_units_with_options(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         units: &[u16],
         force_mutation_record: bool,
@@ -1455,7 +1455,7 @@ impl JsContextHost {
     pub(crate) fn set_text_content(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         value: &str,
     ) -> bool {
@@ -2247,11 +2247,12 @@ impl JsContextHost {
     }
 
     pub(crate) fn enter_parser_pause(&mut self) -> crate::document_runtime::ParserPauseGuard {
-        unsafe { &mut *self.runtime }.enter_parser_pause()
+        unsafe { &mut *self.document_runtime }.enter_parser_pause()
     }
 
     pub(crate) fn should_checkpoint_before_parser_custom_element_constructor(&self) -> bool {
-        unsafe { &*self.runtime }.should_checkpoint_before_parser_custom_element_constructor()
+        unsafe { &*self.document_runtime }
+            .should_checkpoint_before_parser_custom_element_constructor()
     }
 
     pub(crate) fn custom_elements_for_node_handle(

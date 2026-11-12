@@ -516,7 +516,7 @@ pub(super) fn timeout_error_value<'s>(
 
 pub(crate) fn create_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut super::JsContextHost,
+    host: &mut super::PageScriptHost,
     aborted: bool,
     reason: Option<v8::Local<'_, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {

@@ -4,7 +4,7 @@ mod background;
 mod font;
 
 pub(in crate::native_bridge::element::styles) fn style_property_value_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -26,7 +26,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_value_with_conte
 }
 
 pub(super) fn computed_style_property_value_with_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
@@ -35,7 +35,7 @@ pub(super) fn computed_style_property_value_with_context(
 }
 
 pub(super) fn computed_style_property_value_after_style_update(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
@@ -216,7 +216,7 @@ pub(super) fn computed_property_requires_stylesheet_sources(
 }
 
 pub(super) fn computed_style_property_value_with_prepared_inputs(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     inputs: &FullStyleWorldSnapshot,
@@ -242,7 +242,7 @@ pub(super) fn computed_transform_matrix_value(value: &str) -> Option<String> {
 }
 
 fn computed_style_property_value_from_moli(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -294,7 +294,7 @@ fn computed_style_property_value_from_moli(
 }
 
 fn computed_inherited_css_keyword_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     initial: &str,
@@ -312,7 +312,7 @@ fn computed_inherited_css_keyword_property_value(
     }
 }
 
-fn computed_text_size_adjust_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn computed_text_size_adjust_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let Some(value) =
         inline_style_property_value_for_inline_style(runtime, handle, "text-size-adjust")
     else {
@@ -328,7 +328,7 @@ fn computed_text_size_adjust_value(runtime: &JsContextHost, handle: DomHandle) -
 }
 
 pub(super) fn computed_text_size_adjust_specified_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     value: &str,
 ) -> Option<String> {
@@ -345,7 +345,7 @@ pub(super) fn computed_text_size_adjust_specified_value(
 }
 
 fn computed_non_inherited_css_keyword_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     initial: &str,
@@ -362,7 +362,7 @@ fn computed_non_inherited_css_keyword_property_value(
 }
 
 fn computed_text_emphasis_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -374,7 +374,7 @@ fn computed_text_emphasis_shorthand_value(
 }
 
 fn computed_font_variant_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> String {
@@ -386,7 +386,7 @@ fn computed_font_variant_shorthand_value(
 }
 
 fn computed_mask_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> String {
@@ -416,7 +416,7 @@ fn computed_mask_shorthand_value(
 }
 
 fn computed_webkit_text_stroke_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -436,7 +436,7 @@ fn computed_webkit_text_stroke_shorthand_value(
 }
 
 fn computed_text_decoration_paint_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -454,7 +454,7 @@ fn computed_text_decoration_paint_value(
 }
 
 pub(super) fn inline_text_decoration_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let Some((entries, shared_css_wide_keyword)) =
@@ -475,7 +475,7 @@ pub(super) fn inline_text_decoration_shorthand_value(
 }
 
 fn computed_text_decoration_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -538,7 +538,7 @@ fn serialize_text_decoration_shorthand(
 }
 
 fn computed_text_decoration_color_is_currentcolor(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> bool {
@@ -570,7 +570,7 @@ fn text_decoration_component_or_initial<'a>(value: &'a str, initial: &'static st
 }
 
 fn computed_inline_text_decoration_line_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let entry = inline_style_entry_for_inline_style(runtime, handle, "text-decoration-line")?;
@@ -587,7 +587,7 @@ fn computed_inline_text_decoration_line_value(
 }
 
 fn computed_inline_zoom_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<String> {
@@ -600,7 +600,7 @@ fn computed_inline_zoom_value(
 }
 
 fn computed_animation_range_endpoint_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -739,7 +739,7 @@ fn resolve_css_length_only(value: &str, context: moli_css_parse::CssNumericConte
 }
 
 fn computed_css_numeric_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -809,7 +809,7 @@ fn css_numeric_computed_property_rule(property: &str) -> Option<CssNumericComput
 }
 
 fn css_numeric_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> moli_css_parse::CssNumericContext {
     let read = ComputedStyleRead::new(runtime, handle);
@@ -822,7 +822,7 @@ fn css_numeric_context(
 }
 
 pub(super) fn css_numeric_context_with_viewport_and_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     viewport: StyleViewport,
     resolution: StyleResolutionContext<'_>,
@@ -874,7 +874,7 @@ pub(super) fn css_numeric_context_with_viewport_and_resolution(
 }
 
 fn nearest_size_container_width(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<f64> {
@@ -893,7 +893,7 @@ fn nearest_size_container_width(
 }
 
 fn element_is_size_container(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> bool {
@@ -956,7 +956,7 @@ fn normalize_css_number_for_serialization(value: f64) -> f64 {
 }
 
 fn computed_animation_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -979,7 +979,7 @@ fn computed_animation_shorthand_value(
 }
 
 pub(super) fn inline_animation_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let Some((entries, shared_css_wide_keyword)) = inline_shorthand_entries(
@@ -1011,7 +1011,7 @@ pub(super) fn inline_animation_shorthand_value(
 }
 
 pub(super) fn inline_animation_range_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let Some((entries, shared_css_wide_keyword)) = inline_shorthand_entries(
@@ -1029,7 +1029,7 @@ pub(super) fn inline_animation_range_shorthand_value(
 }
 
 fn computed_animation_range_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -1152,7 +1152,7 @@ pub(crate) fn serialize_animation_shorthand_from_longhands(longhands: [Vec<Strin
 }
 
 fn animation_longhand_components(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
     property: &str,
@@ -1755,7 +1755,7 @@ fn css_steps_count_calc_expression_is_valid(value: &str) -> bool {
 }
 
 fn computed_timing_function_list_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -2108,14 +2108,14 @@ fn split_top_level_raw_component_values(
 }
 
 pub(super) fn inline_transition_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> String {
     transition_shorthand_from_longhands(runtime, handle, None)
 }
 
 fn computed_transition_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -2123,7 +2123,7 @@ fn computed_transition_shorthand_value(
 }
 
 fn transition_shorthand_from_longhands(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: Option<StyleComputationContext>,
 ) -> String {
@@ -2158,7 +2158,7 @@ fn transition_shorthand_from_longhands(
 }
 
 fn inline_shorthand_entries(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     longhands: &[&str],
     reset_only_longhands: &[&str],
@@ -2200,7 +2200,7 @@ fn inline_shorthand_entries(
 }
 
 fn inline_longhand_property_value_for_shorthand(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -2217,7 +2217,7 @@ fn inline_longhand_property_value_for_shorthand(
 }
 
 fn inline_longhand_property_priority_for_shorthand(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<bool> {
@@ -2321,7 +2321,7 @@ fn serialize_single_transition(
 }
 
 fn shadow_tree_inherited_value_for_initial_stylo_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,

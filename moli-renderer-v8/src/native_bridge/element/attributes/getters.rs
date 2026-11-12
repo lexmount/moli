@@ -17,7 +17,7 @@ pub(super) fn element_method_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     method: &str,
 ) -> Option<(
-    *mut super::super::super::JsContextHost,
+    *mut super::super::super::PageScriptHost,
     crate::document_runtime::DomHandle,
 )> {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, args)

@@ -4,7 +4,7 @@ use crate::{
     context_bootstrap,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::Node,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 struct LiveRangeRemoval {
@@ -125,7 +125,7 @@ impl DocumentRuntime {
     pub(super) fn apply_live_range_pre_insert_plan(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         plan: &LiveRangePreInsertPlan,
     ) {
         for removal in &plan.removals {

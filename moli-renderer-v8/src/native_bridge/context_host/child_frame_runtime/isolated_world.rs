@@ -1,5 +1,5 @@
 use super::super::{
-    ChildDefaultContextBootstrapConfig, JsContextHost, PrebootstrappedChildDefaultContext,
+    ChildDefaultContextBootstrapConfig, PageScriptHost, PrebootstrappedChildDefaultContext,
     WeakPrebootstrappedChildDefaultContexts, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextOwner,
 };
@@ -19,7 +19,7 @@ use crate::{
 use anyhow::Result;
 use std::{cell::RefCell, rc::Weak};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn bind_child_window_indexed_db_factory_after_context_registration<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -48,7 +48,7 @@ impl JsContextHost {
 
     pub(crate) fn install_child_default_context_bootstrap(
         &mut self,
-        host: Weak<RefCell<JsContextHost>>,
+        host: Weak<RefCell<PageScriptHost>>,
         pending_contexts: WeakPrebootstrappedChildDefaultContexts,
         resource_owner_id: crate::resource_owner::ResourceOwnerId,
         promise_reject_dispatch: crate::script_vm::PromiseRejectDispatchSlot,

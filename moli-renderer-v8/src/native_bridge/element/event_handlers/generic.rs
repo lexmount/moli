@@ -190,7 +190,7 @@ pub(crate) fn install_global_event_handler_template_bindings<'s>(
 
 fn event_handler_property_value_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut super::super::super::JsContextHost,
+    runtime_ptr: *mut super::super::super::PageScriptHost,
     target: EventTargetHandle,
     data: v8::Local<'s, v8::Value>,
 ) -> v8::Local<'s, v8::Value> {
@@ -207,7 +207,7 @@ fn event_handler_property_value_for_target<'s>(
 
 fn set_event_handler_property_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut super::super::super::JsContextHost,
+    runtime_ptr: *mut super::super::super::PageScriptHost,
     target: EventTargetHandle,
     data: v8::Local<'s, v8::Value>,
     value: v8::Local<'s, v8::Value>,
@@ -362,7 +362,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
 
 fn node_event_handler_target_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Context>> {
     let runtime = unsafe { &*runtime_ptr };
@@ -382,7 +382,7 @@ fn node_event_handler_target_context<'s>(
 
 pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
@@ -412,7 +412,7 @@ pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
 
 fn compile_node_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
@@ -587,7 +587,7 @@ fn handle_invalid_event_handler_receiver<'s>(
 
 pub(super) fn invalidate_event_attribute_handler(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &mut super::super::super::JsContextHost,
+    runtime: &mut super::super::super::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     name: &str,
 ) {

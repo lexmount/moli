@@ -7,11 +7,11 @@ use super::descendants::{
     last_accepted_descendant_through_non_reject,
 };
 use super::shared::child_handles;
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(in crate::native_bridge::traversal) fn tree_walker_parent_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &TreeWalkerSnapshot,
 ) -> Result<Option<DomHandle>, ()> {
     if state.current_node == state.root {
@@ -44,7 +44,7 @@ pub(in crate::native_bridge::traversal) fn tree_walker_parent_node(
 
 pub(in crate::native_bridge::traversal) fn tree_walker_next_sibling(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &TreeWalkerSnapshot,
 ) -> Result<Option<DomHandle>, ()> {
     if state.current_node == state.root {
@@ -104,7 +104,7 @@ pub(in crate::native_bridge::traversal) fn tree_walker_next_sibling(
 
 pub(in crate::native_bridge::traversal) fn tree_walker_previous_sibling(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &TreeWalkerSnapshot,
 ) -> Result<Option<DomHandle>, ()> {
     if state.current_node == state.root {
@@ -164,7 +164,7 @@ pub(in crate::native_bridge::traversal) fn tree_walker_previous_sibling(
 
 pub(in crate::native_bridge::traversal) fn tree_walker_next_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &TreeWalkerSnapshot,
 ) -> Result<Option<DomHandle>, ()> {
     if let Some(descendant) = first_accepted_descendant(
@@ -201,7 +201,7 @@ pub(in crate::native_bridge::traversal) fn tree_walker_next_node(
 
 pub(in crate::native_bridge::traversal) fn tree_walker_previous_node(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     state: &TreeWalkerSnapshot,
 ) -> Result<Option<DomHandle>, ()> {
     if state.current_node == state.root {
@@ -250,7 +250,7 @@ pub(in crate::native_bridge::traversal) fn tree_walker_previous_node(
 
 fn last_accepted_in_tree_walker_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: DomHandle,
     what_to_show: u32,
     filter: Option<&PreparedTraversalFilter>,

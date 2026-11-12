@@ -91,7 +91,7 @@ impl DocumentRuntime {
     pub(crate) fn apply_parser_stream_mutation_effects_to_live_dom_host(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         effects: DomMutationEffects,
     ) {
         self.assert_active_parser_document_incarnation();
@@ -560,7 +560,7 @@ impl DocumentRuntime {
     pub(crate) fn clone_node(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         deep: bool,
     ) -> Option<DomHandle> {
@@ -581,7 +581,7 @@ impl DocumentRuntime {
     pub(crate) fn import_node(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         handle: DomHandle,
         deep: bool,
@@ -609,7 +609,7 @@ impl DocumentRuntime {
     pub(crate) fn adopt_node(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         handle: DomHandle,
     ) -> Option<DomHandle> {
@@ -631,7 +631,7 @@ impl DocumentRuntime {
     pub(crate) fn adopt_native_node_collecting_adoption_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         handle: DomHandle,
     ) -> Option<DomHandle> {
@@ -648,7 +648,7 @@ impl DocumentRuntime {
     pub(crate) fn adopt_native_node_appending_to_current_reaction_queue(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         handle: DomHandle,
     ) -> Option<DomHandle> {
@@ -663,7 +663,7 @@ impl DocumentRuntime {
     fn adopt_native_node_enqueuing_adoption_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
         handle: DomHandle,
     ) -> Option<DomHandle> {
@@ -679,7 +679,7 @@ impl DocumentRuntime {
     fn apply_native_adoption_plan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
         plan: &TreeAdoptionPlan,
     ) -> Option<DomHandle> {
@@ -712,7 +712,7 @@ impl DocumentRuntime {
     fn sync_native_adoption_context_after_owner_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         plan: &TreeAdoptionPlan,
         stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
@@ -730,7 +730,7 @@ impl DocumentRuntime {
     fn queue_image_loads_after_owner_document_change(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
     ) {
         let mut stack = vec![root];
@@ -811,14 +811,14 @@ impl ParserMutationEffectsOwner for DocumentRuntime {
         )
     }
 
-    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
+    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut PageScriptHost) {
         self.ensure_parser_custom_element_reaction_queue(host_ptr);
     }
 
     fn finish_parser_mutation_effects(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         prepared: Self::Prepared,
     ) {
         let _ = finish_runtime_mutation_effects(self, scope, host_ptr, prepared);

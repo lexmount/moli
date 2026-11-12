@@ -4,7 +4,7 @@ use crate::util::v8str;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
-use super::super::super::super::JsContextHost;
+use super::super::super::super::PageScriptHost;
 use super::super::super::define_collection_value_property;
 use super::callbacks::{
     document_all_call_callback, document_all_item_callback, document_all_named_collection_getter,
@@ -45,7 +45,7 @@ struct DocumentAllCollectionSurfaceDeclaration<'scope> {
 
 pub(super) fn build_document_all_collection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let items = document_all_items_array(scope, runtime_ptr, document_handle)?;

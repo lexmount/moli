@@ -87,7 +87,7 @@ fn frozen_frame_transform(
 }
 
 fn root_to_document_frame(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     document: DomHandle,
 ) -> Option<moli_layout::LayoutTransform2D> {
     let dom = runtime.dom_host();
@@ -104,7 +104,7 @@ fn root_to_document_frame(
 }
 
 fn drag_related_target_in_document(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     document: DomHandle,
     mut related: DomHandle,
 ) -> Option<DomHandle> {
@@ -119,7 +119,7 @@ fn drag_related_target_in_document(
 
 fn create_drag_data_transfer_view_for_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
     store: &crate::context_bootstrap::NativeDragDataStore,
     mode: DragDataStoreMode,
@@ -134,7 +134,7 @@ fn create_drag_data_transfer_view_for_target<'s>(
 #[allow(clippy::too_many_arguments)]
 fn dispatch_native_drag_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     event_type: &str,
     target: DomHandle,
     related: Option<DomHandle>,
@@ -184,7 +184,7 @@ enum DragFinishReason {
 /// Take the session before calling script so every exit path ends it once.
 fn finish_drag_session<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     active: &mut Option<ActiveDragSession>,
     reason: DragFinishReason,
     coordinates: InputEventCoordinates,
@@ -261,7 +261,7 @@ fn author_drag_operation<'s>(
 
 fn accepted_drag_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
     transfer: v8::Local<'s, v8::Object>,
     canceled: bool,
@@ -283,7 +283,7 @@ fn accepted_drag_operation<'s>(
 /// leave using that view; a later update delivers over using a new view.
 fn update_drag_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &mut ActiveDragSession,
     target: Option<DomHandle>,
     coordinates: InputEventCoordinates,
@@ -391,7 +391,7 @@ fn update_drag_target<'s>(
 
 fn drop_drag_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &mut ActiveDragSession,
     coordinates: InputEventCoordinates,
     modifiers: u8,
@@ -471,7 +471,7 @@ fn drop_drag_target<'s>(
 
 fn native_drag_source(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     gesture: PendingDragGesture,
 ) -> Option<(DomHandle, RendererDragData)> {
     let runtime = unsafe { &*runtime_ptr };
@@ -596,7 +596,7 @@ fn touch_pointer_properties(event_name: &str, pointer_id: i32) -> RendererPointe
 
 fn dispatch_pointer_capture_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     pointer_id: i32,
     events: &[PointerCaptureDispatchEvent],
     coordinates: InputEventCoordinates,
@@ -646,7 +646,7 @@ fn dispatch_pointer_capture_events(
 
 fn release_pointer_capture_after_pointer_end(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     pointer_id: i32,
     coordinates: InputEventCoordinates,
     button: i32,
@@ -676,7 +676,7 @@ fn release_pointer_capture_after_pointer_end(
 
 fn dispatch_drag_pointer_suppression_boundaries(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     target: DomHandle,
     coordinates: InputEventCoordinates,
     pointer: &RendererPointerEventProperties,
@@ -726,7 +726,7 @@ fn dispatch_drag_pointer_suppression_boundaries(
 
 fn dispatch_touch_pointer_boundary_events(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     previous: Option<DomHandle>,
     current: Option<DomHandle>,
     x: f64,

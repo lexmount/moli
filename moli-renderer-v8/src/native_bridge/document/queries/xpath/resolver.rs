@@ -6,7 +6,7 @@ use crate::{
     },
     context_bootstrap::dispatch_window_error_event_with_details,
     exception_reporting::{CallbackExceptionLogLevel, V8ExceptionReport, log_callback_exception},
-    native_bridge::{JsContextHost, WindowExecutionContextIdentity},
+    native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
     util::context_host_ptr_from_global_bridge,
     webidl,
 };
@@ -23,7 +23,7 @@ use moli_xpath::NamespaceResolver;
 pub(super) struct V8XPathNamespaceResolver<'s, 'i> {
     scope: NonNull<v8::PinScope<'s, 'i>>,
     callback: Rc<webidl::PreparedWebIdlCallbackInterface>,
-    host_ptr: Option<*mut JsContextHost>,
+    host_ptr: Option<*mut PageScriptHost>,
     execution_context: Option<WindowExecutionContextIdentity>,
 }
 

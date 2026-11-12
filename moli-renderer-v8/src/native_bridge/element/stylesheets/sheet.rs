@@ -17,7 +17,7 @@ pub(super) const STYLE_SHEET_CACHE_SLOT: &str = "__moliStyleSheet";
 fn sync_sheet_from_linked_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sheet: v8::Local<'s, v8::Object>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     source: &crate::style_engine::StyloStylesheetSource,
 ) -> bool {
     let Some(stylesheet) = source
@@ -35,7 +35,7 @@ fn sync_sheet_from_linked_source<'s>(
 fn sync_csp_blocked_link_sheet_metadata<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sheet: v8::Local<'s, v8::Object>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     if let Some(disposition) = crate::stylesheet_blocking::stylesheet_link_disposition(
@@ -48,7 +48,7 @@ fn sync_csp_blocked_link_sheet_metadata<'s>(
 }
 
 fn linked_stylesheet_source(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Option<crate::style_engine::StyloStylesheetSource> {
     runtime.linked_stylesheet_source_for_owner(handle)
@@ -57,7 +57,7 @@ fn linked_stylesheet_source(
 fn sync_linked_sheet_media_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     sheet: v8::Local<'s, v8::Object>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     let media = runtime
@@ -264,7 +264,7 @@ pub(crate) fn sync_cached_style_sheet_media_from_owner<'s>(
 fn style_sheet_for_processing_instruction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    runtime: &mut crate::native_bridge::JsContextHost,
+    runtime: &mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     target: &str,
     data: &str,

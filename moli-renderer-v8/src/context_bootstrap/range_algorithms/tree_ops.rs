@@ -417,7 +417,7 @@ pub(in crate::context_bootstrap::range_algorithms) fn remove_child_internal_hand
 
 fn range_tree_op_node_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     let node = moli_webapi_declare::web_api_object_target(scope, node)?;
@@ -426,7 +426,7 @@ fn range_tree_op_node_handle<'s>(
 
 fn clone_node_internal_handle_with_host(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     deep: bool,
 ) -> Option<DomHandle> {
@@ -435,7 +435,7 @@ fn clone_node_internal_handle_with_host(
 
 fn append_child_internal_handle_with_host(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
 ) -> Option<()> {
@@ -446,7 +446,7 @@ fn append_child_internal_handle_with_host(
 
 fn insert_before_internal_handle_with_host(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference_child: Option<DomHandle>,
@@ -458,7 +458,7 @@ fn insert_before_internal_handle_with_host(
 
 fn remove_child_internal_handle_with_host(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
 ) -> Option<()> {

@@ -532,7 +532,7 @@ fn attr_metadata_from_native_attribute(attribute: &Attribute) -> DetachedAttrNod
 }
 
 fn live_native_attribute_metadata_for_target(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) -> Option<DetachedAttrNodeMetadata> {
@@ -549,7 +549,7 @@ fn live_native_attribute_metadata_for_target(
 }
 
 fn live_native_attribute_metadata_for_name(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> Option<DetachedAttrNodeMetadata> {
@@ -571,7 +571,7 @@ fn live_native_attribute_metadata_for_name(
 }
 
 fn live_native_attribute_metadata_for_namespace(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     namespace_uri: Option<&str>,
     local_name: &str,
@@ -590,7 +590,7 @@ fn live_native_attribute_metadata_for_namespace(
 }
 
 fn live_native_attribute_value_for_target(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) -> Option<String> {
@@ -681,7 +681,7 @@ fn detach_replaced_live_attr_node<'s>(
 
 fn set_live_attribute_node_native(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) {
@@ -709,7 +709,7 @@ fn set_live_attribute_node_native(
 
 fn remove_live_attribute_node_native(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     metadata: &DetachedAttrNodeMetadata,
 ) {

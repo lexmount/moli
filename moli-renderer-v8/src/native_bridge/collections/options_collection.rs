@@ -21,7 +21,7 @@ struct OptionsCollectionAddArgs<'s> {
 fn options_collection_descriptor(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
-) -> Option<(*mut JsContextHost, LiveCollectionDescriptor)> {
+) -> Option<(*mut PageScriptHost, LiveCollectionDescriptor)> {
     let Ok((runtime_ptr, descriptor)) = live_collection_descriptor_from_object(scope, receiver)
     else {
         throw_type_error(scope, "Illegal invocation");

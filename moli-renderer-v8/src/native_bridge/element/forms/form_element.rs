@@ -278,7 +278,7 @@ pub(in crate::native_bridge) fn form_elements_getter_function<'s>(
 }
 
 pub(crate) fn form_control_elements(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
 ) -> Vec<DomHandle> {
     let Some(scope) = FormControlScope::new(runtime, form_handle) else {
@@ -294,7 +294,7 @@ struct FormControlScope {
 }
 
 impl FormControlScope {
-    fn new(runtime: &JsContextHost, form: DomHandle) -> Option<Self> {
+    fn new(runtime: &PageScriptHost, form: DomHandle) -> Option<Self> {
         let dom = runtime.dom_host();
         if dom.is_html_element_named(form, "fieldset") {
             return Some(Self {
@@ -317,7 +317,7 @@ impl FormControlScope {
         })
     }
 
-    fn contains(self, runtime: &JsContextHost, candidate: DomHandle) -> bool {
+    fn contains(self, runtime: &PageScriptHost, candidate: DomHandle) -> bool {
         let dom = runtime.dom_host();
         let mut current = dom.parent_node(candidate);
         while let Some(handle) = current {
@@ -333,7 +333,7 @@ impl FormControlScope {
 }
 
 pub(crate) fn form_data_control_elements(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
 ) -> Vec<DomHandle> {
     if !runtime
@@ -361,7 +361,7 @@ pub(crate) fn form_data_control_elements(
 }
 
 pub(crate) fn autofill_related_form_control_elements(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     anchor: DomHandle,
 ) -> Vec<DomHandle> {
     if !is_form_control_handle(runtime, anchor, false) {
@@ -380,7 +380,7 @@ pub(crate) fn autofill_related_form_control_elements(
 }
 
 fn collect_form_control_elements_from(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     include_root: bool,
     form_handle: Option<DomHandle>,
@@ -407,7 +407,7 @@ fn collect_form_control_elements_from(
 }
 
 fn push_shadow_including_children(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     stack: &mut Vec<DomHandle>,
 ) {
@@ -430,7 +430,7 @@ fn push_shadow_including_children(
 }
 
 fn is_form_control_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     include_image_inputs: bool,
 ) -> bool {
@@ -454,7 +454,7 @@ fn is_form_control_handle(
 }
 
 fn form_control_matches_owner(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     owner: Option<DomHandle>,
     include_image_inputs: bool,
@@ -557,7 +557,7 @@ pub(in crate::native_bridge) fn form_target_getter_function<'s>(
     rv.set(value.into());
 }
 
-fn form_owner_document_url(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn form_owner_document_url(runtime: &PageScriptHost, handle: DomHandle) -> String {
     runtime
         .dom_host()
         .owner_document_handle(handle)
@@ -734,7 +734,7 @@ fn object_has_expando_named_property(
 }
 
 fn form_has_named_item_or_past_name(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     key: &str,
 ) -> bool {
@@ -944,7 +944,7 @@ pub(in crate::native_bridge) fn form_named_query<'s>(
 }
 
 fn form_named_item_matches(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     key: &str,
 ) -> (LiveCollectionQueryKind, Vec<DomHandle>) {
@@ -972,7 +972,7 @@ fn form_named_item_matches(
 }
 
 pub(in crate::native_bridge) fn form_named_control_matches(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
@@ -985,7 +985,7 @@ pub(in crate::native_bridge) fn form_named_control_matches(
 }
 
 pub(in crate::native_bridge) fn form_named_image_matches(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
@@ -998,7 +998,7 @@ pub(in crate::native_bridge) fn form_named_image_matches(
 }
 
 fn form_named_matches_from_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     form_handle: DomHandle,
     key: &str,
     source: LiveCollectionQueryKind,
@@ -1020,7 +1020,7 @@ fn form_named_matches_from_source(
 }
 
 fn form_named_candidate_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     scope: FormControlScope,
     candidate: DomHandle,
     key: &str,
@@ -1048,7 +1048,7 @@ fn form_named_candidate_source(
     }
 }
 
-fn sort_form_named_matches(runtime: &JsContextHost, matches: &mut [DomHandle]) {
+fn sort_form_named_matches(runtime: &PageScriptHost, matches: &mut [DomHandle]) {
     matches.sort_by(|left, right| {
         runtime
             .dom_host()
@@ -1056,7 +1056,7 @@ fn sort_form_named_matches(runtime: &JsContextHost, matches: &mut [DomHandle]) {
     });
 }
 
-fn nearest_form_ancestor(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn nearest_form_ancestor(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     let mut current = runtime.dom_host().parent_node(handle);
     while let Some(parent) = current {
         if runtime.dom_host().is_html_element_named(parent, "form") {

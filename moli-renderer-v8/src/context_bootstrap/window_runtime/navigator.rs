@@ -1164,7 +1164,7 @@ fn storage_bucket_manager_owner_is_live<'s>(
     if let Some(handle) = storage_bucket_manager_child_handle(scope, manager) {
         return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
             // SAFETY: context_host_ptr_from_global_bridge returns the live
-            // JsContextHost pointer owned by the current V8 context.
+            // PageScriptHost pointer owned by the current V8 context.
             unsafe { (&*host_ptr).child_browsing_context_is_live(handle) }
         });
     }

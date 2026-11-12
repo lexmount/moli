@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken, WindowExecutionContextOwner,
+    OwnerDispatchScope, PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextOwner,
     WindowTaskTarget,
 };
 use crate::page_task_queue::RendererPageWindowMessageTaskId;
@@ -80,7 +80,7 @@ impl PendingWindowMessageEndpoint {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn enter_window_message_source_scope(
         &mut self,
         source: PendingWindowMessageEndpoint,

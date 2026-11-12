@@ -50,8 +50,8 @@ pub(super) struct PendingMainWorld {
 }
 
 pub(super) fn initialize(
-    isolate: &RendererDocumentIsolateHandle,
-    host: &Rc<RefCell<JsContextHost>>,
+    isolate: &RendererIsolateHandle,
+    host: &Rc<RefCell<PageScriptHost>>,
     resource_owner_id: crate::resource_owner::ResourceOwnerId,
     promise_reject_dispatch: &PromiseRejectDispatchSlot,
     storage_bucket_store: crate::context_bootstrap::SharedStorageBucketStore,

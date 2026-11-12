@@ -1,6 +1,6 @@
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
-pub(super) fn child_handles(runtime_ptr: *mut JsContextHost, node: DomHandle) -> Vec<DomHandle> {
+pub(super) fn child_handles(runtime_ptr: *mut PageScriptHost, node: DomHandle) -> Vec<DomHandle> {
     unsafe { &*runtime_ptr }
         .dom_host()
         .child_handles(node)
@@ -8,7 +8,7 @@ pub(super) fn child_handles(runtime_ptr: *mut JsContextHost, node: DomHandle) ->
 }
 
 pub(super) fn node_is_inside_root(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: DomHandle,
     root: DomHandle,
 ) -> bool {
@@ -26,7 +26,7 @@ pub(super) fn node_is_inside_root(
 }
 
 pub(super) fn next_preorder_node(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: DomHandle,
     root: DomHandle,
 ) -> Option<DomHandle> {
@@ -49,7 +49,7 @@ pub(super) fn next_preorder_node(
 }
 
 pub(super) fn previous_preorder_node(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: DomHandle,
     root: DomHandle,
 ) -> Option<DomHandle> {
@@ -65,7 +65,7 @@ pub(super) fn previous_preorder_node(
     dom.parent_node(node)
 }
 
-fn last_preorder_descendant(runtime_ptr: *mut JsContextHost, node: DomHandle) -> DomHandle {
+fn last_preorder_descendant(runtime_ptr: *mut PageScriptHost, node: DomHandle) -> DomHandle {
     let runtime = unsafe { &*runtime_ptr };
     let mut current = node;
     while let Some(child) = runtime.dom_host().dom().last_child(current) {

@@ -340,7 +340,7 @@ fn shared_worker_constructor_context(
     receiver: v8::Local<'_, v8::Object>,
 ) -> Option<(
     SharedWorkerConstructorContext,
-    *mut crate::native_bridge::JsContextHost,
+    *mut crate::native_bridge::PageScriptHost,
 )> {
     let (current_context_document_referrer_policy, document_meta_content_security_policies) = {
         let global = scope.get_current_context().global(scope);
@@ -452,7 +452,7 @@ fn shared_worker_constructor_context(
 
 fn shared_worker_parent_service_worker_client_id_for_script(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut crate::native_bridge::JsContextHost,
+    host: &mut crate::native_bridge::PageScriptHost,
     child_handle: Option<DomHandle>,
     script_url: &Url,
 ) -> Option<crate::service_worker_runtime::ServiceWorkerClientId> {

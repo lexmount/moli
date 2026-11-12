@@ -95,8 +95,8 @@ pub(super) fn node_has_pointer_capture_callback<'s>(
 
 fn pointer_capture_receiver_has_frame<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &super::super::JsContextHost,
-    runtime_ptr: *mut super::super::JsContextHost,
+    runtime: &super::super::PageScriptHost,
+    runtime_ptr: *mut super::super::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {

@@ -1,6 +1,6 @@
 use super::super::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, element::form_associated_form_owner},
+    native_bridge::{PageScriptHost, element::form_associated_form_owner},
 };
 use super::element_state::is_form_associated_custom_element_handle;
 use super::form_lifecycle::{
@@ -13,7 +13,7 @@ use super::traversal::collect_shadow_including_subtree_handles;
 
 pub(crate) fn dispatch_form_reset_callbacks_for_form(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     form: DomHandle,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {
@@ -23,7 +23,7 @@ pub(crate) fn dispatch_form_reset_callbacks_for_form(
 
 pub(crate) fn enqueue_form_reset_callbacks_for_form(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     form: DomHandle,
 ) {
     let handles = unsafe { &*host_ptr }
@@ -45,7 +45,7 @@ pub(crate) fn enqueue_form_reset_callbacks_for_form(
 
 pub(crate) fn enqueue_form_association_callbacks_for_all(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let handles = unsafe { &*host_ptr }
         .dom_host()
@@ -65,7 +65,7 @@ pub(crate) fn enqueue_form_association_callbacks_for_all(
 
 pub(crate) fn enqueue_form_disabled_callbacks_in_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     let mut handles = Vec::new();
@@ -81,7 +81,7 @@ pub(crate) fn enqueue_form_disabled_callbacks_in_subtree(
 
 pub(crate) fn dispatch_form_association_callbacks_for_all(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {
         enqueue_form_association_callbacks_for_all(scope, host_ptr);
@@ -90,7 +90,7 @@ pub(crate) fn dispatch_form_association_callbacks_for_all(
 
 pub(crate) fn dispatch_form_disabled_callbacks_in_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {

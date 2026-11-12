@@ -1,4 +1,4 @@
-use super::super::{BridgeHandle, ComputedStyleDescriptor, DomTokenListKind, JsContextHost};
+use super::super::{BridgeHandle, ComputedStyleDescriptor, DomTokenListKind, PageScriptHost};
 use super::NativeDomBridge;
 use crate::document_runtime::DomHandle;
 
@@ -33,7 +33,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_handle<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Node(handle))
@@ -61,7 +61,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_window<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(scope, host_ptr, BridgeHandle::Window)
     }
@@ -69,7 +69,7 @@ impl NativeDomBridge {
     pub(super) fn wrap_bridge_handle<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: BridgeHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.materialize_bridge_wrapper(scope, host_ptr, handle, BridgeWrapperIdentity::Canonical)
@@ -78,7 +78,7 @@ impl NativeDomBridge {
     fn materialize_bridge_wrapper<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: BridgeHandle,
         identity: BridgeWrapperIdentity,
     ) -> Option<v8::Local<'s, v8::Object>> {
@@ -117,7 +117,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_handle_for_receiver<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         receiver: v8::Local<'s, v8::Object>,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
@@ -138,7 +138,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_class_list<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(
@@ -151,7 +151,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_part_list<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(
@@ -164,7 +164,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_rel_list<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(
@@ -177,7 +177,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_dataset<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Dataset(handle))
@@ -186,7 +186,7 @@ impl NativeDomBridge {
     pub(crate) fn wrap_style<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::Style(handle))
@@ -195,7 +195,7 @@ impl NativeDomBridge {
     pub(crate) fn create_computed_style<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
         descriptor: ComputedStyleDescriptor,
     ) -> Option<v8::Local<'s, v8::Object>> {

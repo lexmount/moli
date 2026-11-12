@@ -9,7 +9,7 @@ use crate::{
 };
 use moli_shared_worker::{SharedWorkerClientOwnerId, SharedWorkerInstanceId};
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn browser_context_runtime(&self) -> crate::runtime::RendererBrowserContextRuntime {
         self.browser_context_runtime.clone()
     }

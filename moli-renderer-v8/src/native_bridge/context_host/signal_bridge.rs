@@ -1,6 +1,6 @@
 use super::*;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn is_abort_signal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

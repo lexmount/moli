@@ -1,4 +1,4 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::definition::{CustomElementDefinition, CustomElementStore};
 use super::definition_name_for_handle;
 
@@ -27,7 +27,7 @@ impl CustomElementStore {
 
     pub(super) fn observes_attribute_for_handle(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         name: &str,
     ) -> bool {
@@ -61,7 +61,7 @@ impl CustomElementStore {
 
     pub(crate) fn definition_disables_shadow_for_handle(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> bool {
         self.upgraded_definition_names
@@ -76,7 +76,7 @@ impl CustomElementStore {
 
     pub(crate) fn definition_allows_internals_for_handle(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> bool {
         if !self.is_upgraded_handle(handle) && !self.is_pending_construction_handle(handle) {
@@ -91,7 +91,7 @@ impl CustomElementStore {
 
     pub(super) fn definition_for_handle(
         &self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) -> Option<&CustomElementDefinition> {
         let name = self.upgraded_definition_names.get(&handle)?;

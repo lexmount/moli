@@ -4,7 +4,7 @@ use super::callbacks::svg_test_string_list_getter;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         document::{SVG_NS, detached_native_object_for_handle},
         element::{node_event_handler_getter_function, node_event_handler_setter_function},
         node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
@@ -60,7 +60,7 @@ pub(super) fn install_bindings<'s>(
     }
 }
 
-fn target_element(runtime: &JsContextHost, animation: DomHandle) -> Option<DomHandle> {
+fn target_element(runtime: &PageScriptHost, animation: DomHandle) -> Option<DomHandle> {
     let dom = runtime.dom_host();
     if !dom.is_connected_to_document(animation) {
         return None;

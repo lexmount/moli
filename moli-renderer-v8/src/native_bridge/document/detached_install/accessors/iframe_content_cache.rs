@@ -11,7 +11,7 @@ pub(super) const DETACHED_IFRAME_CONTENT_WINDOW_SLOT: &str = "__lmDetachedIframe
 
 pub(crate) fn detached_iframe_current_content_document_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     iframe_handle: DomHandle,
 ) -> Option<DomHandle> {
     if let Some(document) =
@@ -57,7 +57,7 @@ pub(in crate::native_bridge) fn clear_detached_iframe_cached_context<'s>(
 
 pub(in crate::native_bridge) fn clear_detached_iframe_cached_context_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     iframe_handle: DomHandle,
 ) {
     if let Some(iframe) = detached_native_object_for_handle(scope, runtime_ptr, iframe_handle) {
@@ -79,7 +79,7 @@ pub(super) fn detached_iframe_cache_object<'s>(
 pub(super) fn detached_iframe_runtime_and_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     iframe: v8::Local<'s, v8::Object>,
-) -> Option<(*mut crate::native_bridge::JsContextHost, DomHandle)> {
+) -> Option<(*mut crate::native_bridge::PageScriptHost, DomHandle)> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let handle = detached_native_handle_for_runtime(scope, runtime_ptr, iframe)?;
     Some((runtime_ptr, handle))

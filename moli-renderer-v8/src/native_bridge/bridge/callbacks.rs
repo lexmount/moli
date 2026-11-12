@@ -1,4 +1,4 @@
-use super::super::{BridgeHandle, JsContextHost, ReflectorId, bridge_handle_from_object};
+use super::super::{BridgeHandle, PageScriptHost, ReflectorId, bridge_handle_from_object};
 use super::NativeDomBridge;
 use crate::{
     document_runtime::DomHandle,
@@ -14,7 +14,7 @@ use crate::{
 pub(crate) fn set_wrapped_handle_or_null(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: Option<DomHandle>,
 ) {
     let Some(handle) = handle else {
@@ -30,7 +30,7 @@ pub(crate) fn set_wrapped_handle_or_null(
 pub(crate) fn set_wrapped_handle_or_null_for_receiver(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'_, v8::Object>,
     handle: Option<DomHandle>,
 ) {
@@ -46,7 +46,7 @@ pub(crate) fn set_wrapped_handle_or_null_for_receiver(
 
 pub(crate) fn wrapped_handle_value_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'_, v8::Object>,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -67,7 +67,7 @@ pub(crate) fn wrapped_handle_value_for_receiver<'s>(
 
 pub(crate) fn wrapped_handle_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let live = {
@@ -103,7 +103,7 @@ pub(crate) fn wrapped_handle_value<'s>(
 pub(crate) fn set_wrapped_handle_array(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) {
     let mut values = Vec::with_capacity(handles.len());
@@ -122,13 +122,13 @@ pub(crate) fn set_wrapped_handle_array(
 pub(crate) fn runtime_ptr_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> std::result::Result<*mut JsContextHost, String> {
+) -> std::result::Result<*mut PageScriptHost, String> {
     let value = object
         .get_internal_field(scope, 0)
         .ok_or_else(|| "native bridge object missing runtime field".to_owned())?;
     let external = v8::Local::<v8::External>::try_from(value)
         .map_err(|_| "native bridge runtime field was not an External".to_owned())?;
-    let runtime_ptr = external.value() as *mut JsContextHost;
+    let runtime_ptr = external.value() as *mut PageScriptHost;
     if runtime_ptr.is_null() {
         return Err("native bridge runtime pointer was null".to_owned());
     }

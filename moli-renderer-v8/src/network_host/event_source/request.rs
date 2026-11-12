@@ -1,5 +1,5 @@
 use super::*;
-use crate::native_bridge::{JsContextHost, throw_dom_exception};
+use crate::native_bridge::{PageScriptHost, throw_dom_exception};
 use crate::network_host::{
     BLOCKED_BY_CLIENT_ERROR_TEXT, active_subresource_network_partition_key,
     effective_subresource_policy_context, local_url_response, merge_subresource_request_headers,
@@ -312,7 +312,7 @@ pub(crate) fn start_event_source_request<'s>(
 
 fn prepare_event_source_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     event_source: v8::Local<'s, v8::Object>,
 ) -> Result<PreparedEventSourceRequest, String> {
     let execution_context = host
@@ -376,7 +376,7 @@ fn prepare_event_source_request<'s>(
 
 fn dispatch_service_worker_event_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     event_source: v8::Local<'s, v8::Object>,
     prepared: &PreparedEventSourceRequest,
 ) -> Option<u64> {
@@ -482,7 +482,7 @@ struct RegisteredEventSourceRequest {
 
 fn register_event_source_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     event_source: v8::Local<'s, v8::Object>,
     prepared: &PreparedEventSourceRequest,
     cancel_handle: Option<FetchCancelHandle>,
@@ -516,7 +516,7 @@ fn register_event_source_request<'s>(
 }
 
 fn record_event_source_preflight_failure<'s>(
-    _host: &mut JsContextHost,
+    _host: &mut PageScriptHost,
     event_source: v8::Local<'s, v8::Object>,
     scope: &mut v8::PinScope<'s, '_>,
     _error: String,
@@ -525,7 +525,7 @@ fn record_event_source_preflight_failure<'s>(
 }
 
 fn record_prepared_event_source_failure<'s>(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: &PreparedEventSourceRequest,
     error: String,
     scope: &mut v8::PinScope<'s, '_>,

@@ -8,13 +8,13 @@ use crate::dom::native::CustomElementState;
 use super::super::{
     document_runtime::DomHandle,
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{get_private_object, global_constructor_prototype},
 };
 
 pub(super) fn fail_existing_custom_element_construction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     constructor: v8::Local<'s, v8::Function>,
     failure: ConstructionFailure<'s>,
@@ -46,7 +46,7 @@ pub(super) fn fail_existing_custom_element_construction<'s>(
 
 fn set_wrapper_failed_custom_element_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     wrapper: v8::Local<'s, v8::Object>,
 ) {

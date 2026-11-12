@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, WindowEnvironmentSettings, WindowExecutionContextIdentity,
+    OwnerDispatchScope, PageScriptHost, WindowEnvironmentSettings, WindowExecutionContextIdentity,
     WindowExecutionContextOwner,
 };
 use crate::document_runtime::DomHandle;
@@ -7,7 +7,7 @@ use crate::document_runtime::DomHandle;
 const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Static pure APIs use their concrete function realm, including retained
     /// Document settings, without reading author-visible Window properties.
     pub(crate) fn current_realm_effective_domain(
@@ -373,7 +373,7 @@ impl JsContextHost {
     pub(crate) fn window_execution_context_can_access_other_host(
         &self,
         accessing: WindowExecutionContextIdentity,
-        target_host: &JsContextHost,
+        target_host: &PageScriptHost,
         accessed: WindowExecutionContextIdentity,
     ) -> bool {
         if !self.window_execution_context_identity_is_current(accessing)

@@ -135,7 +135,7 @@ pub(crate) fn runtime_window_dispatch_scope<'s>(
 
 pub(super) fn window_task_target_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<crate::native_bridge::WindowTaskTarget> {
     let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;

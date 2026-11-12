@@ -10,7 +10,7 @@ use crate::{
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use super::window_document_tasks::{PendingWindowTask, WindowTaskLedger};
-use super::{JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity};
+use super::{OwnerDispatchScope, PageScriptHost, WindowExecutionContextIdentity};
 
 pub(super) type FileReadingState = WindowTaskLedger<
     RendererPageFileReadingTaskId,
@@ -38,7 +38,7 @@ impl FileReadingTask {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_blob_read_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -191,7 +191,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_file_reading_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowExecutionContextIdentity,
         task: FileReadingTask,
     ) -> PageFileReadingTargetEffect {

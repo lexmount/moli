@@ -9,7 +9,7 @@ use crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_con
 use crate::{
     callback_invocation::invoke_synchronous_webidl_callback_function,
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         element::{form_associated_form_owner, is_valid_submit_button},
         node_relevant_context, node_runtime_and_handle_from_object_or_detached,
         throw_dom_exception,
@@ -177,7 +177,7 @@ pub(super) fn form_data_constructor_callback<'s>(
 
 pub(crate) fn construct_form_data_entries_for_form<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: crate::document_runtime::DomHandle,
     form: v8::Local<'s, v8::Object>,
     submitter: Option<v8::Local<'s, v8::Object>>,

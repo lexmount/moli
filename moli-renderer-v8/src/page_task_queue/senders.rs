@@ -60,7 +60,7 @@ pub(crate) struct RendererPageTaskProducerSenders {
     service_worker: RendererPageServiceWorkerTaskSender,
 }
 
-/// Complete PageVm-stamped capability bundle installed in `JsContextHost`.
+/// Complete PageVm-stamped capability bundle installed in `PageScriptHost`.
 ///
 /// Keeping this bundle intact prevents positional sender tuples and makes a
 /// partially installed Window task surface unrepresentable. Resource

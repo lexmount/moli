@@ -3,7 +3,7 @@ use std::ffi::c_void;
 
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, NativeDomBridge},
+    native_bridge::{NativeDomBridge, PageScriptHost},
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
 
@@ -109,7 +109,7 @@ pub(crate) fn install_traversal_template_bindings<'s>(
 
 pub(in crate::native_bridge) fn build_node_iterator_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     bridge: &mut NativeDomBridge,
     root: DomHandle,
     what_to_show: u32,
@@ -139,7 +139,7 @@ pub(in crate::native_bridge) fn build_node_iterator_wrapper<'s>(
 
 pub(in crate::native_bridge) fn build_tree_walker_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     bridge: &mut NativeDomBridge,
     root: DomHandle,
     what_to_show: u32,

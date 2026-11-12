@@ -1,6 +1,6 @@
 use crate::{
     custom_elements, dom::native::DomMutationEffects, mutation_coordinator::notify_dom_mutation,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 /// Document-specific resource and lifecycle work surrounding the shared parser
@@ -11,19 +11,19 @@ pub(crate) trait ParserMutationEffectsOwner {
 
     fn prepare_parser_mutation_effects(&mut self, effects: &DomMutationEffects) -> Self::Prepared;
 
-    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost);
+    fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut PageScriptHost);
 
     fn finish_parser_mutation_effects(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         prepared: Self::Prepared,
     );
 }
 
 pub(crate) fn apply_parser_mutation_effects(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner: &mut impl ParserMutationEffectsOwner,
     effects: &DomMutationEffects,
 ) {

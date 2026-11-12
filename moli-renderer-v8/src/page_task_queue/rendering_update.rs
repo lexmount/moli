@@ -13,7 +13,7 @@ use super::{RendererOwnerWakeSender, RendererOwnerWakeSource, WindowDocumentTask
 
 /// PageVm-local key for one pending Document rendering-update payload.
 ///
-/// V8 objects and mutable coalescing state remain in the `JsContextHost` that
+/// V8 objects and mutable coalescing state remain in the `PageScriptHost` that
 /// accepted the update. The stable Page source carries only this key and the
 /// immutable Document target, so a replacement PageVm cannot consume a
 /// naturally reused local id.

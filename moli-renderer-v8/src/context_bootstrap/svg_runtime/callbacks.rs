@@ -649,7 +649,7 @@ fn svg_marker_runtime_and_handle<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> Option<(
-    *mut crate::native_bridge::JsContextHost,
+    *mut crate::native_bridge::PageScriptHost,
     crate::document_runtime::DomHandle,
 )> {
     let Ok((runtime_ptr, handle)) =

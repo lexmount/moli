@@ -6,7 +6,7 @@
 //! execution, not while the binding merely queues work.
 
 use crate::{
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     page_task_queue::{RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind},
     util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value},
     webidl,
@@ -84,7 +84,7 @@ pub(crate) struct DirectoryReaderCallbackTask {
 impl DirectoryReaderCallbackTask {
     pub(crate) fn admit<'s>(
         scope: &mut v8::PinScope<'s, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         reader: v8::Local<'s, v8::Object>,
         success_callback: WebIdlCallbackFunction,
         error_callback: Option<WebIdlCallbackFunction>,
@@ -197,7 +197,7 @@ impl DirectoryReaderCallbackTask {
     pub(crate) fn invoke(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) -> DirectoryReaderCallbackTaskEffect {
         let reader = v8::Local::new(scope, &self.reader);
         if let DirectoryReaderRequestOutcome::Batch {

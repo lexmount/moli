@@ -5,11 +5,11 @@ use super::registry::{
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomAdoptionTarget, Node},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(crate) fn adoption_plan_before_adoption(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     adoption_targets: &[DomAdoptionTarget],
 ) -> CustomElementAdoptionPlan {
     let host = unsafe { &*host_ptr };
@@ -77,7 +77,7 @@ pub(crate) fn adoption_plan_before_adoption(
 }
 
 fn should_preserve_same_document_registry_association(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     let host = unsafe { &*host_ptr }.dom_host();

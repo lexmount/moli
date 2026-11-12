@@ -260,7 +260,7 @@ mod tests {
     fn common_text_codec_state_releases_collected_and_teardown_decoders() {
         use crate::{
             common_runtime::{CommonRuntimeBinding, CommonRuntimeState},
-            native_bridge::JsContextHost,
+            native_bridge::PageScriptHost,
             util::ContextHostLifecycle,
         };
         use std::{cell::Cell, rc::Rc};
@@ -278,7 +278,7 @@ mod tests {
             CommonRuntimeBinding::install_window(
                 context,
                 &common,
-                std::ptr::NonNull::<JsContextHost>::dangling().as_ptr(),
+                std::ptr::NonNull::<PageScriptHost>::dangling().as_ptr(),
                 &lifecycle,
             );
             let scope = &mut v8::ContextScope::new(scope, context);

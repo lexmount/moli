@@ -1,7 +1,7 @@
 //! Routes a JavaScript `AbortSignal` to the store that owns it.
 //!
 //! Window and worker AbortSignals have deliberately separate lifetime owners:
-//! the Window `JsContextHost` and the exact worker run. Shared Web API
+//! the Window `PageScriptHost` and the exact worker run. Shared Web API
 //! algorithms may accept either kind, but must not infer ownership from a
 //! public prototype or maintain a third abort-algorithm list. Resolving once
 //! produces a short-lived capability that delegates state and algorithm

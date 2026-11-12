@@ -224,7 +224,7 @@ fn set_html_loading_for_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
     owner: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle, String)> {
+) -> Option<(*mut PageScriptHost, DomHandle, String)> {
     let value = property_dom_string_value(scope, value, owner, "loading")?;
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
@@ -299,7 +299,7 @@ fn hyperlink_url_setter_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     property: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle, url::Url, String)> {
+) -> Option<(*mut PageScriptHost, DomHandle, url::Url, String)> {
     node_runtime_and_handle_from_object_or_detached(scope, args.this()).ok()?;
     let value =
         property_usv_string_value(scope, args.get(0), "HTMLHyperlinkElementUtils", property)?;
@@ -699,7 +699,7 @@ fn svg_fetch_priority_receiver<'s>(
     interface: &'static str,
     local_name: &'static str,
     setter: bool,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -2281,7 +2281,7 @@ pub(super) struct SvgStyleElementPrototypeDeclaration {
 
 const SVG_STYLE_DOM_STRING_ATTRIBUTES: &[&str] = &["media", "title", "type"];
 
-fn is_svg_style_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_svg_style_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -2295,7 +2295,7 @@ fn svg_style_element_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -2313,7 +2313,7 @@ fn svg_style_element_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {

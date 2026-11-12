@@ -290,7 +290,7 @@ impl ScriptVm {
                 .child_has_isolated_window_proxies(child_handle);
             if needs_isolated_proxy_restore {
                 let restored = self.with_default_context_scope(|scope, host_ptr| {
-                    crate::native_bridge::JsContextHost::restore_child_isolated_window_proxies(
+                    crate::native_bridge::PageScriptHost::restore_child_isolated_window_proxies(
                         scope,
                         host_ptr,
                         child_handle,

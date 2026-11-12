@@ -185,7 +185,7 @@ const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 
 fn locate_namespace(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     start: DomHandle,
     prefix: Option<&str>,
 ) -> Option<String> {
@@ -359,7 +359,7 @@ pub(in crate::native_bridge) fn node_lookup_prefix_callback<'s>(
     }
 }
 
-fn locate_prefix(runtime: &JsContextHost, start: DomHandle, namespace: &str) -> Option<String> {
+fn locate_prefix(runtime: &PageScriptHost, start: DomHandle, namespace: &str) -> Option<String> {
     // DOM spec "locate a namespace prefix": walk up looking for an element
     // whose namespace matches and has a prefix; or an xmlns:p attribute whose
     // value matches. Same element-only-walk semantics as locate_namespace.

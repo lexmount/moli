@@ -136,7 +136,7 @@ pub(super) fn storage_access_allows_web_storage_for_window<'s>(
 pub(super) fn current_storage_host_for_owner(
     scope: &mut v8::PinScope<'_, '_>,
     owner: WebStorageOwner,
-) -> Option<(String, String, *mut crate::native_bridge::JsContextHost)> {
+) -> Option<(String, String, *mut crate::native_bridge::PageScriptHost)> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *host_ptr };
     let (origin, area_key) = match owner {

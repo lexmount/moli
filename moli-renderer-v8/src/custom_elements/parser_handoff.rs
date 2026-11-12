@@ -11,12 +11,12 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     dom::native::{Attribute, CustomElementState},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     local_name: &str,
     namespace: &str,
@@ -75,7 +75,7 @@ pub(crate) fn create_and_construct_parser_custom_element_direct_for_document(
 
 fn construct_parser_created_customized_builtin_existing_element(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     token_attributes: &[Attribute],
     definition_match: ParserCustomElementDefinitionMatch,

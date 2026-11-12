@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use crate::frame_owner_model::{
     DocumentLinkEventOwner, DocumentLoadDelayTokenId, FrameDocumentTaskOwner,
     MainDocumentCompleteLifecycleAction, MainDocumentDomContentLoadedLifecycleAction,
@@ -17,14 +17,14 @@ use crate::{
     },
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn plan_and_commit_current_main_runtime_script_start(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         node: crate::document_runtime::DomHandle,
         host_script_handle: &str,
     ) -> std::result::Result<Option<CommittedInlineClassicScript>, String> {
-        let runtime = unsafe { &mut *self.runtime };
+        let runtime = unsafe { &mut *self.document_runtime };
         let Some(plan) = runtime.host_plan_script_start(node, host_script_handle) else {
             return Ok(None);
         };
@@ -98,7 +98,7 @@ impl JsContextHost {
                         integrity: None,
                         parser_inserted: false,
                     };
-                let host_ptr: *mut JsContextHost = self;
+                let host_ptr: *mut PageScriptHost = self;
                 if let Some(source) =
                     crate::native_bridge::element::inline_script_source_for_execution(
                         scope, host_ptr, node, &source, request,
@@ -194,7 +194,7 @@ impl JsContextHost {
     /// Commit the lifecycle authority for a plan prepared by
     /// `DocumentRuntime`.
     ///
-    /// This method deliberately does not dereference `self.runtime`. The
+    /// This method deliberately does not dereference `self.document_runtime`. The
     /// caller owns the mutable runtime phase, temporarily borrows the context
     /// host only for this exact FrameOwnerStore transaction, and then applies
     /// the committed value back to the runtime synchronously.

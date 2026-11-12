@@ -304,7 +304,7 @@ pub(crate) fn dispatch_xhr_upload_abort_if_in_progress(
 
 fn send_synchronous_network_xhr(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     loader: ResourceRequestClient,
@@ -533,7 +533,7 @@ fn synchronous_xhr_timeout(
 
 fn record_synchronous_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     error_text: String,

@@ -1,4 +1,4 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 
 #[derive(Clone, Copy)]
 enum ChildDocumentInteractiveScriptDisposition {
@@ -55,7 +55,7 @@ impl ChildDocumentCompleteBlockers {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn route_child_document_lifecycle_action(
         &self,
         action: FrameDocumentLifecycleAction,
@@ -124,7 +124,7 @@ impl JsContextHost {
                         .is_some_and(|element| element.is_image_resource_element())
             })
             .collect::<Vec<_>>();
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         for image_handle in image_handles {
             crate::native_bridge::element::queue_image_load_event_if_needed_with_initiator(
                 scope,
@@ -159,7 +159,7 @@ impl JsContextHost {
                         == Some(snapshot.document_handle)
             })
             .collect::<Vec<_>>();
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         for handle in handles {
             let Some(element) = self
                 .dom_host()
@@ -875,7 +875,7 @@ impl JsContextHost {
             finished,
             "finished document-owned child unload lifecycle"
         );
-        unsafe { &mut *self.runtime }
+        unsafe { &mut *self.document_runtime }
             .cancel_window_execution_context_timers(execution_context_owner);
         true
     }

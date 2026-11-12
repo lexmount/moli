@@ -9,11 +9,11 @@ use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
 use super::{
     dispatch_form_association_callback_if_needed, dispatch_form_disabled_callback_if_needed,
 };
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(crate) fn upgrade_subtree_if_defined(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     let mut stack = vec![root];
@@ -29,7 +29,7 @@ pub(crate) fn upgrade_subtree_if_defined(
 
 pub(crate) fn upgrade_subtree_if_defined_for_registry(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
     registry_key: CustomElementRegistryKey,
 ) -> bool {
@@ -54,7 +54,7 @@ pub(crate) fn upgrade_subtree_if_defined_for_registry(
 
 pub(crate) fn enqueue_upgrade_reaction_if_defined(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !can_upgrade_handle(host_ptr, handle) {
@@ -66,7 +66,7 @@ pub(crate) fn enqueue_upgrade_reaction_if_defined(
 
 pub(crate) fn enqueue_upgrade_reactions_for_subtree(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     let mut handles = Vec::new();
@@ -80,7 +80,7 @@ pub(crate) fn enqueue_upgrade_reactions_for_subtree(
 
 pub(crate) fn upgrade_late_defined_connected_tree_after_parser_sync(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     // This checkpoint exists only to observe definitions or lifecycle state
@@ -96,7 +96,7 @@ pub(crate) fn upgrade_late_defined_connected_tree_after_parser_sync(
 
 fn upgrade_late_defined_connected_tree_after_parser_sync_non_quiescent(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> bool {
     // Parser-created custom elements whose definitions are already known must

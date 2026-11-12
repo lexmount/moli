@@ -1,4 +1,4 @@
-use super::{FrameDocumentLoadDeliveryTask, JsContextHost};
+use super::{FrameDocumentLoadDeliveryTask, PageScriptHost};
 use crate::{
     context_bootstrap::{
         construct_original_event, construct_original_page_transition_event,
@@ -106,7 +106,7 @@ impl ChildFrameLoadDeliveryPhaseResult {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn dispatch_ready_child_initial_empty_load_synchronously(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -119,7 +119,7 @@ impl JsContextHost {
         {
             return false;
         }
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         self.run_child_browsing_context_load_delivery(scope, host_ptr, task)
             .callback_dispatched
     }
@@ -323,7 +323,7 @@ impl JsContextHost {
     fn run_child_browsing_context_load_delivery(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task: FrameDocumentLoadDeliveryTask,
     ) -> ChildFrameLoadDeliveryResult {
         let mut task = task;
@@ -381,7 +381,7 @@ impl JsContextHost {
                 }
                 Some(FrameDocumentLoadDeliveryProgress::Finished(finish)) => {
                     let finished_child_handle = finish.child_handle;
-                    let runtime = unsafe { &mut *self.runtime };
+                    let runtime = unsafe { &mut *self.document_runtime };
                     self.arm_child_meta_refresh_navigation(scope, runtime, finished_child_handle);
                     self.publish_child_frame_load_finish(finish);
                     self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
@@ -426,7 +426,7 @@ impl JsContextHost {
     fn dispatch_child_owner_element_load_phase(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         action: FrameDocumentLoadDeliveryAction,
     ) -> ChildFrameLoadDeliveryPhaseResult {
         let handle = action.child_handle();
@@ -436,7 +436,7 @@ impl JsContextHost {
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
         self.enter_child_browsing_context_host_load_dispatch(handle);
-        let runtime = unsafe { &mut *self.runtime };
+        let runtime = unsafe { &mut *self.document_runtime };
         let _ = runtime.dispatch_public_event_best_effort(
             scope,
             host_ptr,
@@ -452,7 +452,7 @@ impl JsContextHost {
             self.trace_stale_child_load_delivery(action, "owner_element_load");
             return ChildFrameLoadDeliveryPhaseResult::after_callback(None);
         }
-        let runtime = unsafe { &mut *self.runtime };
+        let runtime = unsafe { &mut *self.document_runtime };
         self.arm_child_meta_refresh_navigation(scope, runtime, handle);
         ChildFrameLoadDeliveryPhaseResult::after_callback(progress)
     }
@@ -742,14 +742,14 @@ impl JsContextHost {
             return;
         };
         if let Some(timer_id) = task.timer_id {
-            unsafe { &mut *self.runtime }.cancel_timer(timer_id);
+            unsafe { &mut *self.document_runtime }.cancel_timer(timer_id);
         }
     }
 
     pub(crate) fn run_child_browsing_context_host_load_task_work(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task: FrameDocumentLoadDeliveryTask,
     ) -> ChildFrameHostLoadTaskOutcome {
         let mut task_outcome = ChildFrameHostLoadTaskOutcome::ConsumedWithoutCallback;

@@ -1,6 +1,6 @@
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 impl DocumentRuntime {
@@ -47,7 +47,7 @@ impl DocumentRuntime {
     pub(super) fn reset_focus_for_non_preserving_connected_move_before_insert(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_roots: &[DomHandle],
         was_connected: bool,
     ) {

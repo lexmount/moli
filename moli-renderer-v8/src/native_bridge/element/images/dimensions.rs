@@ -1,7 +1,7 @@
 use crate::document_runtime::DomHandle;
 use crate::webidl;
 
-use super::super::super::{JsContextHost, node::node_runtime_and_handle_from_object_or_detached};
+use super::super::super::{PageScriptHost, node::node_runtime_and_handle_from_object_or_detached};
 use super::super::{element_attribute, parse_non_negative_dimension, set_reflected_attribute};
 
 pub(in crate::native_bridge) fn image_width_getter_function<'s>(
@@ -103,7 +103,7 @@ fn set_image_unsigned_long_attribute_on_object<'s>(
 }
 
 pub(crate) fn image_intrinsic_dimensions(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<(u32, u32)> {
     runtime.image_resource_intrinsic_dimensions(handle)

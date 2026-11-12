@@ -1,8 +1,8 @@
-use crate::{document_runtime::DomHandle, dom::native::Attribute, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::Attribute, native_bridge::PageScriptHost};
 
 pub(super) fn append_parser_custom_element_token_attributes(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     token_attributes: &[Attribute],
 ) {
@@ -13,7 +13,7 @@ pub(super) fn append_parser_custom_element_token_attributes(
 
 pub(super) fn set_parser_token_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     attribute: &Attribute,
 ) {

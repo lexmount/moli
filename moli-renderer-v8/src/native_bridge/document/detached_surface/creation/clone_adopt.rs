@@ -10,7 +10,7 @@ use super::super::super::super::node::node_runtime_and_handle_from_object;
 
 fn native_clone_source_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     if let Ok((node_runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, node)

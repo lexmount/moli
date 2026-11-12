@@ -275,7 +275,7 @@ pub(super) fn skip_view_transition<'s>(
 
 pub(crate) fn run_view_transition_update_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     transition: v8::Local<'s, v8::Object>,
     callback: Option<&WindowWebIdlCallbackFunction>,
 ) {

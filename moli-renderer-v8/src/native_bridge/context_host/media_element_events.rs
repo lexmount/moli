@@ -1,5 +1,5 @@
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, MediaLoadSequenceId, WindowDocumentTaskTarget};
+use super::{MediaLoadSequenceId, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     native_bridge::element::MediaLoadEventPhase,
@@ -35,7 +35,7 @@ pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
     PendingMediaElementEventPayload,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn queue_media_volume_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -178,7 +178,7 @@ impl JsContextHost {
     pub(crate) fn apply_authorized_media_element_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task_id: RendererPageMediaElementEventTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageMediaElementEventTaskKind,

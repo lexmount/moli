@@ -1,5 +1,5 @@
 use super::super::{
-    BridgeHandle, JsContextHost, bridge_handle_from_object,
+    BridgeHandle, PageScriptHost, bridge_handle_from_object,
     node::{node_is_element, node_runtime_and_handle_from_object_or_detached},
     throw_dom_exception, validate_attribute_name,
 };
@@ -44,7 +44,7 @@ pub(in crate::native_bridge) fn build_dom_string_map_wrapper_template<'s, 'i>(
 fn dataset_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, DomHandle)> {
     let (runtime_ptr, handle) = bridge_handle_from_object(scope, object)
         .context("failed to resolve DOMStringMap wrapper")?;
     match handle {
@@ -121,7 +121,7 @@ fn dataset_key_has_forbidden_dash_lowercase(key: &str) -> bool {
 }
 
 fn dataset_attribute_name_for_key(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     key: &str,
 ) -> Option<String> {
@@ -130,7 +130,7 @@ fn dataset_attribute_name_for_key(
         .find(|name| dataset_attribute_name_to_key(name).as_deref() == Some(key))
 }
 
-fn dataset_property_names(runtime: &JsContextHost, handle: DomHandle) -> Vec<String> {
+fn dataset_property_names(runtime: &PageScriptHost, handle: DomHandle) -> Vec<String> {
     element_attribute_names(runtime, handle)
         .into_iter()
         .filter_map(|name| dataset_attribute_name_to_key(&name))
@@ -243,7 +243,7 @@ fn dataset_indexed_enumerator(
 
 fn set_dataset_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     value: &str,
@@ -264,7 +264,7 @@ fn set_dataset_attribute(
 
 fn remove_dataset_attribute(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) {

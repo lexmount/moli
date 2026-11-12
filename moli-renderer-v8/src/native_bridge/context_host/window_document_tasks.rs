@@ -1,4 +1,4 @@
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget};
 use crate::document_runtime::DomHandle;
 use crate::runtime::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
 
@@ -150,7 +150,7 @@ pub(super) struct ResolvedWindowDocumentTaskContext<'s> {
     pub(super) context: v8::Local<'s, v8::Context>,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Freezes the exact Window/Document source of a browser-owner handoff.
     ///
     /// The returned root lifecycle identity is causal metadata for the owning

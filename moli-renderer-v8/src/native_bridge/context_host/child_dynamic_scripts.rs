@@ -5,7 +5,7 @@ use crate::{
     types::{ScriptKind, ScriptMode, ScriptSourceKind},
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_child_dynamic_document_import_map(
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut Self,

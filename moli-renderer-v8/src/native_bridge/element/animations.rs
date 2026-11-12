@@ -1,5 +1,5 @@
 use crate::document_runtime::{DomHandle, EventTargetHandle};
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 
 use super::css_animation_start_applies;
 use super::events::{construct_simple_event, dispatch_public_event};
@@ -7,13 +7,16 @@ use super::styles::StyleObservation;
 
 pub(crate) fn queue_animation_start_for_listener_target(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
 ) {
     let _ = unsafe { &mut *runtime_ptr }.queue_animation_start_scan(scope, target);
 }
 
-fn active_animation_handles(runtime: &JsContextHost, document_handle: DomHandle) -> Vec<DomHandle> {
+fn active_animation_handles(
+    runtime: &PageScriptHost,
+    document_handle: DomHandle,
+) -> Vec<DomHandle> {
     let mut out = Vec::new();
     let mut stack = vec![document_handle];
     // The traversal has no script callbacks. Share its style observation, then
@@ -49,7 +52,7 @@ fn active_animation_handles(runtime: &JsContextHost, document_handle: DomHandle)
 /// authorized by the Page rendering-update arbiter.
 pub(crate) fn dispatch_animation_start_scan(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     target: EventTargetHandle,
 ) -> bool {
@@ -72,7 +75,7 @@ pub(crate) fn dispatch_animation_start_scan(
 
 fn dispatch_animation_start_if_applies(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };

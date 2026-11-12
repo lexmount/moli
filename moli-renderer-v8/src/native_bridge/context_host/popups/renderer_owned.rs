@@ -33,7 +33,7 @@ impl OpenedRendererWindow<'_> {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn has_browser_owned_auxiliary_page_factory(&self) -> bool {
         self.browser_context_runtime
             .browser_owns_auxiliary_document_responses()

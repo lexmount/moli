@@ -140,7 +140,7 @@ pub(in crate::native_bridge) fn textarea_default_value_setter_function<'s>(
 
 fn detached_textarea_value_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'s, v8::Object>,
     handle: DomHandle,
 ) -> Option<String> {

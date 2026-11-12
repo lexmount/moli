@@ -3,7 +3,7 @@ use crate::custom_elements;
 
 pub(in crate::native_bridge) fn set_text_content_in_reaction_scope(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     value: &str,
 ) -> bool {

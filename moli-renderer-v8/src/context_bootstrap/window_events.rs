@@ -1,6 +1,6 @@
 use super::shared::append_console_message;
 use super::*;
-use crate::{document_runtime::EventTargetHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::EventTargetHandle, native_bridge::PageScriptHost};
 
 mod accessors;
 mod console;

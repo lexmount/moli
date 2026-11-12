@@ -7,7 +7,7 @@ use crate::{
     dom::native::NodeType,
     {
         document_runtime::DomHandle,
-        native_bridge::{JsContextHost, WindowExecutionContextIdentity},
+        native_bridge::{PageScriptHost, WindowExecutionContextIdentity},
         util::throw_type_error,
         webidl,
     },
@@ -42,7 +42,7 @@ pub(in crate::native_bridge) struct TraversalFilter {
 impl TraversalFilter {
     pub(super) fn new<'s>(
         scope: &mut v8::PinScope<'s, '_>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         wrapper: v8::Local<'s, v8::Object>,
         callback: WebIdlCallbackInterface,
     ) -> Self {
@@ -97,7 +97,7 @@ impl PreparedTraversalFilter {
 
 pub(super) fn traversal_filter_result(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     filter: Option<&PreparedTraversalFilter>,
     node: DomHandle,
     what_to_show: u32,
@@ -109,7 +109,7 @@ pub(super) fn traversal_filter_result(
 }
 
 fn accepts_what_to_show(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     node: DomHandle,
     what_to_show: u32,
 ) -> bool {
@@ -136,7 +136,7 @@ fn node_type_show_mask(node: &crate::dom::native::Node) -> u32 {
 
 fn call_traversal_filter(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     filter: Option<&PreparedTraversalFilter>,
     node: DomHandle,
 ) -> TraversalFilterResult {

@@ -113,7 +113,7 @@ impl ActiveStorageContext {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn child_browsing_context_current_url(&self, handle: DomHandle) -> Option<Url> {
         self.frame_owner_store
             .current_child_owner_snapshot(handle)
@@ -696,7 +696,7 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn ensure_top_document_credentialless_storage_nonce(
         &mut self,
     ) -> OpaqueOriginNonce {
-        unsafe { &mut *self.runtime }
+        unsafe { &mut *self.document_runtime }
             .ensure_credentialless_storage_nonce(&self.browser_context_runtime)
     }
 

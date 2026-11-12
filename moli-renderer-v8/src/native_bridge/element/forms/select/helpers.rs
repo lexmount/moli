@@ -1,18 +1,18 @@
 use super::*;
 
-pub(super) fn element_option_value(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+pub(super) fn element_option_value(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     runtime.dom_host().dom().option_value(handle)
 }
 
-pub(super) fn select_option_handles(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHandle> {
+pub(super) fn select_option_handles(runtime: &PageScriptHost, handle: DomHandle) -> Vec<DomHandle> {
     runtime.dom_host().select_option_elements(handle)
 }
 
-pub(super) fn select_is_multiple(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn select_is_multiple(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     element_has_attribute(runtime, handle, "multiple")
 }
 
-pub(super) fn effective_option_selected(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn effective_option_selected(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
     };
@@ -38,7 +38,7 @@ pub(super) fn effective_option_selected(runtime: &JsContextHost, handle: DomHand
     element.selected()
 }
 
-pub(super) fn selected_index_for_select(runtime: &JsContextHost, handle: DomHandle) -> i32 {
+pub(super) fn selected_index_for_select(runtime: &PageScriptHost, handle: DomHandle) -> i32 {
     for (index, option) in select_option_handles(runtime, handle)
         .into_iter()
         .enumerate()

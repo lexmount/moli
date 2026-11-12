@@ -6,7 +6,7 @@ use crate::{
     util::v8str,
 };
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Capture one DOM-manipulation task per exact recipient LocalDOMWindow.
     ///
     /// The Web Storage mutation, storage-area match and source exclusion are
@@ -156,7 +156,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_storage_event_delivery(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowTaskTarget,
         data: &RendererPageStorageEventData,
     ) -> bool {

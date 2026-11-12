@@ -10,7 +10,7 @@ mod wrappers;
 // rule: choose the node's document realm before wrapping a native node.
 fn wrapped_traversal_node_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut super::JsContextHost,
+    runtime_ptr: *mut super::PageScriptHost,
     context_node: crate::document_runtime::DomHandle,
     node: crate::document_runtime::DomHandle,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -36,7 +36,7 @@ fn wrapped_traversal_node_value<'s>(
 fn set_wrapped_traversal_node_or_null(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut super::JsContextHost,
+    runtime_ptr: *mut super::PageScriptHost,
     root: crate::document_runtime::DomHandle,
     node: Option<crate::document_runtime::DomHandle>,
 ) {

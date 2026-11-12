@@ -10,7 +10,7 @@ use super::super::{
 };
 use crate::document_runtime::DocumentSubresourceCspKind;
 use crate::native_bridge::{
-    JsContextHost, MediaLoadSequenceId, PendingMediaCanPlayFollowup,
+    MediaLoadSequenceId, PageScriptHost, PendingMediaCanPlayFollowup,
     PendingMediaLoadTerminalFollowup,
 };
 use crate::util::v8_string;
@@ -197,7 +197,7 @@ pub(in crate::native_bridge) fn media_preload_setter_function<'s>(
 
 pub(crate) fn queue_media_load_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     queue_media_load(scope, runtime_ptr, handle, MediaLoadTrigger::Automatic);
@@ -205,7 +205,7 @@ pub(crate) fn queue_media_load_if_needed(
 
 pub(crate) fn queue_media_load_for_explicit_request(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     queue_media_load(scope, runtime_ptr, handle, MediaLoadTrigger::Explicit);
@@ -213,7 +213,7 @@ pub(crate) fn queue_media_load_for_explicit_request(
 
 fn queue_media_load(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     trigger: MediaLoadTrigger,
 ) {
@@ -268,7 +268,7 @@ fn queue_media_load(
 
 pub(crate) fn queue_media_load_if_source_or_loading_change(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute_name: &str,
 ) {
@@ -297,7 +297,7 @@ pub(crate) fn queue_media_load_if_source_or_loading_change(
 
 pub(crate) fn queue_revealed_lazy_media_loads(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
 ) {
     let candidates = unsafe { &*runtime_ptr }.lazy_media_load_candidates();
     let mut stale = Vec::new();
@@ -324,7 +324,7 @@ pub(crate) fn queue_revealed_lazy_media_loads(
 }
 
 pub(crate) fn register_lazy_media_load_candidate_if_media(
-    runtime: &mut JsContextHost,
+    runtime: &mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     if runtime
@@ -344,7 +344,7 @@ enum LazyMediaLoadCandidateState {
 }
 
 fn lazy_media_load_candidate_state(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> LazyMediaLoadCandidateState {
     let Some(node) = runtime.dom_host().node(handle) else {
@@ -394,7 +394,7 @@ enum MediaLoadDeferral {
 }
 
 fn media_load_deferral(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     trigger: MediaLoadTrigger,
 ) -> Option<MediaLoadDeferral> {
@@ -422,7 +422,7 @@ fn media_load_deferral(
 }
 
 fn media_is_inside_initial_viewport(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
     let Ok(rect) = read_bounding_client_rect(runtime, handle) else {
@@ -440,7 +440,7 @@ fn media_is_inside_initial_viewport(
 
 fn start_media_load(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     selected_source: Option<SelectedMediaSource>,
 ) {
@@ -584,7 +584,7 @@ impl MediaLoadEventPhase {
 
 fn queue_media_load_event_phase(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     sequence: MediaLoadSequenceId,
     phase: MediaLoadEventPhase,
@@ -597,7 +597,7 @@ fn queue_media_load_event_phase(
 
 pub(crate) fn dispatch_media_load_event_phase(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     sequence: MediaLoadSequenceId,
     phase: MediaLoadEventPhase,
@@ -674,7 +674,7 @@ pub(crate) fn dispatch_media_load_event_phase(
 
 pub(crate) fn queue_media_canplay_after_text_tracks(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     followup: Option<PendingMediaCanPlayFollowup>,
 ) {
     let Some(followup) = followup else {
@@ -696,7 +696,7 @@ pub(crate) fn queue_media_canplay_after_text_tracks(
 
 pub(crate) fn queue_media_load_network_terminal_followup(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     sequence: MediaLoadSequenceId,
     followup: Option<PendingMediaLoadTerminalFollowup>,
@@ -706,7 +706,7 @@ pub(crate) fn queue_media_load_network_terminal_followup(
 
 fn queue_media_load_terminal_followup_if_ready(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     sequence: MediaLoadSequenceId,
     followup: Option<PendingMediaLoadTerminalFollowup>,
@@ -726,7 +726,7 @@ fn queue_media_load_terminal_followup_if_ready(
 
 fn dispatch_media_autoplay_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) {
     let should_autoplay = {
@@ -752,7 +752,7 @@ fn dispatch_media_autoplay_if_needed(
 }
 
 fn media_load_target_for_source_change(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: crate::document_runtime::DomHandle,
     attribute_name: &str,
 ) -> Option<crate::document_runtime::DomHandle> {
@@ -778,7 +778,7 @@ struct SelectedMediaSource {
 }
 
 fn selected_media_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: crate::document_runtime::DomHandle,
 ) -> Result<Option<SelectedMediaSource>, ()> {
     let element = runtime

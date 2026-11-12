@@ -2,7 +2,7 @@ use super::{CustomElementRegistryAssociation, CustomElementRegistryKey};
 use crate::web_api_interfaces;
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{
         context_host_ptr_from_context_slot, get_private_object, get_private_value,
         new_null_prototype_object, set_private_value,
@@ -33,7 +33,7 @@ pub(crate) fn mark_custom_elements_registry_owner(
 pub(crate) fn registry_owner_host<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     registry: v8::Local<'s, v8::Object>,
-) -> Option<*mut JsContextHost> {
+) -> Option<*mut PageScriptHost> {
     let registry = moli_webapi_declare::web_api_object_target(scope, registry)?;
     let owner = get_private_object(scope, registry, CUSTOM_ELEMENTS_REGISTRY_OWNER_SLOT)?;
     context_host_ptr_from_context_slot(owner.get_creation_context(scope)?)
@@ -88,7 +88,7 @@ pub(crate) fn registry_association_from_value<'s>(
 }
 
 pub(crate) fn registry_association_matches_document(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     document_handle: DomHandle,
     association: CustomElementRegistryAssociation,
 ) -> bool {

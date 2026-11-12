@@ -1,6 +1,6 @@
 use super::reactions::enter_custom_element_reaction;
 
-use super::super::native_bridge::JsContextHost;
+use super::super::native_bridge::PageScriptHost;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 
 pub(super) enum CustomElementConstructorInvocation {
@@ -11,7 +11,7 @@ pub(super) enum CustomElementConstructorInvocation {
 
 pub(super) fn invoke_custom_element_constructor(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructor: v8::Local<'_, v8::Function>,
 ) -> CustomElementConstructorInvocation {
     let invocation = {

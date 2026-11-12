@@ -1,5 +1,5 @@
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::EventTargetHandle,
     frame_owner_model::FrameDocumentTaskOwner,
@@ -41,7 +41,7 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
     PendingRenderingUpdatePayload,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
     ///
@@ -233,7 +233,7 @@ impl JsContextHost {
     pub(crate) fn apply_authorized_rendering_update(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         task_id: RendererPageRenderingUpdateTaskId,
         target: WindowDocumentTaskTarget,
         kind: RendererPageRenderingUpdateTaskKind,
@@ -268,7 +268,7 @@ impl JsContextHost {
     fn dispatch_authorized_animation_start_scan(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         event_target: EventTargetHandle,
     ) -> bool {
@@ -292,7 +292,7 @@ impl JsContextHost {
     fn dispatch_authorized_post_parse_autofocus(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
     ) -> bool {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
@@ -310,7 +310,7 @@ impl JsContextHost {
     fn dispatch_authorized_environment_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         change: PendingEnvironmentChange,
     ) -> bool {
@@ -495,7 +495,7 @@ impl JsContextHost {
     fn dispatch_authorized_document_scroll_events(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
     ) -> bool {
         let Some(resolved) = self.resolve_authorized_window_document_task_context(scope, target)
@@ -514,7 +514,7 @@ impl JsContextHost {
     fn dispatch_authorized_document_scroll_events_in_current_context(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         document_handle: crate::document_runtime::DomHandle,
     ) -> bool {

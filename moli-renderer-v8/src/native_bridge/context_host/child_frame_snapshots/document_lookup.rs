@@ -1,8 +1,8 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use super::ChildBrowsingContextDocumentSnapshot;
 use crate::dom::native::{NativeDom, Node};
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Serializes a loaded child frame's Document from `dom`, an export copy
     /// of the live DOM, with the child Document's shadow roots and scripting
     /// flag, as the live child snapshot does.

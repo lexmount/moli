@@ -11,7 +11,7 @@ use crate::{
         usage::collect_font_uses,
     },
     native_bridge::{
-        JsContextHost, WindowExecutionContextOwner,
+        PageScriptHost, WindowExecutionContextOwner,
         element::{StyleObservation, style_viewport_for_document},
     },
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -51,7 +51,7 @@ struct Inputs {
 }
 
 impl Inputs {
-    fn new(host: &JsContextHost, document: DomHandle, faces: &[FontFaceLoad]) -> Self {
+    fn new(host: &PageScriptHost, document: DomHandle, faces: &[FontFaceLoad]) -> Self {
         // A ready getter can run before the resource phase has observed an
         // ancestor's CSSOM edits. Refresh embedding styles before consulting
         // the inferred viewport cache, from the outermost frame inward.
@@ -88,7 +88,7 @@ impl Inputs {
 pub(super) fn update_sources<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     fonts: v8::Local<'s, v8::Object>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: DomHandle,
     ordered: Vec<FontFaceLoad>,
     manual_start: usize,

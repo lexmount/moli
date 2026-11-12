@@ -1,6 +1,6 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::{JsContextHost, throw_dom_exception};
+use crate::native_bridge::{PageScriptHost, throw_dom_exception};
 use crate::util::{throw_type_error, v8str};
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -115,7 +115,7 @@ fn nullable_creation_registry<'s>(
 impl CreateElementOptions {
     pub(in crate::native_bridge::document) fn initialize_non_html_element(
         &self,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         handle: DomHandle,
     ) {
         let runtime = unsafe { &mut *runtime_ptr };
@@ -132,7 +132,7 @@ impl CreateElementOptions {
     pub(in crate::native_bridge::document) fn flatten(
         mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        runtime_ptr: *mut JsContextHost,
+        runtime_ptr: *mut PageScriptHost,
         document_handle: DomHandle,
     ) -> Option<Self> {
         if self.registry_association.is_some() && self.is_name.is_some() {
@@ -162,7 +162,7 @@ impl CreateElementOptions {
 
 pub(in crate::native_bridge) fn validate_registry_association_for_document(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: DomHandle,
     registry_association: Option<custom_elements::CustomElementRegistryAssociation>,
 ) -> bool {

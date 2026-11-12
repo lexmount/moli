@@ -217,7 +217,7 @@ impl RendererPageModuleReactionRoute {
     }
 }
 
-/// PageVm-stamped producer installed in `JsContextHost` before page script can
+/// PageVm-stamped producer installed in `PageScriptHost` before page script can
 /// create a module evaluation Promise.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageModuleReactionSender {

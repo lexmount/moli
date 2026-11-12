@@ -3,7 +3,7 @@ use super::*;
 const JS_MAX_SAFE_INTEGER_TOKEN: u64 = (1_u64 << 53) - 1;
 const MAX_INTERNAL_REFERENCE_TOKEN_ATTEMPTS: usize = 16;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_internal_node_reference(&mut self, handle: DomHandle) -> Option<u64> {
         self.dom_host().node(handle)?;
 

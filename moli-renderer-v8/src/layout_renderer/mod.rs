@@ -9,10 +9,10 @@ use moli_layout::{
     LayoutViewport, build_layout_pass_with_embedded_frames,
 };
 
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(crate) fn build_native_layout_pass(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
@@ -32,7 +32,7 @@ pub(crate) fn build_native_layout_pass(
 }
 
 fn build_native_layout_pass_recursive(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
@@ -134,7 +134,7 @@ fn build_native_layout_pass_recursive(
 }
 
 struct NativeEmbeddedFrameRenderer<'a> {
-    runtime: &'a JsContextHost,
+    runtime: &'a PageScriptHost,
     reason: moli_layout::LayoutFlushReason,
     capture_paint: bool,
     include_backgrounds: bool,
@@ -202,7 +202,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
 
 #[cfg(test)]
 pub(crate) fn build_normalized_native_box_tree_for_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     root: DomHandle,
 ) -> Result<moli_layout::NormalizedBoxTree, moli_layout::LayoutError> {
     let document = runtime

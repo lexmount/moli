@@ -22,7 +22,7 @@ pub(crate) use projection::{
 
 pub(crate) fn sync_document_fonts_for_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
     document: crate::document_runtime::DomHandle,
 ) {
     let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {

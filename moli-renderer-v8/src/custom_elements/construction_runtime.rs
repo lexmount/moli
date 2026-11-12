@@ -16,11 +16,11 @@ use super::{
 };
 use crate::dom::native::CustomElementState;
 
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) fn create_custom_element_for_registry_key<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     owner_document: DomHandle,
     explicit_registry_association: Option<CustomElementRegistryAssociation>,
@@ -116,7 +116,7 @@ pub(super) fn create_custom_element_for_registry_key<'s>(
 
 pub(super) fn construct_custom_element_directly<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructor: v8::Local<'s, v8::Function>,
     owner_document: DomHandle,
     definition_name: &str,

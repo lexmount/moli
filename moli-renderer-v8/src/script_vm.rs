@@ -60,7 +60,7 @@ pub(crate) type ScriptVmBootstrapError = Box<(anyhow::Error, DomHost)>;
 /// committed typestate before consuming this token.
 pub(crate) struct MainWindowProxyNavigationCommit {
     context: Option<v8::Global<v8::Context>>,
-    renderer_document_isolate: RendererDocumentIsolateHandle,
+    renderer_document_isolate: RendererIsolateHandle,
     page_id: u64,
 }
 
@@ -671,7 +671,7 @@ use super::{
         execute_module_script_source, register_import_map_source,
     },
     native_bridge::{
-        JsContextHost, RuntimeObservableContextToken, SharedPrebootstrappedChildDefaultContexts,
+        PageScriptHost, RuntimeObservableContextToken, SharedPrebootstrappedChildDefaultContexts,
         node_runtime_and_handle_from_object,
     },
     planning::PreparedScript,
@@ -915,7 +915,7 @@ use crate::document_runtime::{DeferredPageTaskLane, FollowupPageTaskDisposition}
 use document_isolate::*;
 pub(crate) use document_isolate::{
     RendererDeferredContextHostReleaseQueue, RendererDocumentIsolateBootstrap,
-    RendererDocumentIsolateHandle, RendererDocumentIsolateReservationAccounting,
+    RendererDocumentIsolateReservationAccounting, RendererIsolateHandle,
     RendererPageScriptEnvironment, ScriptVmDefaultWorldBootstrap,
     WeakRendererPageScriptEnvironment, renderer_document_isolate_accounting_diagnostics,
 };
@@ -941,9 +941,9 @@ type ScriptGlobalsBaseline = Vec<String>;
 struct ScriptGlobalsBaseline;
 
 fn recover_bootstrap_dom_host_from_holder(
-    renderer_document_isolate: RendererDocumentIsolateHandle,
+    renderer_document_isolate: RendererIsolateHandle,
     renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     document_runtime: Box<DocumentRuntime>,
 ) -> DomHost {
     drop(context_host);
@@ -954,8 +954,8 @@ fn recover_bootstrap_dom_host_from_holder(
 }
 
 fn register_main_window_execution_context_for_bootstrap(
-    renderer_document_isolate: &RendererDocumentIsolateHandle,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    renderer_document_isolate: &RendererIsolateHandle,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     context: &v8::Global<v8::Context>,
 ) -> Result<()> {
     renderer_document_isolate
@@ -1025,9 +1025,9 @@ pub(super) struct ScriptVm {
     prebootstrapped_child_default_contexts: SharedPrebootstrappedChildDefaultContexts,
     child_document_modulator_store: ChildDocumentModulatorStore,
     root_frame_id: Option<String>,
-    // `JsContextHost` stores a non-owning pointer into `document_runtime`, so it
+    // `PageScriptHost` stores a non-owning pointer into `document_runtime`, so it
     // must be dropped before the runtime field during normal Rust field teardown.
-    _context_host: Rc<RefCell<JsContextHost>>,
+    _context_host: Rc<RefCell<PageScriptHost>>,
     pub(super) document_runtime: ScriptVmDocumentRuntimeOwner,
     post_domcontentloaded_page_task_tx: PageTaskSender,
     page_runtime_wake_tx: PageRuntimeWakeSender,
@@ -1071,7 +1071,7 @@ pub(super) struct ScriptVm {
         Option<crate::page_task_queue::RendererPageTaskTestResidence>,
     // Native and V8 per-document state must drop before the final isolate
     // handle; retained realms then release their host through its GC queue.
-    renderer_document_isolate: RendererDocumentIsolateHandle,
+    renderer_document_isolate: RendererIsolateHandle,
 }
 
 impl moli_layout::GeometryProvider for ScriptVm {
@@ -1086,13 +1086,13 @@ impl moli_layout::GeometryProvider for ScriptVm {
 }
 
 pub(super) struct ScriptVmCommandTurnOutputScope {
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     recorder: crate::runtime::RendererCommandTurnOutputRecorder,
     _inspector_scope: ScriptVmInspectorCommandTurnOutputScope,
 }
 
 pub(super) struct ScriptVmOrdinaryPageTurnNavigationHandoffScope {
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
 }
 
 impl Drop for ScriptVmOrdinaryPageTurnNavigationHandoffScope {
@@ -1376,7 +1376,7 @@ impl ScriptVm {
                 let scope = &mut scope.init();
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
-                let expected_runtime_ptr: *mut JsContextHost = (*context_host).as_ptr();
+                let expected_runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
                 page_inspector.with_session_and_outbound(
                     inspector,
                     PageInspectorSessionTarget::Frontend(inspector_session_id),
@@ -2147,7 +2147,7 @@ impl ScriptVmPageRealmBootstrap {
         }
         let dom_debugger_pause_scheduler = page_inspector.dom_debugger_pause_scheduler();
 
-        let context_host = Rc::new(RefCell::new(JsContextHost::new(
+        let context_host = Rc::new(RefCell::new(PageScriptHost::new(
             document_runtime.as_mut(),
             frame_owner_store,
             bridge_bindings,
@@ -2351,7 +2351,7 @@ impl ScriptVmDefaultWorldBootstrap {
         browser_context_runtime: RendererBrowserContextRuntime,
     ) -> std::result::Result<Self, ScriptVmBootstrapError> {
         let renderer_document_isolate_bootstrap =
-            match RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
+            match RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(
                 page_task_tx.v8_foreground_task_sender(),
             ) {
                 Ok(bootstrap) => bootstrap,
@@ -2421,7 +2421,7 @@ impl ScriptVmDefaultWorldBootstrap {
     }
 
     fn capture_baseline_globals_and_attach_context(
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         isolate: &mut v8::OwnedIsolate,
         inspector: &mut RendererInspectorIsolateBackend,
         page_inspector: &mut DocumentInspectorBinding,

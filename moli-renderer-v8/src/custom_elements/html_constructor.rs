@@ -10,13 +10,13 @@ use crate::dom::{native::CustomElementState, native::html_element_interface_name
 
 use super::super::{
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{receiver_uses_new_target_realm_object_fallback, v8_string},
 };
 
 pub(crate) fn create_element_from_registered_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructor: v8::Local<'s, v8::Function>,
     active_constructor_name: &str,
     receiver: v8::Local<'s, v8::Object>,
@@ -80,7 +80,7 @@ pub(crate) fn create_element_from_registered_constructor<'s>(
 
 pub(crate) fn html_constructor_new_target_passes_early_sanity(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     constructor: v8::Local<'_, v8::Function>,
     active_constructor_name: &str,
 ) -> bool {
@@ -108,7 +108,7 @@ pub(crate) fn html_constructor_new_target_passes_early_sanity(
 }
 
 fn owner_document_for_registered_constructor(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
 ) -> Option<DomHandle> {
     match registry_key {

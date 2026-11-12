@@ -1,12 +1,12 @@
 use super::construction_failure::CUSTOM_ELEMENT_ALREADY_CONSTRUCTED_HANDLE_SLOT;
 
 use super::super::{
-    document_runtime::DomHandle, native_bridge::JsContextHost, util::get_private_value,
+    document_runtime::DomHandle, native_bridge::PageScriptHost, util::get_private_value,
 };
 
 pub(super) fn already_constructed_reentry_consumed_pending_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     exception: v8::Local<'s, v8::Value>,
     constructor: v8::Local<'s, v8::Function>,

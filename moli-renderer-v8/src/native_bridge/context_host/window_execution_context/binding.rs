@@ -1,5 +1,5 @@
 use super::super::{
-    JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken,
+    OwnerDispatchScope, PageScriptHost, RuntimeObservableContextToken,
     current_runtime_observable_context_token,
 };
 use super::{WindowExecutionContextIdentity, WindowExecutionContextOwner};
@@ -43,7 +43,7 @@ impl WindowExecutionContextLocator {
         self.realm_token
     }
 
-    fn resolve_identity(self, host: &JsContextHost) -> Option<WindowExecutionContextIdentity> {
+    fn resolve_identity(self, host: &PageScriptHost) -> Option<WindowExecutionContextIdentity> {
         if !host.window_execution_context_owner_is_current(self.owner, self.dispatch_scope) {
             return None;
         }
@@ -123,19 +123,19 @@ impl WindowExecutionContextBinding {
 
     pub(crate) fn resolve_identity(
         &self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
     ) -> Option<WindowExecutionContextIdentity> {
         self.locator.resolve_identity(host)
     }
 
-    pub(crate) fn is_current(&self, host: &JsContextHost) -> bool {
+    pub(crate) fn is_current(&self, host: &PageScriptHost) -> bool {
         self.resolve_identity(host).is_some()
     }
 
     pub(crate) fn with_current_scope<R>(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, OwnerDispatchScope) -> R,
     ) -> Option<R> {
         // The dispatch slot owns the host Rc for this call. Use its stable raw

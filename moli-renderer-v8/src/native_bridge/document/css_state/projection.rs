@@ -5,7 +5,7 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     dom::native::{DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, Node},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::with_cached_node_wrapper_realm,
 };
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ struct DocumentCssProjections {
 }
 
 impl DocumentCssProjections {
-    fn from_owner_changes(host: &JsContextHost, changes: &[DomStylesheetOwnerChange]) -> Self {
+    fn from_owner_changes(host: &PageScriptHost, changes: &[DomStylesheetOwnerChange]) -> Self {
         let mut projections = Self::default();
         for change in changes {
             if !owner_change_projects_css(host, change) {
@@ -55,7 +55,7 @@ impl DocumentCssProjections {
         projections
     }
 
-    fn for_source_change(host: &JsContextHost, owner: DomHandle) -> Self {
+    fn for_source_change(host: &PageScriptHost, owner: DomHandle) -> Self {
         let mut projections = Self::default();
         let Some(tree_scope) = host.dom_host().root_node_handle(owner) else {
             return projections;
@@ -66,7 +66,7 @@ impl DocumentCssProjections {
 
     fn push_for_scope(
         &mut self,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         scope: DomHandle,
         owner: DomHandle,
         refresh: bool,
@@ -109,7 +109,7 @@ impl DocumentCssProjections {
             .insert((scope, owner), index);
     }
 
-    fn apply(self, scope: &mut v8::PinScope<'_, '_>, host: &JsContextHost) {
+    fn apply(self, scope: &mut v8::PinScope<'_, '_>, host: &PageScriptHost) {
         let mut font_face_documents = Vec::new();
         for projection in self.projections {
             let document = match &projection {
@@ -150,7 +150,7 @@ impl DocumentCssProjections {
 
 pub(crate) fn apply_stylesheet_owner_css_projections(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     changes: &[DomStylesheetOwnerChange],
 ) {
     for change in changes {
@@ -199,7 +199,7 @@ pub(crate) fn apply_stylesheet_owner_css_projections(
 }
 
 fn owner_change_detaches_cached_inline_sheet(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     change: &DomStylesheetOwnerChange,
 ) -> bool {
     owner_is_inline_style_element(host, change.owner())
@@ -211,7 +211,7 @@ fn owner_change_detaches_cached_inline_sheet(
 }
 
 fn owner_change_detaches_cached_link_sheet(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     change: &DomStylesheetOwnerChange,
 ) -> bool {
     if matches!(
@@ -249,7 +249,7 @@ fn owner_change_detaches_cached_link_sheet(
 
 pub(crate) fn apply_stylesheet_source_css_projection(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     owner: DomHandle,
 ) {
     if host.dom_host().is_html_element_named(owner, "link")
@@ -268,7 +268,7 @@ pub(crate) fn apply_stylesheet_source_css_projection(
     DocumentCssProjections::for_source_change(host, owner).apply(scope, host);
 }
 
-fn owner_change_projects_css(host: &JsContextHost, change: &DomStylesheetOwnerChange) -> bool {
+fn owner_change_projects_css(host: &PageScriptHost, change: &DomStylesheetOwnerChange) -> bool {
     match change.kind() {
         DomStylesheetOwnerChangeKind::Attribute {
             namespace,
@@ -289,7 +289,7 @@ fn owner_change_projects_css(host: &JsContextHost, change: &DomStylesheetOwnerCh
     }
 }
 
-fn owner_is_inline_style_element(host: &JsContextHost, owner: DomHandle) -> bool {
+fn owner_is_inline_style_element(host: &PageScriptHost, owner: DomHandle) -> bool {
     host.dom_host().is_inline_style_sheet_owner(owner)
 }
 

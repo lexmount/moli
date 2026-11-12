@@ -189,7 +189,7 @@ impl NativeModulepreloadLinkFetchOutcome {
 /// connected style/link owner is processed.
 ///
 /// Preparing this value only reads the DOM. `ScriptVm` commits it while
-/// safely borrowing `JsContextHost`, then gives the resulting admission back
+/// safely borrowing `PageScriptHost`, then gives the resulting admission back
 /// to `DocumentRuntime` synchronously. No task or event-loop turn may run
 /// between those phases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

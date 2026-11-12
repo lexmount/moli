@@ -11,7 +11,7 @@ use moli_fetch::{
 
 pub(super) fn record_intercepted_xhr(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) -> u64 {
@@ -50,7 +50,7 @@ pub(super) fn record_intercepted_xhr(
 
 pub(super) fn dispatch_service_worker_xhr(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: &PreparedXhrSendRequest,
 ) -> Option<u64> {
@@ -156,7 +156,7 @@ pub(super) fn dispatch_service_worker_xhr(
 
 pub(super) fn record_offline_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) {
@@ -175,7 +175,7 @@ pub(super) fn record_offline_xhr_failure(
 
 pub(super) fn record_blocked_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) {
@@ -194,7 +194,7 @@ pub(super) fn record_blocked_xhr_failure(
 
 pub(super) fn record_policy_blocked_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     message: String,
@@ -218,7 +218,7 @@ pub(super) use self::record_policy_blocked_xhr_failure as record_url_policy_xhr_
 
 pub(super) fn record_bad_port_xhr_failure(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) {
@@ -240,7 +240,7 @@ pub(super) fn record_bad_port_xhr_failure(
 
 pub(super) fn queue_local_xhr_response(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     response: Response,
@@ -250,7 +250,7 @@ pub(super) fn queue_local_xhr_response(
 }
 
 pub(super) fn record_xhr_response_success(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     prepared: &PreparedXhrSendRequest,
     response: &Response,
 ) {
@@ -283,7 +283,7 @@ pub(super) fn record_xhr_response_success(
 
 pub(super) fn spawn_network_xhr_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     request_client: ResourceRequestClient,

@@ -1,6 +1,6 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 
-impl JsContextHost {
+impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn websocket_connection_for_test(
         &self,

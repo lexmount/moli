@@ -14,7 +14,7 @@ use super::element::{
     control_label_handles, form_control_elements, form_named_control_matches,
     form_named_image_matches,
 };
-use super::{JsContextHost, RuntimeObservableContextToken};
+use super::{PageScriptHost, RuntimeObservableContextToken};
 use dense_reflector_map::DenseReflectorMap;
 
 mod dense_reflector_map;
@@ -266,7 +266,7 @@ impl Hash for LiveCollectionDescriptor {
 }
 
 impl LiveCollectionDescriptor {
-    pub(super) fn resolve(&self, host: &JsContextHost) -> Rc<[DomHandle]> {
+    pub(super) fn resolve(&self, host: &PageScriptHost) -> Rc<[DomHandle]> {
         let query_version = host.dom_host().query_version();
         if let Some(handles) = self
             .resolution_cache

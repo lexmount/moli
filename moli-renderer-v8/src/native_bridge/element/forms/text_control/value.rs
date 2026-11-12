@@ -2,7 +2,7 @@ use super::*;
 use crate::native_bridge::document::detached_native_handle_for_runtime;
 use crate::util::utf16_len;
 
-pub(crate) fn text_control_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+pub(crate) fn text_control_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return String::new();
     };
@@ -36,7 +36,7 @@ pub(in crate::native_bridge) fn normalize_textarea_api_value(value: &str) -> Str
 }
 
 pub(super) fn clamp_text_control_offset(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     offset: u32,
 ) -> u32 {
@@ -44,7 +44,7 @@ pub(super) fn clamp_text_control_offset(
     offset.min(len)
 }
 
-pub(crate) fn is_text_control(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn is_text_control(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -66,7 +66,7 @@ pub(crate) fn is_text_control(runtime: &JsContextHost, handle: DomHandle) -> boo
 }
 
 pub(super) fn supports_variable_length_selection(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime
@@ -102,7 +102,7 @@ pub(in crate::native_bridge) fn textarea_value_getter_function<'s>(
 
 fn detached_textarea_value_attribute_default<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'s, v8::Object>,
     handle: DomHandle,
     current_value: &str,

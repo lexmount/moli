@@ -2,7 +2,7 @@
 
 use super::{QueuedMutationRecord, QueuedMutationRecordKind, wrap_node_handle};
 use crate::{
-    native_bridge::{JsContextHost, build_static_handle_node_list_wrapper},
+    native_bridge::{PageScriptHost, build_static_handle_node_list_wrapper},
     util::{callback_data_index_value, callback_data_item, get_private_value, v8_string, v8str},
     web_api_interfaces,
 };
@@ -103,7 +103,7 @@ fn attribute_getter<'s>(
 
 pub(super) fn build_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     record: &QueuedMutationRecord,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let target = wrap_node_handle(scope, host_ptr, record.target)?;

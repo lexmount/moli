@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
+    OwnerDispatchScope, PageScriptHost, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
     context_bootstrap::{error_event_handler_arguments, event_is_error_event},
@@ -57,7 +57,7 @@ struct ReadyChildWindowEventListenerInvocation {
     callback: PreparedEventCallback,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn child_window_event_requires_runtime_dispatch(
         &self,
         handle: DomHandle,
@@ -375,7 +375,7 @@ impl JsContextHost {
         ) else {
             return false;
         };
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         self.dispatch_public_event(
             scope,
             host_ptr,
@@ -636,7 +636,7 @@ impl JsContextHost {
         );
         let returned = invoke_prepared_event_callback(
             scope,
-            self as *mut JsContextHost,
+            self as *mut PageScriptHost,
             false,
             event_type,
             &format!("child window {event_type} listener"),
@@ -791,7 +791,7 @@ fn apply_child_window_event_handler_return<'s>(
 
 fn install_child_body_load_attribute_handler_if_needed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     handle: DomHandle,
 ) {
     let Some(source) = host
@@ -819,7 +819,7 @@ fn install_child_body_load_attribute_handler_if_needed<'s>(
     {
         return;
     }
-    let host_ptr: *mut JsContextHost = host;
+    let host_ptr: *mut PageScriptHost = host;
     let Some(handler) = compile_event_attribute_handler_for_owner(
         scope,
         host_ptr,

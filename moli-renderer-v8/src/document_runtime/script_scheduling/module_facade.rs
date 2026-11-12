@@ -630,7 +630,7 @@ impl DocumentRuntime {
     #[cfg(test)]
     pub(crate) fn absorb_runtime_binding_calls_from_host(
         &mut self,
-        host: &mut JsContextHost,
+        host: &mut PageScriptHost,
     ) -> Vec<String> {
         self.absorb_runtime_binding_calls(host.take_runtime_binding_calls())
     }

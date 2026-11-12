@@ -47,7 +47,7 @@ struct ValidityStateDeclaration {
 
 pub(in crate::native_bridge) fn form_validate_for_submission(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
 ) -> bool {
     form_check_validity(scope, runtime_ptr, form_handle)
@@ -83,7 +83,7 @@ pub(in crate::native_bridge) fn form_report_validity_callback(
 
 fn form_check_validity(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
 ) -> bool {
     let invalid_controls = {
@@ -107,7 +107,7 @@ fn form_check_validity(
 
 fn invalid_form_control_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     form_handle: DomHandle,
 ) -> Vec<DomHandle> {
     let controls = {
@@ -148,7 +148,7 @@ pub(in crate::native_bridge) fn control_report_validity_callback(
 
 fn control_check_validity(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let is_valid = control_satisfies_constraints(scope, runtime_ptr, handle);
@@ -221,7 +221,7 @@ pub(in crate::native_bridge) fn control_validity_getter_function<'s>(
 
 pub(in crate::native_bridge) fn control_matches_validity_pseudo(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     selector: &str,
 ) -> Option<bool> {
@@ -312,7 +312,7 @@ fn build_validity_state_object<'s>(
 
 fn control_validation_message(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> String {
     let will_validate = {
@@ -339,7 +339,7 @@ fn control_validation_message(
 
 fn control_satisfies_constraints(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let will_validate = {
@@ -351,7 +351,7 @@ fn control_satisfies_constraints(
 
 fn control_validity(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> ControlValidity {
     let is_form_associated_custom_element = {
@@ -380,7 +380,7 @@ fn control_validity(
 }
 
 fn control_suffers_bad_input(
-    _runtime: &JsContextHost,
+    _runtime: &PageScriptHost,
     _handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -390,7 +390,7 @@ fn control_suffers_bad_input(
         && element.input_bad_input()
 }
 
-fn control_will_validate(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn control_will_validate(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
     };
@@ -401,7 +401,7 @@ fn control_will_validate(runtime: &JsContextHost, handle: DomHandle) -> bool {
 }
 
 fn control_suffers_required_value_missing(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -428,7 +428,7 @@ fn control_suffers_required_value_missing(
 }
 
 fn element_is_constraint_validation_candidate(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -445,7 +445,7 @@ fn element_is_constraint_validation_candidate(
 }
 
 fn element_matches_validity_pseudo(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -464,7 +464,7 @@ fn element_type_supports_intrinsic_validation(element: &Element) -> bool {
 }
 
 fn element_type_supports_intrinsic_validation_with_tree(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -484,7 +484,7 @@ fn control_is_readonly_barred_from_constraint_validation(element: &Element) -> b
 }
 
 fn required_value_missing_is_suppressed_for_immutable_control(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -495,7 +495,7 @@ fn required_value_missing_is_suppressed_for_immutable_control(
             || (element.is_html_input() && element.input_type().supports_readonly()))
 }
 
-pub(crate) fn control_has_datalist_ancestor(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn control_has_datalist_ancestor(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let mut current = runtime.dom_host().parent_node(handle);
     while let Some(parent) = current {
         let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
@@ -512,7 +512,7 @@ pub(crate) fn control_has_datalist_ancestor(runtime: &JsContextHost, handle: Dom
 }
 
 fn input_suffers_required_value_missing(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -527,7 +527,7 @@ fn input_suffers_required_value_missing(
 }
 
 fn control_suffers_type_mismatch(
-    _runtime: &JsContextHost,
+    _runtime: &PageScriptHost,
     _handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -547,7 +547,7 @@ fn control_suffers_type_mismatch(
 
 fn control_suffers_pattern_mismatch(
     scope: &mut v8::PinScope<'_, '_>,
-    _runtime: &JsContextHost,
+    _runtime: &PageScriptHost,
     _handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -618,7 +618,11 @@ fn v8_pattern_matches_entire_value(
     Some(!result.is_null())
 }
 
-fn control_suffers_too_long(runtime: &JsContextHost, handle: DomHandle, element: &Element) -> bool {
+fn control_suffers_too_long(
+    runtime: &PageScriptHost,
+    handle: DomHandle,
+    element: &Element,
+) -> bool {
     if !element.input_value_user_edited()
         || !text_control_length_validation_applies(runtime, handle, element)
     {
@@ -631,7 +635,7 @@ fn control_suffers_too_long(runtime: &JsContextHost, handle: DomHandle, element:
 }
 
 fn control_suffers_too_short(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -647,7 +651,7 @@ fn control_suffers_too_short(
 }
 
 fn text_control_length_validation_applies(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -657,7 +661,7 @@ fn text_control_length_validation_applies(
 }
 
 fn control_suffers_range_underflow(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -673,7 +677,7 @@ fn control_suffers_range_underflow(
 }
 
 fn control_suffers_range_overflow(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -689,7 +693,7 @@ fn control_suffers_range_overflow(
 }
 
 fn control_suffers_step_mismatch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     element: &Element,
 ) -> bool {
@@ -719,7 +723,7 @@ fn control_suffers_number_step_mismatch(element: &Element) -> Option<bool> {
 }
 
 fn input_value_for_numeric_validity(
-    _runtime: &JsContextHost,
+    _runtime: &PageScriptHost,
     _handle: DomHandle,
     element: &Element,
 ) -> Option<f64> {
@@ -748,7 +752,7 @@ pub(in crate::native_bridge::element::forms) fn input_step_base(element: &Elemen
     )
 }
 
-fn radio_group_has_checked_control(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn radio_group_has_checked_control(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .radio_group_members(handle)
@@ -762,7 +766,7 @@ fn radio_group_has_checked_control(runtime: &JsContextHost, handle: DomHandle) -
         })
 }
 
-fn radio_group_suffers_required_value_missing(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn radio_group_suffers_required_value_missing(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let members = runtime.dom_host().radio_group_members(handle);
     let has_required = members.iter().any(|candidate| {
         runtime
@@ -781,7 +785,7 @@ fn radio_group_suffers_required_value_missing(runtime: &JsContextHost, handle: D
         })
 }
 
-fn select_suffers_required_value_missing(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn select_suffers_required_value_missing(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let selected_options = runtime.dom_host().select_selected_option_elements(handle);
     if selected_options.is_empty() {
         return true;
@@ -792,7 +796,7 @@ fn select_suffers_required_value_missing(runtime: &JsContextHost, handle: DomHan
 }
 
 fn select_placeholder_label_option(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let select = runtime.dom_host().node(handle).and_then(Node::as_element)?;
@@ -828,7 +832,7 @@ fn select_display_size_for_validation(select: &Element) -> i32 {
 
 pub(in crate::native_bridge) fn dispatch_invalid_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     if let Some(event) = construct_simple_event(scope, "invalid", false, true, false) {

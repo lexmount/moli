@@ -30,7 +30,7 @@ pub(in crate::native_bridge::collections) fn callback_arg_live_collection_kind(
 pub(in crate::native_bridge::collections) fn live_collection_descriptor_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, LiveCollectionDescriptor), String> {
+) -> std::result::Result<(*mut PageScriptHost, LiveCollectionDescriptor), String> {
     let runtime_ptr = runtime_ptr_from_object(scope, object)?;
     let collection_id = object_collection_id(scope, object)?;
     let descriptor = unsafe { &mut *runtime_ptr }
@@ -44,7 +44,7 @@ pub(in crate::native_bridge::collections) fn live_collection_descriptor_from_obj
 pub(in crate::native_bridge::collections) fn static_handle_collection_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> std::result::Result<(*mut JsContextHost, u32), String> {
+) -> std::result::Result<(*mut PageScriptHost, u32), String> {
     let runtime_ptr = runtime_ptr_from_object(scope, object)?;
     let value = object
         .get_internal_field(scope, STATIC_HANDLE_COLLECTION_ID_INTERNAL_FIELD)
@@ -62,7 +62,7 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_id_from_ob
 }
 
 pub(in crate::native_bridge::collections) fn static_handle_collection_len(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     collection_id: u32,
 ) -> Option<usize> {
     unsafe { &mut *runtime_ptr }
@@ -71,7 +71,7 @@ pub(in crate::native_bridge::collections) fn static_handle_collection_len(
 }
 
 pub(in crate::native_bridge::collections) fn static_handle_collection_handle_at(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     collection_id: u32,
     index: usize,
 ) -> Option<DomHandle> {
@@ -99,7 +99,7 @@ pub(in crate::native_bridge::collections) fn object_collection_id(
 }
 
 pub(in crate::native_bridge::collections) fn named_item_matches(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     descriptor: &LiveCollectionDescriptor,
     key: &str,
 ) -> Vec<DomHandle> {
@@ -126,7 +126,7 @@ pub(in crate::native_bridge::collections) fn named_item_matches(
 }
 
 pub(in crate::native_bridge::collections) fn named_item_property_names(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     descriptor: &LiveCollectionDescriptor,
 ) -> Vec<String> {
     if !matches!(

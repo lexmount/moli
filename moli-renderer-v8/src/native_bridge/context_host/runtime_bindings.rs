@@ -1,4 +1,4 @@
-use super::{JsContextHost, RuntimeBindingExecutionContext, RuntimeObservableContextToken};
+use super::{PageScriptHost, RuntimeBindingExecutionContext, RuntimeObservableContextToken};
 use crate::{
     protocol_types::{PendingRuntimeBindingCall, RuntimeBindingRegistration},
     runtime_binding_data::{build_runtime_binding_data, runtime_binding_callback},
@@ -21,7 +21,7 @@ impl RuntimeBindingOwnerTransitionOutcome {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn document_task_owner_is_current(
         &self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
@@ -66,7 +66,7 @@ impl JsContextHost {
             };
             let Some(value) = Self::build_runtime_binding_function(
                 scope,
-                self as *mut JsContextHost,
+                self as *mut PageScriptHost,
                 &binding_name,
                 execution_context_id,
                 execution_context,
@@ -90,7 +90,7 @@ impl JsContextHost {
 
     fn build_runtime_binding_function<'s>(
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         name: &str,
         execution_context_id: i64,
         execution_context: RuntimeBindingExecutionContext,

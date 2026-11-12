@@ -2,7 +2,7 @@ use crate::{
     context_bootstrap::dispatch_window_error_event_with_details,
     document_runtime::DomHandle,
     exception_reporting::build_exception_report_without_stack,
-    native_bridge::{JsContextHost, OwnerDispatchScope},
+    native_bridge::{OwnerDispatchScope, PageScriptHost},
     util::{create_script_origin_with_base_url, v8_string},
 };
 
@@ -14,7 +14,7 @@ pub(crate) enum EventAttributeHandlerScope {
 
 pub(super) fn compile_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     source: &str,
     arguments: &[v8::Local<'s, v8::String>],
@@ -38,7 +38,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
 
 pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner: OwnerDispatchScope,
     source: &str,
     handler_scope: EventAttributeHandlerScope,
@@ -68,7 +68,7 @@ pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
 
 fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     owner: OwnerDispatchScope,
     base_url: &url::Url,
     source: &str,
@@ -99,7 +99,7 @@ fn compile_event_attribute_handler_for_owner_with_context<'s>(
 
 fn compile_event_attribute_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     base_url: &url::Url,
     source: &str,
     arguments: &[v8::Local<'s, v8::String>],

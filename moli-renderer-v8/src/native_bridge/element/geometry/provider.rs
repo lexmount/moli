@@ -8,10 +8,10 @@ use moli_layout::{
 
 use super::client_rect::{ClientRect, union_client_rect, zero_client_rect};
 use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 fn query_source(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
     query: LayoutQuery<DomHandle>,
 ) -> Result<Option<LayoutQueryAnswer<DomHandle>>, LayoutError> {
@@ -29,7 +29,7 @@ fn query_source(
 }
 
 pub(crate) fn observable_geometry_query(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
@@ -39,7 +39,7 @@ pub(crate) fn observable_geometry_query(
 
 /// Style sampling never initializes layout as a side effect.
 fn published_geometry_query(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
@@ -51,7 +51,7 @@ fn published_geometry_query(
 }
 
 pub(crate) fn observable_geometry_batch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
@@ -61,7 +61,7 @@ pub(crate) fn observable_geometry_batch(
 
 /// Style and observer sampling never initializes layout as a side effect.
 pub(crate) fn published_geometry_batch(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
@@ -78,7 +78,7 @@ pub(crate) fn published_geometry_batch(
 }
 
 pub(crate) fn observable_document_metrics(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
 ) -> Result<LayoutDocumentMetrics, LayoutError> {
     match observable_geometry_query(runtime, document, &LayoutQuery::DocumentMetrics)? {
@@ -88,7 +88,7 @@ pub(crate) fn observable_document_metrics(
 }
 
 pub(crate) fn read_client_rects(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<Vec<ClientRect>, LayoutError> {
     match query_source(runtime, source, LayoutQuery::ClientRects { source })? {
@@ -101,7 +101,7 @@ pub(crate) fn read_client_rects(
 }
 
 pub(crate) fn observable_sources_with_fragments(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     sources: &[DomHandle],
 ) -> Result<HashSet<DomHandle>, LayoutError> {
@@ -132,7 +132,7 @@ pub(crate) fn observable_sources_with_fragments(
 }
 
 pub(crate) fn read_bounding_client_rect(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<ClientRect, LayoutError> {
     let mut rects = read_client_rects(runtime, source)?.into_iter();
@@ -146,7 +146,7 @@ pub(crate) fn read_bounding_client_rect(
 }
 
 pub(crate) fn observable_bounding_client_rects(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     sources: &[DomHandle],
 ) -> Result<Vec<ClientRect>, LayoutError> {
     let Some((&first, rest)) = sources.split_first() else {
@@ -198,7 +198,7 @@ pub(crate) fn observable_bounding_client_rects(
 }
 
 pub(crate) fn read_box_model(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<Option<LayoutBoxModel>, LayoutError> {
     match query_source(runtime, source, LayoutQuery::BoxModel { source })? {
@@ -209,7 +209,7 @@ pub(crate) fn read_box_model(
 }
 
 pub(crate) fn observable_event_offset(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
     point: LayoutPoint,
 ) -> Result<LayoutPoint, LayoutError> {
@@ -221,7 +221,7 @@ pub(crate) fn observable_event_offset(
 }
 
 pub(crate) fn read_element_metrics(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<Option<LayoutElementMetrics<DomHandle>>, LayoutError> {
     match query_source(runtime, source, LayoutQuery::ElementMetrics { source })? {
@@ -232,7 +232,7 @@ pub(crate) fn read_element_metrics(
 }
 
 pub(crate) fn observable_used_grid_tracks(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<Option<LayoutResolvedGridTracks>, LayoutError> {
     if !runtime.dom_host().is_connected(source) {
@@ -257,7 +257,7 @@ pub(crate) fn observable_used_grid_tracks(
 }
 
 pub(crate) fn read_scroll_into_view_geometry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<Option<LayoutScrollIntoViewGeometry<DomHandle>>, LayoutError> {
     match query_source(
@@ -272,7 +272,7 @@ pub(crate) fn read_scroll_into_view_geometry(
 }
 
 pub(crate) fn observable_caret_position(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutCaretPosition<DomHandle>>, LayoutError> {
@@ -301,7 +301,7 @@ pub(crate) fn observable_caret_position(
 }
 
 pub(crate) fn observable_hit_test_all(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,

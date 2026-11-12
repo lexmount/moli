@@ -11,7 +11,7 @@ mod snapshot;
 pub(super) use initialize::initialize_child_window_realm_state;
 pub(super) use model::{ChildWindowRealmInit, WindowWorldKind};
 
-impl crate::native_bridge::JsContextHost {
+impl crate::native_bridge::PageScriptHost {
     pub(crate) fn rebind_child_window_realm_document_state<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

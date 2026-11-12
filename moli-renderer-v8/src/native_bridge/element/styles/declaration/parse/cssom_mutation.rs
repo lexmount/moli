@@ -104,7 +104,7 @@ pub(in crate::native_bridge::element::styles) fn parse_style_property_entries_fo
 
 pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_pdb_storage(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
     value: &str,
@@ -249,7 +249,7 @@ pub(in crate::native_bridge::element::styles) fn set_inline_style_property_with_
 
 pub(in crate::native_bridge::element::styles) fn set_inline_style_css_text_with_pdb_storage(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     css_text: &str,
 ) {

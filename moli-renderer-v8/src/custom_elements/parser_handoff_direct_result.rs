@@ -7,7 +7,7 @@ use super::{
     synchronize_wrapper_custom_element_prototype, validate_custom_element_construction_result,
 };
 use crate::{
-    document_runtime::DomHandle, dom::native::CustomElementState, native_bridge::JsContextHost,
+    document_runtime::DomHandle, dom::native::CustomElementState, native_bridge::PageScriptHost,
 };
 
 pub(super) struct ParserDirectConstructionContext<'s, 'a> {
@@ -21,7 +21,7 @@ pub(super) struct ParserDirectConstructionContext<'s, 'a> {
 
 pub(super) fn handle_parser_direct_constructor_invocation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     invocation: CustomElementConstructorInvocation,
     context: ParserDirectConstructionContext<'s, '_>,
 ) -> DomHandle {
@@ -56,7 +56,7 @@ pub(super) fn handle_parser_direct_constructor_invocation<'s>(
 
 fn handle_parser_direct_created_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     created: v8::Global<v8::Object>,
     context: ParserDirectConstructionContext<'s, '_>,
 ) -> DomHandle {
@@ -102,7 +102,7 @@ fn handle_parser_direct_created_element<'s>(
 
 fn mark_parser_direct_construction_success<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_handle: DomHandle,
     constructed_handle: DomHandle,
     registry_key: CustomElementRegistryKey,
@@ -130,7 +130,7 @@ fn mark_parser_direct_construction_success<'s>(
 
 fn fail_parser_direct_construction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     constructor: v8::Local<'s, v8::Function>,
     failure: ConstructionFailure<'s>,

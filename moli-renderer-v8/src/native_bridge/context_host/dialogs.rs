@@ -1,4 +1,4 @@
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 use crate::runtime::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogResult, RendererPendingJavaScriptDialog,
 };
@@ -16,7 +16,7 @@ impl PendingJavaScriptDialogRecord {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn javascript_dialog_handler_enabled(&self) -> bool {
         self.browser_context_runtime
             .javascript_dialog_handler_enabled()

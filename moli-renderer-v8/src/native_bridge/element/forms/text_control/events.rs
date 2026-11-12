@@ -3,7 +3,7 @@ use crate::page_task_queue::RendererPageUserInteractionEventKind;
 
 pub(crate) fn dispatch_text_control_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     event_type: &str,
 ) {
@@ -15,7 +15,7 @@ pub(crate) fn dispatch_text_control_event(
 
 pub(crate) fn queue_text_control_selection_change_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let _ = unsafe { &mut *runtime_ptr }.queue_user_interaction_event_task(
@@ -27,7 +27,7 @@ pub(crate) fn queue_text_control_selection_change_event(
 
 pub(crate) fn queue_text_control_document_selection_change_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let _ = unsafe { &mut *runtime_ptr }.queue_user_interaction_event_task(
@@ -39,7 +39,7 @@ pub(crate) fn queue_text_control_document_selection_change_event(
 
 pub(crate) fn queue_text_control_select_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let _ = unsafe { &mut *runtime_ptr }.queue_user_interaction_event_task(

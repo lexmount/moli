@@ -1,4 +1,4 @@
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 use crate::types::{
     ScriptNetworkOutputItem, SubresourceNetworkRecord, SubresourceResourceType,
     WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent, WebSocketNetworkEvent,
@@ -7,7 +7,7 @@ use http::HeaderName;
 use moli_cookie_jar::StoredCookieSetReport;
 use moli_websocket::websocket_cookie_url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn record_websocket_open(
         &mut self,
         socket_id: u64,

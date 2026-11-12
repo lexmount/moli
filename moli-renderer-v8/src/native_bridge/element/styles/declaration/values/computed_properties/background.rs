@@ -3,7 +3,7 @@ use super::*;
 /// CSSOM serializes the coordinated background layers, including initial
 /// components. Specified-value shorthand serialization would omit those parts.
 pub(super) fn computed_shorthand(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> String {

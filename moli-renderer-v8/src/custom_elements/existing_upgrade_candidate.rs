@@ -1,11 +1,11 @@
 use super::super::{
     document_runtime::DomHandle,
-    native_bridge::{JsContextHost, wrapped_handle_value},
+    native_bridge::{PageScriptHost, wrapped_handle_value},
 };
 
 pub(super) fn custom_element_wrapper_for_existing_upgrade<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     wrapped_handle_value(scope, host_ptr, handle)
@@ -13,7 +13,7 @@ pub(super) fn custom_element_wrapper_for_existing_upgrade<'s>(
 }
 
 pub(super) fn definition_disables_existing_shadow(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     unsafe { &*host_ptr }

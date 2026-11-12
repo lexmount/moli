@@ -5,7 +5,7 @@ use super::super::{
     document_runtime::DomHandle,
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     native_bridge::{
-        JsContextHost, document::preserve_detached_element_bridge_for_custom_prototype,
+        PageScriptHost, document::preserve_detached_element_bridge_for_custom_prototype,
         node_runtime_and_handle_from_object,
     },
     util::get_private_object,
@@ -20,7 +20,7 @@ pub(super) enum FailedExistingConstructionPrototype {
 
 pub(super) fn validate_custom_element_construction_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     expected_handle: Option<DomHandle>,
     created: v8::Local<'s, v8::Object>,
     definition_name: &str,
@@ -115,7 +115,7 @@ pub(crate) fn set_wrapper_custom_element_constructor_prototype<'s>(
 
 pub(super) fn synchronize_custom_element_prototype_for_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     source: v8::Local<'s, v8::Object>,
 ) {

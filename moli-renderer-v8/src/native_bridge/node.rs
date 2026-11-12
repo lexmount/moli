@@ -15,7 +15,7 @@ use super::super::{
     },
 };
 use super::{
-    CollectionKind, JsContextHost, LiveCollectionQueryKind, callback_arg_string,
+    CollectionKind, LiveCollectionQueryKind, PageScriptHost, callback_arg_string,
     runtime_ptr_from_object, set_wrapped_handle_or_null, set_wrapped_handle_or_null_for_receiver,
     throw_dom_exception,
 };
@@ -266,11 +266,11 @@ pub(super) fn throw_incompatible_method_receiver(
     );
 }
 
-fn node_type_for_handle(runtime: &JsContextHost, handle: DomHandle) -> Option<NodeType> {
+fn node_type_for_handle(runtime: &PageScriptHost, handle: DomHandle) -> Option<NodeType> {
     runtime.dom_host().node(handle).map(Node::node_type)
 }
 
-fn is_parent_node_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_parent_node_receiver(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     node_type_for_handle(runtime, handle).is_some_and(|node_type| {
         matches!(
             node_type,
@@ -279,7 +279,7 @@ fn is_parent_node_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
     })
 }
 
-fn is_child_node_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_child_node_receiver(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     node_type_for_handle(runtime, handle).is_some_and(|node_type| {
         matches!(
             node_type,
@@ -293,7 +293,7 @@ fn is_child_node_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
     })
 }
 
-fn is_non_document_type_child_node_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_non_document_type_child_node_receiver(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     node_type_for_handle(runtime, handle).is_some_and(|node_type| {
         matches!(
             node_type,
@@ -308,7 +308,7 @@ fn is_non_document_type_child_node_receiver(runtime: &JsContextHost, handle: Dom
 
 pub(super) fn require_parent_node_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     member: &str,
     is_method: bool,
@@ -326,7 +326,7 @@ pub(super) fn require_parent_node_receiver(
 
 pub(super) fn require_child_node_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     member: &str,
 ) -> bool {
@@ -339,7 +339,7 @@ pub(super) fn require_child_node_receiver(
 
 pub(super) fn require_non_document_type_child_node_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     member: &str,
 ) -> bool {
@@ -352,7 +352,7 @@ pub(super) fn require_non_document_type_child_node_receiver(
 
 pub(super) fn require_element_getter_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     member: &str,
 ) -> bool {
@@ -365,7 +365,7 @@ pub(super) fn require_element_getter_receiver(
 
 pub(super) fn require_element_setter_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     member: &str,
 ) -> bool {
@@ -378,7 +378,7 @@ pub(super) fn require_element_setter_receiver(
 
 pub(super) fn require_element_method_receiver(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     method: &str,
 ) -> bool {
@@ -908,7 +908,7 @@ fn node_text_content_setter_function<'s>(
 }
 
 pub(super) fn element_name_for_owner_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let dom_host = runtime.dom_host();
@@ -1239,7 +1239,7 @@ pub(super) fn node_backing_object<'s>(
 pub(crate) fn node_runtime_and_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, DomHandle)> {
     let object = v8::Local::new(scope, object);
     let object =
         node_backing_object(scope, object).context("Node receiver has no native backing")?;
@@ -1273,7 +1273,7 @@ pub(crate) fn object_is_node_wrapper_or_detached<'s>(
 pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, DomHandle)> {
     let object = v8::Local::new(scope, object);
     let object =
         node_backing_object(scope, object).context("Node receiver has no native backing")?;
@@ -1286,7 +1286,7 @@ pub(crate) fn node_runtime_and_handle_from_object_or_detached<'s>(
     let runtime_ptr = object
         .get_creation_context(scope)
         .and_then(context_host_ptr_from_context_slot)
-        .context("detached node's context has no JsContextHost")?;
+        .context("detached node's context has no PageScriptHost")?;
     let handle = super::document::detached_native_handle_for_runtime(scope, runtime_ptr, object)
         .context("object is neither a Node wrapper nor a detached node")?;
     Ok((runtime_ptr, handle))
@@ -1311,7 +1311,7 @@ pub(crate) fn branded_node_handle<'s>(
 
 pub(crate) fn current_or_live_delegate_node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
@@ -1325,14 +1325,14 @@ pub(crate) fn current_or_live_delegate_node_arg_handle(
 pub(super) fn node_runtime_and_handle_from_args(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
-) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, DomHandle)> {
     node_runtime_and_handle_from_object(scope, args.this())
 }
 
 pub(super) fn node_runtime_and_handle_from_args_or_detached(
     scope: &mut v8::PinScope<'_, '_>,
     args: &v8::FunctionCallbackArguments<'_>,
-) -> anyhow::Result<(*mut JsContextHost, DomHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, DomHandle)> {
     let this = v8::Global::new(scope, args.this());
     let this = v8::Local::new(scope, this);
     node_runtime_and_handle_from_object_or_detached(scope, this)
@@ -1340,7 +1340,7 @@ pub(super) fn node_runtime_and_handle_from_args_or_detached(
 
 pub(crate) fn node_owner_document_relevant_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Context>> {
     let document_handle = unsafe { &*runtime_ptr }
@@ -1376,7 +1376,7 @@ pub(crate) fn node_relevant_context<'s>(
 
 pub(super) fn node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'_, v8::Value>,
 ) -> Option<DomHandle> {
     if value.is_null_or_undefined() {
@@ -1391,7 +1391,7 @@ pub(super) fn node_arg_handle(
 }
 
 pub(super) fn insertion_document_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
 ) -> Option<DomHandle> {
     if node_is_document(runtime, parent) {
@@ -1404,14 +1404,14 @@ pub(super) fn insertion_document_handle(
     }
 }
 
-pub(super) fn node_is_document(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn node_is_document(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
         .is_some_and(Node::is_document)
 }
 
-pub(super) fn node_is_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn node_is_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -1421,7 +1421,7 @@ pub(super) fn node_is_element(runtime: &JsContextHost, handle: DomHandle) -> boo
 pub(super) fn set_wrapped_node_or_null(
     scope: &mut v8::PinScope<'_, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: Option<DomHandle>,
 ) {
     set_wrapped_handle_or_null(scope, rv, runtime_ptr, handle);

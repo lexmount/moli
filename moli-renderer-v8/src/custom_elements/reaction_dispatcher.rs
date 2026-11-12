@@ -8,11 +8,11 @@ use super::form_lifecycle_callbacks::{
 use super::lifecycle::call_lifecycle_callback;
 use super::reaction_upgrade::invoke_upgrade_reaction;
 use super::reactions::CustomElementReaction;
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) fn invoke_custom_element_reactions_for_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     loop {

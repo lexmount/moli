@@ -243,7 +243,7 @@ impl XhrExecutionContextSnapshot {
 
 pub(crate) fn xhr_execution_context_binding(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
 ) -> Option<crate::native_bridge::WindowExecutionContextBinding> {
     let snapshot = xhr_state_string_property(scope, xhr, XHR_EXECUTION_CONTEXT_BINDING_SLOT)?;

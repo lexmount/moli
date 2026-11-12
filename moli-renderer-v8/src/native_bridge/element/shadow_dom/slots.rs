@@ -6,7 +6,7 @@ use crate::util::throw_type_error;
 use crate::webidl;
 
 use super::super::super::{
-    JsContextHost,
+    PageScriptHost,
     bridge::wrapped_handle_value_for_receiver,
     node::{
         node_runtime_and_handle_from_args_or_detached,
@@ -244,7 +244,7 @@ pub(in crate::native_bridge) fn slot_assign_callback<'s>(
 fn set_slot_handle_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     receiver: v8::Local<'s, v8::Object>,
     handles: &[DomHandle],
     detached_objects: bool,

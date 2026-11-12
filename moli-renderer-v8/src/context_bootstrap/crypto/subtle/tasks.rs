@@ -36,12 +36,12 @@ pub(crate) fn register_webcrypto_task<'s>(
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return None;
     };
-    // Page runtimes expose a JsContextHost on the global bridge and settle
+    // Page runtimes expose a PageScriptHost on the global bridge and settle
     // through the renderer owner queue. Worker globals do not, so fall back to
     // the worker-owned completion lane routed through the worker event loop.
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         // SAFETY: the global bridge stores the current realm's live
-        // JsContextHost. Registration runs synchronously inside the V8
+        // PageScriptHost. Registration runs synchronously inside the V8
         // callback before control returns to the owner. The returned producer
         // captures the exact PageVm, Window realm, and never-reused task id.
         let producer =

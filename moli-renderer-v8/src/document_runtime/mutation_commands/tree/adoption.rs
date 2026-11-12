@@ -3,7 +3,7 @@ use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     dom::native::DomHost,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -39,7 +39,7 @@ impl TreeDocumentTransition {
 impl TreeAdoptionPlan {
     pub(in crate::document_runtime) fn before_standalone_adoption(
         dom_host: &mut DomHost,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
         new_document: DomHandle,
     ) -> Self {
@@ -53,7 +53,7 @@ impl TreeAdoptionPlan {
 
     fn before_adoption(
         dom_host: &mut DomHost,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
         new_document: DomHandle,
     ) -> Self {
@@ -109,7 +109,7 @@ impl TreeAdoptionPlan {
     pub(in crate::document_runtime) fn clear_shadow_root_adopted_style_sheets(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
     ) {
         let runtime = unsafe { &mut *host_ptr };
         for &shadow_root in &self.shadow_roots {
@@ -125,7 +125,7 @@ impl TreeAdoptionPlan {
 impl DocumentRuntime {
     pub(super) fn tree_adoption_plan_before_insert(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
         parent: DomHandle,
     ) -> TreeAdoptionPlan {
@@ -138,7 +138,7 @@ impl DocumentRuntime {
     pub(super) fn sync_shadow_root_adopted_style_sheets_after_insertion_adoption(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
         if !insertion_plan.adoption.crosses_documents() {

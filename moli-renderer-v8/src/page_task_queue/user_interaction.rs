@@ -9,7 +9,7 @@ use super::{
 };
 
 /// Host-local key for one user-interaction event payload retained by
-/// `JsContextHost`.
+/// `PageScriptHost`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct RendererPageUserInteractionTaskId(u64);
 

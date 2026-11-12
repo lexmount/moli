@@ -5,7 +5,7 @@ use super::{
 use crate::{
     context_bootstrap, custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 struct TreeRemovalReactionGroups {
@@ -17,7 +17,7 @@ impl DocumentRuntime {
     pub(super) fn dispatch_tree_removal_side_effects_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         removal_plan: &TreeRemovalPlan,
         profile: TreeMutationSourceProfile,
     ) {
@@ -51,7 +51,7 @@ impl DocumentRuntime {
     fn dispatch_tree_removal_pre_reaction_followups_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         removal_plan: &TreeRemovalPlan,
     ) {
         self.reset_non_dirty_textarea_selection_after_child_list_change(removal_plan.parent);
@@ -106,7 +106,7 @@ impl DocumentRuntime {
     pub(super) fn dispatch_tree_removal_custom_element_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         removal_plan: &TreeRemovalPlan,
         profile: TreeMutationSourceProfile,
     ) {
@@ -251,7 +251,7 @@ impl DocumentRuntime {
     pub(super) fn enqueue_tree_removed_lifecycle_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
     ) -> bool {
         let lifecycle_quiescent =
@@ -286,7 +286,7 @@ impl DocumentRuntime {
     fn enqueue_tree_retained_removal_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
     ) -> bool {
         let mut enqueued = false;
@@ -302,7 +302,7 @@ impl DocumentRuntime {
     fn enqueue_tree_removal_form_disabled_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
     ) -> bool {
         self.enqueue_custom_element_form_disabled_callbacks_in_subtree(scope, host_ptr, root)
@@ -310,7 +310,7 @@ impl DocumentRuntime {
 
     fn apply_removed_from_lifecycle_bookkeeping_before_reactions(
         &mut self,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         root: DomHandle,
     ) {
         let runtime = unsafe { &mut *host_ptr };

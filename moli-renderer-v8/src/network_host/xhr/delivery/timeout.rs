@@ -17,7 +17,7 @@ struct XhrTimeoutDataDeclaration<'scope> {
 
 pub(in crate::network_host::xhr) fn schedule_xhr_timeout(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     internal_id: u64,
 ) {

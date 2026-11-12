@@ -86,7 +86,7 @@ impl ScriptVm {
             .disable_subframe_loading_for_document_subtree(retired_document);
         let prepared = self.prepare_document_context_transition(transition.context_transition());
         self.with_default_context_scope(|scope, host_ptr| {
-            JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
+            PageScriptHost::drop_child_browsing_context_subtree_with_window_realm(
                 scope,
                 host_ptr,
                 retired_document,

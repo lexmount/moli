@@ -289,7 +289,7 @@ pub(in crate::native_bridge) fn node_replace_with_callback<'s>(
 
 fn child_node_insertion_handles<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document_handle: Option<DomHandle>,
     values: impl IntoIterator<Item = v8::Local<'s, v8::Value>>,
 ) -> Option<Vec<DomHandle>> {

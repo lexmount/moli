@@ -73,7 +73,7 @@ const LINK_REL_LIST_SUPPORTED_TOKENS: &[&str] = &[
 
 const NAVIGATION_REL_LIST_SUPPORTED_TOKENS: &[&str] = &["noreferrer", "noopener", "opener"];
 
-fn rel_list_supports_token(runtime: &JsContextHost, handle: DomHandle, token: &str) -> bool {
+fn rel_list_supports_token(runtime: &PageScriptHost, handle: DomHandle, token: &str) -> bool {
     let supported_tokens = if runtime.dom_host().is_html_element_named(handle, "link") {
         LINK_REL_LIST_SUPPORTED_TOKENS
     } else if ["a", "area", "form"]

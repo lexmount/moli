@@ -55,7 +55,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_public_event_best_effort<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         dispatch_target: EventTargetHandle,
         event: v8::Local<'s, v8::Object>,
         context: &str,
@@ -405,7 +405,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_document_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         event_type: &str,
     ) -> std::result::Result<(), String> {
         let target = EventTargetHandle::Node(self.document_handle());
@@ -416,7 +416,7 @@ impl DocumentRuntime {
     pub(crate) fn dispatch_public_event<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         dispatch_target: EventTargetHandle,
         event: v8::Local<'s, v8::Object>,
     ) -> std::result::Result<PublicEventDispatchResult, String> {
@@ -504,7 +504,7 @@ impl DocumentRuntime {
     fn append_child_document_window_to_path(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         path: &mut Vec<EventTargetHandle>,
     ) {
         if path
@@ -655,7 +655,7 @@ fn trim_window_from_subresource_load_path(
 
 fn source_target_for_reference_event(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
     let event_type = public_event_type(scope, event)?;

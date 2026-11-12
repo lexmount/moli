@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost,
+    PageScriptHost,
     abort::dom_exception_value,
     element::{construct_simple_event, dispatch_public_event},
     node::{
@@ -155,7 +155,7 @@ fn pointer_lock_options<'s>(
 
 fn queue_pointer_lock_failure<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     document: DomHandle,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     failure: PointerLockFailure,

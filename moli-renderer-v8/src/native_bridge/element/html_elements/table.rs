@@ -19,7 +19,7 @@ use super::super::super::{
     throw_dom_exception,
 };
 use super::super::set_reflected_attribute;
-use super::{DomHandle, JsContextHost, parse_i32_attribute_or};
+use super::{DomHandle, PageScriptHost, parse_i32_attribute_or};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "HTMLTableElement.insertRow")]
@@ -89,7 +89,7 @@ enum TableReceiverKind {
 }
 
 fn table_receiver_matches(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     kind: TableReceiverKind,
 ) -> bool {
@@ -107,7 +107,7 @@ fn table_getter_receiver<'s>(
     interface: &'static str,
     member: &'static str,
     kind: TableReceiverKind,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -127,7 +127,7 @@ fn table_setter_receiver<'s>(
     interface: &'static str,
     member: &'static str,
     kind: TableReceiverKind,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -147,7 +147,7 @@ fn table_method_receiver<'s>(
     interface: &'static str,
     method: &'static str,
     kind: TableReceiverKind,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -165,7 +165,7 @@ fn html_table_element_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_getter_receiver(
         scope,
         receiver,
@@ -179,7 +179,7 @@ fn html_table_element_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_setter_receiver(
         scope,
         receiver,
@@ -193,7 +193,7 @@ fn html_table_element_method_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     method: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_method_receiver(
         scope,
         receiver,
@@ -207,7 +207,7 @@ fn html_table_section_method_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     method: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_method_receiver(
         scope,
         receiver,
@@ -221,7 +221,7 @@ fn html_table_row_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_getter_receiver(
         scope,
         receiver,
@@ -235,7 +235,7 @@ fn html_table_row_method_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     method: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_method_receiver(
         scope,
         receiver,
@@ -249,7 +249,7 @@ fn html_table_cell_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_getter_receiver(
         scope,
         receiver,
@@ -263,7 +263,7 @@ fn html_table_cell_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     table_setter_receiver(
         scope,
         receiver,
@@ -277,7 +277,7 @@ fn clamp_col_span(value: i32) -> i32 {
     value.clamp(1, 1000)
 }
 
-fn parse_col_span(runtime: &JsContextHost, handle: DomHandle) -> i32 {
+fn parse_col_span(runtime: &PageScriptHost, handle: DomHandle) -> i32 {
     clamp_col_span(parse_i32_attribute_or(runtime, handle, "colspan", 1))
 }
 
@@ -285,7 +285,7 @@ fn clamp_row_span(value: i32) -> i32 {
     if value == 0 { 0 } else { value.clamp(1, 65534) }
 }
 
-fn parse_row_span(runtime: &JsContextHost, handle: DomHandle) -> i32 {
+fn parse_row_span(runtime: &PageScriptHost, handle: DomHandle) -> i32 {
     clamp_row_span(parse_i32_attribute_or(runtime, handle, "rowspan", 1))
 }
 
@@ -937,7 +937,7 @@ fn set_table_slot_on_object<'s>(
 
 fn set_table_slot_for_handles_preserving_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     table: DomHandle,
     value: v8::Local<'s, v8::Value>,
     local_name: &str,
@@ -956,7 +956,7 @@ fn set_table_slot_for_handles_preserving_identity<'s>(
 
 fn set_table_slot_child(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     table: DomHandle,
     child: DomHandle,
     local_name: &str,
@@ -1003,7 +1003,7 @@ fn set_table_slot_child(
 
 fn table_child_arg_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<DomHandle> {
     let handle = node_or_existing_detached_arg_handle(scope, runtime_ptr, value)?;
@@ -1058,7 +1058,7 @@ fn delete_table_slot<'s>(
 
 fn delete_direct_html_child(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     table: DomHandle,
     local_name: &str,
 ) {
@@ -1071,7 +1071,7 @@ fn delete_direct_html_child(
 fn insert_table_child<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference: Option<DomHandle>,
@@ -1096,7 +1096,7 @@ fn insert_table_child<'s>(
 
 fn insert_table_child_to_current_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     parent: DomHandle,
     child: DomHandle,
     reference: Option<DomHandle>,
@@ -1109,7 +1109,7 @@ fn insert_table_child_to_current_reaction_queue(
 }
 
 fn first_direct_html_child(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     parent: DomHandle,
     local_name: &str,
 ) -> Option<DomHandle> {
@@ -1119,7 +1119,7 @@ fn first_direct_html_child(
 }
 
 fn table_slot_reference(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     table: DomHandle,
     placement: TableSlotPlacement,
     moving: Option<DomHandle>,
@@ -1141,7 +1141,7 @@ fn table_slot_reference(
     }
 }
 
-fn create_tbody_reference(runtime: &JsContextHost, table: DomHandle) -> Option<DomHandle> {
+fn create_tbody_reference(runtime: &PageScriptHost, table: DomHandle) -> Option<DomHandle> {
     let mut reference = None;
     for handle in runtime.dom_host().child_handles(table) {
         let next = runtime.dom_host().next_sibling(handle);
@@ -1154,7 +1154,7 @@ fn create_tbody_reference(runtime: &JsContextHost, table: DomHandle) -> Option<D
 
 fn delete_row_from_handles(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     rows: Vec<DomHandle>,
     raw_index: i32,
 ) {
@@ -1177,7 +1177,7 @@ fn delete_row_from_handles(
     }
 }
 
-fn table_row_index(runtime: &JsContextHost, row: DomHandle) -> i32 {
+fn table_row_index(runtime: &PageScriptHost, row: DomHandle) -> i32 {
     let Some(table) = row_table(runtime, row) else {
         return -1;
     };
@@ -1190,7 +1190,7 @@ fn table_row_index(runtime: &JsContextHost, row: DomHandle) -> i32 {
         .unwrap_or(-1)
 }
 
-fn table_section_row_index(runtime: &JsContextHost, row: DomHandle) -> i32 {
+fn table_section_row_index(runtime: &PageScriptHost, row: DomHandle) -> i32 {
     let Some(parent) = runtime.dom_host().node(row).and_then(Node::parent_node) else {
         return -1;
     };
@@ -1213,7 +1213,7 @@ fn table_section_row_index(runtime: &JsContextHost, row: DomHandle) -> i32 {
         .unwrap_or(-1)
 }
 
-fn table_cell_index(runtime: &JsContextHost, cell: DomHandle) -> i32 {
+fn table_cell_index(runtime: &PageScriptHost, cell: DomHandle) -> i32 {
     runtime
         .dom_host()
         .node(cell)
@@ -1230,7 +1230,7 @@ fn table_cell_index(runtime: &JsContextHost, cell: DomHandle) -> i32 {
         .unwrap_or(-1)
 }
 
-fn row_table(runtime: &JsContextHost, row: DomHandle) -> Option<DomHandle> {
+fn row_table(runtime: &PageScriptHost, row: DomHandle) -> Option<DomHandle> {
     let parent = runtime.dom_host().node(row).and_then(Node::parent_node)?;
     if runtime.dom_host().is_html_element_named(parent, "table") {
         return Some(parent);
@@ -1247,13 +1247,13 @@ fn row_table(runtime: &JsContextHost, row: DomHandle) -> Option<DomHandle> {
     None
 }
 
-fn is_html_table_section(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_html_table_section(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().is_html_element_named(handle, "thead")
         || runtime.dom_host().is_html_element_named(handle, "tbody")
         || runtime.dom_host().is_html_element_named(handle, "tfoot")
 }
 
-fn is_html_table_cell(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_html_table_cell(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().is_html_element_named(handle, "td")
         || runtime.dom_host().is_html_element_named(handle, "th")
 }

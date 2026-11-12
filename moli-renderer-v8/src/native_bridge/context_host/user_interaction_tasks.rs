@@ -9,7 +9,7 @@ use crate::{
 use moli_webidl_callback::WebIdlCallbackFunction;
 
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 
 pub(crate) enum PendingUserInteractionTaskPayload {
     EventTarget(DomHandle),
@@ -22,7 +22,7 @@ pub(super) type UserInteractionTaskState = ExactWindowDocumentTaskLedger<
     PendingUserInteractionTaskPayload,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Queue one event on the stable HTML user-interaction task source.
     ///
     /// The event target determines exact Document ownership. A Document
@@ -153,7 +153,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_user_interaction_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         kind: RendererPageUserInteractionTaskKind,
         payload: PendingUserInteractionTaskPayload,

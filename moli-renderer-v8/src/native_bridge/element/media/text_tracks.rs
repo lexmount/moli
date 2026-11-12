@@ -6,7 +6,7 @@ use crate::document_runtime::DomHandle;
 use crate::dom::native::Node;
 use crate::native_bridge::bridge::throw_dom_exception;
 use crate::native_bridge::{
-    JsContextHost, MediaLoadSequenceId, PendingMediaTextTrackGateRegistration,
+    MediaLoadSequenceId, PageScriptHost, PendingMediaTextTrackGateRegistration,
     PendingTextTrackLoadTerminal, PendingTextTrackLoadTerminalFollowup, TextTrackLoadSequenceId,
 };
 use crate::page_task_queue::{RendererPageTextTrackLoadTaskId, RendererPageTextTrackLoadTaskKind};
@@ -560,7 +560,7 @@ pub(in crate::native_bridge) fn track_text_track_getter_function<'s>(
 
 fn ensure_track_element_text_track<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     wrapper: v8::Local<'s, v8::Object>,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -1090,7 +1090,7 @@ fn remove_cue_from_track<'s>(
 
 pub(in crate::native_bridge) fn refresh_media_active_text_track_cues(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     media_handle: DomHandle,
 ) {
     let Some(media) = node_wrapper_from_handle(scope, media_handle) else {
@@ -1132,7 +1132,7 @@ fn refresh_text_track_active_cues<'s>(
 
 fn refresh_text_track_active_cues_with_runtime<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     track: v8::Local<'s, v8::Object>,
 ) {
     let Some(active_cues) = get_private_value(scope, track, TEXT_TRACK_ACTIVE_CUES_SLOT)
@@ -1174,7 +1174,7 @@ fn refresh_text_track_active_cues_with_runtime<'s>(
 
 fn text_track_media_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     track: v8::Local<'s, v8::Object>,
 ) -> Option<DomHandle> {
     if let Some(handle) = private_dom_handle(scope, track, TEXT_TRACK_MEDIA_HANDLE_SLOT) {
@@ -1256,7 +1256,7 @@ fn text_track_list_get_track_by_id_callback<'s>(
 
 pub(in crate::native_bridge) fn apply_default_text_track_modes_for_media(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     media_handle: DomHandle,
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -1272,7 +1272,7 @@ pub(in crate::native_bridge) fn apply_default_text_track_modes_for_media(
 
 pub(crate) fn queue_default_text_track_mode_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -1286,7 +1286,7 @@ pub(crate) fn queue_default_text_track_mode_if_needed(
 
 pub(crate) fn apply_default_text_track_mode_for_track(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
@@ -1312,7 +1312,7 @@ pub(crate) fn apply_default_text_track_mode_for_track(
 
 pub(crate) fn queue_text_track_load_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     queue_text_track_load_with_media_gate(scope, runtime_ptr, handle, None);
@@ -1320,7 +1320,7 @@ pub(crate) fn queue_text_track_load_if_needed(
 
 pub(crate) fn queue_media_selection_text_track_loads(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     media_handle: DomHandle,
     media_sequence: MediaLoadSequenceId,
 ) {
@@ -1356,7 +1356,7 @@ pub(crate) fn queue_media_selection_text_track_loads(
 
 fn queue_text_track_load_with_media_gate(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     media_gate: Option<(DomHandle, MediaLoadSequenceId)>,
 ) {
@@ -1416,7 +1416,7 @@ fn queue_text_track_load_with_media_gate(
 
 fn register_media_text_track_gate(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     media_handle: DomHandle,
     media_sequence: MediaLoadSequenceId,
     track_handle: DomHandle,
@@ -1428,7 +1428,7 @@ fn register_media_text_track_gate(
 }
 
 fn queue_track_load_start(
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     sequence: TextTrackLoadSequenceId,
 ) -> bool {
@@ -1442,7 +1442,7 @@ fn queue_track_load_start(
 
 fn apply_track_load_start(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     task_id: RendererPageTextTrackLoadTaskId,
 ) -> bool {
     let handle = task_id.track();
@@ -1520,7 +1520,7 @@ fn apply_track_load_start(
 
 pub(crate) fn queue_text_track_terminal_followup(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     sequence: TextTrackLoadSequenceId,
     followup: Option<PendingTextTrackLoadTerminalFollowup>,
@@ -1547,7 +1547,7 @@ pub(crate) fn queue_text_track_terminal_followup(
 
 fn apply_track_terminal(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     task_id: RendererPageTextTrackLoadTaskId,
     kind: RendererPageTextTrackLoadTaskKind,
 ) -> bool {
@@ -1625,7 +1625,7 @@ fn apply_track_terminal(
 
 pub(crate) fn apply_text_track_load_task(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     task_id: RendererPageTextTrackLoadTaskId,
     kind: RendererPageTextTrackLoadTaskKind,
 ) -> bool {
@@ -1642,7 +1642,7 @@ pub(crate) fn apply_text_track_load_task(
 
 fn cancel_text_track_sequence_and_settle_media(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     let followup =
@@ -1650,13 +1650,13 @@ fn cancel_text_track_sequence_and_settle_media(
     super::queue_media_canplay_after_text_tracks(scope, runtime_ptr, followup);
 }
 
-fn track_source_still_matches(runtime: &JsContextHost, handle: DomHandle, src: &str) -> bool {
+fn track_source_still_matches(runtime: &PageScriptHost, handle: DomHandle, src: &str) -> bool {
     element_attribute(runtime, handle, "src").unwrap_or_default() == src
 }
 
 fn queue_text_track_list_track_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     media_handle: DomHandle,
     list: v8::Local<'s, v8::Object>,
     track: v8::Local<'s, v8::Object>,
@@ -1688,11 +1688,11 @@ pub(crate) fn dispatch_text_track_list_event<'s>(
     }
 }
 
-fn track_has_media_parent(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn track_has_media_parent(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     track_media_parent(runtime, handle).is_some()
 }
 
-fn track_media_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn track_media_parent(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     runtime
         .dom_host()
         .node(handle)
@@ -1705,7 +1705,7 @@ fn track_media_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomH
 
 pub(in crate::native_bridge) fn queue_text_track_load_if_source(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) {

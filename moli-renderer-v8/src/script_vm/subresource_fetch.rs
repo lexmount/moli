@@ -18,7 +18,7 @@ use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
 use crate::document_runtime::DocumentRuntime;
 use crate::frame_owner_model::FrameDocumentModuleTerminalQueueFollowup;
-use crate::native_bridge::{JsContextHost, OwnerDispatchScope, PendingTextTrackLoadTerminal};
+use crate::native_bridge::{OwnerDispatchScope, PageScriptHost, PendingTextTrackLoadTerminal};
 use crate::network::ResourceRequestClient;
 use crate::runtime::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
@@ -119,7 +119,7 @@ impl WorkerOwnedFetchTarget {
 
 fn document_connect_csp_redirect_failure_message<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     pending: &PendingSubresourceFetchState,
     final_url: &Url,
 ) -> Option<String> {
@@ -189,7 +189,7 @@ fn document_connect_csp_redirect_failure_message<'s>(
 
 fn report_window_fetch_csp_redirect_violation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     report_context: &crate::network_host::WindowCspReportRequestContext,
     violation: &crate::document_runtime::DocumentContentSecurityPolicyViolation,
 ) {
@@ -198,7 +198,7 @@ fn report_window_fetch_csp_redirect_violation<'s>(
         report_context,
         violation,
     );
-    let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
+    let host_ptr: *mut PageScriptHost = context_host.as_ref().as_ptr();
     context_host
         .borrow_mut()
         .dispatch_document_connect_csp_violation_event_for_exact_owner_without_report_best_effort(
@@ -210,7 +210,7 @@ fn report_window_fetch_csp_redirect_violation<'s>(
 }
 
 fn detached_window_fetch_csp_redirect_failure_message(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     pending: &PendingSubresourceFetchState,
     final_url: &Url,
 ) -> Option<String> {
@@ -246,7 +246,7 @@ fn detached_window_fetch_csp_redirect_failure_message(
 
 fn apply_media_subresource_terminal(
     scope: &mut v8::PinScope<'_, '_>,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     media_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::MediaLoadSequenceId,
     internal_id: u64,
@@ -260,7 +260,7 @@ fn apply_media_subresource_terminal(
             internal_id,
             successful,
         );
-    let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
+    let host_ptr: *mut PageScriptHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_media_load_network_terminal_followup(
         scope,
         host_ptr,
@@ -306,7 +306,7 @@ impl ImageSubresourceTerminal<'_> {
 
 fn apply_image_subresource_terminal(
     scope: &mut v8::PinScope<'_, '_>,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     image_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::ImageLoadEventId,
     internal_id: u64,
@@ -346,7 +346,7 @@ fn apply_image_subresource_terminal(
             terminal.resource_performance_entry(request_url),
         );
     }
-    let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
+    let host_ptr: *mut PageScriptHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_image_load_network_terminal_followup(
         host_ptr,
         image_handle,
@@ -357,7 +357,7 @@ fn apply_image_subresource_terminal(
 
 fn apply_text_track_subresource_terminal(
     scope: &mut v8::PinScope<'_, '_>,
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     track_handle: crate::document_runtime::DomHandle,
     sequence: crate::native_bridge::TextTrackLoadSequenceId,
     internal_id: u64,
@@ -371,7 +371,7 @@ fn apply_text_track_subresource_terminal(
             internal_id,
             terminal,
         );
-    let host_ptr: *mut JsContextHost = context_host.as_ref().as_ptr();
+    let host_ptr: *mut PageScriptHost = context_host.as_ref().as_ptr();
     crate::native_bridge::element::queue_text_track_terminal_followup(
         scope,
         host_ptr,
@@ -382,7 +382,7 @@ fn apply_text_track_subresource_terminal(
 }
 
 fn apply_stylesheet_subresource_terminal(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
 ) {
     let _ = context_host
@@ -391,7 +391,7 @@ fn apply_stylesheet_subresource_terminal(
 }
 
 fn enter_subresource_owner_async_scope<'s>(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     scope: &mut v8::PinScope<'s, '_>,
     owner: OwnerDispatchScope,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -424,7 +424,7 @@ fn enter_subresource_owner_async_scope<'s>(
 /// checkpoint. Promise reactions created by Fetch/XHR completion must observe
 /// the same child or popup Window as the body that settled them.
 fn defer_subresource_owner_async_scope<'s>(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     scope: &mut v8::PinScope<'s, '_>,
     owner: OwnerDispatchScope,
     previous: Option<v8::Local<'s, v8::Value>>,
@@ -444,7 +444,7 @@ fn defer_subresource_owner_async_scope<'s>(
 }
 
 fn dispatch_streaming_event_source_messages<'s>(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     scope: &mut v8::PinScope<'s, '_>,
     event_source: v8::Local<'s, v8::Object>,
     request_handle: Option<SubresourceNetworkRequestHandle>,
@@ -488,7 +488,7 @@ pub(crate) enum AsyncSubresourceFetchBodyActivity {
 }
 
 fn window_subresource_owner_is_current(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     pending: &PendingSubresourceFetchState,
 ) -> bool {
     pending
@@ -502,7 +502,7 @@ fn window_subresource_owner_is_current(
 }
 
 fn window_subresource_realm_is_current(
-    context_host: &Rc<RefCell<JsContextHost>>,
+    context_host: &Rc<RefCell<PageScriptHost>>,
     scope: &mut v8::PinScope<'_, '_>,
     pending: &PendingSubresourceFetchState,
 ) -> bool {

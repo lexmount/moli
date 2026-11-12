@@ -26,14 +26,14 @@ fn input_list_getter_from_object<'s>(
     set_wrapped_input_association_or_null(scope, rv, runtime_ptr, object, datalist);
 }
 
-fn input_list_handle(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+fn input_list_handle(runtime: &PageScriptHost, handle: DomHandle) -> Option<DomHandle> {
     runtime.dom_host().input_datalist_handle(handle)
 }
 
 fn set_wrapped_input_association_or_null<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     source: v8::Local<'s, v8::Object>,
     target: Option<DomHandle>,
 ) {

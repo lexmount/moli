@@ -1,5 +1,5 @@
 use super::window_document_tasks::{ExactWindowDocumentTaskLedger, PendingExactWindowDocumentTask};
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
     document_runtime::DomHandle,
     page_task_queue::{
@@ -22,7 +22,7 @@ pub(super) type ElementToggleEventState = ExactWindowDocumentTaskLedger<
     PendingElementToggleEventPayload,
 >;
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Queue one element `toggle` task on the shared DOM-manipulation source.
     ///
     /// Repeated changes to the same element cancel the old closure and append a
@@ -177,7 +177,7 @@ impl JsContextHost {
     pub(crate) fn dispatch_authorized_element_toggle_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: WindowDocumentTaskTarget,
         data: RendererPageElementToggleEventData,
     ) -> bool {

@@ -6,7 +6,7 @@ pub(crate) struct PendingWebCryptoTask {
     pub(crate) resolver: v8::Global<v8::PromiseResolver>,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_pending_webcrypto_task(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

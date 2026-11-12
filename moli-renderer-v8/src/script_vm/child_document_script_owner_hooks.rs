@@ -17,7 +17,7 @@ use crate::{
         FrameDocumentTaskOwner, FrameRealmId, FrameScriptJob,
         PendingChildExternalClassicDocumentScript, PendingChildJavascriptUrlDocumentScript,
     },
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 use super::{
@@ -42,7 +42,7 @@ pub(in crate::script_vm) struct ChildDocumentScriptOwnerHooks<'vm> {
 }
 
 pub(in crate::script_vm) struct ChildParserScriptNestingScope {
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     child_handle: DomHandle,
     owner: FrameDocumentTaskOwner,
 }

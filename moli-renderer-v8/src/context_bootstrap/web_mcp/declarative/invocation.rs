@@ -7,7 +7,7 @@ use crate::{
     document_runtime::DomHandle,
     dom::{forms::InputType, native::Node},
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         element::{
             dispatch_text_control_event, focus_element, form_control_elements,
             form_control_is_effectively_disabled, is_valid_submit_button,
@@ -19,7 +19,7 @@ use moli_webmcp::{Fill, prepare_fill};
 
 pub(in crate::context_bootstrap::web_mcp) fn start(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     form: DomHandle,
     autosubmit: bool,
@@ -166,7 +166,7 @@ pub(in crate::context_bootstrap::web_mcp) fn start(
 
 fn fill_checked(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     checked: bool,
 ) -> bool {
@@ -181,7 +181,7 @@ fn fill_checked(
     before != checked
 }
 
-fn form_is_current(host: &JsContextHost, id: u64, form: DomHandle) -> bool {
+fn form_is_current(host: &PageScriptHost, id: u64, form: DomHandle) -> bool {
     let store = &host.native_bridge().web_mcp;
     let Some(pending) = store.pending.get(&id) else {
         return false;
@@ -197,7 +197,7 @@ fn form_is_current(host: &JsContextHost, id: u64, form: DomHandle) -> bool {
             )
 }
 
-pub(crate) fn begin_form_submit(host: &mut JsContextHost, form: DomHandle) -> Option<u64> {
+pub(crate) fn begin_form_submit(host: &mut PageScriptHost, form: DomHandle) -> Option<u64> {
     let store = &mut host.native_bridge_mut().web_mcp;
     let id = store.pending_form_id(form)?;
     let active = store.pending.get_mut(&id)?.form.as_mut()?;
@@ -210,7 +210,7 @@ pub(crate) fn begin_form_submit(host: &mut JsContextHost, form: DomHandle) -> Op
 
 pub(crate) fn finish_form_submit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
     event: v8::Local<'s, v8::Object>,
     allows_default: bool,
@@ -243,7 +243,7 @@ pub(crate) fn finish_form_submit<'s>(
 
 pub(crate) fn form_submission_failed(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     id: u64,
 ) {
     execution::finish_error(scope, host_ptr, id, "Form validation or submission failed");
@@ -251,7 +251,7 @@ pub(crate) fn form_submission_failed(
 
 pub(crate) fn finish_form_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     form: DomHandle,
     accepted: bool,
 ) {
@@ -266,7 +266,7 @@ pub(crate) fn finish_form_navigation(
 }
 
 pub(in crate::context_bootstrap::web_mcp) fn finish_activity(
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     pending: &PendingInvocation,
 ) {
     if let Some(form) = &pending.form {
@@ -279,7 +279,7 @@ pub(in crate::context_bootstrap::web_mcp) fn finish_activity(
 
 pub(crate) fn cancel_form_execution(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     form: DomHandle,
 ) {
     let id = unsafe { &*host_ptr }

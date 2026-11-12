@@ -1,6 +1,6 @@
 use super::super::{
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{
         constructor_prototype, get_private_object, global_constructor_prototype,
         new_target_realm_constructor_prototype, receiver_uses_new_target_realm_object_fallback,
@@ -10,7 +10,7 @@ use super::CustomElementRegistryKey;
 
 pub(super) fn receiver_prototype_chain_contains_constructor_prototype(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     receiver: v8::Local<'_, v8::Object>,
     constructor_name: &str,
@@ -35,7 +35,7 @@ pub(super) fn receiver_prototype_chain_contains_constructor_prototype(
 
 fn registry_constructor_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     constructor_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {

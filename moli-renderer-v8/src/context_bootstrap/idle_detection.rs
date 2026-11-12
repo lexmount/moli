@@ -365,7 +365,7 @@ fn idle_detector_start_callback<'s>(
 
 fn context_is_top_level_window(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
     context: v8::Local<'_, v8::Context>,
 ) -> bool {
     let current_global = context.global(scope);

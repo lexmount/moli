@@ -1,4 +1,4 @@
-use super::{FrameOwnerStore, JsContextHost};
+use super::{FrameOwnerStore, PageScriptHost};
 use crate::{
     document_script_scheduler::FrameDocumentReadyActionRoute,
     frame_owner_model::FrameDocumentTaskRealmCurrentness,
@@ -40,7 +40,7 @@ impl FrameOwnerStore {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn frame_document_ready_route_task_is_current(
         &self,
         route: &FrameDocumentReadyActionRoute,

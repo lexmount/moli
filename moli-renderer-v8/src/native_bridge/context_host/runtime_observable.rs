@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, WindowExecutionContextAccessPolicy,
+    OwnerDispatchScope, PageScriptHost, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
     WindowExecutionContextRealmRegistration, active_lightweight_popup_id,
 };
@@ -99,7 +99,7 @@ impl PendingRuntimeObservableConsoleSourceEvent {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     /// Close only this concrete realm's running work. Default and isolated
     /// worlds, including unpromoted children, use the same service list.
     /// Registry retirement remains separate so Inspector can identify the

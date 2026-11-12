@@ -1,6 +1,6 @@
 use crate::{
     document_runtime::DomHandle,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     util::{context_host_ptr_from_global_bridge, enqueue_host_microtask},
 };
 
@@ -13,7 +13,7 @@ pub(super) use super::reaction_types::CustomElementReaction;
 
 pub(super) fn enqueue_custom_element_reaction(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     reaction: CustomElementReaction,
 ) {
@@ -27,7 +27,7 @@ pub(super) fn enqueue_custom_element_reaction(
 
 fn schedule_backup_custom_element_reaction_microtask(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     let Some(callback) =
         v8::Function::new(scope, custom_element_backup_reaction_microtask_callback)
@@ -51,7 +51,7 @@ fn custom_element_backup_reaction_microtask_callback(
     flush_backup_custom_element_reaction_queue(scope, host_ptr);
 }
 
-pub(crate) fn push_parser_custom_element_reaction_queue(host_ptr: *mut JsContextHost) {
+pub(crate) fn push_parser_custom_element_reaction_queue(host_ptr: *mut PageScriptHost) {
     unsafe { &mut *host_ptr }
         .custom_element_reactions_mut()
         .push_element_queue();
@@ -59,7 +59,7 @@ pub(crate) fn push_parser_custom_element_reaction_queue(host_ptr: *mut JsContext
 
 pub(super) fn flush_current_custom_element_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("custom element reaction flush");
     loop {
@@ -81,14 +81,14 @@ pub(super) fn flush_current_custom_element_reaction_queue(
 
 pub(crate) fn flush_parser_custom_element_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     flush_current_custom_element_reaction_queue(scope, host_ptr);
 }
 
 fn flush_backup_custom_element_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     unsafe { &*host_ptr }
         .debug_assert_not_in_structural_mutation("backup custom element reaction flush");

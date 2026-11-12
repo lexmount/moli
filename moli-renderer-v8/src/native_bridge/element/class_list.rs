@@ -1,5 +1,5 @@
 use super::super::{
-    BridgeHandle, DomTokenListKind, JsContextHost, bridge_handle_from_object,
+    BridgeHandle, DomTokenListKind, PageScriptHost, bridge_handle_from_object,
     node::{node_is_element, node_runtime_and_handle_from_object_or_detached},
     throw_dom_exception, validate_class_list_token, validate_class_list_token_pair,
 };

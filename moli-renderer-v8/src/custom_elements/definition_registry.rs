@@ -7,11 +7,11 @@ use super::definition_builder::{
 };
 use super::definition_error::CustomElementDefineError;
 use crate::dom::custom_elements::is_valid_custom_element_name;
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 
 pub(crate) fn define_custom_element_for_registry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     registry_key: CustomElementRegistryKey,
     name: &str,
     constructor: v8::Local<'s, v8::Function>,

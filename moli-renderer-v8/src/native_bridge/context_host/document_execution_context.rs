@@ -2,7 +2,7 @@
 //! creation Realm and from permission to execute a callback in that Window.
 
 use super::{
-    DomHandle, JsContextHost, OwnerDispatchScope, WindowEnvironmentSettings,
+    DomHandle, OwnerDispatchScope, PageScriptHost, WindowEnvironmentSettings,
     WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ impl From<WindowExecutionContextIdentity> for DocumentExecutionContext {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn document_execution_context_for_node(
         &self,
         node: DomHandle,

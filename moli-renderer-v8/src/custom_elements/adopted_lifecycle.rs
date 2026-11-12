@@ -1,11 +1,11 @@
-use super::super::native_bridge::{JsContextHost, wrapped_handle_value};
+use super::super::native_bridge::{PageScriptHost, wrapped_handle_value};
 use super::lifecycle::{custom_element_callback_receiver, invoke_custom_element_callback};
 use super::reactions::{enqueue_custom_element_reaction, enter_custom_element_reaction};
 use super::{AdoptionCallbackTarget, CustomElementReaction};
 
 pub(crate) fn enqueue_adopted_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: AdoptionCallbackTarget,
 ) -> bool {
     if !unsafe { &*host_ptr }
@@ -37,7 +37,7 @@ pub(crate) fn enqueue_adopted_callback(
 
 pub(super) fn call_adopted_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: AdoptionCallbackTarget,
 ) {
     if !unsafe { &*host_ptr }
@@ -77,7 +77,7 @@ pub(super) fn call_adopted_callback(
 
 pub(crate) fn enqueue_adopted_callbacks(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     targets: &[AdoptionCallbackTarget],
 ) -> bool {
     if unsafe { &*host_ptr }.custom_elements_subtree_lifecycle_quiescent() {

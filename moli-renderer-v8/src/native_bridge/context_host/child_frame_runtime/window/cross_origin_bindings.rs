@@ -78,7 +78,7 @@ fn set_href_value<'s>(
 struct WindowTarget<'s> {
     window: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Context>,
-    host: *mut JsContextHost,
+    host: *mut PageScriptHost,
     child: Option<DomHandle>,
     closed: bool,
 }

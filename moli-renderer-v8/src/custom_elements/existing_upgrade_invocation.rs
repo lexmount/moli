@@ -1,4 +1,4 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::construction_failure::ConstructionFailure;
 use super::construction_invocation::{
     CustomElementConstructorInvocation, invoke_custom_element_constructor,
@@ -16,7 +16,7 @@ use super::reactions::enter_upgrade_dynamic_markup_insertion;
 
 pub(super) fn upgrade_existing_custom_element_with_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     wrapper: v8::Local<'s, v8::Object>,
     constructor: v8::Local<'s, v8::Function>,

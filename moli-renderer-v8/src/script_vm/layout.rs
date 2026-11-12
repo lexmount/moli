@@ -660,7 +660,7 @@ impl ScriptVm {
     }
 
     #[cfg(test)]
-    pub(crate) fn context_host_weak_for_test(&self) -> std::rc::Weak<RefCell<JsContextHost>> {
+    pub(crate) fn context_host_weak_for_test(&self) -> std::rc::Weak<RefCell<PageScriptHost>> {
         Rc::downgrade(&self._context_host)
     }
 

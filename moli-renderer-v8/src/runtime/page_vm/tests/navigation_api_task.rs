@@ -396,7 +396,7 @@ currentResult.finished.then(
                     );
                     assert_eq!(
                         current_task_id, stale_task_id,
-                        "fresh JsContextHost counters should naturally reuse the local task id"
+                        "fresh PageScriptHost counters should naturally reuse the local task id"
                     );
                     page_vm
                         .run_claimed_selected_page_task_for_test(current, &loader)

@@ -2,7 +2,7 @@ use crate::document_runtime::DomHandle;
 use moli_dom::native::DomHost;
 
 use super::{
-    JsContextHost, collections,
+    PageScriptHost, collections,
     identity::{CollectionKind, LiveCollectionQueryKind},
 };
 
@@ -53,7 +53,7 @@ pub(crate) fn document_all_named_item_handles(dom: &DomHost, name: &str) -> Vec<
 
 pub(crate) fn build_window_named_items_collection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     root: DomHandle,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {

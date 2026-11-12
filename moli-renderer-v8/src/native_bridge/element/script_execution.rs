@@ -2,14 +2,14 @@ use crate::{
     content_security_policy::ContentSecurityPolicyScriptElementRequest,
     document_runtime::DomHandle,
     frame_owner_model::{FrameScriptJob, FrameScriptSource},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 use super::trusted_types::trusted_script_source_for_execution;
 
 pub(crate) fn prepare_inline_classic_frame_script_job_for_execution(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     job: &mut FrameScriptJob,
 ) -> anyhow::Result<bool> {
     if !job.needs_inline_classic_element_preparation() {
@@ -51,7 +51,7 @@ pub(crate) fn prepare_inline_classic_frame_script_job_for_execution(
 
 pub(crate) fn inline_script_source_for_execution(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     script: DomHandle,
     source: &str,
     request: ContentSecurityPolicyScriptElementRequest<'_>,

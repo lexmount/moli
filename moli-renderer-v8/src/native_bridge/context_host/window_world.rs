@@ -9,7 +9,7 @@ use std::{
 };
 
 use super::{
-    JsContextHost, OwnerDispatchScope, PrebootstrappedChildDefaultContext,
+    OwnerDispatchScope, PageScriptHost, PrebootstrappedChildDefaultContext,
     RuntimeObservableContextToken, WindowExecutionContextAccessPolicy,
     WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
@@ -271,7 +271,7 @@ impl PrebootstrappedWindowContexts {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     #[cfg(test)]
     pub(crate) fn fail_next_reused_isolated_proxy_bootstrap_for_test(&self) {
         self.force_reused_isolated_proxy_bootstrap_failure.set(true);
@@ -508,7 +508,7 @@ impl JsContextHost {
 
 pub(crate) fn remember_isolated_window_context(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     context: v8::Local<'_, v8::Context>,
 ) -> anyhow::Result<()> {
     let world = context
@@ -567,7 +567,7 @@ pub(crate) fn remember_isolated_window_context(
 
 fn remember_isolated_child_window_proxy(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     context: v8::Local<'_, v8::Context>,
     world: Rc<IsolatedWindowWorld>,
     child_handle: DomHandle,
@@ -793,7 +793,7 @@ pub(crate) fn window_event_access<'s>(
 
 fn ensure_isolated_window_world_member<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: WindowExecutionContextIdentity,
     world: Rc<IsolatedWindowWorld>,
     access_policy: WindowExecutionContextAccessPolicy,

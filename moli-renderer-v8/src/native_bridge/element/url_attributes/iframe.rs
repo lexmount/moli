@@ -2,7 +2,7 @@ use crate::document_runtime::DomHandle;
 use crate::util::get_private_value;
 use url::Url;
 
-use super::super::super::JsContextHost;
+use super::super::super::PageScriptHost;
 use super::super::set_reflected_attribute;
 use super::helpers::resolve_url_like_attribute;
 
@@ -10,7 +10,7 @@ const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle
 
 pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     value: &str,
 ) {
@@ -64,7 +64,7 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     let _ = runtime.queue_child_document_complete_lifecycle_if_ready(handle);
 }
 
-fn current_iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+fn current_iframe_navigation_target(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     if let Some(current_url) = runtime.child_browsing_context_visible_url(handle) {
         return Some(current_url);
     }
@@ -76,7 +76,7 @@ fn current_iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) 
     })
 }
 
-fn iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn iframe_navigation_target(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let resolved_src = resolve_url_like_attribute(runtime, handle, "src");
     if resolved_src.is_empty() {
         "about:blank".to_owned()
@@ -86,7 +86,7 @@ fn iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> Strin
 }
 
 pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !runtime.dom_host().is_html_element_named(handle, "iframe") {
@@ -109,7 +109,7 @@ pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
 }
 
 pub(in crate::native_bridge::element) fn iframe_is_in_own_child_document(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime
@@ -121,7 +121,7 @@ pub(in crate::native_bridge::element) fn iframe_is_in_own_child_document(
 }
 
 pub(in crate::native_bridge::element) fn iframe_has_inactive_child_context(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime
@@ -132,7 +132,7 @@ pub(in crate::native_bridge::element) fn iframe_has_inactive_child_context(
 
 pub(in crate::native_bridge::element) fn iframe_is_inside_its_own_child_context_document(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };

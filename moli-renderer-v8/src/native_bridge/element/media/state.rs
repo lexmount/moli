@@ -273,7 +273,7 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
 
 fn schedule_media_seek_completion(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) {
     let Some(token) = (unsafe { &mut *runtime_ptr })
@@ -293,7 +293,7 @@ fn schedule_media_seek_completion(
 
 pub(crate) fn dispatch_media_volume_change(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !media_element_is_current_event_target(unsafe { &*runtime_ptr }, handle) {
@@ -308,7 +308,7 @@ pub(crate) fn dispatch_media_volume_change(
 
 pub(crate) fn dispatch_media_seeking_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !media_element_is_current_event_target(unsafe { &*runtime_ptr }, handle) {
@@ -320,7 +320,7 @@ pub(crate) fn dispatch_media_seeking_event(
 
 pub(crate) fn dispatch_media_seek_completion(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     token: u64,
 ) -> bool {
@@ -335,7 +335,7 @@ pub(crate) fn dispatch_media_seek_completion(
 }
 
 fn media_element_is_current_event_target(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime

@@ -225,7 +225,7 @@ fn insert_detached_document_child<'s>(
 }
 
 fn create_native_html_shell_element(
-    runtime: &mut JsContextHost,
+    runtime: &mut PageScriptHost,
     document_handle: DomHandle,
     local_name: &str,
     registry_association: custom_elements::CustomElementRegistryAssociation,

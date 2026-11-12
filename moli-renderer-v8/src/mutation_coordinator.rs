@@ -7,7 +7,7 @@ pub(crate) use notifications::{notify_dom_mutation, notify_native_dom_mutation};
 
 use super::{
     host::{HostEventTargetRegistry, HostScriptScheduler},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 #[derive(Debug, Default)]
@@ -157,7 +157,7 @@ impl MutationCoordinator {
     pub(super) fn apply(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         dom_host: &mut DomHost,
         _scripts: &mut HostScriptScheduler,
         _events: &mut HostEventTargetRegistry,

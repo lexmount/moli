@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use super::JsContextHost;
+use super::PageScriptHost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InputModifiers(u8);
@@ -150,14 +150,14 @@ fn navigation_policy_from_modifiers(
 /// nested input dispatch, and unwinding.
 #[must_use = "dropping the scope immediately would discard the current input event"]
 pub(crate) struct CurrentInputEventScope {
-    context_host: Rc<RefCell<JsContextHost>>,
+    context_host: Rc<RefCell<PageScriptHost>>,
     previous: Option<CurrentInputEvent>,
     installed: CurrentInputEvent,
 }
 
 impl CurrentInputEventScope {
     pub(crate) fn enter(
-        context_host: Rc<RefCell<JsContextHost>>,
+        context_host: Rc<RefCell<PageScriptHost>>,
         event: CurrentInputEvent,
     ) -> Self {
         let previous = context_host

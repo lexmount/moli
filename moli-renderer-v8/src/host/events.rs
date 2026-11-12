@@ -152,7 +152,7 @@ pub(crate) enum DispatchStatus {
 
 pub(crate) fn invoke_prepared_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     invocation_target_in_shadow_tree: bool,
     event_type: &str,
     callback_name: &str,
@@ -234,7 +234,7 @@ pub(crate) fn invoke_prepared_event_callback<'s>(
 #[allow(clippy::too_many_arguments)]
 fn invoke_prepared_event_callback_with_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event_type: &str,
     callback_name: &str,
     callback: crate::native_bridge::PreparedEventCallback,
@@ -286,7 +286,7 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
 fn invoke_event_handler_property<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
     target_object: v8::Local<'s, v8::Object>,
@@ -502,7 +502,7 @@ fn invoke_event_handler_property<'s>(
 fn invoke_event_target_handler_property<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
     target_object: v8::Local<'s, v8::Object>,
@@ -529,7 +529,7 @@ fn invoke_event_target_handler_property<'s>(
 fn call_event_target_listeners_filtered<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
     event_type: &str,
@@ -565,7 +565,7 @@ fn call_event_target_listeners_filtered<'s>(
     )
 }
 
-fn event_target_is_current(host_ptr: *mut JsContextHost, target: EventTargetHandle) -> bool {
+fn event_target_is_current(host_ptr: *mut PageScriptHost, target: EventTargetHandle) -> bool {
     match target {
         EventTargetHandle::ChildWindow(target) => {
             unsafe { &*host_ptr }.child_window_event_target_is_current(target)
@@ -576,7 +576,7 @@ fn event_target_is_current(host_ptr: *mut JsContextHost, target: EventTargetHand
 
 pub(crate) fn report_event_listener_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event_type: &str,
     handler: v8::Local<'s, v8::Function>,
     report: &V8ExceptionReport,
@@ -597,7 +597,7 @@ pub(crate) fn report_event_listener_exception<'s>(
 
 pub(crate) fn report_event_callback_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event_type: &str,
     relevant_identity: Option<crate::native_bridge::WindowExecutionContextIdentity>,
     child_handle: Option<DomHandle>,
@@ -1171,7 +1171,7 @@ impl HostEventTargetRegistry {
     fn call_listeners_filtered<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         target: EventTargetHandle,
         invocation_target_in_shadow_tree: bool,
         event_type: &str,
@@ -1361,7 +1361,7 @@ impl HostEventTargetRegistry {
 pub(crate) fn dispatch_public_event<'s, 'i>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, 'i>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dispatch_target: EventTargetHandle,
     propagation_path: &[EventTargetHandle],
     event: v8::Local<'s, v8::Object>,
@@ -1380,7 +1380,7 @@ pub(crate) fn dispatch_public_event<'s, 'i>(
 pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, 'i>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dispatch_target: EventTargetHandle,
     original_target: EventTargetHandle,
     propagation_path: &[EventTargetHandle],
@@ -1406,7 +1406,7 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
 fn dispatch_public_event_with_original_target_impl<'s, 'i>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, 'i>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dispatch_target: EventTargetHandle,
     original_target: EventTargetHandle,
     propagation_path: &[EventTargetHandle],
@@ -1852,7 +1852,7 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
 }
 
 fn stops_submit_or_reset_at_ancestor_form(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
     event_type: &str,
@@ -1871,7 +1871,7 @@ fn stops_submit_or_reset_at_ancestor_form(
 pub(crate) fn dispatch_host_event(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dispatch_target: EventTargetHandle,
     event_target: EventTargetHandle,
     event_type: &str,
@@ -1914,7 +1914,7 @@ pub(crate) fn dispatch_host_event(
 fn run_host_event_dispatch<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     dispatch_target: EventTargetHandle,
     invocation_target_in_shadow_tree: bool,
     target_object: v8::Local<'s, v8::Object>,
@@ -2156,7 +2156,7 @@ fn event_default_prevented(
 
 fn event_target_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
 ) -> std::result::Result<v8::Local<'s, v8::Object>, String> {
     match target {
@@ -2176,7 +2176,7 @@ fn event_target_object<'s>(
 
 pub(crate) fn event_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
 ) -> std::result::Result<v8::Local<'s, v8::Value>, String> {
     Ok(match target {
@@ -2192,7 +2192,7 @@ pub(crate) fn event_target_value<'s>(
 
 fn event_target_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
@@ -2213,7 +2213,7 @@ fn event_target_receiver<'s>(
 
 fn set_event_target_for_current_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
@@ -2226,7 +2226,7 @@ fn set_event_target_for_current_target<'s>(
 
 fn set_event_related_target_for_current_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     original_related_target: Option<EventTargetHandle>,
     current_target: EventTargetHandle,
@@ -2246,7 +2246,7 @@ fn set_event_related_target_for_current_target<'s>(
 
 fn set_event_source_for_current_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     original_source_target: Option<EventTargetHandle>,
     current_target: EventTargetHandle,
@@ -2266,7 +2266,7 @@ fn set_event_source_for_current_target<'s>(
 
 fn set_event_composed_path_for_current_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     propagation_path: &[EventTargetHandle],
     current_target: EventTargetHandle,
@@ -2291,7 +2291,7 @@ fn set_event_composed_path_for_current_target<'s>(
 
 fn event_window_value_for_path<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     propagation_path: &[EventTargetHandle],
 ) -> v8::Local<'s, v8::Value> {
     let document_handle = {
@@ -2320,7 +2320,7 @@ fn event_window_value_for_path<'s>(
 }
 
 fn event_phase_for_current_target(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
     ancestor_phase: u32,
@@ -2334,7 +2334,7 @@ fn event_phase_for_current_target(
 
 fn set_event_post_dispatch_targets<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     post_dispatch_target: Option<EventTargetHandle>,
     post_dispatch_related_target: Option<Option<EventTargetHandle>>,
@@ -2362,7 +2362,7 @@ fn set_event_post_dispatch_targets<'s>(
 
 fn set_event_post_dispatch_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
     post_dispatch_source: Option<EventTargetHandle>,
 ) -> std::result::Result<(), String> {
@@ -2379,7 +2379,7 @@ fn set_event_post_dispatch_source<'s>(
 }
 
 fn post_dispatch_retargeted_target(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     propagation_path: &[EventTargetHandle],
 ) -> Option<EventTargetHandle> {
@@ -2399,7 +2399,7 @@ fn post_dispatch_retargeted_target(
 }
 
 fn invocation_target_is_in_shadow_tree(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
 ) -> bool {
     let EventTargetHandle::Node(handle) = target else {
@@ -2412,7 +2412,7 @@ fn invocation_target_is_in_shadow_tree(
 
 fn event_related_target_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
     let value = crate::context_bootstrap::event_backing(scope, event)
@@ -2433,7 +2433,7 @@ fn event_related_target_handle(
 
 fn event_source_target_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     event: v8::Local<'_, v8::Object>,
 ) -> Option<EventTargetHandle> {
     let value = crate::context_bootstrap::event_backing(scope, event)
@@ -2448,7 +2448,7 @@ fn event_source_target_handle(
 }
 
 fn propagation_path_for_related_target(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     original_related_target: EventTargetHandle,
     propagation_path: &[EventTargetHandle],
@@ -2474,7 +2474,7 @@ fn propagation_path_for_related_target(
 }
 
 fn retargets_are_hidden_by_shadow_boundary(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     original_related_target: EventTargetHandle,
     current_target: EventTargetHandle,
@@ -2485,7 +2485,7 @@ fn retargets_are_hidden_by_shadow_boundary(
 }
 
 fn target_has_inaccessible_shadow_root(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     target: EventTargetHandle,
     current_target: EventTargetHandle,
 ) -> bool {
@@ -2509,7 +2509,7 @@ fn target_has_inaccessible_shadow_root(
 }
 
 fn retarget_event_target(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
 ) -> EventTargetHandle {
@@ -2532,7 +2532,7 @@ fn retarget_event_target(
 }
 
 fn visible_event_path(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     propagation_path: &[EventTargetHandle],
     current_target: EventTargetHandle,
 ) -> Vec<EventTargetHandle> {
@@ -2565,7 +2565,7 @@ fn visible_event_path(
 }
 
 fn current_target_can_access_shadow_root(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     current_target: EventTargetHandle,
     shadow_root: NativeNodeId,
 ) -> bool {

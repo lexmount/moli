@@ -1,7 +1,7 @@
 use crate::{document_runtime::DomHandle, dom::native::Node};
 
 use super::super::super::{
-    JsContextHost,
+    PageScriptHost,
     node::{
         append_child_in_reaction_scope, insert_before_in_reaction_scope, insertion_document_handle,
     },
@@ -10,7 +10,7 @@ use super::position::InsertAdjacentPosition;
 
 pub(super) fn insert_adjacent_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     position: InsertAdjacentPosition,
     node: DomHandle,
@@ -55,7 +55,7 @@ pub(super) fn insert_adjacent_handle(
 
 pub(super) fn insert_adjacent_html_fragment_handle(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     target: DomHandle,
     position: InsertAdjacentPosition,
     node: DomHandle,
@@ -124,7 +124,7 @@ pub(super) fn insert_adjacent_html_fragment_handle(
 }
 
 pub(super) fn insert_adjacent_document_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     target: DomHandle,
     position: InsertAdjacentPosition,
 ) -> Option<DomHandle> {
@@ -133,7 +133,7 @@ pub(super) fn insert_adjacent_document_handle(
 }
 
 pub(super) fn insert_adjacent_context_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     target: DomHandle,
     position: InsertAdjacentPosition,
 ) -> Option<DomHandle> {

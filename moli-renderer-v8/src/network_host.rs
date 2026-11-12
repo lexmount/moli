@@ -213,7 +213,7 @@ use super::{
     blob,
     context_bootstrap::{new_readable_stream_from_array_buffer, new_readable_stream_from_source},
     dom_parser,
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
     page_task_queue::RendererResourceCompletionSender,
     types::{
         AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,

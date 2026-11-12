@@ -56,7 +56,7 @@ fn select_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLSelectElement", member, "select")
 }
 
@@ -64,7 +64,7 @@ fn select_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_setter_receiver(scope, receiver, "HTMLSelectElement", member, "select")
 }
 
@@ -72,7 +72,7 @@ fn select_method_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     method: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
@@ -113,7 +113,7 @@ fn set_select_boolean_attribute_on_receiver<'s>(
     attribute: &'static str,
     property: &'static str,
     value: v8::Local<'s, v8::Value>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     let (runtime_ptr, handle) = select_setter_receiver(scope, receiver, property)?;
     set_reflected_boolean_attribute(
         scope,
@@ -701,14 +701,14 @@ pub(in crate::native_bridge) fn select_value_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn is_select_add_candidate(runtime: &JsContextHost, handle: DomHandle) -> bool {
+fn is_select_add_candidate(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.dom_host().is_html_element_named(handle, "option")
         || runtime.dom_host().is_html_element_named(handle, "optgroup")
 }
 
 pub(in crate::native_bridge) fn select_add_insertion_point<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     select_handle: DomHandle,
     added_handle: DomHandle,
     before: Option<v8::Local<'s, v8::Value>>,
@@ -774,7 +774,7 @@ pub(in crate::native_bridge) fn select_add_insertion_point<'s>(
 
 pub(in crate::native_bridge) fn resize_select_options(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     select_handle: DomHandle,
     next_len: usize,
 ) {
@@ -803,7 +803,7 @@ pub(in crate::native_bridge) fn resize_select_options(
 
 pub(in crate::native_bridge) fn set_select_indexed_option(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     select_handle: DomHandle,
     index: u32,
     value: v8::Local<'_, v8::Value>,
@@ -863,7 +863,7 @@ pub(in crate::native_bridge) fn set_select_indexed_option(
 
 pub(in crate::native_bridge) fn normalize_single_select_selectedness(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     select_handle: DomHandle,
 ) {
     let runtime = unsafe { &mut *runtime_ptr };

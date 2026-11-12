@@ -1,5 +1,5 @@
 use super::super::{
-    ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost,
+    ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost,
     child_frames::WebStorageScope,
 };
 use super::{
@@ -10,7 +10,7 @@ use super::{
 use crate::document_runtime::DomHandle;
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn detached_child_browsing_context_document_snapshots_for_dom_snapshot(
         &mut self,
         top_frame_id: &str,

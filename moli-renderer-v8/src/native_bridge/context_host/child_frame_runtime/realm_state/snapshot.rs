@@ -1,9 +1,9 @@
 use super::model::{ChildWindowRealmInit, ChildWindowRealmSnapshot};
-use crate::native_bridge::JsContextHost;
+use crate::native_bridge::PageScriptHost;
 use anyhow::{Context, Result, ensure};
 
 pub(super) fn capture_child_window_realm_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     init: ChildWindowRealmInit,
 ) -> Result<ChildWindowRealmSnapshot> {
     ensure!(
@@ -37,7 +37,7 @@ pub(super) fn capture_child_window_realm_snapshot(
 }
 
 pub(super) fn validate_child_window_realm_snapshot(
-    host: &JsContextHost,
+    host: &PageScriptHost,
     snapshot: &ChildWindowRealmSnapshot,
 ) -> Result<()> {
     ensure!(

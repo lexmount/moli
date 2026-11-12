@@ -44,7 +44,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     parsed: ParsedWindowFetchInput,
     fetch_context: crate::native_bridge::WindowFetchContext,
-    host: &JsContextHost,
+    host: &PageScriptHost,
 ) -> anyhow::Result<PreparedWindowFetchRequest> {
     // Combine duplicate values before preflight and context overrides while
     // preserving the first field spelling for native network serialization.

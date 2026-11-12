@@ -577,7 +577,7 @@ fn clone_explicit_custom_element_registry_association<'s>(
 fn clone_native_handle_for_registry_source<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     if let Ok((runtime_ptr, handle)) =
         crate::native_bridge::node_runtime_and_handle_from_object(scope, node)
     {

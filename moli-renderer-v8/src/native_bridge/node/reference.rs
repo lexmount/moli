@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TreeNodeReference {
-    pub runtime_ptr: *mut JsContextHost,
+    pub runtime_ptr: *mut PageScriptHost,
     pub handle: DomHandle,
 }
 

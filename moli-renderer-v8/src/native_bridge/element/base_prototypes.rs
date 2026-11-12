@@ -29,7 +29,7 @@ pub(in crate::native_bridge) const BODY_LEGACY_PROTOTYPE_ACCESSORS: &[&str] = &[
 ];
 
 pub(crate) fn computed_style_property_for_handle(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> String {

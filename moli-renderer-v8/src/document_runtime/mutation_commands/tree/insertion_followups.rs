@@ -8,14 +8,14 @@ use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
     mutation_coordinator::{ConnectedScriptMutationPolicy, RuntimeMutationOptions},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 impl DocumentRuntime {
     pub(super) fn dispatch_tree_insertion_side_effects_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
@@ -54,7 +54,7 @@ impl DocumentRuntime {
     pub(super) fn dispatch_tree_insertion_pre_reaction_followups_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
         self.reset_non_dirty_textarea_selection_after_child_list_change(insertion_plan.parent);
@@ -72,7 +72,7 @@ impl DocumentRuntime {
     pub(super) fn dispatch_tree_insertion_immediate_side_effects_after_change(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
@@ -115,7 +115,7 @@ impl DocumentRuntime {
     fn dispatch_tree_insertion_custom_element_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         profile: TreeMutationSourceProfile,
     ) {
@@ -144,7 +144,7 @@ impl DocumentRuntime {
     fn enqueue_tree_insertion_custom_element_reactions(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         insertion_plan: &TreeInsertionPlan<'_>,
         upgrade_connected_subtrees: bool,
     ) {
@@ -220,7 +220,7 @@ impl DocumentRuntime {
     pub(super) fn hide_inserted_nonce_content_attributes(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         roots: &[DomHandle],
         reaction_policy: TreeReactionDispatchPolicy,
     ) {

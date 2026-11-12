@@ -213,7 +213,7 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) {
+fn reset_input_selection_to_end(runtime: &mut PageScriptHost, handle: DomHandle) {
     let Some(end) = runtime
         .dom_host()
         .node(handle)

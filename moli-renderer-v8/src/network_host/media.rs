@@ -2,7 +2,7 @@ use super::cross_origin_request_modes as media_cross_origin_request_modes;
 use super::subresource::{PreparedSubresourceFetch, SubresourceFetchOptions};
 use super::*;
 use crate::native_bridge::{
-    JsContextHost, MediaLoadSequenceId, OwnerDispatchScope, PendingMediaLoadOwner,
+    MediaLoadSequenceId, OwnerDispatchScope, PageScriptHost, PendingMediaLoadOwner,
 };
 use crate::types::SubresourceRequestInitiatorType;
 use anyhow::{Context, Result, bail, ensure};
@@ -16,7 +16,7 @@ pub(crate) enum MediaElementResourceFetchStart {
 
 pub(crate) fn start_media_element_resource_fetch(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
+    host: &mut PageScriptHost,
     media_handle: crate::document_runtime::DomHandle,
     sequence: MediaLoadSequenceId,
     request_url: url::Url,

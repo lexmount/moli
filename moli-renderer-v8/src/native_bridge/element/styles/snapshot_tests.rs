@@ -43,7 +43,7 @@ fn fixture(body: &str) -> StandaloneScriptVmHarness {
     vm
 }
 
-fn divs_in_subtree(host: &JsContextHost, root: DomHandle) -> Vec<DomHandle> {
+fn divs_in_subtree(host: &PageScriptHost, root: DomHandle) -> Vec<DomHandle> {
     let mut nodes = Vec::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {

@@ -1,7 +1,7 @@
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) fn shadow_including_subtree_handles(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> Vec<DomHandle> {
     let mut handles = Vec::new();
@@ -15,7 +15,7 @@ pub(super) fn shadow_including_subtree_handles(
 }
 
 pub(super) fn collect_shadow_including_subtree_handles(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
     handles: &mut Vec<DomHandle>,
 ) {
@@ -23,7 +23,7 @@ pub(super) fn collect_shadow_including_subtree_handles(
 }
 
 pub(super) fn shadow_including_child_handles(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> Vec<DomHandle> {
     let dom_host = unsafe { &*host_ptr }.dom_host();

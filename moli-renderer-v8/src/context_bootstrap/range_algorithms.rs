@@ -58,7 +58,7 @@ pub(in crate::context_bootstrap::range_algorithms) use mutation::{
 /// geometry and visible-text serializer used by the Selection Web API.
 pub(crate) fn document_selection_drag_text_at_point(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     x: f64,
     y: f64,
@@ -115,7 +115,7 @@ pub(crate) struct NativeSelectionDragSnapshot {
 
 pub(crate) fn document_selection_drag_snapshot_at_point(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     x: f64,
     y: f64,

@@ -39,7 +39,7 @@ pub(super) struct DedicatedWorkerError<'a> {
 
 pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
+    host_ptr: *mut crate::native_bridge::PageScriptHost,
     worker: v8::Local<'s, v8::Object>,
     error: DedicatedWorkerError<'_>,
 ) -> Result<()> {

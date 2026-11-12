@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn dispatch_drag_source_event(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     session: &ActiveDragSession,
     coordinates: InputEventCoordinates,
     modifiers: u8,

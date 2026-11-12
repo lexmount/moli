@@ -39,7 +39,7 @@ pub(super) enum XhrSendPrepareError {
 
 pub(super) fn xhr_dom_debugger_request_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
 ) -> String {
     let raw_url = xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
@@ -58,7 +58,7 @@ pub(super) fn xhr_dom_debugger_request_url<'s>(
 
 pub(super) fn prepare_xhr_send_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     method: String,
     prepared_body: PreparedXhrSendBody,
@@ -289,7 +289,7 @@ fn validate_xhr_buffer_source(
 
 fn xhr_request_headers(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &JsContextHost,
+    host: &PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared_body: &PreparedXhrSendBody,
 ) -> (moli_fetch::RequestHeaders, Vec<(String, String)>) {

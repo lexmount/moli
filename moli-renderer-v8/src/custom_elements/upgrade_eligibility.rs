@@ -1,7 +1,7 @@
-use super::super::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use super::super::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 use super::definition_name_for_handle;
 
-pub(super) fn can_upgrade_handle(host_ptr: *mut JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn can_upgrade_handle(host_ptr: *mut PageScriptHost, handle: DomHandle) -> bool {
     // A pending reaction does not change the element's state. A nested reaction
     // scope must be able to enqueue it again and perform the upgrade immediately.
     let host = unsafe { &*host_ptr };

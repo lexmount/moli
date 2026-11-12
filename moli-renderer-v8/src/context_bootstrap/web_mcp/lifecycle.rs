@@ -3,7 +3,7 @@
 use moli_page_types::{RendererWebMcpEvent, RendererWebMcpResult, RendererWebMcpToolId};
 
 use crate::{
-    native_bridge::{JsContextHost, WindowDocumentOwner},
+    native_bridge::{PageScriptHost, WindowDocumentOwner},
     util::context_host_ptr_from_global_bridge,
 };
 
@@ -95,7 +95,7 @@ impl ModelContextStore {
 
 pub(crate) fn queue_retirement_task(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) {
     {
         let store = &mut unsafe { &mut *host_ptr }.native_bridge_mut().web_mcp;

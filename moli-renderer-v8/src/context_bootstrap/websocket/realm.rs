@@ -17,7 +17,7 @@ pub(super) fn websocket_constructor_relevant_context<'s>(
 
 pub(super) fn effective_websocket_document_scope(
     scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
+    host: &crate::native_bridge::PageScriptHost,
 ) -> Option<(
     crate::native_bridge::WindowExecutionContextBinding,
     crate::network::context::SubresourceRequestEnvironment,

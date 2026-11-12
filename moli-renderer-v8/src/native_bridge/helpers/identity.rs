@@ -1,4 +1,4 @@
-use super::super::{BridgeHandle, JsContextHost, ReflectorId};
+use super::super::{BridgeHandle, PageScriptHost, ReflectorId};
 use crate::util::context_host_ptr_from_context_slot;
 use anyhow::{Context, bail, ensure};
 
@@ -31,14 +31,14 @@ fn object_reflector_id(
 pub(in crate::native_bridge) fn bridge_handle_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-) -> anyhow::Result<(*mut JsContextHost, BridgeHandle)> {
+) -> anyhow::Result<(*mut PageScriptHost, BridgeHandle)> {
     // Related Pages share an isolate, but reflector IDs belong to the
     // wrapper's original DOM bridge rather than the calling Window's bridge.
     let context = object
         .get_creation_context(scope)
         .context("native wrapper has no creation context")?;
     let runtime_ptr = context_host_ptr_from_context_slot(context)
-        .context("native wrapper's creation context has no JsContextHost")?;
+        .context("native wrapper's creation context has no PageScriptHost")?;
     let reflector_id = object_reflector_id(scope, object)?;
     let handle = unsafe { &*runtime_ptr }
         .native_bridge()

@@ -15,7 +15,7 @@ use super::{
 /// exact Window/Document owner, a Host-local payload id, and a family-local
 /// operation kind.
 ///
-/// Mutable DOM/V8 payloads remain in the creating `JsContextHost`; this route
+/// Mutable DOM/V8 payloads remain in the creating `PageScriptHost`; this route
 /// carries the immutable scheduler envelope and publishes one empty-to-nonempty
 /// readiness edge.
 #[derive(Clone, Debug)]

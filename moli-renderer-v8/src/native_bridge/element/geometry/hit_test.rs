@@ -9,7 +9,7 @@ use moli_layout::LayoutScrollbarHit;
 use super::provider::{
     observable_geometry_batch, observable_hit_test_all, provider_contract_error,
 };
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
@@ -48,7 +48,7 @@ impl FrameHitTest {
     /// an input hit crosses an embedded-content boundary.
     fn child(
         self,
-        runtime: &JsContextHost,
+        runtime: &PageScriptHost,
         frame: DomHandle,
         hit: LayoutHit<DomHandle>,
     ) -> Option<Self> {
@@ -68,7 +68,7 @@ impl FrameHitTest {
 }
 
 pub(crate) fn observable_input_hit_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<InputHit>, LayoutError> {
@@ -77,7 +77,7 @@ pub(crate) fn observable_input_hit_test(
 
 #[cfg(test)]
 pub(crate) fn observable_scrollbar_hit_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutScrollbarHit<DomHandle>>, LayoutError> {
@@ -90,7 +90,7 @@ pub(crate) fn observable_scrollbar_hit_test(
 /// Coordinate input initializes a cold page once, then consumes the same
 /// published tree, including embedded frames, until an explicit refresh.
 pub(crate) fn input_surface_hit_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
@@ -120,7 +120,7 @@ pub(crate) fn input_surface_hit_test(
 }
 
 pub(crate) fn observable_deep_hit_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
@@ -133,7 +133,7 @@ pub(crate) fn observable_deep_hit_test(
 }
 
 fn input_hit_test_via_documents(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
@@ -147,7 +147,7 @@ fn input_hit_test_via_documents(
 }
 
 fn input_hit_test_in_frame(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     frame: FrameHitTest,
     ignore_pointer_events_none: bool,
     depth: usize,
@@ -173,7 +173,7 @@ fn input_hit_test_in_frame(
 }
 
 fn input_surface_hit_test_in_tree(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     tree: &FrozenLayoutTree<DomHandle>,
     point: LayoutPoint,
     root_to_frame: LayoutTransform2D,
@@ -280,7 +280,7 @@ fn input_surface_hit_test_in_tree(
 }
 
 fn live_hit_in_tree(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     tree: &FrozenLayoutTree<DomHandle>,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
@@ -308,7 +308,7 @@ fn live_hit_in_tree(
 }
 
 fn live_hit_in_frame(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     frame: FrameHitTest,
     ignore_pointer_events_none: bool,
 ) -> Result<Option<(LayoutHit<DomHandle>, DomHandle)>, LayoutError> {
@@ -352,7 +352,7 @@ fn live_hit_in_frame(
 /// frozen layout pass. Single-point DOM APIs consume this query while
 /// penetrating-list APIs use `observable_hit_test_all`.
 pub(crate) fn observable_hit_test(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     document: DomHandle,
     point: LayoutPoint,
     ignore_pointer_events_none: bool,
@@ -384,7 +384,7 @@ pub(crate) fn observable_hit_test(
     }
 }
 
-fn element_for_hit_source(runtime: &JsContextHost, mut source: DomHandle) -> Option<DomHandle> {
+fn element_for_hit_source(runtime: &PageScriptHost, mut source: DomHandle) -> Option<DomHandle> {
     loop {
         let node = runtime.dom_host().node(source)?;
         if node.is_element() {

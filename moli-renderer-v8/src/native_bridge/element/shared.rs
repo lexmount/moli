@@ -1,10 +1,10 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{Element, Node};
 
-use super::super::JsContextHost;
+use super::super::PageScriptHost;
 
 fn with_element<T>(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     map: impl FnOnce(&Element) -> T,
 ) -> Option<T> {
@@ -16,7 +16,7 @@ fn with_element<T>(
 }
 
 pub(super) fn element_attribute(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> Option<String> {
@@ -26,7 +26,7 @@ pub(super) fn element_attribute(
 }
 
 pub(super) fn element_has_attribute(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     name: &str,
 ) -> bool {
@@ -37,10 +37,10 @@ pub(super) fn element_has_attribute(
     element.has_attribute(&normalized_name)
 }
 
-pub(super) fn element_attribute_names(runtime: &JsContextHost, handle: DomHandle) -> Vec<String> {
+pub(super) fn element_attribute_names(runtime: &PageScriptHost, handle: DomHandle) -> Vec<String> {
     with_element(runtime, handle, Element::attribute_names).unwrap_or_default()
 }
 
-pub(super) fn style_string(runtime: &JsContextHost, handle: DomHandle) -> String {
+pub(super) fn style_string(runtime: &PageScriptHost, handle: DomHandle) -> String {
     element_attribute(runtime, handle, "style").unwrap_or_default()
 }

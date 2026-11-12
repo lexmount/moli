@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
+    PageScriptHost, RuntimeObservableContextToken, WindowExecutionContextIdentity,
     WindowExecutionContextOwner,
 };
 
@@ -11,7 +11,7 @@ pub(super) struct PendingFontFaceLoad {
     _face: v8::Global<v8::Object>,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn retain_pending_font_face_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

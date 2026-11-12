@@ -1,4 +1,4 @@
-use super::JsContextHost;
+use super::PageScriptHost;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -140,7 +140,7 @@ impl SharedResourceTimingBufferRegistry {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn resource_timing_buffer_registry(&self) -> SharedResourceTimingBufferRegistry {
         self.resource_timing_buffers.clone()
     }

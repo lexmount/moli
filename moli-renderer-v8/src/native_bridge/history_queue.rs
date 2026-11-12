@@ -1,5 +1,5 @@
 use super::{
-    JsContextHost, NavigationHistoryEntrySeed, WindowExecutionContextBinding,
+    NavigationHistoryEntrySeed, PageScriptHost, WindowExecutionContextBinding,
     WindowExecutionContextIdentity, WindowTaskTarget,
 };
 use crate::page_task_queue::{
@@ -331,7 +331,7 @@ impl HistoryQueueState {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn begin_navigation_lifecycle_attempt(
         &mut self,
         kind: &'static str,

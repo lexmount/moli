@@ -1,4 +1,4 @@
-use super::{ChildBrowsingContextEntry, JsContextHost};
+use super::{ChildBrowsingContextEntry, PageScriptHost};
 use crate::{
     detached_event_target::dispatch_detached_simple_event,
     document_runtime::DomHandle,
@@ -114,7 +114,7 @@ impl ChildBrowsingContextEntry {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     fn child_classic_script_network_attribution(
         &self,
         child_handle: DomHandle,
@@ -494,7 +494,7 @@ impl JsContextHost {
             return false;
         }
         let _ = self.child_browsing_context_document_wrapper(scope, event.child_handle);
-        let host_ptr = self as *mut JsContextHost;
+        let host_ptr = self as *mut PageScriptHost;
         let Some(target) =
             self.native_bridge_mut()
                 .wrap_handle(scope, host_ptr, event.script_handle)
@@ -859,7 +859,7 @@ impl ChildBrowsingContextEntry {
     }
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn install_empty_child_classic_script_runner_for_current_document(
         &mut self,
         handle: DomHandle,

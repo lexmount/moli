@@ -27,7 +27,7 @@ use crate::web_api_interfaces;
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
     native_bridge::{
-        self, JsContextHost,
+        self, PageScriptHost,
         document::{
             document_all_value_for_receiver, document_cookie_for_receiver,
             set_document_cookie_for_receiver,
@@ -1521,7 +1521,7 @@ pub(crate) fn install_wpt_webdriver_runtime_state(
 
 pub(crate) fn finish_context_bootstrap(
     scope: &mut v8::PinScope<'_, '_>,
-    document_runtime: &mut JsContextHost,
+    document_runtime: &mut PageScriptHost,
     secure_context_url: &url::Url,
 ) -> Result<()> {
     super::exposed_interfaces::initialize_realm_interface_registry(

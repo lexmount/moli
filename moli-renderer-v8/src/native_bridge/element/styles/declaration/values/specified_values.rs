@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn css_animation_start_applies(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn css_animation_start_applies(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     if !runtime
         .dom_host()
         .node(handle)
@@ -41,7 +41,7 @@ impl ComputedStyleRead<'_> {
 }
 
 pub(super) fn active_css_animation_midpoint_px_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     resolution: StyleResolutionContext<'_>,
@@ -55,7 +55,7 @@ pub(super) fn active_css_animation_midpoint_px_with_resolution(
 }
 
 pub(super) fn active_registered_length_custom_property_animation_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     underlying_value: &str,
@@ -87,7 +87,7 @@ fn registered_length_keyframe_endpoint_px(value: &str, underlying_value: &str) -
 }
 
 fn active_css_animation_translate_x_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<f64> {
@@ -103,7 +103,7 @@ fn active_css_animation_translate_x_with_resolution(
 }
 
 pub(crate) fn active_css_animation_transform_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let read = ComputedStyleRead::new(runtime, handle);
@@ -111,7 +111,7 @@ pub(crate) fn active_css_animation_transform_value(
 }
 
 pub(super) fn active_css_animation_transform_value_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Option<String> {
@@ -120,7 +120,7 @@ pub(super) fn active_css_animation_transform_value_with_resolution(
 }
 
 pub(super) fn active_css_animation_static_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     resolution: StyleResolutionContext<'_>,
@@ -132,7 +132,7 @@ pub(super) fn active_css_animation_static_value(
 }
 
 fn active_css_animation_property_values_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     resolution: StyleResolutionContext<'_>,
@@ -157,7 +157,7 @@ fn active_css_animation_property_values_with_resolution(
 }
 
 fn active_css_animation_names_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     resolution: StyleResolutionContext<'_>,
 ) -> Vec<String> {
@@ -461,7 +461,7 @@ fn transform_translate_x_px(value: &str) -> Option<f64> {
 }
 
 fn stylo_computed_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
@@ -470,7 +470,7 @@ fn stylo_computed_style_value(
 }
 
 fn stylo_computed_pseudo_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     pseudo_element: &str,
     property: &str,
@@ -482,7 +482,7 @@ fn stylo_computed_pseudo_style_value(
 }
 
 pub(super) fn normalized_stylo_computed_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
@@ -492,7 +492,7 @@ pub(super) fn normalized_stylo_computed_style_value(
 }
 
 pub(super) fn normalized_stylo_computed_style_value_with_inputs(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     context: StyleComputationContext,
@@ -511,7 +511,7 @@ pub(super) fn normalized_stylo_computed_style_value_with_inputs(
 }
 
 fn normalize_stylo_computed_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,
@@ -527,7 +527,7 @@ fn normalize_stylo_computed_style_value(
 }
 
 pub(super) fn normalize_stylo_computed_style_value_with_resolution(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     value: &str,
@@ -557,7 +557,7 @@ fn normalize_touch_action_serialization(property: &str, value: &str) -> String {
 }
 
 pub(super) fn normalized_stylo_computed_pseudo_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     pseudo_element: &str,
     property: &str,
@@ -569,7 +569,7 @@ pub(super) fn normalized_stylo_computed_pseudo_style_value(
 }
 
 pub(super) fn inline_style_entry_for_inline_style(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<StyleEntry> {
@@ -579,7 +579,7 @@ pub(super) fn inline_style_entry_for_inline_style(
 }
 
 pub(super) fn inline_style_property_value_for_inline_style(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -594,7 +594,7 @@ pub(super) fn inline_style_property_value_for_inline_style(
 }
 
 pub(crate) fn raw_inline_style_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {
@@ -914,7 +914,7 @@ fn simple_var_fallback_component_text(input: &mut Parser<'_>) -> Option<String> 
 }
 
 pub(super) fn inline_style_entry(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<StyleEntry> {
@@ -961,7 +961,7 @@ pub(super) fn inline_style_entry(
     })
 }
 
-fn inline_all_style_entry(runtime: &JsContextHost, handle: DomHandle) -> Option<StyleEntry> {
+fn inline_all_style_entry(runtime: &PageScriptHost, handle: DomHandle) -> Option<StyleEntry> {
     let entries = style_entries(runtime, handle);
     let all_index = entries
         .iter()
@@ -978,7 +978,7 @@ fn inline_all_style_entry(runtime: &JsContextHost, handle: DomHandle) -> Option<
 }
 
 fn inline_style_entries_for_property(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     candidate: impl Fn(&StyleEntry) -> Option<StyleEntry>,
 ) -> Option<StyleEntry> {
@@ -1035,7 +1035,7 @@ pub(super) fn box_shorthand_component(value: &str, shorthand_index: usize) -> Op
 }
 
 pub(in crate::native_bridge::element::styles::declaration) fn computed_style_default_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> String {
@@ -1204,7 +1204,7 @@ pub(in crate::native_bridge::element::styles::declaration) fn computed_style_def
 }
 
 pub(super) fn inherited_computed_style_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
     initial: &str,
@@ -1216,14 +1216,14 @@ pub(super) fn inherited_computed_style_value(
 }
 
 pub(super) fn inherited_style_parent(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     flat_tree_element_parent(runtime, handle)
 }
 
 pub(crate) fn style_property_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -1244,7 +1244,7 @@ fn normalize_specified_cssom_value(property: &str, value: String) -> String {
 }
 
 pub(in crate::native_bridge::element::styles) fn style_property_value_with_viewport_width(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     mode: StyleMode,
     property: &str,
@@ -1493,7 +1493,7 @@ pub(in crate::native_bridge::element::styles) fn style_property_value_with_viewp
 }
 
 fn inline_exact_style_entry_with_index(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<(usize, StyleEntry)> {
@@ -1513,7 +1513,7 @@ fn inline_exact_style_entry_with_index(
 }
 
 fn exact_shorthand_has_later_overriding_longhand(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     shorthand_index: usize,
     shorthand: &StyleEntry,
@@ -1529,7 +1529,7 @@ fn exact_shorthand_has_later_overriding_longhand(
 }
 
 fn inline_shorthand_value_from_longhands(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     longhands: &[&str],
 ) -> Option<String> {
@@ -1556,7 +1556,7 @@ fn inline_shorthand_value_from_longhands(
     compress_box_components(&values)
 }
 
-fn inline_text_emphasis_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn inline_text_emphasis_shorthand_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let Some(style) = inline_style_entry_for_inline_style(runtime, handle, "text-emphasis-style")
     else {
         return String::new();
@@ -1577,7 +1577,7 @@ fn inline_text_emphasis_shorthand_value(runtime: &JsContextHost, handle: DomHand
     format!("{} {}", style.value, color.value)
 }
 
-fn inline_font_variant_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn inline_font_variant_shorthand_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let exact = inline_exact_style_entry_with_index(runtime, handle, "font-variant");
     let mut values = exact
         .as_ref()
@@ -1660,7 +1660,7 @@ pub(super) fn serialize_font_variant_shorthand_values(values: &[String]) -> Opti
     )
 }
 
-fn inline_list_style_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn inline_list_style_shorthand_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     if let Some(entry) = inline_style_entry_for_inline_style(runtime, handle, "list-style") {
         return entry.value;
     }
@@ -1672,7 +1672,7 @@ fn inline_list_style_shorthand_value(runtime: &JsContextHost, handle: DomHandle)
     )
 }
 
-fn inline_outline_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn inline_outline_shorthand_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     if let Some(entry) = inline_style_entry_for_inline_style(runtime, handle, "outline") {
         return entry.value;
     }
@@ -1685,7 +1685,7 @@ fn inline_outline_shorthand_value(runtime: &JsContextHost, handle: DomHandle) ->
 }
 
 fn inline_fixed_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     longhands: &[&str],
     serialize: impl Fn(&[String]) -> Option<String>,
@@ -1739,7 +1739,7 @@ fn serialize_list_style_shorthand_components(values: &[String]) -> Option<String
 }
 
 fn fixed_shorthand_component(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     shorthand: &str,
     index: usize,
@@ -1805,7 +1805,7 @@ fn outline_components(value: &str) -> Option<Vec<String>> {
     ])
 }
 
-fn inline_border_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> String {
+fn inline_border_shorthand_value(runtime: &PageScriptHost, handle: DomHandle) -> String {
     let top = inline_border_side_shorthand_value(runtime, handle, BorderSide::Top);
     if top.is_empty() {
         return String::new();
@@ -1823,7 +1823,7 @@ fn inline_border_shorthand_value(runtime: &JsContextHost, handle: DomHandle) -> 
 }
 
 fn inline_border_side_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     side: BorderSide,
 ) -> String {
@@ -1843,7 +1843,7 @@ fn inline_border_side_shorthand_value(
 }
 
 fn inline_border_side_component_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     side: BorderSide,
 ) -> String {
@@ -1884,7 +1884,7 @@ fn inline_border_side_component_shorthand_value(
 }
 
 pub(super) fn computed_border_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     context: StyleComputationContext,
 ) -> String {
@@ -1905,7 +1905,7 @@ pub(super) fn computed_border_shorthand_value(
 }
 
 pub(super) fn computed_border_side_shorthand_value(
-    runtime: &JsContextHost,
+    runtime: &PageScriptHost,
     handle: DomHandle,
     side: BorderSide,
     context: StyleComputationContext,

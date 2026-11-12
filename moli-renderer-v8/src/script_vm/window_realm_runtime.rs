@@ -1,6 +1,6 @@
 use std::{cell::RefCell, mem::ManuallyDrop, ops::Deref, rc::Weak};
 
-use crate::native_bridge::{JsContextHost, JsContextHostBridgeRef, RuntimeObservableContextToken};
+use crate::native_bridge::{JsContextHostBridgeRef, PageScriptHost, RuntimeObservableContextToken};
 
 use super::RendererDeferredContextHostReleaseQueue;
 
@@ -18,7 +18,7 @@ pub(crate) struct WindowRealmRuntimeState {
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) runtime_observable_context_token: RuntimeObservableContextToken,
     pub(crate) bridge_ref: Option<JsContextHostBridgeRef>,
-    host: Weak<RefCell<JsContextHost>>,
+    host: Weak<RefCell<PageScriptHost>>,
     isolated: bool,
 }
 
@@ -35,7 +35,7 @@ impl WindowRealmRuntime {
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_, ()>,
         context: v8::Local<'_, v8::Context>,
-        host: Weak<RefCell<JsContextHost>>,
+        host: Weak<RefCell<PageScriptHost>>,
         runtime_observable_context_token: RuntimeObservableContextToken,
         deferred_releases: RendererDeferredContextHostReleaseQueue,
         isolated: bool,

@@ -5,7 +5,7 @@ fn input_getter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_getter_receiver(scope, receiver, "HTMLInputElement", member, "input")
 }
 
@@ -13,7 +13,7 @@ fn input_setter_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
-) -> Option<(*mut JsContextHost, DomHandle)> {
+) -> Option<(*mut PageScriptHost, DomHandle)> {
     html_element_setter_receiver(scope, receiver, "HTMLInputElement", member, "input")
 }
 
@@ -235,7 +235,7 @@ pub(in crate::native_bridge) fn input_form_action_getter_function<'s>(
 
 fn input_form_action_getter_from_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
@@ -281,7 +281,7 @@ pub(in crate::native_bridge) fn input_form_enctype_getter_function<'s>(
 
 fn input_form_enctype_getter_from_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
@@ -325,7 +325,7 @@ pub(in crate::native_bridge) fn input_form_method_getter_function<'s>(
 
 fn input_form_method_getter_from_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     document_runtime::{DocumentRuntime, DomHandle},
-    native_bridge::JsContextHost,
+    native_bridge::PageScriptHost,
 };
 
 pub(super) struct TreeInsertionPlan<'a> {
@@ -90,7 +90,7 @@ impl DocumentRuntime {
         &mut self,
         parent: DomHandle,
         insertion_roots: &'a [DomHandle],
-        host_ptr: *mut JsContextHost,
+        host_ptr: *mut PageScriptHost,
         options: TreeInsertionPlanOptions,
     ) -> TreeInsertionPlan<'a> {
         let live_range_plan = if unsafe { &mut *host_ptr }.live_ranges_is_empty() {

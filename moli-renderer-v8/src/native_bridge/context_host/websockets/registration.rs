@@ -1,4 +1,4 @@
-use super::super::{JsContextHost, security_policy::DocumentCspOutcome};
+use super::super::{PageScriptHost, security_policy::DocumentCspOutcome};
 use super::WebSocketConnectionState;
 use crate::document_runtime::document_content_security_policy_error_message;
 use crate::network_host::BLOCKED_BY_CLIENT_ERROR_TEXT;
@@ -15,7 +15,7 @@ use moli_websocket::{
 };
 use url::Url;
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(crate) fn register_websocket_for_document(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

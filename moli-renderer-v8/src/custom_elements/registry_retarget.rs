@@ -2,10 +2,10 @@ use super::{
     registry::{CustomElementRegistryAssociation, RegistryAssociationRetarget},
     traversal::shadow_including_subtree_handles,
 };
-use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::PageScriptHost};
 
 pub(crate) fn registry_association_retargets_before_removal(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     root: DomHandle,
 ) -> Vec<RegistryAssociationRetarget> {
     let host = unsafe { &*host_ptr };
@@ -40,14 +40,14 @@ pub(super) fn should_record_import_clone_registry_association(
 }
 
 pub(crate) fn apply_registry_association_retargets(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     retargets: &[RegistryAssociationRetarget],
 ) {
     unsafe { &mut *host_ptr }.apply_custom_element_registry_association_retargets(retargets);
 }
 
 pub(crate) fn apply_parser_created_null_registry_associations(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handles: &[DomHandle],
 ) {
     let host = unsafe { &mut *host_ptr };

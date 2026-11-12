@@ -11,7 +11,7 @@ fn video_getter_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> Option<(
-    *mut crate::native_bridge::JsContextHost,
+    *mut crate::native_bridge::PageScriptHost,
     crate::document_runtime::DomHandle,
 )> {
     html_element_getter_receiver(scope, receiver, "HTMLVideoElement", member, "video")
@@ -22,7 +22,7 @@ fn video_setter_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &'static str,
 ) -> Option<(
-    *mut crate::native_bridge::JsContextHost,
+    *mut crate::native_bridge::PageScriptHost,
     crate::document_runtime::DomHandle,
 )> {
     html_element_setter_receiver(scope, receiver, "HTMLVideoElement", member, "video")

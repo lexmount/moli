@@ -1,4 +1,4 @@
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WorkerOwnerScope};
+use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentOwner, WorkerOwnerScope};
 use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::runtime::ServiceWorkerControlState;
 use crate::service_worker_runtime::ServiceWorkerNotificationAction;
@@ -102,7 +102,7 @@ pub(crate) struct PendingServiceWorkerClientsOpenWindowPopup {
     document_owner: crate::native_bridge::LightweightPopupDocumentOwner,
 }
 
-impl JsContextHost {
+impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn register_main_service_worker_client(
         browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
         document_url: Url,

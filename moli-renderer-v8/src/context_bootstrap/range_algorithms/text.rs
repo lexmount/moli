@@ -123,7 +123,7 @@ pub(super) fn range_selection_string_contents_for_boundaries(
 }
 
 fn collect_selection_text_sources(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     root: DomHandle,
     out: &mut Vec<DomHandle>,
 ) {
@@ -220,7 +220,7 @@ struct RangeTextBounds {
 
 fn append_selection_rendered_text(
     scope: &mut v8::PinScope<'_, '_>,
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     bounds: RangeTextBounds,
     state: SelectionTextState,
@@ -373,7 +373,7 @@ fn selection_node_may_intersect_range(
 }
 
 pub(crate) fn selection_text_element_is_hidden(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     style_property_value(runtime, handle, StyleMode::Computed, "display") == "none"
@@ -381,7 +381,7 @@ pub(crate) fn selection_text_element_is_hidden(
 }
 
 fn selection_text_element_is_inert(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     runtime
@@ -394,7 +394,7 @@ fn selection_text_element_is_inert(
 }
 
 fn selection_text_has_inert_ancestor(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     modal_escape_root: Option<DomHandle>,
 ) -> bool {
@@ -412,7 +412,7 @@ fn selection_text_has_inert_ancestor(
 }
 
 fn selection_text_active_modal_dialog(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     document: DomHandle,
 ) -> Option<DomHandle> {
     runtime
@@ -421,7 +421,7 @@ fn selection_text_active_modal_dialog(
 }
 
 fn selection_text_is_inert(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     state: SelectionTextState,
 ) -> bool {
@@ -434,7 +434,7 @@ fn selection_text_is_inert(
 }
 
 fn selection_text_descendant_or_self(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     ancestor: DomHandle,
 ) -> bool {
@@ -449,7 +449,7 @@ fn selection_text_descendant_or_self(
 }
 
 fn selection_text_flat_tree_parent(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let parent = runtime.dom_host().composed_parent(handle)?;
@@ -460,7 +460,7 @@ fn selection_text_flat_tree_parent(
 }
 
 fn selection_text_user_select_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let value = inline_css_property_value(runtime, handle, "user-select")
@@ -477,7 +477,7 @@ fn selection_text_user_select_value(
 }
 
 fn selection_text_content_visibility_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
 ) -> Option<String> {
     let value =
@@ -491,7 +491,7 @@ fn selection_text_content_visibility_value(
 }
 
 fn inline_css_property_value(
-    runtime: &crate::native_bridge::JsContextHost,
+    runtime: &crate::native_bridge::PageScriptHost,
     handle: DomHandle,
     property: &str,
 ) -> Option<String> {

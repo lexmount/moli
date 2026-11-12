@@ -1,5 +1,5 @@
-use super::super::JsContextHost;
 use super::super::OwnerDispatchScope;
+use super::super::PageScriptHost;
 use super::super::window_security_tokens::WindowAccessOrigin;
 use super::WindowExecutionContextIdentity;
 use crate::document_runtime::DomHandle;
@@ -26,7 +26,7 @@ pub(crate) struct WindowEnvironmentSettings {
 impl WindowEnvironmentSettings {
     pub(crate) fn bind_current_child_document(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
         child_handle: DomHandle,
     ) -> Option<()> {
         // A reused element can point to a new Window. Only a currently
@@ -61,7 +61,7 @@ impl WindowEnvironmentSettings {
 
     pub(crate) fn bind_current_main_document_for_retirement(
         scope: &mut v8::PinScope<'_, '_>,
-        host: &JsContextHost,
+        host: &PageScriptHost,
     ) -> Option<()> {
         let context = scope.get_current_context();
         let execution_identity =
@@ -86,8 +86,8 @@ impl WindowEnvironmentSettings {
     /// task registry entry is retired. This grants no execution authority.
     pub(in crate::native_bridge::context_host) fn can_access_current_window(
         &self,
-        host: &JsContextHost,
-        target_host: &JsContextHost,
+        host: &PageScriptHost,
+        target_host: &PageScriptHost,
         target: WindowExecutionContextIdentity,
     ) -> bool {
         if !target_host.window_execution_context_identity_is_current(target) {
@@ -128,7 +128,7 @@ impl WindowEnvironmentSettings {
         origin.can_access(&target_origin)
     }
 
-    pub(crate) fn effective_domain(&self, host: &JsContextHost) -> Option<String> {
+    pub(crate) fn effective_domain(&self, host: &PageScriptHost) -> Option<String> {
         let mut origin = self.access_origin.clone();
         if let WindowAccessOrigin::Tuple {
             document_domain, ..
@@ -157,7 +157,7 @@ impl WindowEnvironmentSettings {
 
     pub(crate) fn resolve_module_specifier(
         &self,
-        host: &mut JsContextHost,
+        host: &mut PageScriptHost,
         specifier: &str,
         base_url: &Url,
     ) -> Result<Url, String> {
@@ -175,7 +175,7 @@ impl WindowEnvironmentSettings {
         }
     }
 
-    pub(crate) fn api_base_url(&self, host: &JsContextHost) -> Option<Url> {
+    pub(crate) fn api_base_url(&self, host: &PageScriptHost) -> Option<Url> {
         let document = host.dom_host().node(self.document)?.as_document()?;
         // Preserve the existing bootstrap view while an initial empty Document
         // still stands in for a locally available child snapshot. An explicit

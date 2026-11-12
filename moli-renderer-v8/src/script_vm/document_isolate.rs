@@ -20,7 +20,7 @@ use crate::{
         initialize_import_meta_object_callback,
     },
     native_bridge::bindings::NativeBridgeBindings,
-    native_bridge::{JsContextHost, SharedPrebootstrappedChildDefaultContexts},
+    native_bridge::{PageScriptHost, SharedPrebootstrappedChildDefaultContexts},
     page_task_queue::{
         PageRuntimeTaskSource, PageRuntimeWakeSender, PageTaskSender,
         RendererPageV8ForegroundTaskSender,
@@ -51,7 +51,7 @@ pub(crate) struct RendererDeferredContextHostReleaseQueue {
 }
 
 struct RendererDeferredContextHostRelease {
-    _host: Option<Rc<RefCell<JsContextHost>>>,
+    _host: Option<Rc<RefCell<PageScriptHost>>>,
     retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
 }
 
@@ -85,7 +85,7 @@ impl RendererDeferredContextHostReleaseQueue {
 
     pub(crate) fn defer(
         &self,
-        host: Rc<RefCell<JsContextHost>>,
+        host: Rc<RefCell<PageScriptHost>>,
         retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
     ) {
         self.defer_release(RendererDeferredContextHostRelease {
@@ -195,9 +195,9 @@ pub(super) struct ScriptVmPageRealmBootstrap {
     // Partial bootstrap can drop before publication. Release bridge owners
     // before their native backing, and keep V8 alive until all of it
     // has been released.
-    pub(super) context_host: Rc<RefCell<JsContextHost>>,
+    pub(super) context_host: Rc<RefCell<PageScriptHost>>,
     pub(super) document_runtime: Box<DocumentRuntime>,
-    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
+    pub(super) renderer_document_isolate: RendererIsolateHandle,
 }
 
 pub(super) struct ScriptVmContextBootstrap {
@@ -214,7 +214,7 @@ impl std::ops::Deref for ScriptVmContextBootstrap {
 
 pub(crate) struct RendererDocumentIsolateBootstrap {
     pub(crate) initial_document_environment: Option<super::ScriptVmInitialDocumentEnvironment>,
-    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
+    pub(super) renderer_document_isolate: RendererIsolateHandle,
     pub(super) bridge_bindings: NativeBridgeBindings,
     pub(super) renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
     pub(super) page_inspector: DocumentInspectorBinding,
@@ -230,7 +230,7 @@ impl RendererDocumentIsolateBootstrap {
 
     pub(crate) fn clone_renderer_document_isolate_handle_for_owner_retention(
         &self,
-    ) -> RendererDocumentIsolateHandle {
+    ) -> RendererIsolateHandle {
         self.renderer_document_isolate.clone()
     }
 
@@ -266,7 +266,7 @@ pub(crate) struct WeakRendererPageScriptEnvironment(Weak<RendererPageScriptEnvir
 
 struct RendererPageScriptEnvironmentInner {
     page_id: u64,
-    renderer_document_isolate: RendererDocumentIsolateHandle,
+    renderer_document_isolate: RendererIsolateHandle,
     inspector_isolate_backend: RendererInspectorIsolateBackendHandle,
     page_runtime_task_source: PageRuntimeTaskSource,
     output_journal: crate::runtime::RendererTurnOutputJournal,
@@ -275,7 +275,7 @@ struct RendererPageScriptEnvironmentInner {
     browsing_context_name: OnceCell<crate::runtime::RendererBrowsingContextName>,
     auxiliary_window: OnceCell<crate::runtime::RendererAuxiliaryWindow>,
     opener: RefCell<Option<v8::Global<v8::Object>>>,
-    document_host: RefCell<Weak<RefCell<JsContextHost>>>,
+    document_host: RefCell<Weak<RefCell<PageScriptHost>>>,
     closed: Cell<bool>,
 }
 
@@ -339,7 +339,7 @@ impl RendererPageScriptEnvironment {
 
     pub(crate) fn new(
         page_id: u64,
-        renderer_document_isolate: RendererDocumentIsolateHandle,
+        renderer_document_isolate: RendererIsolateHandle,
         inspector_isolate_backend: RendererInspectorIsolateBackendHandle,
         page_runtime_task_source: PageRuntimeTaskSource,
         output_journal: crate::runtime::RendererTurnOutputJournal,
@@ -374,7 +374,7 @@ impl RendererPageScriptEnvironment {
         assert!(self.inner.auxiliary_allocator.set(allocator).is_ok());
     }
 
-    pub(super) fn bind_document_host(&self, host: &Rc<RefCell<JsContextHost>>) {
+    pub(super) fn bind_document_host(&self, host: &Rc<RefCell<PageScriptHost>>) {
         *self.inner.document_host.borrow_mut() = Rc::downgrade(host);
     }
 
@@ -434,7 +434,7 @@ impl RendererPageScriptEnvironment {
         }
     }
 
-    pub(super) fn inherit_window_identity(&self, host: &mut JsContextHost) {
+    pub(super) fn inherit_window_identity(&self, host: &mut PageScriptHost) {
         if let Some(name) = self.inner.browsing_context_name.get() {
             host.bind_browsing_context_name(name.clone());
             host.bind_auxiliary_window(self.inner.auxiliary_window.get().cloned());
@@ -494,7 +494,7 @@ impl RendererPageScriptEnvironment {
             .find_map(|inner| matches(&inner).map(|()| Self { inner }))
     }
 
-    pub(crate) fn related_document_hosts(&self) -> Vec<Rc<RefCell<JsContextHost>>> {
+    pub(crate) fn related_document_hosts(&self) -> Vec<Rc<RefCell<PageScriptHost>>> {
         self.inner
             .renderer_document_isolate
             .related_pages
@@ -622,9 +622,9 @@ pub(crate) struct ScriptVmDefaultWorldBootstrap {
     // Partial bootstrap can drop before publication. Release bridge owners
     // before their native backing, and keep V8 alive until all of it
     // has been released.
-    pub(super) context_host: Rc<RefCell<JsContextHost>>,
+    pub(super) context_host: Rc<RefCell<PageScriptHost>>,
     pub(super) document_runtime: Box<DocumentRuntime>,
-    pub(super) renderer_document_isolate: RendererDocumentIsolateHandle,
+    pub(super) renderer_document_isolate: RendererIsolateHandle,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -661,7 +661,7 @@ impl RendererDocumentIsolateTeardown {
 
     pub(super) fn unregister_platform_on_context_teardown(
         self,
-        renderer_document_isolate: &RendererDocumentIsolateHandle,
+        renderer_document_isolate: &RendererIsolateHandle,
     ) {
         if self.unregister_platform_on_context_teardown {
             renderer_document_isolate.unregister_renderer_document_isolate_platform();
@@ -680,9 +680,11 @@ impl RendererDocumentIsolateTeardown {
     }
 }
 
+/// Shared renderer-isolate access reused by related pages and replacement
+/// document executions.
 #[derive(Clone)]
-pub(crate) struct RendererDocumentIsolateHandle {
-    inner: Rc<RefCell<RendererDocumentIsolateHolder>>,
+pub(crate) struct RendererIsolateHandle {
+    inner: Rc<RefCell<RendererIsolateHolder>>,
     deferred_context_host_releases: RendererDeferredContextHostReleaseQueue,
     related_pages:
         Rc<RefCell<std::collections::BTreeMap<u64, Weak<RendererPageScriptEnvironmentInner>>>>,
@@ -690,16 +692,16 @@ pub(crate) struct RendererDocumentIsolateHandle {
 }
 
 type PendingRelatedPageTurnCompletions =
-    std::collections::BTreeMap<usize, Weak<RefCell<JsContextHost>>>;
+    std::collections::BTreeMap<usize, Weak<RefCell<PageScriptHost>>>;
 
-impl std::fmt::Debug for RendererDocumentIsolateHandle {
+impl std::fmt::Debug for RendererIsolateHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RendererDocumentIsolateHandle")
+        f.debug_struct("RendererIsolateHandle")
             .finish_non_exhaustive()
     }
 }
 
-impl RendererDocumentIsolateHandle {
+impl RendererIsolateHandle {
     pub(crate) fn deferred_context_host_release_queue(
         &self,
     ) -> RendererDeferredContextHostReleaseQueue {
@@ -746,10 +748,7 @@ impl RendererDocumentIsolateHandle {
         devtools_target_shutdown_registry: Option<&RendererDevToolsTargetShutdownRegistry>,
     ) -> Result<RendererDocumentIsolateBootstrap> {
         let (renderer_document_isolate, bridge_bindings) =
-            RendererDocumentIsolateHolder::new_holder(
-                foreground_wake,
-                devtools_target_shutdown_registry,
-            )?;
+            RendererIsolateHolder::new_holder(foreground_wake, devtools_target_shutdown_registry)?;
         let deferred_context_host_releases = renderer_document_isolate
             .deferred_context_host_releases
             .clone();
@@ -798,7 +797,7 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate, &mut RendererInspectorIsolateBackend) -> T,
     ) -> T {
         let mut holder = self.inner.borrow_mut();
-        let RendererDocumentIsolateHolder {
+        let RendererIsolateHolder {
             isolate,
             inspector_backend,
             ..
@@ -819,7 +818,7 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate, &mut RendererInspectorIsolateBackend) -> Result<T>,
     ) -> Result<T> {
         let mut holder = self.inner.borrow_mut();
-        let RendererDocumentIsolateHolder {
+        let RendererIsolateHolder {
             isolate,
             inspector_backend,
             ..
@@ -860,7 +859,7 @@ impl RendererDocumentIsolateHandle {
         op: impl FnOnce(&mut v8::OwnedIsolate, &IsolateBootstrapCache) -> Result<T>,
     ) -> Result<T> {
         let mut holder = self.inner.borrow_mut();
-        let RendererDocumentIsolateHolder {
+        let RendererIsolateHolder {
             isolate, bootstrap, ..
         } = &mut *holder;
         with_entered_owned_isolate(isolate, |isolate| {
@@ -890,7 +889,8 @@ impl RendererDocumentIsolateHandle {
     }
 }
 
-pub(super) struct RendererDocumentIsolateHolder {
+/// Owns the renderer isolate and the resources retired with that isolate.
+pub(super) struct RendererIsolateHolder {
     deferred_context_host_releases: RendererDeferredContextHostReleaseQueue,
     // Unregister before destroying the Inspector backend so owner shutdown
     // never observes a target whose isolate has already been disposed.
@@ -908,7 +908,7 @@ pub(super) struct RendererDocumentIsolateHolder {
     _accounting: RendererDocumentIsolateAccountingGuard,
 }
 
-impl RendererDocumentIsolateHolder {
+impl RendererIsolateHolder {
     fn new_holder(
         foreground_wake: V8ForegroundTaskWake,
         devtools_target_shutdown_registry: Option<&RendererDevToolsTargetShutdownRegistry>,
@@ -1055,7 +1055,7 @@ impl RendererDocumentIsolateHolder {
     }
 }
 
-impl Drop for RendererDocumentIsolateHolder {
+impl Drop for RendererIsolateHolder {
     fn drop(&mut self) {
         self.unregister_platform();
         // Fields drop in declaration order after this method. Enter now so the

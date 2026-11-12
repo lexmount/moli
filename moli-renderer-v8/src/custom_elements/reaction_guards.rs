@@ -1,16 +1,16 @@
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
 
 pub(super) struct CustomElementReactionGuard {
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 }
 
 struct CustomElementReactionScope<'scope, 'pin, 'host> {
     scope: &'host mut v8::PinScope<'scope, 'pin>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 }
 
 pub(super) struct DynamicMarkupInsertionGuard {
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     document: Option<DomHandle>,
 }
 
@@ -35,14 +35,14 @@ impl Drop for DynamicMarkupInsertionGuard {
 }
 
 pub(super) fn enter_custom_element_reaction(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
 ) -> CustomElementReactionGuard {
     unsafe { &mut *host_ptr }.enter_custom_element_reaction();
     CustomElementReactionGuard { host_ptr }
 }
 
 pub(super) fn enter_upgrade_dynamic_markup_insertion(
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> DynamicMarkupInsertionGuard {
     let document = unsafe { &*host_ptr }
@@ -55,7 +55,7 @@ pub(super) fn enter_upgrade_dynamic_markup_insertion(
 }
 
 impl<'scope, 'pin, 'host> CustomElementReactionScope<'scope, 'pin, 'host> {
-    fn enter(scope: &'host mut v8::PinScope<'scope, 'pin>, host_ptr: *mut JsContextHost) -> Self {
+    fn enter(scope: &'host mut v8::PinScope<'scope, 'pin>, host_ptr: *mut PageScriptHost) -> Self {
         unsafe { &mut *host_ptr }
             .custom_element_reactions_mut()
             .push_element_queue();
@@ -69,7 +69,7 @@ impl<'scope, 'pin, 'host> CustomElementReactionScope<'scope, 'pin, 'host> {
 
 pub(crate) fn with_custom_element_reaction_scope<'scope, 'pin, R>(
     scope: &mut v8::PinScope<'scope, 'pin>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     op: impl FnOnce(&mut v8::PinScope<'scope, 'pin>) -> R,
 ) -> R {
     let mut reaction_scope = CustomElementReactionScope::enter(scope, host_ptr);

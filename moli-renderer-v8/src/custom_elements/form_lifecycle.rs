@@ -7,14 +7,14 @@ use super::reactions::{
 use super::super::{
     document_runtime::DomHandle,
     native_bridge::{
-        JsContextHost,
+        PageScriptHost,
         element::{form_associated_form_owner, form_control_is_effectively_disabled},
     },
 };
 
 pub(crate) fn enqueue_form_association_callback_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !unsafe { &*host_ptr }
@@ -59,7 +59,7 @@ pub(crate) fn enqueue_form_association_callback_if_needed(
 
 pub(super) fn enqueue_form_disabled_callback_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
     if !unsafe { &*host_ptr }
@@ -104,7 +104,7 @@ pub(super) fn enqueue_form_disabled_callback_if_needed(
 
 pub(crate) fn dispatch_form_association_callback_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {
@@ -114,7 +114,7 @@ pub(crate) fn dispatch_form_association_callback_if_needed(
 
 pub(crate) fn dispatch_form_disabled_callback_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) {
     with_custom_element_reaction_scope(scope, host_ptr, |scope| {
@@ -127,7 +127,7 @@ pub(crate) fn dispatch_form_disabled_callback_if_needed(
 #[allow(dead_code)]
 pub(crate) fn dispatch_form_state_restore_callback(
     scope: &mut v8::PinScope<'_, '_>,
-    host_ptr: *mut JsContextHost,
+    host_ptr: *mut PageScriptHost,
     handle: DomHandle,
     value: String,
     mode: FormStateRestoreMode,
