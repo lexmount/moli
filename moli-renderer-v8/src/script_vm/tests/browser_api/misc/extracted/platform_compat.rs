@@ -1556,13 +1556,14 @@ fn automation_override_preserves_the_native_webdriver_baseline() {
         })
         .unwrap();
         for enabled in [false, true, false] {
-            vm.set_navigator_overrides(&moli_page_types::NavigatorOverrides {
+            vm.set_navigator_overrides_and_sync_surface(&moli_page_types::NavigatorOverrides {
                 queries: moli_page_types::NavigatorQueryOverrides {
                     automation: enabled,
                     ..Default::default()
                 },
                 ..Default::default()
-            });
+            })
+            .unwrap();
             assert_eq!(
                 vm.eval("navigator.webdriver").unwrap(),
                 (baseline || enabled).to_string()

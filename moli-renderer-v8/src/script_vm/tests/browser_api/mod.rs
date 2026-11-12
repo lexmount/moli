@@ -52,6 +52,7 @@ mod misc;
 mod native_owner_xhr;
 mod navigation;
 mod navigation_event_init;
+mod navigator_overrides;
 mod notification_init;
 mod opaque_document_cookie;
 mod opaque_wasm_origins;

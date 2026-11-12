@@ -37,15 +37,17 @@ async fn resource_initiator_geolocation_watch_preserves_registration_across_nati
         if count > 1 {
             vm.set_navigator_overrides_and_sync_surface(&moli_page_types::NavigatorOverrides {
                 geolocation: latitude.map(|latitude| {
-                    moli_page_types::GeolocationPositionOverride {
-                        latitude,
-                        longitude: 56.0,
-                        accuracy: 1.0,
-                        altitude: None,
-                        altitude_accuracy: None,
-                        heading: None,
-                        speed: None,
-                    }
+                    moli_page_types::GeolocationOverride::Position(
+                        moli_page_types::GeolocationPositionOverride {
+                            latitude,
+                            longitude: 56.0,
+                            accuracy: 1.0,
+                            altitude: None,
+                            altitude_accuracy: None,
+                            heading: None,
+                            speed: None,
+                        },
+                    )
                 }),
                 ..Default::default()
             })

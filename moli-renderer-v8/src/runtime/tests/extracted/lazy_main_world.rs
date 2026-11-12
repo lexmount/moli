@@ -126,7 +126,7 @@ async fn native_environment_updates_survive_main_world_activation() {
     for command in [
         RendererPageCommand::SetNavigatorOverrides(moli_page_types::NavigatorOverrides {
             online: Some(false),
-            max_touch_points: 7,
+            max_touch_points: Some(7),
             ..Default::default()
         }),
         RendererPageCommand::SetIdleOverride(Some(moli_page_types::EmulatedIdleOverride {
@@ -153,7 +153,7 @@ async fn native_environment_updates_survive_main_world_activation() {
     page.run_async_command(RendererPageCommand::SetNavigatorOverrides(
         moli_page_types::NavigatorOverrides {
             online: Some(true),
-            max_touch_points: 2,
+            max_touch_points: Some(2),
             ..Default::default()
         },
     ))
