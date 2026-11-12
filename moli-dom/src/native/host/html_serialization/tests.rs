@@ -423,3 +423,59 @@ fn export_policy_filters_overrides_and_inserts_without_mutating_attributes() {
         assert_eq!(host.dom().serialize_document(), before);
     }
 }
+
+#[test]
+fn export_visits_inert_shadow_roots_and_borrows_native_storage() {
+    use std::{cell::Cell, sync::Arc};
+    struct Policy<'a> {
+        dom: &'a NativeDom,
+        storage_refs: usize,
+        visited: Cell<usize>,
+    }
+    impl HtmlSerializationPolicy for Policy<'_> {
+        fn include_node(&self, node: &Node) -> bool {
+            assert_eq!(Arc::strong_count(&self.dom.nodes.chunks), self.storage_refs);
+            self.visited.set(self.visited.get() + 1);
+            !node.is_html_element_named("style")
+        }
+        fn include_shadow_adopted_style_sheets(&self) -> bool {
+            false
+        }
+    }
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    host.reset_html_document_shell();
+    let body = host.document_body_handle().unwrap();
+    let template = host.create_element("template");
+    let contents = host.parser_template_contents_handle(template).unwrap();
+    let element = host.create_element("div");
+    assert!(host.append_child(contents, element));
+    assert!(host.append_child(body, template));
+    let mut init = ShadowRootInit::new("closed");
+    init.set_adopted_style_sheets(Some("data:text/css,b%7Bcolor:red%7D".into()));
+    let root = host.attach_shadow_root_with_init(element, init).unwrap();
+    let style = host.create_element("style");
+    let css = host.create_text_node("b{color:red}");
+    assert!(host.append_child(style, css));
+    let text = host.create_text_node("KEEP");
+    assert!(host.append_child(root, style));
+    assert!(host.append_child(root, text));
+    let before = host
+        .get_html_for_export(body, &scripting_enabled, None, None, None)
+        .unwrap();
+    assert!(before.contains("shadowrootadoptedstylesheets="));
+    let policy = Policy {
+        dom: host.dom(),
+        storage_refs: Arc::strong_count(&host.dom().nodes.chunks),
+        visited: Cell::new(0),
+    };
+    assert_eq!(
+        host.get_html_for_export(body, &scripting_enabled, Some(&policy), None, None)
+            .as_deref(),
+        Ok("<template><div><template shadowrootmode=\"closed\">KEEP</template></div></template>")
+    );
+    assert!(policy.visited.get() > 0);
+    assert_eq!(
+        host.get_html_for_export(body, &scripting_enabled, None, None, None),
+        Ok(before)
+    );
+}

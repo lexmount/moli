@@ -17,7 +17,6 @@ impl PageVm {
         let vm = self.vm();
         let dom = vm.document_runtime.dom_host().dom();
         let policy = HtmlDumpPolicy {
-            dom,
             strip: options.strip,
             base: options
                 .with_base
@@ -33,35 +32,17 @@ impl PageVm {
     }
 }
 
-struct HtmlDumpPolicy<'a> {
-    dom: &'a NativeDom,
+struct HtmlDumpPolicy {
     strip: RendererContentStripOptions,
     base: Option<BaseInsertion>,
 }
 
-impl HtmlDumpPolicy<'_> {
-    fn is_inert_template_node(&self, node: &Node) -> bool {
-        node.owner_document()
-            .and_then(|document| self.dom.node(document))
-            .and_then(Node::as_document)
-            .is_some_and(|document| document.is_inert_template_document())
-    }
-}
-
-impl HtmlSerializationPolicy for HtmlDumpPolicy<'_> {
+impl HtmlSerializationPolicy for HtmlDumpPolicy {
     fn include_node(&self, node: &Node) -> bool {
-        self.is_inert_template_node(node)
-            || !super::content_filter::should_strip_node(node, self.strip)
+        !super::content_filter::should_strip_node(node, self.strip)
     }
 
-    fn include_attribute(&self, node: NativeNodeId, attribute: &Attribute) -> bool {
-        if self
-            .dom
-            .node(node)
-            .is_some_and(|node| self.is_inert_template_node(node))
-        {
-            return true;
-        }
+    fn include_attribute(&self, _: NativeNodeId, attribute: &Attribute) -> bool {
         let name_start = attribute
             .prefix()
             .filter(|prefix| !prefix.is_empty())
@@ -229,7 +210,6 @@ mod tests {
             let count = dom.nodes().len();
             let version = host.dom_version();
             let policy = HtmlDumpPolicy {
-                dom,
                 strip: Default::default(),
                 base: Some(BaseInsertion::new(dom, href)),
             };

@@ -139,16 +139,7 @@ impl DomHost {
                     explicit,
                 } => serializable && state.init.serializable() || explicit.contains(&state.handle),
                 // Only author roots enter this native registry; UA trees are renderer projections.
-                ShadowRootInclusion::AllAuthor => {
-                    profile == ShadowRootMarkupProfile::Inspector
-                        || self
-                            .dom
-                            .node(host)
-                            .and_then(Node::owner_document)
-                            .and_then(|document| self.dom.node(document))
-                            .and_then(Node::as_document)
-                            .is_none_or(|document| !document.is_inert_template_document())
-                }
+                ShadowRootInclusion::AllAuthor => true,
             };
             if !included {
                 return None;
