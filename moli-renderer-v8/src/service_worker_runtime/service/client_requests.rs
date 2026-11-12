@@ -445,6 +445,7 @@ impl ServiceWorkerRuntimeService {
         &self,
         source_version_id: ServiceWorkerVersionId,
         client_id: ServiceWorkerClientId,
+        ancestor_origins: Vec<String>,
     ) -> Result<Option<ServiceWorkerClientSnapshot>, ServiceWorkerClientNavigateError> {
         let state = self.inner.state.lock();
         let Some(source_version) = state.versions.get(&source_version_id) else {
@@ -467,10 +468,9 @@ impl ServiceWorkerRuntimeService {
         if !moli_url::same_origin(&source_version.script_url, &client.document_url) {
             return Ok(None);
         }
-        Ok(Some(service_worker_client_snapshot(
-            source_registration,
-            client,
-        )))
+        let mut snapshot = service_worker_client_snapshot(source_registration, client);
+        snapshot.ancestor_origins = ancestor_origins;
+        Ok(Some(snapshot))
     }
 
     pub(crate) fn client_focus_result_for_current_window_client(
@@ -519,6 +519,7 @@ impl ServiceWorkerRuntimeService {
         snapshot.frame_type = native_state.frame_type;
         snapshot.visibility_state = native_state.visibility_state;
         snapshot.focused = native_state.focused;
+        snapshot.ancestor_origins = native_state.ancestor_origins;
         Ok(snapshot)
     }
 

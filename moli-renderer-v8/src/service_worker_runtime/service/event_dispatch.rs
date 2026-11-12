@@ -627,6 +627,7 @@ impl ServiceWorkerRuntimeService {
                 source_client_snapshot.frame_type = window.frame_type;
                 source_client_snapshot.visibility_state = window.visibility_state;
                 source_client_snapshot.focused = window.focused;
+                source_client_snapshot.ancestor_origins = window.ancestor_origins;
             }
             let Some(version) = state.versions.get_mut(&version_id) else {
                 return false;

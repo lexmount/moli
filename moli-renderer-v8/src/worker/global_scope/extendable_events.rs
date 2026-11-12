@@ -197,6 +197,10 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
         && let Some(window_proto) = global_constructor_prototype(scope, "WindowClient")
     {
         let _ = window_proto.set_prototype(scope, client_proto.into());
+        super::service_worker_api::install_window_client_ancestor_origins_prototype(
+            scope,
+            window_proto,
+        )?;
     }
 
     Ok(())

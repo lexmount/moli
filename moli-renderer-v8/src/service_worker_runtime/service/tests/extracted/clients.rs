@@ -1966,6 +1966,7 @@ async fn client_query_replies_during_startup_reject_stale_runs() {
                 visibility_state: ServiceWorkerClientVisibilityState::Visible,
                 focused: false,
                 last_focus_order: None,
+                ancestor_origins: Vec::new(),
             },
         );
         service.drain_service_lane();
@@ -1992,6 +1993,7 @@ async fn client_query_replies_during_startup_reject_stale_runs() {
                 visibility_state: ServiceWorkerClientVisibilityState::Visible,
                 focused: true,
                 last_focus_order: Some(1),
+                ancestor_origins: Vec::new(),
             },
         );
         service.drain_service_lane();
@@ -2136,10 +2138,15 @@ fn client_navigate_result_exposes_same_origin_window_client_only() {
     let about_blank_client_id = register_client_for_test(&service, url("about:blank"));
 
     let controlled_result = service
-        .client_navigate_result_for_current_window_client(version_id, controlled_client_id)
+        .client_navigate_result_for_current_window_client(
+            version_id,
+            controlled_client_id,
+            vec!["https://parent.test".to_owned()],
+        )
         .expect("controlled same-origin client should produce a result")
         .expect("controlled same-origin client should be exposed");
     assert_eq!(controlled_result.id, controlled_client_id);
+    assert_eq!(controlled_result.ancestor_origins, ["https://parent.test"]);
     assert_eq!(
         controlled_result.url,
         url("https://example.test/app/next.html")
@@ -2154,6 +2161,7 @@ fn client_navigate_result_exposes_same_origin_window_client_only() {
         .client_navigate_result_for_current_window_client(
             version_id,
             out_of_scope_same_origin_client_id,
+            Vec::new(),
         )
         .expect("same-origin client should produce a result")
         .expect("same-origin client should be exposed even if no longer controlled");
@@ -2168,12 +2176,20 @@ fn client_navigate_result_exposes_same_origin_window_client_only() {
     assert!(!out_of_scope_same_origin_result.controlled);
 
     let cross_origin_result = service
-        .client_navigate_result_for_current_window_client(version_id, cross_origin_client_id)
+        .client_navigate_result_for_current_window_client(
+            version_id,
+            cross_origin_client_id,
+            Vec::new(),
+        )
         .expect("cross-origin client should resolve as a successful null result");
     assert_eq!(cross_origin_result, None);
 
     let about_blank_result = service
-        .client_navigate_result_for_current_window_client(version_id, about_blank_client_id)
+        .client_navigate_result_for_current_window_client(
+            version_id,
+            about_blank_client_id,
+            Vec::new(),
+        )
         .expect("about:blank client should resolve as a successful null result");
     assert_eq!(about_blank_result, None);
 }
@@ -2213,11 +2229,17 @@ fn client_focus_result_samples_native_state_without_mutating_other_clients() {
             version_id,
             second_client_id,
             focus_target_document_owner_for_test(&service, second_client_id),
-            Some(focused_native_window_state_for_test()),
+            Some(
+                crate::service_worker_runtime::ServiceWorkerWindowClientState {
+                    ancestor_origins: vec!["https://parent.test".to_owned()],
+                    ..focused_native_window_state_for_test()
+                },
+            ),
         )
         .expect("focus should produce a window client snapshot");
     assert_eq!(focused.id, second_client_id);
     assert!(focused.focused);
+    assert_eq!(focused.ancestor_origins, ["https://parent.test"]);
 
     let all_scope_windows = service.query_clients(&ServiceWorkerClientQuery {
         request_id: 20,
@@ -2278,6 +2300,7 @@ fn focused_native_window_state_for_test()
         visibility_state: ServiceWorkerClientVisibilityState::Visible,
         focused: true,
         last_focus_order: Some(1),
+        ancestor_origins: Vec::new(),
     }
 }
 
@@ -2321,7 +2344,7 @@ fn client_focus_result_requires_a_focused_native_snapshot() {
             version_id,
             client,
             focus_target_document_owner_for_test(&service, client),
-            Some(native)
+            Some(native.clone())
         ),
         Err(ServiceWorkerClientFocusError::inactive())
     );
@@ -3624,6 +3647,7 @@ fn stopped_active_message_keeps_native_source_snapshot_while_starting_worker() {
                 visibility_state: ServiceWorkerClientVisibilityState::Hidden,
                 focused: true,
                 last_focus_order: None,
+                ancestor_origins: vec!["https://parent.test".to_owned(), "null".to_owned()],
             }
         ),
         V8StructuredClonePayload::default()
@@ -3657,6 +3681,7 @@ fn stopped_active_message_keeps_native_source_snapshot_while_starting_worker() {
             visibility_state: ServiceWorkerClientVisibilityState::Hidden,
             controlled: true,
             focused: true,
+            ancestor_origins: vec!["https://parent.test".to_owned(), "null".to_owned()],
         })
     );
     let client = state.live_clients.get(&client_id).unwrap();

@@ -32,6 +32,7 @@ impl ScriptVm {
             .client_navigate_result_for_current_window_client(
                 continuation.source_version_id,
                 client_id,
+                Vec::new(),
             );
         browser_context_runtime
             .service_worker_runtime()

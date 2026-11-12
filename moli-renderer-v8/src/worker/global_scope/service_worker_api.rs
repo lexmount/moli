@@ -1796,6 +1796,7 @@ pub(in crate::worker) fn build_service_worker_client_object_from_snapshot<'s>(
         client.frame_type.as_webidl_str(),
         client.visibility_state.as_webidl_str(),
         client.focused,
+        &client.ancestor_origins,
     )
 }
 
@@ -1808,10 +1809,15 @@ pub(in crate::worker) fn build_service_worker_client_object<'s>(
     frame_type: &'static str,
     visibility_state: &'static str,
     focused: bool,
+    ancestor_origins: &[String],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = v8_string(scope, url).unwrap_or_else(|| v8::String::empty(scope));
     let client = if client_type == "window" {
-        ServiceWorkerWindowClientDeclaration {
+        let origins = crate::util::serialize_v8_array(scope, ancestor_origins)?;
+        if origins.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+            return None;
+        }
+        let client = ServiceWorkerWindowClientDeclaration {
             id: exposed_client_id.to_owned(),
             url,
             client_type,
@@ -1824,7 +1830,14 @@ pub(in crate::worker) fn build_service_worker_client_object<'s>(
             navigate: (),
         }
         .bind(scope)
-        .ok()?
+        .ok()?;
+        set_private_value(
+            scope,
+            client,
+            SERVICE_WORKER_CLIENT_ANCESTOR_ORIGINS_SLOT,
+            origins.into(),
+        );
+        client
     } else {
         ServiceWorkerBaseClientDeclaration {
             id: exposed_client_id.to_owned(),
@@ -1843,6 +1856,32 @@ pub(in crate::worker) fn build_service_worker_client_object<'s>(
         v8::BigInt::new_from_u64(scope, client_id.as_u64()).into(),
     );
     Some(client)
+}
+
+pub(super) fn install_window_client_ancestor_origins_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    prototype: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    WindowClientAncestorOriginsPrototypeDeclaration::default()
+        .initialize(scope, prototype)
+        .map_err(|error| anyhow!("failed to initialize WindowClient ancestorOrigins: {error}"))
+}
+
+fn service_worker_window_client_ancestor_origins_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(origins) = get_private_value(
+        scope,
+        args.this(),
+        SERVICE_WORKER_CLIENT_ANCESTOR_ORIGINS_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(origins.into());
 }
 
 fn service_worker_client_id_from_object<'s>(
@@ -2133,6 +2172,7 @@ const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerNavigationPreloadManagerScope";
 
 pub(super) const SERVICE_WORKER_CLIENT_ID_SLOT: &str = "__lmServiceWorkerClientId";
+const SERVICE_WORKER_CLIENT_ANCESTOR_ORIGINS_SLOT: &str = "__lmServiceWorkerClientAncestorOrigins";
 
 #[derive(Default, WebApiObject)]
 #[webapi(interface = web_api_interfaces::Clients, prototype = "Object")]
@@ -2363,6 +2403,13 @@ pub(in crate::worker) struct ServiceWorkerBaseClientDeclaration<'scope> {
 
     #[webapi(method = "postMessage", callback = service_worker_client_post_message_callback, length = 1)]
     post_message: (),
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain)]
+struct WindowClientAncestorOriginsPrototypeDeclaration {
+    #[webapi(accessor_property, getter = service_worker_window_client_ancestor_origins_getter, enumerable)]
+    ancestor_origins: (),
 }
 
 #[derive(WebApiObject)]

@@ -1108,6 +1108,7 @@ pub(super) fn service_worker_client_snapshot_with_controlled(
         visibility_state: client.visibility_state,
         controlled,
         focused: client.focused,
+        ancestor_origins: Vec::new(),
     }
 }
 
