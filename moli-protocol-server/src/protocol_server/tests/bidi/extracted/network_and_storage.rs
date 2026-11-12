@@ -1549,3 +1549,160 @@ async fn websocket_bidi_completed_synchronous_xhr_never_reports_a_response_pause
     abort_test_cdp_server(server).await;
     fixture.abort();
 }
+
+#[tokio::test]
+async fn websocket_bidi_string_pattern_fragments_preserve_real_xhr_pauses() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let observed = hits.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/api",
+                    get(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async { "fragment-body" }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
+        .await
+        .unwrap();
+    assert_eq!(
+        send_bidi_command_response(&mut socket, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let created = send_bidi_command_response(
+        &mut socket,
+        2,
+        "browsingContext.create",
+        json!({"type":"tab"}),
+    )
+    .await;
+    let context = created["result"]["context"].as_str().unwrap().to_owned();
+    let navigated = send_bidi_command_response(
+        &mut socket,
+        3,
+        "browsingContext.navigate",
+        json!({"context":context,"url":format!("http://{addr}/"),"wait":"complete"}),
+    )
+    .await;
+    assert_eq!(navigated["type"], "success", "{navigated}");
+    let subscribed = send_bidi_command_response(
+        &mut socket,
+        4,
+        "session.subscribe",
+        json!({"events":["network.beforeRequestSent","network.responseCompleted","network.fetchError"],"contexts":[context]}),
+    )
+    .await;
+    assert_eq!(subscribed["type"], "success", "{subscribed}");
+    let api = format!("http://{addr}/api");
+    let added = send_bidi_command_response(
+        &mut socket,
+        5,
+        "network.addIntercept",
+        json!({"phases":["beforeRequestSent"],"contexts":[context],
+            "urlPatterns":[{"type":"string","pattern":format!("{api}#ref")}]}),
+    )
+    .await;
+    assert_eq!(added["type"], "success", "{added}");
+    let intercept = added["result"]["intercept"].clone();
+
+    for (index, fragment) in ["", "#ref", "#different"].into_iter().enumerate() {
+        let evaluate_id = 10 + index as u64 * 2;
+        let continue_id = evaluate_id + 1;
+        let url = format!("{api}{fragment}");
+        socket
+            .send(WsMessage::Text(
+                json!({
+                    "id":evaluate_id,"method":"script.evaluate","params":{
+                        "target":{"context":context},"awaitPromise":true,
+                        "expression":format!(r#"new Promise((resolve, reject) => {{
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', {url:?}, true);
+                    xhr.onload = () => resolve(`${{xhr.status}}:${{xhr.responseText}}`);
+                    xhr.onerror = () => reject(new Error('XHR network error'));
+                    xhr.send();
+                }})"#)
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        // Observe either a real pause or a terminal result, so a missed rule
+        // fails on the actual response instead of waiting for a nonexistent pause.
+        let messages = recv_until_match(&mut socket, |message| {
+            (message["method"] == "network.beforeRequestSent"
+                && message["params"]["isBlocked"] == true)
+                || message["method"] == "network.responseCompleted"
+                || message["method"] == "network.fetchError"
+                || message["id"] == evaluate_id
+        })
+        .await;
+        let paused = messages
+            .iter()
+            .find(|message| {
+                message["method"] == "network.beforeRequestSent"
+                    && message["params"]["isBlocked"] == true
+            })
+            .unwrap_or_else(|| panic!("XHR {url} did not pause: {messages:?}"));
+        assert_eq!(paused["params"]["intercepts"], json!([intercept]));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            index,
+            "{url} reached the server before continueRequest"
+        );
+        assert!(messages.iter().all(|message| message["id"] != evaluate_id));
+        let request = paused["params"]["request"]["request"].clone();
+
+        socket
+            .send(WsMessage::Text(
+                json!({
+                    "id":continue_id,"method":"network.continueRequest","params":{"request":request}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let mut resumed = recv_until_id(&mut socket, continue_id).await;
+        if !resumed.iter().any(|message| message["id"] == evaluate_id) {
+            resumed.extend(recv_until_id(&mut socket, evaluate_id).await);
+        }
+        let completed = |message: &serde_json::Value| {
+            message["method"] == "network.responseCompleted"
+                && message["params"]["request"]["request"] == request
+        };
+        if !resumed.iter().any(completed) {
+            resumed.extend(recv_until_match(&mut socket, completed).await);
+        }
+        let continued = bidi_message_by_id(&resumed, continue_id);
+        assert_eq!(continued["type"], "success", "{continued}");
+        let result = bidi_message_by_id(&resumed, evaluate_id);
+        assert_eq!(
+            result["result"]["result"]["value"], "200:fragment-body",
+            "{result}"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), index + 1);
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    fixture.abort();
+}

@@ -127,7 +127,10 @@ fn maps_network_add_and_remove_intercept_to_shared_fetch_commands() {
         "params": {
             "phases": ["responseStarted", "beforeRequestSent", "authRequired"],
             "urlPatterns": [
-                {"type": "string", "pattern": "HTTPS://example.test/asset.txt"},
+                {"type": "string", "pattern": "HTTPS://example.test/asset.txt#ref"},
+                {"type": "string", "pattern": "https://example.test/literal%23path?token=%23#ignored"},
+                {"type": "string", "pattern": "https://example.test/empty#"},
+                {"type": "string", "pattern": "https://example.test/plain"},
                 {
                     "type": "pattern",
                     "protocol": "HTTPS",
@@ -169,6 +172,9 @@ fn maps_network_add_and_remove_intercept_to_shared_fetch_commands() {
             .collect::<Vec<_>>(),
         vec![
             "https://example.test/asset.txt",
+            "https://example.test/literal%23path?token=%23",
+            "https://example.test/empty",
+            "https://example.test/plain",
             "https://example.test/api?q=1"
         ]
     );
