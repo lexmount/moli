@@ -231,7 +231,10 @@ impl RendererBrowserContextRuntime {
             direct_completion_tx: Some(direct_completion_tx),
         };
 
-        if !self.dispatch_service_worker_fetch(dispatch) {
+        // Retain the upload's protocol text view and native request context,
+        // while keeping navigation FetchEvents in manual redirect mode.
+        let request = request.clone().with_redirect_mode(redirect_mode);
+        if !self.dispatch_service_worker_fetch_request(dispatch, request) {
             return Ok(None);
         }
 

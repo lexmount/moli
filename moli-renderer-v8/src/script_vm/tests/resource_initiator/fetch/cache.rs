@@ -90,6 +90,7 @@ async fn cached_fetch_keeps_timing_authorization_for_ready_and_pending_bodies() 
                     headers: Vec::new(),
                     network_extra_info_available: false,
                     request_extra_info: None,
+                    dispatched_request: None,
                     response_extra_info: None,
                     redirect_has_extra_info: false,
                     request_cookie_report: None,
