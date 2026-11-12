@@ -217,18 +217,6 @@ fn set_indexed_db_slot_value(
     set_private_value(scope, object, key, value);
 }
 
-fn set_indexed_db_internal_object_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(key) = v8_string(scope, key) else {
-        return;
-    };
-    let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
-}
-
 fn indexed_db_private_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'_, v8::Object>,
@@ -321,15 +309,3 @@ pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '
     enqueue_ready_transaction_starts(scope);
 }
 pub(crate) use self::typed_state::retire_indexed_db_context;
-
-fn set_indexed_db_internal_name_property(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &IndexedDbName,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(key) = crate::util::v8_string_from_utf16_units(scope, key.as_utf16()) else {
-        return;
-    };
-    let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
-}
