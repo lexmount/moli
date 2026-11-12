@@ -51,6 +51,7 @@ impl PageScriptHost {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceFetchPause {
+                    network_pause: None,
                     source_document,
                     info: Box::new(info.clone()),
                     child_document: child_document.map(Box::new),
@@ -181,13 +182,7 @@ impl PageScriptHost {
     pub(crate) fn next_subresource_network_request_handle(
         &mut self,
     ) -> SubresourceNetworkRequestHandle {
-        let handle =
-            SubresourceNetworkRequestHandle::new(self.next_subresource_network_request_handle);
-        self.next_subresource_network_request_handle = self
-            .next_subresource_network_request_handle
-            .wrapping_add(1)
-            .max(1);
-        handle
+        crate::network::interception_control::next_subresource_network_handle()
     }
 
     pub(crate) fn record_subresource_request_started(
@@ -453,6 +448,38 @@ impl PageScriptHost {
         }
     }
 
+    pub(crate) fn update_pending_subresource_native_info(
+        &mut self,
+        info: &PendingSubresourceFetchInfo,
+    ) {
+        if let Some(pending) = self.pending_subresource_fetches.get_mut(&info.internal_id) {
+            pending.info = info.clone();
+        }
+    }
+
+    pub(crate) fn start_pending_subresource_native_stream(
+        &mut self,
+        info: &PendingSubresourceFetchInfo,
+    ) {
+        let Some(pending) = self.pending_subresource_fetches.get_mut(&info.internal_id) else {
+            return;
+        };
+        pending.info = info.clone();
+        let disposition = pending.load.disposition();
+        // Native pauses have already announced the request to protocol clients.
+        // The staged body delivery still needs its own request metadata; the
+        // protocol projection suppresses that duplicate public announcement.
+        self.record_pending_subresource_request_started(info, disposition);
+    }
+
+    pub(crate) fn pending_subresource_native_inputs(
+        &self,
+        internal_id: u64,
+    ) -> Option<(ResourceLoadLease, PendingSubresourceFetchInfo)> {
+        let pending = self.pending_subresource_fetches.get(&internal_id)?;
+        Some((pending.load.clone(), pending.info.clone()))
+    }
+
     pub(crate) fn css_module_text_for_url(&self, url: &url::Url) -> Option<String> {
         self.css_module_texts_by_url.get(url.as_str()).cloned()
     }
@@ -469,12 +496,11 @@ impl PageScriptHost {
         self.subresource_activity_epoch
     }
 
-    fn assign_pending_subresource_fetch_identity(
+    pub(crate) fn assign_pending_subresource_fetch_identity(
         &mut self,
         info: &mut PendingSubresourceFetchInfo,
     ) {
-        self.next_pending_subresource_fetch_id += 1;
-        info.internal_id = self.next_pending_subresource_fetch_id;
+        info.internal_id = crate::network::interception_control::next_subresource_request_id();
         if info.network_request_handle.is_none() {
             info.network_request_handle = Some(self.next_subresource_network_request_handle());
         }
@@ -1644,6 +1670,7 @@ impl PageScriptHost {
         network_partition_key: Option<String>,
         policy_context: crate::types::SubresourcePolicyContext,
         mut info: PendingSubresourceFetchInfo,
+        publish_request_started: bool,
     ) -> u64 {
         self.assign_pending_subresource_fetch_identity(&mut info);
         let internal_id = info.internal_id;
@@ -1653,7 +1680,9 @@ impl PageScriptHost {
             ResourceLoadDisposition::Ordinary,
             cancel_handle.clone(),
         );
-        self.record_pending_subresource_request_started(&info, load.disposition());
+        if publish_request_started {
+            self.record_pending_subresource_request_started(&info, load.disposition());
+        }
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
@@ -2996,6 +3025,7 @@ impl PageScriptHost {
         if let Some(source_document) = self.root_document_lifecycle_identity()
             && self.append_live_turn_owner_action(
                 crate::runtime::RendererOwnerAction::SubresourceContinue {
+                    network_pause: None,
                     source_document,
                     event: Box::new(event.clone()),
                 },

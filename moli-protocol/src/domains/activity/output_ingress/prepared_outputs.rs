@@ -531,6 +531,7 @@ impl PreparedProtocolOutputs {
                 source_document,
                 info,
                 child_document,
+                network_pause,
             } => {
                 crate::domains::fetch::
                     subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -538,6 +539,7 @@ impl PreparedProtocolOutputs {
                         owner,
                         source_document,
                         *info,
+                        network_pause,
                         child_document.map(|document| *document),
                         page_source,
                     )
@@ -546,6 +548,7 @@ impl PreparedProtocolOutputs {
             RendererOwnerAction::SubresourceContinue {
                 source_document,
                 event,
+                network_pause,
             } => {
                 crate::domains::network::NetworkPreparedOutputs::
                     from_renderer_subresource_continue(
@@ -553,6 +556,7 @@ impl PreparedProtocolOutputs {
                         owner,
                         source_document,
                         *event,
+                        network_pause,
                     )
                     .append_to_output_sink(&mut prepared);
             }

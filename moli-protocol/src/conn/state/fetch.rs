@@ -1137,44 +1137,13 @@ impl TargetFetchConfig {
         &self.patterns
     }
 
-    pub(crate) fn synchronous_xhr_interception_patterns(&self) -> Vec<String> {
-        // CDP authentication interception is URL-independent. BiDi auth
-        // interception, in contrast, retains its own URL patterns below.
-        if self
-            .fetch_sessions
-            .values()
-            .any(|session| session.handle_auth_requests)
-        {
-            return vec!["*".to_owned()];
-        }
-        let mut patterns = self
-            .patterns
-            .iter()
-            .filter(|pattern| {
-                pattern.resource_type_filter.is_none_or(|filter| {
-                    filter.matches_resource_type(DevToolsNetworkResourceType::Xhr)
-                })
-            })
-            .map(|pattern| pattern.url_pattern.clone())
-            .chain(
-                self.network_intercepts
-                    .values()
-                    .filter(|intercept| intercept.handle_auth_requests)
-                    .flat_map(|intercept| intercept.auth_url_patterns.iter().cloned()),
-            )
-            .collect::<Vec<_>>();
-        patterns.sort();
-        patterns.dedup();
-        patterns
-    }
-
     pub(crate) fn subresource_interception_config(
         &self,
     ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
-        fetch_subresource_interception_config_for_patterns(
-            self.enabled || self.handle_auth_requests,
-            &self.patterns,
-        )
+        if self.handle_auth_requests {
+            return (true, None);
+        }
+        fetch_subresource_interception_config_for_patterns(self.enabled, &self.patterns)
     }
 
     pub(crate) fn subresource_interception_snapshot(
@@ -1882,10 +1851,6 @@ fn network_intercept_matches_auth_required(
 }
 
 impl TargetFetchOwner {
-    pub(crate) fn synchronous_xhr_interception_patterns(&self) -> Vec<String> {
-        self.config.synchronous_xhr_interception_patterns()
-    }
-
     pub(crate) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
         self.pending
             .pending_subresource_fetch_responses

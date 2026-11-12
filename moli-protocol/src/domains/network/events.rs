@@ -380,8 +380,7 @@ pub(crate) fn fetch_subresource_initial_request_network_events(
         )
         .map(str::to_owned),
         redirect_response: output
-            .child_document()
-            .and_then(|document| document.redirect.as_ref())
+            .redirect()
             .map(|redirect| NetworkRedirectResponseEvent {
                 url: redirect.from_url.as_str().to_owned(),
                 status: redirect.status,

@@ -936,9 +936,13 @@ impl NavigationEngine {
         self.page_network_policy.set_blocked_url_patterns(patterns);
     }
 
-    pub fn set_synchronous_xhr_interception_patterns(&mut self, patterns: &[String]) {
+    pub fn set_subresource_interception(
+        &mut self,
+        enabled: bool,
+        resource_type: Option<crate::page::SubresourceResourceType>,
+    ) {
         self.page_network_policy
-            .set_synchronous_xhr_interception_patterns(Some(patterns));
+            .set_subresource_interception(enabled, resource_type);
     }
 
     fn ensure_resource_runtime(

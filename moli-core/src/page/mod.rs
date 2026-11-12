@@ -599,3 +599,6 @@ mod tests {
         );
     }
 }
+
+mod resource_command;
+pub use resource_command::{CompletedResourceCommand, PendingResourceCommand};

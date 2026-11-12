@@ -702,6 +702,25 @@ fn async_subresource_trace_fields_for_event(
             internal_id: Some(completion.internal_id),
             ..AsyncSubresourceTraceFields::default()
         },
+        AsyncSubresourceFetchEvent::InterceptedXhrStreamingStarted { started, .. } => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("intercepted_xhr_stream_start"),
+                internal_id: Some(started.internal_id),
+                body_source_id: Some(started.body_source_id),
+                ..AsyncSubresourceTraceFields::default()
+            }
+        }
+        AsyncSubresourceFetchEvent::InterceptedXhrCompleted(completed) => {
+            AsyncSubresourceTraceFields {
+                event_kind: Some("intercepted_xhr_complete"),
+                internal_id: Some(completed.info.internal_id),
+                ..AsyncSubresourceTraceFields::default()
+            }
+        }
+        AsyncSubresourceFetchEvent::InterceptionOutputReady(_) => AsyncSubresourceTraceFields {
+            event_kind: Some("native_interception_output"),
+            ..Default::default()
+        },
         AsyncSubresourceFetchEvent::ObservedNetworkRecord(record) => AsyncSubresourceTraceFields {
             event_kind: Some("observed_network_record"),
             resource_type: Some(record.resource_type()),

@@ -429,6 +429,10 @@ impl RendererTurnOutputJournal {
             super::RendererOutputItem::OwnerAction(
                 crate::runtime::RendererOwnerAction::JavaScriptDialog(_)
                     | crate::runtime::RendererOwnerAction::Popup(_)
+                    | crate::runtime::RendererOwnerAction::SubresourceFetchPause {
+                        network_pause: Some(_),
+                        ..
+                    }
             )
         )
     }

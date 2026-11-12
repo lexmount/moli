@@ -886,6 +886,12 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    InterceptionOutputReady(crate::network::interception_output::InterceptionOutputWake),
+    InterceptedXhrCompleted(Box<crate::network_host::controlled_xhr::ControlledXhrResponse>),
+    InterceptedXhrStreamingStarted {
+        info: Box<PendingSubresourceFetchInfo>,
+        started: Box<AsyncSubresourceStreamingStarted>,
+    },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
@@ -896,11 +902,22 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::InterceptedXhrCompleted(completed) => {
+                AsyncSubresourceFetchEventTarget::Completion {
+                    internal_id: completed.info.internal_id,
+                }
+            }
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
-            Self::ObservedNetworkRecord(_) => {
+            Self::InterceptionOutputReady(_) | Self::ObservedNetworkRecord(_) => {
                 AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
+            }
+            Self::InterceptedXhrStreamingStarted { started, .. } => {
+                AsyncSubresourceFetchEventTarget::StreamingStart {
+                    internal_id: started.internal_id,
+                    body_source_id: started.body_source_id,
+                }
             }
             Self::StreamingStarted(started) => AsyncSubresourceFetchEventTarget::StreamingStart {
                 internal_id: started.internal_id,

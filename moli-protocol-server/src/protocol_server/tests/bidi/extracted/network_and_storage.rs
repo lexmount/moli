@@ -1520,17 +1520,51 @@ async fn websocket_bidi_completed_synchronous_xhr_never_reports_a_response_pause
         assert_eq!(event["params"]["isBlocked"], false, "{event}");
         assert!(event["params"].get("intercepts").is_none(), "{event}");
     }
-    // A network URL covered by the response rule cannot be silently delivered
-    // to JS either. Until an independent decision lane exists, fail explicitly.
-    let reply=send_bidi_command_response(&mut socket,7,"script.evaluate",json!({
+    // The response really pauses while the script remains synchronously in
+    // send(). Its decision travels independently of the Page command queue.
+    socket.send(WsMessage::Text(json!({"id":7,"method":"script.evaluate","params":{
         "target":{"context":context},"awaitPromise":false,
-        "expression":"(() => {try {const xhr=new XMLHttpRequest();xhr.open('GET','/api',false);xhr.send();return xhr.responseText;}catch(e){return e.name;}})()"
-    })).await;
+        "expression":"(() => {const xhr=new XMLHttpRequest();xhr.open('GET','/api',false);xhr.send();return xhr.responseText;})()"
+    }}).to_string().into())).await.unwrap();
+    let paused = recv_until_match(&mut socket, |message| {
+        message["method"] == "network.responseStarted"
+            && message["params"]["request"]["url"] == format!("http://{addr}/api")
+    })
+    .await;
+    let pause = paused
+        .iter()
+        .find(|message| {
+            message["method"] == "network.responseStarted"
+                && message["params"]["request"]["url"] == format!("http://{addr}/api")
+        })
+        .unwrap();
+    assert_eq!(pause["params"]["isBlocked"], true, "{pause}");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    socket
+        .send(WsMessage::Text(
+            json!({"id":70,"method":"network.continueResponse",
+                "params":{"request":pause["params"]["request"]["request"]}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let mut completed = recv_until_id(&mut socket, 7).await;
+    if !completed.iter().any(|message| message["id"] == 70) {
+        completed.extend(recv_until_id(&mut socket, 70).await);
+    }
     assert_eq!(
-        reply["result"]["result"]["value"], "NetworkError",
-        "{reply}"
+        completed
+            .iter()
+            .find(|message| message["id"] == 70)
+            .unwrap()["type"],
+        "success"
     );
-    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        completed.iter().find(|message| message["id"] == 7).unwrap()["result"]["result"]["value"],
+        "network"
+    );
     let removed = send_bidi_command_response(
         &mut socket,
         8,
@@ -1544,7 +1578,7 @@ async fn websocket_bidi_completed_synchronous_xhr_never_reports_a_response_pause
         "expression":"(() => {const xhr=new XMLHttpRequest();xhr.open('GET','/api',false);xhr.send();return xhr.responseText;})()"
     })).await;
     assert_eq!(reply["result"]["result"]["value"], "network", "{reply}");
-    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
     let _ = socket.close(None).await;
     abort_test_cdp_server(server).await;
     fixture.abort();

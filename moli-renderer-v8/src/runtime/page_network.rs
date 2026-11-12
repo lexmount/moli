@@ -132,6 +132,9 @@ impl PageVm {
         enabled: bool,
         resource_type: Option<crate::SubresourceResourceType>,
     ) {
+        self.request_client
+            .page_network_policy()
+            .set_subresource_interception(enabled, resource_type);
         self.vm_mut()
             .set_fetch_subresource_interception(enabled, resource_type);
     }

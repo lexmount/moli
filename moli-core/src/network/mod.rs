@@ -10,3 +10,5 @@ pub use moli_renderer_v8::network::{
     },
     new_shared_web_storage_store, web_storage_partitioned_area_key,
 };
+
+pub use moli_renderer_v8::network::{ResourceInterceptionPause, ResourceInterceptionReply};

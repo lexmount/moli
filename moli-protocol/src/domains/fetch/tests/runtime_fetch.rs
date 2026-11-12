@@ -1,4 +1,5 @@
 use super::*;
+mod native_xhr;
 mod navigation_disable;
 use crate::automation::{
     AutomationCommand, AutomationContext, AutomationResult, DevToolsAddNetworkInterceptCommand,

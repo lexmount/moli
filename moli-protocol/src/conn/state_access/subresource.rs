@@ -1,5 +1,5 @@
 use anyhow::Result;
-use moli_core::page::CompletedPageCommand;
+use moli_core::page::CompletedResourceCommand;
 
 use super::ProtocolWorkflowState;
 use crate::domains::fetch::SubresourceAutoContinueCompletion;
@@ -8,7 +8,7 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_subresource_auto_continue(
         self,
         completion: SubresourceAutoContinueCompletion,
-        completed: Result<CompletedPageCommand>,
+        completed: Result<CompletedResourceCommand>,
     ) {
         completion.finish(self.connection, completed);
     }
@@ -36,7 +36,7 @@ impl ProtocolWorkflowState<'_> {
     pub(crate) fn finish_subresource_continue_action(
         self,
         completion: crate::domains::activity::SubresourceContinueCompletion,
-        completed: Result<CompletedPageCommand>,
+        completed: Result<CompletedResourceCommand>,
     ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         completion.finish(self.connection, completed)
     }

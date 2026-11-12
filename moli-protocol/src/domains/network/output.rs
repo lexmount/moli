@@ -75,6 +75,7 @@ pub(crate) struct TargetSubresourceFetchPauseNetworkOutput {
     blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
     fetch_request_id: Option<String>,
     child_document: Option<moli_core::page::ChildDocumentFetchRequest>,
+    redirect: Option<moli_page_types::NavigationRedirect>,
 }
 
 impl TargetSubresourceFetchPauseNetworkOutput {
@@ -103,7 +104,24 @@ impl TargetSubresourceFetchPauseNetworkOutput {
             blocked_intercepts: Vec::new(),
             fetch_request_id: None,
             child_document: None,
+            redirect: None,
         }
+    }
+
+    pub(crate) fn with_redirect(
+        mut self,
+        redirect: Option<moli_page_types::NavigationRedirect>,
+    ) -> Self {
+        self.redirect = redirect;
+        self
+    }
+
+    pub(crate) fn redirect(&self) -> Option<&moli_page_types::NavigationRedirect> {
+        self.redirect.as_ref().or_else(|| {
+            self.child_document
+                .as_ref()
+                .and_then(|document| document.redirect.as_ref())
+        })
     }
 
     pub(crate) fn with_child_document(

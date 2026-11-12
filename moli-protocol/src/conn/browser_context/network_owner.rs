@@ -439,6 +439,19 @@ impl CdpConnection {
         result
     }
 
+    pub(crate) fn network_request_id_for_subresource_handle_for_owner(
+        &mut self,
+        owner: &crate::conn::CommandOwnerScope,
+        handle: moli_core::page::SubresourceNetworkRequestHandle,
+    ) -> Option<String> {
+        let mut allocator = std::mem::take(&mut self.network_request_id_allocator);
+        let result = self
+            .runtime_session_owner_slot_mut_for_owner(owner)
+            .map(|slot| slot.network_request_id_for_subresource_handle(handle, &mut allocator));
+        self.network_request_id_allocator = allocator;
+        result
+    }
+
     pub(crate) fn network_request_id_for_subresource_handle_for_session_owner(
         &mut self,
         session_id: Option<&str>,

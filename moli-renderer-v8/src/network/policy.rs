@@ -92,7 +92,7 @@ impl PageNetworkConditionsState {
 pub struct PageNetworkPolicy {
     state: Arc<Mutex<PageNetworkPolicyState>>,
     network_conditions: Arc<Mutex<PageNetworkConditionsState>>,
-    synchronous_xhr_intercepts: Arc<Mutex<Option<SharedPatternList>>>,
+    subresource_interception: Arc<Mutex<Option<(bool, Option<SubresourceResourceType>)>>>,
 }
 
 impl Default for PageNetworkPolicy {
@@ -100,7 +100,7 @@ impl Default for PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(PageNetworkPolicyState::default())),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
-            synchronous_xhr_intercepts: Arc::default(),
+            subresource_interception: Arc::default(),
         }
     }
 }
@@ -120,7 +120,7 @@ impl PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(state)),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState::default())),
-            synchronous_xhr_intercepts: Arc::default(),
+            subresource_interception: Arc::default(),
         }
     }
 
@@ -141,7 +141,7 @@ impl PageNetworkPolicy {
             self.snapshot(),
             self.memory_cache_partition_id(),
         );
-        copy.synchronous_xhr_intercepts = Arc::clone(&self.synchronous_xhr_intercepts);
+        copy.subresource_interception = Arc::clone(&self.subresource_interception);
         copy
     }
 
@@ -174,7 +174,7 @@ impl PageNetworkPolicy {
                 revision: snapshot.network_conditions_revision,
                 offline: snapshot.network_offline,
             })),
-            synchronous_xhr_intercepts: Arc::default(),
+            subresource_interception: Arc::default(),
         }
     }
 
@@ -202,7 +202,7 @@ impl PageNetworkPolicy {
                 cache_disabled: snapshot.cache_disabled,
             })),
             network_conditions: Arc::clone(&self.network_conditions),
-            synchronous_xhr_intercepts: Arc::clone(&self.synchronous_xhr_intercepts),
+            subresource_interception: Arc::clone(&self.subresource_interception),
         }
     }
 
@@ -214,8 +214,8 @@ impl PageNetworkPolicy {
         Arc::ptr_eq(&self.state, &other.state)
             && Arc::ptr_eq(&self.network_conditions, &other.network_conditions)
             && Arc::ptr_eq(
-                &self.synchronous_xhr_intercepts,
-                &other.synchronous_xhr_intercepts,
+                &self.subresource_interception,
+                &other.subresource_interception,
             )
     }
 
@@ -312,33 +312,35 @@ impl PageNetworkPolicy {
         state.advance_revision();
     }
 
-    /// Exact protocol rules for synchronous XHR, shared by all Documents and
-    /// workers in this target. None retains the native API's conservative
-    /// resource-class fallback; an empty list means no matching intercept.
-    pub fn set_synchronous_xhr_interception_patterns(&self, patterns: Option<&[String]>) {
-        *self.synchronous_xhr_intercepts.lock() = patterns.map(|patterns| {
-            Arc::from(
-                patterns
-                    .iter()
-                    .map(|value| value.clone().into_boxed_str())
-                    .collect::<Vec<_>>(),
-            )
-        });
+    /// Live target eligibility only. Protocol rules and session ordering stay
+    /// with their canonical protocol owner, rather than being copied to XHR.
+    pub fn set_subresource_interception(
+        &self,
+        enabled: bool,
+        resource_type: Option<SubresourceResourceType>,
+    ) {
+        *self.subresource_interception.lock() = Some((enabled, resource_type));
     }
 
-    pub(crate) fn synchronous_xhr_interception_patterns(
+    pub(crate) fn subresource_interception_config(
         &self,
-        class_intercepted: bool,
-    ) -> Arc<[Box<str>]> {
-        self.synchronous_xhr_intercepts
+        fallback: (bool, Option<SubresourceResourceType>),
+    ) -> (bool, Option<SubresourceResourceType>) {
+        self.subresource_interception.lock().unwrap_or(fallback)
+    }
+
+    pub(crate) fn should_intercept_subresource(
+        &self,
+        resource_type: SubresourceResourceType,
+        fallback: bool,
+    ) -> bool {
+        self.subresource_interception
             .lock()
-            .clone()
-            .unwrap_or_else(|| {
-                if class_intercepted {
-                    Arc::from([Box::<str>::from("*")])
-                } else {
-                    Arc::from([])
-                }
+            .map_or(fallback, |(enabled, expected)| {
+                enabled
+                    && expected.is_none_or(|expected| {
+                        expected.has_same_cdp_fetch_interception_type(resource_type)
+                    })
             })
     }
 
@@ -533,41 +535,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn synchronous_xhr_rules_follow_document_and_worker_views_but_isolate_new_targets() {
+    fn interception_eligibility_follows_same_target_views_only() {
         let page = PageNetworkPolicy::default();
         let document = page.isolated_same_page_copy();
-        let worker = document.isolated_same_page_copy();
-        let lease = document.frozen_request_view();
+        let worker = page.frozen_request_view();
+        page.set_subresource_interception(true, Some(SubresourceResourceType::Xhr));
         let target = page.isolated_copy();
-        page.set_synchronous_xhr_interception_patterns(Some(&["*/api/*".to_owned()]));
-        let popup = page.isolated_copy();
-        assert!(
-            popup
-                .synchronous_xhr_interception_patterns(false)
-                .is_empty()
-        );
-        for view in [&page, &document, &worker, &lease] {
-            assert_eq!(
-                view.synchronous_xhr_interception_patterns(false).as_ref(),
-                &[Box::<str>::from("*/api/*")]
-            );
+        for view in [&page, &document, &worker] {
+            assert!(view.should_intercept_subresource(SubresourceResourceType::Xhr, false));
+            assert!(!view.should_intercept_subresource(SubresourceResourceType::Image, false));
         }
-        assert!(
-            target
-                .synchronous_xhr_interception_patterns(false)
-                .is_empty()
-        );
-        page.set_synchronous_xhr_interception_patterns(Some(&[]));
-        assert!(
-            worker
-                .synchronous_xhr_interception_patterns(true)
-                .is_empty()
-        );
-        // Native users that configure only a resource class stay conservative.
-        assert_eq!(
-            target.synchronous_xhr_interception_patterns(true).as_ref(),
-            &[Box::<str>::from("*")]
-        );
+        assert!(!target.should_intercept_subresource(SubresourceResourceType::Xhr, false));
+        page.set_subresource_interception(false, None);
+        for view in [&page, &document, &worker] {
+            assert!(!view.should_intercept_subresource(SubresourceResourceType::Xhr, true));
+        }
+        assert!(target.should_intercept_subresource(SubresourceResourceType::Xhr, true));
     }
 
     #[test]

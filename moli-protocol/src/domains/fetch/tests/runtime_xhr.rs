@@ -1242,6 +1242,13 @@ async fn runtime_xhr_subresource_fulfill_request_loads_synthetic_response() {
         "one request start across pause and fulfillment"
     );
 
+    wait_for_network_loading_finished(
+        &mut ctx,
+        "SID-1",
+        &network_request_id,
+        "synthetic XHR network completion",
+    )
+    .await;
     let response = ctx
         .sent
         .iter()
