@@ -1057,7 +1057,7 @@ impl BackgroundNavigationLoadJob {
             return (Err(error), false);
         }
         let mut early_result_sent = false;
-        let navigation = async {
+        let navigation = Box::pin(async {
             if let Some(navigation) = load_inline_html_navigation_with_engine_async(
                 &mut engine,
                 self.page_reservation.clone(),
@@ -1217,7 +1217,7 @@ impl BackgroundNavigationLoadJob {
                     Self::emit_early_result_for_successful_document(&mut early_result, &navigation);
             }
             navigation
-        }
+        })
         .await;
         if let Some(started) = timing_started {
             tracing::info!(
