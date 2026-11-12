@@ -2,9 +2,9 @@ use super::{JsContextHost, OwnerDispatchScope};
 use crate::{
     content_security_policy::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
-        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyStyleElementRequest, TrustedTypesForScriptRequirements,
-        current_script_violation_location,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyStyleElementRequest,
+        TrustedTypesForScriptRequirements, current_script_violation_location,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -1245,6 +1245,28 @@ impl JsContextHost {
             Some(violation) => DocumentCspOutcome::Blocked(violation),
             None => DocumentCspOutcome::Allowed,
         }
+    }
+
+    pub(crate) fn check_service_worker_registration_csp_for_owner(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        script_url: &Url,
+    ) -> DocumentCspOutcome {
+        let Some(document) = self.owner_document_policy_snapshot(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let Some(policy) = self.document_connect_policy_snapshot_for_owner(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let check = policy
+            .for_resource_kind(ContentSecurityPolicyResourceKind::WorkerConstructor)
+            .check_url(
+                &document.document_url,
+                script_url,
+                ContentSecurityPolicyRedirectStatus::NoRedirect,
+            );
+        self.queue_document_connect_csp_check_with_script_location(scope, owner, check)
     }
 
     pub(crate) fn check_document_connect_csp_for_owner_with_redirect_status<'s>(

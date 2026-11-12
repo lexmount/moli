@@ -60,6 +60,13 @@ impl ServiceWorkerWindowRequestContext {
         &self.document_url
     }
 
+    pub(crate) fn registration_urls_match_origin(&self, script_url: &Url, scope_url: &Url) -> bool {
+        let origin = self.storage_key.origin();
+        origin != "null"
+            && moli_url::origin_ascii_serialization(script_url) == origin
+            && moli_url::origin_ascii_serialization(scope_url) == origin
+    }
+
     fn serialized_storage_key(&self) -> String {
         self.storage_key.serialized_storage_key()
     }

@@ -1,6 +1,9 @@
 //! Worker-owned ServiceWorkerContainer jobs and realm-local registration objects.
 
 use super::*;
+use crate::content_security_policy::{
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyResourceKind,
+};
 use crate::service_worker_runtime::{
     ServiceWorkerClientUrlError, ServiceWorkerRegisterJob, ServiceWorkerRegistrationRequest,
     ServiceWorkerRegistrationSnapshot, ServiceWorkerUpdateViaCache,
@@ -92,7 +95,7 @@ pub(crate) fn try_worker_service_worker_register<'s>(
     update_via_cache: ServiceWorkerUpdateViaCache,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
 ) -> bool {
-    let Some(state) = get_worker_state(scope) else {
+    let Some(worker_state) = get_worker_state(scope) else {
         return false;
     };
     let requirements = worker_trusted_types_for_script_requirements(scope).unwrap_or_default();
@@ -110,7 +113,7 @@ pub(crate) fn try_worker_service_worker_register<'s>(
     };
     rv.set(resolver.get_promise(scope).into());
     let request = {
-        let mut state = state.borrow_mut();
+        let state = worker_state.borrow();
         let Some(document_url) = state.current_script_url.clone() else {
             reject(
                 scope,
@@ -175,6 +178,20 @@ pub(crate) fn try_worker_service_worker_register<'s>(
             );
             return true;
         };
+        drop(state);
+        if let Some(message) = super::content_security_policy::check_worker_request_csp(
+            scope,
+            &worker_state,
+            &document_url,
+            &script_url,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
+            "ServiceWorkerContainer.register",
+            ContentSecurityPolicyDisposition::Enforce,
+        ) {
+            reject(scope, resolver, &message, Some("SecurityError"));
+            return true;
+        }
+        let mut state = worker_state.borrow_mut();
         let storage_key = state.storage_key.serialized_storage_key();
         // Subscribe before starting the job. The owner queues the installing
         // snapshot, promise result, and updatefound as separate worker tasks.
