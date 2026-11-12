@@ -328,6 +328,169 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
 }
 
 #[tokio::test]
+async fn native_handshake_sends_browser_header_casing_on_http1() {
+    assert_browser_header_casing(false).await;
+}
+
+#[tokio::test]
+async fn native_tls_handshake_sends_browser_header_casing_on_http1() {
+    assert_browser_header_casing(true).await;
+}
+
+async fn assert_browser_header_casing(secure: bool) {
+    let tls = secure.then(TlsWebSocketFixture::new);
+    for overridden in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let acceptor = tls.as_ref().map(|tls| tls.server_acceptor(false));
+        let (captured_tx, captured_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            if let Some(acceptor) = acceptor {
+                serve_browser_header_casing(acceptor.accept(stream).await.unwrap(), captured_tx)
+                    .await;
+            } else {
+                serve_browser_header_casing(stream, captured_tx).await;
+            }
+        });
+        let mut context = test_websocket_context();
+        context.cookie_header = Some("sid=server".to_owned());
+        context.extra_headers =
+            vec![("aUtHoRiZaTiOn".to_owned(), "Basic dGVzdA==".to_owned())].into();
+        if overridden {
+            context.extra_headers.extend([
+                ("oRiGiN".to_owned(), b"null".to_vec()),
+                ("uSeR-aGeNt".to_owned(), b"Embedding/1.0".to_vec()),
+                ("CoOkIe".to_owned(), b"sid=override".to_vec()),
+            ]);
+        }
+        if let Some(tls) = &tls {
+            context.tls = tls.tls_config();
+        }
+        let scheme = if secure { "wss" } else { "ws" };
+        let (tx, mut rx) = mpsc::channel(16);
+        let socket_id = 120 + u64::from(overridden);
+        let handle = spawn_standalone_connection(
+            socket_id,
+            format!("{scheme}://localhost:{port}/headers"),
+            vec!["chat".to_owned()],
+            context,
+            tx,
+        );
+        let raw = timeout(Duration::from_secs(3), captured_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(raw.starts_with("GET /headers HTTP/1.1\r\n"));
+        let headers = raw
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name, value.trim()))
+            .collect::<Vec<_>>();
+        for (expected_name, expected_value) in [
+            (
+                "Origin",
+                if overridden {
+                    "null"
+                } else {
+                    "https://example.com"
+                },
+            ),
+            (
+                "User-Agent",
+                if overridden {
+                    "Embedding/1.0"
+                } else {
+                    "Moli-WebSocket-Test/1.0"
+                },
+            ),
+            (
+                "Cookie",
+                if overridden {
+                    "sid=override"
+                } else {
+                    "sid=server"
+                },
+            ),
+            ("Authorization", "Basic dGVzdA=="),
+            ("Sec-WebSocket-Protocol", "chat"),
+        ] {
+            let fields = headers
+                .iter()
+                .copied()
+                .filter(|(name, _)| name.eq_ignore_ascii_case(expected_name))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fields,
+                [(expected_name, expected_value)],
+                "raw HTTP/1.1 fields"
+            );
+        }
+        let open = recv_open_event(&mut rx).await;
+        assert_eq!(open.protocol, "chat");
+        handle.send_text("wire-case".to_owned()).unwrap();
+        assert_send_completed(&mut rx, socket_id, FrameOpcode::Text, 9).await;
+        assert_text_message(&mut rx, socket_id, "echo:wire-case").await;
+        handle.close(Some(1000), "done".to_owned()).unwrap();
+        assert_closing(&mut rx, socket_id).await;
+        assert_close(&mut rx, socket_id, 1000, "done", true).await;
+        timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+async fn serve_browser_header_casing<S>(mut stream: S, captured: oneshot::Sender<String>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut raw = Vec::new();
+    while !raw.ends_with(b"\r\n\r\n") {
+        raw.push(stream.read_u8().await.unwrap());
+        assert!(raw.len() < 16 * 1024);
+    }
+    let raw = String::from_utf8(raw).unwrap();
+    let key = raw
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("Sec-WebSocket-Key"))
+        .unwrap()
+        .1
+        .trim();
+    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+    let canonical_origin = raw.contains("\r\nOrigin: ");
+    captured.send(raw).unwrap();
+    if !canonical_origin {
+        stream
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        return;
+    }
+    stream.write_all(format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Protocol: chat\r\n\r\n").as_bytes()).await.unwrap();
+    let mut socket = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        stream,
+        tokio_tungstenite::tungstenite::protocol::Role::Server,
+        None,
+    )
+    .await;
+    assert_eq!(
+        socket.next().await.unwrap().unwrap(),
+        Message::Text("wire-case".into())
+    );
+    socket
+        .send(Message::Text("echo:wire-case".into()))
+        .await
+        .unwrap();
+    assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+    socket.flush().await.unwrap();
+}
+
+#[tokio::test]
 async fn native_handshake_preserves_opaque_header_bytes_and_duplicates() {
     use moli_header_field::HeaderFields;
     use tokio::io::AsyncReadExt;
