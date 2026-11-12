@@ -9,7 +9,6 @@
 
 //! Raster output and resource-budget regressions.
 
-use crate::MAX_PAINT_LAYER_DEPTH;
 use moli_layout::{
     PaintBlendMode, PaintBorderColors, PaintBrush, PaintCaptureSurface, PaintColor,
     PaintCompositeMode, PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFilter,
@@ -98,10 +97,7 @@ fn resource_budget_is_byte_based_instead_of_using_a_pixel_count_limit() {
         u64::from(dimensions.width) * u64::from(dimensions.height) > 16 * 1024 * 1024,
         "test surface must exceed the removed 16M-pixel limit"
     );
-    assert_eq!(
-        validate_resource_budget(dimensions, PaintStreamMetrics::default()),
-        Ok(())
-    );
+    assert_eq!(validate_resource_budget(dimensions, 0), Ok(()));
 }
 
 #[test]
@@ -131,18 +127,16 @@ fn rejects_nested_filters_over_transient_surface_budget() {
 }
 
 #[test]
-fn rejects_excessive_layer_depth_before_backend_creation() {
+fn deep_balanced_clip_scopes_pass_snapshot_validation() {
     let mut snapshot = snapshot(1, 1, 1.0);
-    for _ in 0..=MAX_PAINT_LAYER_DEPTH {
+    for _ in 0..4_097 {
         snapshot.push_fragment(PaintFragment::push_clip(PaintRect::new(0.0, 0.0, 1.0, 1.0)));
     }
-    assert_eq!(
-        raster_snapshot(&snapshot),
-        Err(PaintError::PaintLayerDepthBudgetExceeded {
-            depth: MAX_PAINT_LAYER_DEPTH + 1,
-            max_depth: MAX_PAINT_LAYER_DEPTH,
-        })
-    );
+    for _ in 0..4_097 {
+        snapshot.push_fragment(PaintFragment::PopLayer);
+    }
+
+    assert_eq!(validate_fragment_stream(&snapshot), Ok(0));
 }
 
 #[test]

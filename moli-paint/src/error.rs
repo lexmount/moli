@@ -47,15 +47,6 @@ pub enum PaintError {
         required_bytes: usize,
         max_bytes: usize,
     },
-    /// The snapshot contains too many backend-neutral paint work units.
-    PaintOperationBudgetExceeded {
-        operations: usize,
-        max_operations: usize,
-    },
-    /// The snapshot contains too many positioned glyphs.
-    PaintGlyphBudgetExceeded { glyphs: usize, max_glyphs: usize },
-    /// The snapshot nests more clip/effect scopes than the backend boundary accepts.
-    PaintLayerDepthBudgetExceeded { depth: usize, max_depth: usize },
     /// The backend returned a buffer with an unexpected length.
     UnexpectedBufferLength {
         /// Checked expected byte length.
@@ -121,21 +112,6 @@ impl fmt::Display for PaintError {
             } => write!(
                 formatter,
                 "raster and nested filter surfaces conservatively account for {required_bytes} RGBA bytes, exceeding the {max_bytes}-byte transient budget"
-            ),
-            Self::PaintOperationBudgetExceeded {
-                operations,
-                max_operations,
-            } => write!(
-                formatter,
-                "paint snapshot contains {operations} work units, exceeding the {max_operations}-unit budget"
-            ),
-            Self::PaintGlyphBudgetExceeded { glyphs, max_glyphs } => write!(
-                formatter,
-                "paint snapshot contains {glyphs} positioned glyphs, exceeding the {max_glyphs}-glyph budget"
-            ),
-            Self::PaintLayerDepthBudgetExceeded { depth, max_depth } => write!(
-                formatter,
-                "paint snapshot nests {depth} layer scopes, exceeding the {max_depth}-scope budget"
             ),
             Self::UnexpectedBufferLength { expected, actual } => write!(
                 formatter,

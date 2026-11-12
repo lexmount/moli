@@ -49,7 +49,6 @@ impl Default for PdfOptions {
 pub enum PdfError {
     InvalidParameters,
     PageRangeExceeded,
-    ResourceLimit,
     Paint(crate::PaintError),
     Encoding(String),
 }
@@ -59,7 +58,6 @@ impl fmt::Display for PdfError {
         match self {
             Self::InvalidParameters => f.write_str("invalid print parameters"),
             Self::PageRangeExceeded => f.write_str("Page range exceeds page count"),
-            Self::ResourceLimit => f.write_str("Printing failed: PDF work budget exceeded"),
             Self::Paint(error) => error.fmt(f),
             Self::Encoding(message) => write!(f, "Printing failed: {message}"),
         }
@@ -75,7 +73,7 @@ impl From<crate::PaintError> for PdfError {
 /// Writes embedded, subsetted fonts and native drawing commands. Device pixel
 /// ratio does not affect page geometry. This does not perform CSS fragmentation.
 pub fn pdf_snapshot(snapshot: &PaintSnapshot, options: &PdfOptions) -> Result<Vec<u8>, PdfError> {
-    let metrics = crate::validation::validate_fragment_stream(snapshot)?;
+    crate::validation::validate_fragment_stream(snapshot)?;
     validation::validate(snapshot)?;
     let width = f64::from(snapshot.surface.css_width);
     let height = f64::from(snapshot.surface.css_height);
@@ -110,8 +108,8 @@ pub fn pdf_snapshot(snapshot: &PaintSnapshot, options: &PdfOptions) -> Result<Ve
     let scale = printable_width * options.scale / width;
     let page_height = printable_height / scale;
     let page_count = (height / page_height).ceil().max(1.0);
-    if !page_count.is_finite() || page_count > 100_000.0 {
-        return Err(PdfError::ResourceLimit);
+    if !page_count.is_finite() || page_count >= usize::MAX as f64 {
+        return Err(PdfError::InvalidParameters);
     }
     let page_count = page_count as usize;
     let selected: BTreeSet<usize> = if options.page_ranges.is_empty() {
@@ -126,21 +124,11 @@ pub fn pdf_snapshot(snapshot: &PaintSnapshot, options: &PdfOptions) -> Result<Ve
     if selected.is_empty() {
         return Err(PdfError::PageRangeExceeded);
     }
-    if selected
-        .len()
-        .saturating_mul(metrics.operation_count.saturating_add(snapshot.links.len()))
-        > 20_000_000
-    {
-        return Err(PdfError::ResourceLimit);
-    }
     let mut document = Document::new();
     let mut fonts = text::FontCache::default();
     let mut images = std::collections::HashMap::new();
     let scopes = primitives::scope_ends(&snapshot.fragments)?;
     let regions = links::collect(snapshot)?;
-    if selected.len().saturating_mul(regions.len()) > 1_000_000 {
-        return Err(PdfError::ResourceLimit);
-    }
     let selected = selected
         .into_iter()
         .enumerate()

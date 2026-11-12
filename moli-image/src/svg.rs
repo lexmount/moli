@@ -14,13 +14,6 @@ use std::sync::{Arc, LazyLock};
 /// before `usvg` receives attacker-controlled bytes.
 pub const MAX_ENCODED_SVG_BYTES: usize = 16 * 1024 * 1024;
 
-/// Maximum DOM-neutral vector work units retained by one decoded SVG image.
-///
-/// A node costs one unit and every path segment costs another. The paint
-/// executor charges the same count against its per-capture operation budget.
-pub const MAX_SVG_PAINT_WORK_UNITS: usize = 250_000;
-
-const MAX_SVG_TREE_DEPTH: usize = 1_024;
 const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
 const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
 
@@ -187,7 +180,6 @@ impl SvgImageMetadata {
 pub struct SvgImage {
     tree: usvg::Tree,
     metadata: SvgImageMetadata,
-    paint_work_units: usize,
 }
 
 impl SvgImage {
@@ -198,10 +190,6 @@ impl SvgImage {
     pub const fn metadata(&self) -> SvgImageMetadata {
         self.metadata
     }
-
-    pub const fn paint_work_units(&self) -> usize {
-        self.paint_work_units
-    }
 }
 
 impl std::fmt::Debug for SvgImage {
@@ -210,7 +198,6 @@ impl std::fmt::Debug for SvgImage {
             .debug_struct("SvgImage")
             .field("metadata", &self.metadata)
             .field("tree_size", &self.tree.size())
-            .field("paint_work_units", &self.paint_work_units)
             .finish()
     }
 }
@@ -240,10 +227,6 @@ pub enum SvgDecodeError {
     InvalidConcreteSize,
     #[error("SVG tree could not be parsed: {0}")]
     Parse(#[from] usvg::Error),
-    #[error("SVG tree depth {actual} exceeds the {max}-level limit")]
-    TreeDepthExceeded { actual: usize, max: usize },
-    #[error("SVG contains {actual} vector work units, exceeding the {max}-unit limit")]
-    PaintWorkBudgetExceeded { actual: usize, max: usize },
 }
 
 /// Reads SVG natural sizing without constructing a vector tree.
@@ -330,89 +313,7 @@ fn decode_svg_image_with_fonts(
         ..Default::default()
     };
     let tree = usvg::Tree::from_data(bytes, &options)?;
-    let paint_work_units = tree_work_units(&tree)?;
-    Ok(SvgImage {
-        tree,
-        metadata,
-        paint_work_units,
-    })
-}
-
-fn tree_work_units(tree: &usvg::Tree) -> Result<usize, SvgDecodeError> {
-    let mut units = group_work_units(tree.root(), 1)?;
-    for gradient in tree.linear_gradients() {
-        add_work_units(&mut units, 1usize.saturating_add(gradient.stops().len()))?;
-    }
-    for gradient in tree.radial_gradients() {
-        add_work_units(&mut units, 1usize.saturating_add(gradient.stops().len()))?;
-    }
-    for pattern in tree.patterns() {
-        add_work_units(
-            &mut units,
-            1usize.saturating_add(group_work_units(pattern.root(), 1)?),
-        )?;
-    }
-    for clip_path in tree.clip_paths() {
-        add_work_units(
-            &mut units,
-            1usize.saturating_add(group_work_units(clip_path.root(), 1)?),
-        )?;
-    }
-    for mask in tree.masks() {
-        add_work_units(
-            &mut units,
-            1usize.saturating_add(group_work_units(mask.root(), 1)?),
-        )?;
-    }
-    for filter in tree.filters() {
-        add_work_units(&mut units, 1usize.saturating_add(filter.primitives().len()))?;
-        for primitive in filter.primitives() {
-            if let usvg::filter::Kind::Image(image) = primitive.kind() {
-                add_work_units(&mut units, group_work_units(image.root(), 1)?)?;
-            }
-        }
-    }
-    Ok(units)
-}
-
-fn group_work_units(group: &usvg::Group, depth: usize) -> Result<usize, SvgDecodeError> {
-    if depth > MAX_SVG_TREE_DEPTH {
-        return Err(SvgDecodeError::TreeDepthExceeded {
-            actual: depth,
-            max: MAX_SVG_TREE_DEPTH,
-        });
-    }
-    let mut units = 0usize;
-    for node in group.children() {
-        add_work_units(&mut units, 1)?;
-        add_work_units(
-            &mut units,
-            match node {
-                usvg::Node::Group(group) => group_work_units(group, depth + 1)?,
-                usvg::Node::Path(path) => path.data().segments().count(),
-                usvg::Node::Image(image) => match image.kind() {
-                    usvg::ImageKind::SVG(tree) => group_work_units(tree.root(), depth + 1)?,
-                    usvg::ImageKind::JPEG(_)
-                    | usvg::ImageKind::PNG(_)
-                    | usvg::ImageKind::GIF(_)
-                    | usvg::ImageKind::WEBP(_) => 0,
-                },
-                usvg::Node::Text(text) => group_work_units(text.flattened(), depth + 1)?,
-            },
-        )?;
-    }
-    Ok(units)
-}
-
-fn add_work_units(total: &mut usize, additional: usize) -> Result<(), SvgDecodeError> {
-    *total = total.saturating_add(additional);
-    if *total > MAX_SVG_PAINT_WORK_UNITS {
-        return Err(SvgDecodeError::PaintWorkBudgetExceeded {
-            actual: *total,
-            max: MAX_SVG_PAINT_WORK_UNITS,
-        });
-    }
-    Ok(())
+    Ok(SvgImage { tree, metadata })
 }
 
 fn concrete_object_size(width: Option<f32>, height: Option<f32>, ratio: Option<f32>) -> (f32, f32) {
@@ -568,13 +469,16 @@ mod tests {
     }
 
     #[test]
-    fn parsed_tree_retains_vector_work_without_a_raster_surface() {
+    fn parsed_tree_retains_vector_paths_without_a_raster_surface() {
         let svg = decode_svg_image(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><path d="M0 0h10v10z" fill="red"/></svg>"#,
         )
         .unwrap();
         assert_eq!(svg.metadata().concrete_dimensions(), Some((20, 10)));
-        assert!(svg.paint_work_units() >= 2);
+        assert!(matches!(
+            svg.tree().root().children(),
+            [usvg::Node::Path(_)]
+        ));
         assert_eq!(svg.tree().size().width(), 20.0);
         assert_eq!(svg.tree().size().height(), 10.0);
     }
@@ -619,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn vector_work_budget_includes_definition_subtrees() {
+    fn parsed_tree_preserves_definition_subtrees() {
         let svg = decode_svg_image(
             br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
                 <defs>
@@ -631,7 +535,23 @@ mod tests {
         )
         .unwrap();
 
-        assert!(svg.paint_work_units() >= 10);
+        assert_eq!(svg.tree().clip_paths().len(), 1);
+        assert_eq!(svg.tree().linear_gradients().len(), 1);
+        assert_eq!(svg.tree().linear_gradients()[0].stops().len(), 2);
+    }
+
+    #[test]
+    fn complex_paths_remain_available_for_vector_rendering() {
+        let path = format!("M0 0{}z", "h1v1h-1v-1".repeat(62_501));
+        let source = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><path d="{path}"/></svg>"#,
+        );
+        let svg = decode_svg_image(source.as_bytes()).unwrap();
+        let usvg::Node::Path(path) = &svg.tree().root().children()[0] else {
+            panic!("the vector path must remain available to the renderer");
+        };
+
+        assert!(path.data().segments().count() > 250_000);
     }
 
     #[test]

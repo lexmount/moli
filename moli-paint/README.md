@@ -17,8 +17,8 @@ The entry points and shared code are organized by responsibility:
 - `moli/src/fetch_dump/pdf.rs` starts CLI printing; `screenshot.rs` handles PNG exports.
 - `moli-renderer-v8/src/runtime/page_print.rs` owns PDF request/reply types and the
   print lifecycle. `page_screenshot.rs` owns screenshot/screencast types and capture.
-- `moli-paint/src/validation.rs` validates shared resource references, scope balance
-  and work budgets; `error.rs` defines the public paint errors.
+- `moli-paint/src/validation.rs` validates shared resource references and scope
+  balance; `error.rs` defines the public paint errors.
 - `moli-paint/src/geometry.rs` converts shapes and transforms; `scene/` converts
   drawing primitives into AnyRender commands for both output backends.
 - `moli-paint/src/raster/` allocates and renders pixel surfaces;

@@ -30,11 +30,6 @@ struct Scope {
     hidden: bool,
 }
 
-fn spend(budget: &mut usize, count: usize) -> Result<(), PdfError> {
-    *budget = budget.checked_sub(count).ok_or(PdfError::ResourceLimit)?;
-    Ok(())
-}
-
 pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfError> {
     if snapshot.links.is_empty() {
         return Ok(Vec::new());
@@ -44,7 +39,6 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
     let mut links = links.into_iter().peekable();
     let mut scopes: Vec<Scope> = Vec::new();
     let mut regions: Vec<LinkRegion> = Vec::new();
-    let mut budget = 20_000_000;
     let capture = Rect::new(
         0.0,
         0.0,
@@ -70,18 +64,16 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
             for scope in &scopes {
                 let mut clipped = Vec::new();
                 for polygon in polygons {
-                    spend(&mut budget, polygon.len())?;
                     match &scope.clip {
                         Clip::Rectangle(clip) => clipped.push(intersect(polygon, clip)),
                         Clip::Path(edges, bounds) => {
-                            curved_clip(polygon, edges, *bounds, &mut clipped, &mut budget)?;
+                            curved_clip(polygon, edges, *bounds, &mut clipped);
                         }
                     }
                 }
                 polygons = clipped;
             }
             for polygon in polygons.into_iter().filter(|p| area(p).abs() > 1e-6) {
-                spend(&mut budget, 100)?;
                 regions.push(LinkRegion {
                     polygon,
                     target: link.target.clone(),
@@ -116,13 +108,12 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
             _ => {
                 let path = matrix * crate::geometry::to_backend_shape(shape);
                 let edges = edges(&path);
-                spend(&mut budget, edges.len())?;
                 Clip::Path(edges, path.bounding_box())
             }
         };
         scopes.push(Scope { clip, hidden });
     }
-    Ok(deduplicate(regions, &mut budget))
+    Ok(deduplicate(regions))
 }
 
 fn target_key(target: &PaintLinkTarget) -> (&str, Option<(u32, u32)>) {
@@ -136,9 +127,9 @@ fn target_key(target: &PaintLinkTarget) -> (&str, Option<(u32, u32)>) {
     )
 }
 
-fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Vec<LinkRegion> {
-    // Sweep each complete target separately so unrelated annotations cannot
-    // consume each other's active-candidate budget.
+fn deduplicate(regions: Vec<LinkRegion>) -> Vec<LinkRegion> {
+    // Sweep each complete target separately to avoid comparing annotations
+    // that cannot be duplicates.
     // Paint phases can emit text children before their enclosing inline anchor.
     // A top-to-bottom sweep, with larger polygons first at the same top, visits
     // each container before its descendants regardless of their paint order.
@@ -172,12 +163,6 @@ fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Vec<LinkRegion> 
             active.clear();
             target = Some(&region.target);
         }
-        // Account for both pruning and scanning the active target bucket.
-        // Deduplication is optional: an exhausted budget must not discard
-        // already-clipped regions or fail an otherwise printable document.
-        if spend(budget, active.len().saturating_mul(2).saturating_add(1)).is_err() {
-            return regions;
-        }
         active.retain(|&(_, other)| other.y1 + 1e-6 >= bounds.y0);
         let mut duplicate = false;
         for &(other, other_bounds) in &active {
@@ -188,14 +173,6 @@ fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Vec<LinkRegion> 
                 continue;
             }
             let other = &regions[other];
-            if spend(
-                budget,
-                region.polygon.len().saturating_mul(other.polygon.len()),
-            )
-            .is_err()
-            {
-                return regions;
-            }
             if region.polygon.iter().all(|p| contains(&other.polygon, *p)) {
                 duplicate = true;
                 break;
@@ -374,16 +351,10 @@ fn edges(path: &BezPath) -> Vec<(Point, Point)> {
 // PDF links only accept quadrilaterals. Approximate curved/non-convex clips
 // with half-CSS-pixel scanline strips using the same nonzero winding rule as
 // paint. This retains holes and avoids clickable bounding-box corners.
-fn curved_clip(
-    polygon: Polygon,
-    edges: &[(Point, Point)],
-    bounds: Rect,
-    out: &mut Vec<Polygon>,
-    budget: &mut usize,
-) -> Result<(), PdfError> {
+fn curved_clip(polygon: Polygon, edges: &[(Point, Point)], bounds: Rect, out: &mut Vec<Polygon>) {
     let polygon = clip_rect(polygon, bounds);
     if area(&polygon).abs() <= 1e-6 {
-        return Ok(());
+        return;
     }
     let y0 = polygon.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
     let y1 = polygon
@@ -391,7 +362,6 @@ fn curved_clip(
         .map(|p| p.y)
         .fold(f64::NEG_INFINITY, f64::max);
     let rows = ((y1 - y0) * 2.0).ceil() as usize;
-    spend(budget, rows.saturating_mul(edges.len().max(1)))?;
     for row in 0..rows {
         let top = y0 + row as f64 * 0.5;
         let bottom = (top + 0.5).min(y1);
@@ -418,7 +388,6 @@ fn curved_clip(
             }
             winding += delta;
             if winding == 0 && x > left {
-                spend(budget, polygon.len() + 100)?;
                 let clipped = clip_rect(polygon.clone(), Rect::new(left, top, x, bottom));
                 if area(&clipped).abs() > 1e-6 {
                     out.push(clipped);
@@ -426,7 +395,6 @@ fn curved_clip(
             }
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -444,16 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_deduplication_budget_preserves_all_collected_regions() {
-        // Include exhaustion during a containment check and after a duplicate
-        // has already been found, as well as before any work can start.
-        for mut budget in [0, 1, 5, 25] {
-            let regions = deduplicate(vec![region(), region(), region()], &mut budget);
-            assert_eq!(regions.len(), 3);
-        }
-    }
-
-    #[test]
     fn target_buckets_preserve_destination_equality_and_distinct_destinations() {
         let regions = [0.0, 1.0, -0.0]
             .map(|x| {
@@ -462,14 +420,14 @@ mod tests {
                 region
             })
             .into();
-        let regions = deduplicate(regions, &mut 1_000);
+        let regions = deduplicate(regions);
         assert_eq!(regions.len(), 2);
         assert_eq!(regions[0].target.destination.unwrap().x, 0.0);
         assert_eq!(regions[1].target.destination.unwrap().x, 1.0);
     }
 
     #[test]
-    fn unrelated_targets_do_not_exhaust_the_deduplication_budget() {
+    fn target_buckets_remove_duplicates_without_merging_different_urls() {
         let mut regions = (0..100)
             .map(|index| {
                 let mut region = region();
@@ -480,6 +438,6 @@ mod tests {
         let mut duplicate = region();
         duplicate.target.url = regions[0].target.url.clone();
         regions.push(duplicate);
-        assert_eq!(deduplicate(regions, &mut 1_000).len(), 100);
+        assert_eq!(deduplicate(regions).len(), 100);
     }
 }

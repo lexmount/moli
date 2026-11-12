@@ -15,7 +15,7 @@ mod tests;
 
 use crate::geometry::{device_transform, to_backend_shape};
 use crate::scene::{paint_fragment, sanitize_unit, to_backend_blend_mode, to_backend_color};
-use crate::validation::{PaintStreamMetrics, validate_fragment_stream};
+use crate::validation::validate_fragment_stream;
 use crate::{PaintError, RasterImage};
 use anyrender::ImageRenderer;
 use anyrender::PaintScene;
@@ -42,8 +42,8 @@ struct RasterDimensions {
 /// Rasterizes an owned snapshot to row-major, straight-alpha RGBA8 pixels with Vello CPU.
 pub fn raster_snapshot(snapshot: &PaintSnapshot) -> Result<RasterImage, PaintError> {
     let dimensions = validate_dimensions(snapshot.surface)?;
-    let stream = validate_fragment_stream(snapshot)?;
-    validate_resource_budget(dimensions, stream)?;
+    let max_filter_depth = validate_fragment_stream(snapshot)?;
+    validate_resource_budget(dimensions, max_filter_depth)?;
     let scale = f64::from(snapshot.surface.device_scale);
 
     let mut renderer = VelloCpuImageRenderer::new(dimensions.width, dimensions.height);
@@ -88,12 +88,12 @@ fn unpremultiply_rgba(rgba: &mut [u8]) {
 
 fn validate_resource_budget(
     dimensions: RasterDimensions,
-    stream: PaintStreamMetrics,
+    max_filter_depth: usize,
 ) -> Result<(), PaintError> {
     // Backend filters may crop allocations to content bounds, whereas the
     // software color-filter fallback uses a complete surface. Charging every
     // nested filter as a complete surface is conservative and backend-neutral.
-    let surface_count = stream.max_filter_depth.saturating_add(1);
+    let surface_count = max_filter_depth.saturating_add(1);
     let required_bytes = dimensions.byte_len.saturating_mul(surface_count);
     if required_bytes > MAX_TRANSIENT_RASTER_BYTES {
         return Err(PaintError::TransientRasterBudgetExceeded {
