@@ -282,3 +282,40 @@ fn shadow_excluding_outer_html_matches_native_serializer() {
         );
     }
 }
+
+#[test]
+fn copy_export_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    let element = host.create_element("div");
+    assert!(host.append_child(host.document_node_id(), element));
+    let mut init = ShadowRootInit::new("closed");
+    init.set_serializable(true);
+    init.set_clonable(true);
+    init.set_adopted_style_sheets(Some("data:text/css,b%7Bcolor:red%7D".to_owned()));
+    let root = host.attach_shadow_root_with_init(element, init).unwrap();
+    let child = host.create_element("b");
+    let text = host.create_text_node("KEEP");
+    assert!(host.append_child(root, child));
+    assert!(host.append_child(child, text));
+    let before = host
+        .get_html(element, &scripting_enabled, true, &[])
+        .unwrap();
+    let copy = host.dom().clone();
+    assert_eq!(
+        host.get_html_from_copy(&copy, element, &scripting_enabled, &[root], true),
+        Some(before.clone())
+    );
+    assert_eq!(
+        host.get_html_from_copy(&copy, element, &scripting_enabled, &[root], false)
+            .as_deref(),
+        Some(concat!(
+            "<template shadowrootmode=\"closed\" shadowrootserializable=\"\" ",
+            "shadowrootclonable=\"\"><b>KEEP</b></template>"
+        ))
+    );
+    assert!(before.contains("shadowrootadoptedstylesheets="));
+    assert_eq!(
+        host.get_html(element, &scripting_enabled, true, &[]),
+        Some(before)
+    );
+}

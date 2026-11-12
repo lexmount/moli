@@ -437,20 +437,28 @@ impl ScriptVm {
         &self,
         frame_id: &str,
         dom: &crate::dom::native::NativeDom,
+        include_shadow_style_sheets: bool,
     ) -> Option<crate::native_bridge::ChildBrowsingContextDocumentSnapshot> {
         self._context_host
             .borrow()
-            .child_browsing_context_document_snapshot_from_copy(frame_id, dom)
+            .child_browsing_context_document_snapshot_from_copy(
+                frame_id,
+                dom,
+                include_shadow_style_sheets,
+            )
     }
 
     pub(crate) fn document_markup_from_copy(
         &self,
         document: crate::dom::NodeId,
         dom: &crate::dom::native::NativeDom,
+        include_shadow_style_sheets: bool,
     ) -> Option<String> {
-        self._context_host
-            .borrow()
-            .document_markup_from_copy(document, dom)
+        self._context_host.borrow().document_markup_from_copy(
+            document,
+            dom,
+            include_shadow_style_sheets,
+        )
     }
 
     pub(crate) fn take_pending_location_navigation_with_seed(

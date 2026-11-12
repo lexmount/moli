@@ -47,7 +47,7 @@ impl PageVm {
         for binding in &shadow_roots {
             apply_strip_options(&mut dom, binding.root, options.strip);
         }
-        self.inline_child_frame_markups_into_dump_dom(&mut dom, child_frames);
+        self.inline_child_frame_markups_into_dump_dom(&mut dom, child_frames, !options.strip.css);
 
         if shadow_roots.is_empty() {
             return dom.serialize_document();
@@ -55,7 +55,7 @@ impl PageVm {
         // Serialize shadow roots as `<template shadowrootmode>`, as child
         // frames already do.
         self.vm()
-            .document_markup_from_copy(top_document, &dom)
+            .document_markup_from_copy(top_document, &dom, !options.strip.css)
             .unwrap_or_else(|| dom.serialize_document())
     }
 
@@ -129,6 +129,7 @@ impl PageVm {
         &self,
         dom: &mut NativeDom,
         child_frames: Vec<(String, NativeNodeId, NativeNodeId)>,
+        include_shadow_style_sheets: bool,
     ) {
         // Snapshot order lists a parent frame before its descendants. Walk it
         // backwards so a nested owner's `srcdoc` is already in the copy when
@@ -136,7 +137,11 @@ impl PageVm {
         for (frame_id, owner_node_id, _) in child_frames.into_iter().rev() {
             let Some(snapshot) = self
                 .vm()
-                .child_browsing_context_document_snapshot_from_copy(&frame_id, dom)
+                .child_browsing_context_document_snapshot_from_copy(
+                    &frame_id,
+                    dom,
+                    include_shadow_style_sheets,
+                )
             else {
                 continue;
             };

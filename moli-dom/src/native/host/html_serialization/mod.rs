@@ -51,12 +51,14 @@ impl DomHost {
 
     /// Like [`Self::get_html`], but serializes `dom`, an edited copy of this
     /// host's DOM (for example an export copy), with this host's shadow roots.
+    /// Exports can omit stylesheet metadata without changing the live roots.
     pub fn get_html_from_copy(
         &self,
         dom: &NativeDom,
         handle: DomHandle,
         scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         explicit_shadow_roots: &[DomHandle],
+        include_adopted_style_sheets: bool,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
             dom,
@@ -68,6 +70,7 @@ impl DomHost {
                 explicit: explicit_shadow_roots,
             },
             None,
+            include_adopted_style_sheets,
         )
     }
 
@@ -89,6 +92,7 @@ impl DomHost {
                 explicit: explicit_shadow_roots,
             },
             registry_attribute_policy,
+            true,
         )
     }
 
@@ -106,6 +110,7 @@ impl DomHost {
             scripting_enabled_for_node,
             shadow_root_inclusion,
             registry_attribute_policy,
+            true,
         )
     }
 
@@ -117,10 +122,14 @@ impl DomHost {
         scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
+        include_adopted_style_sheets: bool,
     ) -> Option<String> {
         let shadow_root_provider = |host| {
-            let (shadow_root, init) =
+            let (shadow_root, mut init) =
                 self.serialized_shadow_root_for_host(host, shadow_root_inclusion)?;
+            if !include_adopted_style_sheets {
+                init.set_adopted_style_sheets(None);
+            }
             let mut template_start = String::new();
             self.write_shadow_root_template_start(
                 host,

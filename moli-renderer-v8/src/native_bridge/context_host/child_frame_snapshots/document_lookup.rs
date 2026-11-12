@@ -10,11 +10,13 @@ impl JsContextHost {
         &self,
         frame_id: &str,
         dom: &NativeDom,
+        include_shadow_style_sheets: bool,
     ) -> Option<ChildBrowsingContextDocumentSnapshot> {
         let handle = self.child_browsing_context_owner_node_id_by_frame_id(frame_id)?;
         let document_handle = self.child_browsing_context_document_handle(handle)?;
         let url = self.child_browsing_context_current_url(handle)?;
-        let markup = self.document_markup_from_copy(document_handle, dom)?;
+        let markup =
+            self.document_markup_from_copy(document_handle, dom, include_shadow_style_sheets)?;
         Some(ChildBrowsingContextDocumentSnapshot {
             url: url.as_str().to_owned(),
             markup,
@@ -28,6 +30,7 @@ impl JsContextHost {
         &self,
         document_handle: crate::document_runtime::DomHandle,
         dom: &NativeDom,
+        include_shadow_style_sheets: bool,
     ) -> Option<String> {
         let explicit_shadow_roots = self
             .dom_host()
@@ -48,6 +51,7 @@ impl JsContextHost {
             document_handle,
             &scripting_enabled_for_node,
             &explicit_shadow_roots,
+            include_shadow_style_sheets,
         )
     }
 }
