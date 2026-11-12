@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn live_geometry_reads_refresh_changed_inputs_and_reuse_unchanged_layout() {
+    let mut vm = new_rendered_test_vm(
+        "https://live-geometry.test/",
+        "<!doctype html><body></body>",
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Live);
+    publish_layout_for_test(&mut vm);
+    let before = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval(
+            r#"
+const live = document.createElement('div');live.id='live';
+live.style.cssText='width:77px;height:19px';document.body.append(live);
+JSON.stringify([live.getBoundingClientRect().width,live.getBoundingClientRect().height])
+"#
+        )
+        .unwrap(),
+        "[77,19]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    for _ in 0..3 {
+        assert_eq!(vm.eval("live.getBoundingClientRect().width").unwrap(), "77");
+    }
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    assert_eq!(vm.eval(r#"
+live.style.width='55px';live.style.height='';
+const sheet=document.createElement('style');sheet.textContent='#live{height:31px}';document.head.append(sheet);
+JSON.stringify([live.getBoundingClientRect().width,live.getBoundingClientRect().height])
+"#).unwrap(), "[55,31]");
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
+    assert_eq!(
+        vm.eval(
+            "sheet.sheet.insertRule('#live{height:47px}',1);live.getBoundingClientRect().height"
+        )
+        .unwrap(),
+        "47"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 3);
+}
+
+#[test]
 fn document_point_queries_use_real_paint_order_geometry() {
     let mut vm = new_rendered_test_vm(
         "https://document-point-query.test/path/index.html",

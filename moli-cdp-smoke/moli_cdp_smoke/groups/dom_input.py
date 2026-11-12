@@ -109,7 +109,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
         {"nodeId": document["root"]["nodeId"], "selector": "#upload"},
     )
     for name, contents, expected_type in [
-        ("upload.TXT", b"\x89PNG\r\n\x1a\n", "text/plain"),
+        ("mime-upload.TXT", b"\x89PNG\r\n\x1a\n", "text/plain"),
         ("upload.json", b"{}", "application/json"),
         ("upload.pdf", b"%PDF-1.7\n", "application/pdf"),
         ("upload.moli_unknown", b"\x89PNG\r\n\x1a\n", ""),

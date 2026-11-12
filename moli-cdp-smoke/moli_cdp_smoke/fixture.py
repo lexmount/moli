@@ -405,6 +405,71 @@ document.getElementById('author-host').attachShadow({mode: 'open'}).innerHTML =
 </body></html>
 """
 
+HOVER_HIT_TEST_STYLE = """<!doctype html><style>
+html, body { margin: 0; min-height: 600px; }
+* { box-sizing: border-box; }
+.box { position: absolute; left: 30px; top: 30px; width: 120px; height: 100px; }
+#front { background: rgb(0,128,0); }
+#front:hover { background: rgb(0,0,255); }
+#wrapper { position: absolute; left: 30px; top: 30px; width: 120px; height: 100px; }
+#wrapper input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+                 opacity: 0; z-index: 1; }
+.figcaption { display: none; }
+#wrapper:hover .figcaption, .figure:hover .figcaption { display: block; }
+.figure { position: relative; display: inline-block; padding: 10px; }
+.figure img { width: 100px; height: 80px; }
+</style>"""
+
+HOVER_HIT_TEST_EVENTS = """<script>
+window.hitEvents = [];
+for (const type of ['mousemove', 'click', 'change']) {
+  document.addEventListener(type, event => hitEvents.push({
+    type, target: event.target.id, trusted: event.isTrusted
+  }));
+}
+</script>"""
+
+HOVER_HIT_TEST_FIXTURES = {
+    "stacked": (
+        '<div style="position:relative;z-index:7">'
+        '<div id="front" class="box" style="z-index:31"></div>'
+        '<div id="back" class="box" style="z-index:29"></div></div>'
+    ),
+    "transform": (
+        '<div id="front" class="box" style="z-index:2"></div>'
+        '<div style="transform:translate(0,0)">'
+        '<div id="back" class="box" style="z-index:999"></div></div>'
+    ),
+    "opacity": (
+        '<div id="front" class="box" style="z-index:2"></div>'
+        '<div style="opacity:0.5">'
+        '<div id="back" class="box" style="z-index:999"></div></div>'
+    ),
+    "fixed": (
+        '<div id="front" class="box"></div>'
+        '<div id="cover" class="box" style="position:fixed;z-index:31"></div>'
+    ),
+    "fixed-pass-through": (
+        '<div id="front" class="box"></div>'
+        '<div id="cover" class="box" '
+        'style="position:fixed;z-index:31;pointer-events:none"></div>'
+    ),
+    "label": (
+        '<label id="wrapper"><input id="front" type="radio" name="choice">'
+        '<span>Styled choice</span><span class="figcaption">Hovered</span></label>'
+    ),
+    "label-passive": (
+        '<label id="wrapper"><input id="front" type="radio" name="choice" '
+        'style="pointer-events:none"></label>'
+    ),
+    "figure": (
+        '<div class="figure" id="front"><img alt="" '
+        'src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' '
+        'width=\'100\' height=\'80\'/%3E">'
+        '<div class="figcaption">Caption</div></div>'
+    ),
+}
+
 PARSER_DOM_MUTATION_FIXTURE = """<!doctype html>
 <html><head><script src="/parser-dom-mutation-held.js"></script></head>
 <body id="late-body"><main>ready</main></body></html>
@@ -1399,6 +1464,12 @@ class FixtureServer:
                     self._send_html(DOM_SHADOW_OUTER_HTML_CHILD_FIXTURE)
                 elif route == "/chromium-cdp-hit-test-page":
                     self._send_html(DOM_HIT_TEST_FIXTURE)
+                elif route.startswith("/hover-hit-test/"):
+                    markup = HOVER_HIT_TEST_FIXTURES.get(route.removeprefix("/hover-hit-test/"))
+                    if markup is None:
+                        self._send_text("unknown hover fixture", status=HTTPStatus.NOT_FOUND)
+                    else:
+                        self._send_html(HOVER_HIT_TEST_STYLE + markup + HOVER_HIT_TEST_EVENTS)
                 elif route == "/chromium-cdp-layout-page":
                     self._send_html(
                         "<!doctype html><body><div style='height:10000px;width:10000px'>content</div></body>"

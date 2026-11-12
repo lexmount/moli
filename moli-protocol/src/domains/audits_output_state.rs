@@ -109,15 +109,11 @@ impl TargetAuditsStorageState {
     }
 
     pub(crate) fn ingest_source_issues(&mut self, source: &[InspectorIssueSnapshot]) {
-        let source_prefix_changed = self.source_issue_count > source.len()
-            || (self.source_issue_count > 0
-                && self
-                    .issues
-                    .back()
-                    .zip(source.get(self.source_issue_count - 1))
-                    .is_some_and(|(stored, current)| stored != current));
-        if source_prefix_changed {
-            self.reset_storage();
+        // Page snapshots can lag concrete issues already published by the
+        // renderer output stream. Keep those document facts until the explicit
+        // new-document reset instead of erasing them with an older snapshot.
+        if source.len() <= self.source_issue_count {
+            return;
         }
 
         for issue in source.iter().skip(self.source_issue_count) {
@@ -288,6 +284,26 @@ mod tests {
         let stored = storage.issues_for_cursor(cursor).unwrap();
         assert_eq!(stored.len(), MAX_STORED_INSPECTOR_ISSUES);
         assert_eq!(stored.first(), Some(&issue(1)));
+    }
+
+    #[test]
+    fn stale_source_snapshot_preserves_concrete_issue_replay() {
+        let mut storage = TargetAuditsStorageState::default();
+        storage.append_concrete_issue(issue(0));
+        let generation = storage.generation();
+
+        storage.ingest_source_issues(&[]);
+        assert_eq!(storage.generation(), generation);
+        let mut session = TargetAuditsSessionState::default();
+        let replay = session
+            .enable(&storage)
+            .expect("concrete issue must remain stored");
+        assert_eq!(storage.issues_for_cursor(replay).unwrap(), vec![issue(0)]);
+
+        storage.ingest_source_issues(&[issue(0), issue(1)]);
+        session.mark_emitted(replay);
+        let pending = session.pending_cursor(&storage).expect("new source issue");
+        assert_eq!(storage.issues_for_cursor(pending).unwrap(), vec![issue(1)]);
     }
 
     #[test]
