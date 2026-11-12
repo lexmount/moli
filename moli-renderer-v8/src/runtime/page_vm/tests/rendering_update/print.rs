@@ -21,6 +21,8 @@ async fn native_pdf_resolves_links_base_urls_anchors_and_embedded_frames() {
             r#"
 document.head.innerHTML = `<base href="https://example.org/base/"><style>
 body { margin:0 } a { display:block; width:100px; height:20px }
+#wrapped { position:absolute; top:120px; line-height:20px }
+#wrapped a { display:inline }
 iframe { position:absolute; left:120px; top:20px; width:120px; height:80px; border:0 }
 #destination { position:absolute; top:400px; height:20px }
 </style>`;
@@ -30,6 +32,7 @@ document.body.innerHTML = `<a href="../relative?q=1&amp;x=2">Relative</a>
 <a href="javascript:void(0)">Script</a>
 <a href="https://hidden.invalid/" style="opacity:0">Hidden</a>
 <a href="https://display.invalid/" style="display:none">None</a>
+<div id=wrapped><a href="https://wrapped.example/link">First<br>Second</a></div>
 <div id="destination"><span id="dest name">Destination</span></div>
 <iframe id=frame></iframe>`;
 frame.contentDocument.body.innerHTML = '<a href="https://child.example/link">Child</a>';
@@ -54,6 +57,7 @@ frame.contentDocument.body.innerHTML = '<a href="https://child.example/link">Chi
         let doc = lopdf::Document::load_mem(&bytes)?;
         let mut urls = std::collections::BTreeSet::new();
         let mut destinations = Vec::new();
+        let mut wrapped_regions = Vec::new();
         for object in doc.objects.values() {
             let Ok(dict) = object.as_dict() else { continue };
             if dict.get(b"Subtype").and_then(|o| o.as_name()).ok() != Some(b"Link") {
@@ -61,7 +65,11 @@ frame.contentDocument.body.innerHTML = '<a href="https://child.example/link">Chi
             }
             if let Ok(action) = dict.get(b"A") {
                 let action = action.as_dict()?;
-                urls.insert(String::from_utf8(action.get(b"URI")?.as_str()?.to_vec())?);
+                let url = String::from_utf8(action.get(b"URI")?.as_str()?.to_vec())?;
+                if url == "https://wrapped.example/link" {
+                    wrapped_regions.push(dict.get(b"Rect")?.as_array()?.clone());
+                }
+                urls.insert(url);
             } else {
                 let (_, dest) = doc.dereference(dict.get(b"Dest")?)?;
                 destinations.push(dest.as_array()?[0].as_reference()?);
@@ -72,13 +80,20 @@ frame.contentDocument.body.innerHTML = '<a href="https://child.example/link">Chi
             [
                 "https://example.org/relative?q=1&x=2",
                 "mailto:hello@example.org",
-                "https://child.example/link"
+                "https://child.example/link",
+                "https://wrapped.example/link"
             ]
             .map(str::to_owned)
             .into()
         );
         assert!(!destinations.is_empty());
         assert!(destinations.iter().all(|id| *id == doc.get_pages()[&2]));
+        assert_eq!(
+            wrapped_regions.len(),
+            2,
+            "one link annotation per wrapped line"
+        );
+        assert_ne!(wrapped_regions[0][1], wrapped_regions[1][1]);
         assert_eq!(
             page_vm.vm_mut().eval("matchMedia('print').matches")?,
             "false"

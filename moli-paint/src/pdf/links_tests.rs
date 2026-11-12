@@ -92,6 +92,110 @@ fn links_preserve_separate_lines_and_deduplicate_descendant_regions() {
 }
 
 #[test]
+fn links_deduplicate_descendants_before_or_after_their_wrapped_anchor() {
+    for descendants_first in [false, true] {
+        let mut snapshot = snapshot();
+        let parents = [
+            PaintRect::new(10.0, 20.0, 100.0, 15.0),
+            PaintRect::new(10.0, 50.0, 60.0, 15.0),
+        ];
+        for descendants in [descendants_first, !descendants_first] {
+            for rect in parents {
+                if descendants {
+                    // Exceed the old 64-region lookback: every character of a
+                    // long line can arrive before the enclosing inline region.
+                    for index in 0..rect.width as usize {
+                        link(
+                            &mut snapshot,
+                            PaintRect::new(rect.x + index as f32, rect.y, 1.0, rect.height),
+                            None,
+                        );
+                    }
+                } else {
+                    link(&mut snapshot, rect, None);
+                }
+            }
+        }
+        let doc = document(&snapshot, &options());
+        let annots = annotations(&doc, 1);
+        assert_eq!(annots.len(), 2, "descendants first: {descendants_first}");
+        for (annot, expected) in annots
+            .iter()
+            .zip([[10.0, 265.0, 110.0, 280.0], [10.0, 235.0, 70.0, 250.0]])
+        {
+            for (actual, expected) in bounds(annot).into_iter().zip(expected) {
+                assert!((actual - expected).abs() < 0.01);
+            }
+        }
+    }
+}
+
+#[test]
+fn link_deduplication_keeps_different_targets_and_clipped_gaps() {
+    let mut snapshot = snapshot();
+    for destination in [Some(PaintPoint::new(20.0, 30.0)), None] {
+        link(
+            &mut snapshot,
+            PaintRect::new(10.0, 20.0, 100.0, 15.0),
+            destination,
+        );
+    }
+    link(&mut snapshot, PaintRect::new(10.0, 20.0, 100.0, 15.0), None);
+    snapshot.links.last_mut().unwrap().target.url = "https://other.example/".into();
+    // Identical input rectangles in different clip scopes leave two separated
+    // clickable regions. Deduplicate only after clipping, without filling gaps.
+    for rect in [
+        PaintRect::new(0.0, 50.0, 40.0, 30.0),
+        PaintRect::new(60.0, 50.0, 40.0, 30.0),
+    ] {
+        snapshot.push_fragment(PaintFragment::PushClip {
+            shape: PaintShape::Rect(rect),
+            transform: PaintTransform2D::IDENTITY,
+        });
+        link(&mut snapshot, PaintRect::new(10.0, 50.0, 100.0, 15.0), None);
+        snapshot.push_fragment(PaintFragment::PopLayer);
+    }
+    let doc = document(&snapshot, &options());
+    let annots = annotations(&doc, 1);
+    assert_eq!(annots.len(), 5);
+    assert!(annots[0].has(b"Dest"));
+    assert!(annots[1].has(b"A"));
+    assert_eq!(
+        annots[2]
+            .get(b"A")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"URI")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        b"https://other.example/"
+    );
+    for (annot, expected) in annots[3..]
+        .iter()
+        .zip([[10.0, 235.0, 40.0, 250.0], [60.0, 235.0, 100.0, 250.0]])
+    {
+        for (actual, expected) in bounds(annot).into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.01);
+        }
+    }
+}
+
+#[test]
+fn disjoint_link_lines_do_not_exhaust_the_deduplication_budget() {
+    let mut snapshot = PaintSnapshot::new(PaintViewport::new(300, 60_000, 1.0), PaintColor::WHITE);
+    for line in 0..6_000 {
+        link(
+            &mut snapshot,
+            PaintRect::new(10.0, line as f32 * 10.0, 100.0, 5.0),
+            None,
+        );
+    }
+    assert_eq!(super::links::collect(&snapshot).unwrap().len(), 6_000);
+}
+
+#[test]
 fn pagination_clips_links_and_remaps_internal_destinations_to_selected_pages() {
     let mut snapshot = snapshot();
     link(

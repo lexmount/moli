@@ -81,15 +81,6 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
                 polygons = clipped;
             }
             for polygon in polygons.into_iter().filter(|p| area(p).abs() > 1e-6) {
-                // Inline anchors and their text children often describe the
-                // same region. Remove contained duplicates without joining
-                // separate wrapped lines or filling the gap between them.
-                if regions.iter().rev().take(64).any(|region| {
-                    region.target == link.target
-                        && polygon.iter().all(|p| contains(&region.polygon, *p))
-                }) {
-                    continue;
-                }
                 spend(&mut budget, 100)?;
                 regions.push(LinkRegion {
                     polygon,
@@ -131,7 +122,62 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
         };
         scopes.push(Scope { clip, hidden });
     }
-    Ok(regions)
+    deduplicate(regions, &mut budget)
+}
+
+fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Result<Vec<LinkRegion>, PdfError> {
+    // Paint phases can emit text children before their enclosing inline anchor.
+    // A top-to-bottom sweep, with larger polygons first at the same top, visits
+    // each container before its descendants regardless of their paint order.
+    // Compare the already-clipped polygons, without joining separate lines or
+    // filling gaps, and retain the original order of surviving annotations.
+    let mut order = regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| {
+            let (top, bottom) = region.polygon.iter().fold(
+                (f64::INFINITY, f64::NEG_INFINITY),
+                |(top, bottom), point| (top.min(point.y), bottom.max(point.y)),
+            );
+            (index, top, bottom, area(&region.polygon).abs())
+        })
+        .collect::<Vec<_>>();
+    order.sort_by(|(_, a_top, _, a_area), (_, b_top, _, b_area)| {
+        a_top
+            .total_cmp(b_top)
+            .then_with(|| b_area.total_cmp(a_area))
+    });
+    let mut active: Vec<(usize, f64)> = Vec::new();
+    let mut keep = vec![false; regions.len()];
+    for (index, top, bottom, _) in order {
+        spend(budget, active.len().saturating_add(1))?;
+        active.retain(|&(_, bottom)| bottom + 1e-6 >= top);
+        let region = &regions[index];
+        let mut duplicate = false;
+        for &(other, _) in &active {
+            let other = &regions[other];
+            if other.target != region.target {
+                continue;
+            }
+            spend(
+                budget,
+                region.polygon.len().saturating_mul(other.polygon.len()),
+            )?;
+            if region.polygon.iter().all(|p| contains(&other.polygon, *p)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if !duplicate {
+            keep[index] = true;
+            active.push((index, bottom));
+        }
+    }
+    Ok(regions
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(region, keep)| keep.then_some(region))
+        .collect())
 }
 
 pub(super) struct PageLinks<'a> {
