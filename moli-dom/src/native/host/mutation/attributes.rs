@@ -84,9 +84,6 @@ impl DomHost {
         name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
-        if name.eq_ignore_ascii_case("form") {
-            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
-        }
         let records_enabled = self.mutation_records_enabled();
         let Some(normalized_name) = self.dom.normalized_attribute_name(handle, name) else {
             return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None);
@@ -107,6 +104,11 @@ impl DomHost {
                 Some(Arc::from(attribute.value())),
             ),
             None => (normalized_name, None, None),
+        };
+        let checked_radio_owner_before = if namespace.is_none() && local_name == "form" {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle)
+        } else {
+            None
         };
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
@@ -141,6 +143,9 @@ impl DomHost {
             })
             .unwrap_or_default();
         let changed = self.dom.set_attribute(handle, name, value);
+        self.normalize_checked_radio_groups_after_form_owner_changes(
+            checked_radio_owner_before.as_slice(),
+        );
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, None, name);
             self.sync_select_state_after_option_selected_attribute(handle, name);
@@ -275,9 +280,11 @@ impl DomHost {
         value: &str,
     ) -> DomAttributeMutationOutcome {
         let namespace = namespace.filter(|namespace| !namespace.is_empty());
-        if namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
-            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
-        }
+        let checked_radio_owner_before = if namespace.is_none() && local_name == "form" {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle)
+        } else {
+            None
+        };
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
@@ -285,6 +292,9 @@ impl DomHost {
         let changed = self
             .dom
             .set_attribute_ns(handle, namespace, prefix, local_name, value);
+        self.normalize_checked_radio_groups_after_form_owner_changes(
+            checked_radio_owner_before.as_slice(),
+        );
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
             // Namespace-aware calls can still target HTML id/name by local name.
@@ -379,9 +389,23 @@ impl DomHost {
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
-        if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
-            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
-        }
+        let removes_form_attribute = prior_value.is_some()
+            && self.dom.normalized_attribute_name(handle, name).as_deref() == Some("form")
+            && self
+                .node(handle)
+                .and_then(Node::as_element)
+                .and_then(|element| {
+                    element
+                        .attributes()
+                        .iter()
+                        .find(|attribute| attribute.name_matches("form"))
+                })
+                .is_some_and(|attribute| attribute.namespace().is_empty());
+        let checked_radio_owner_before = if removes_form_attribute {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle)
+        } else {
+            None
+        };
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
                 .and_then(Node::as_element)
@@ -415,6 +439,9 @@ impl DomHost {
             })
             .unwrap_or_default();
         let removed = self.dom.remove_attribute(handle, name);
+        self.normalize_checked_radio_groups_after_form_owner_changes(
+            checked_radio_owner_before.as_slice(),
+        );
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, None, name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
@@ -474,14 +501,21 @@ impl DomHost {
         namespace: Option<&str>,
         local_name: &str,
     ) -> DomAttributeMutationOutcome {
+        let namespace = namespace.filter(|namespace| !namespace.is_empty());
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
-        if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
-            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
-        }
+        let checked_radio_owner_before =
+            if prior_value.is_some() && namespace.is_none() && local_name == "form" {
+                self.reset_parser_form_owner_for_form_attribute_mutation(handle)
+            } else {
+                None
+            };
         let removed = self.dom.remove_attribute_ns(handle, namespace, local_name);
+        self.normalize_checked_radio_groups_after_form_owner_changes(
+            checked_radio_owner_before.as_slice(),
+        );
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {

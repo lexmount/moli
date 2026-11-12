@@ -51,11 +51,13 @@ impl DomHost {
             return Vec::new();
         }
 
-        if self.is_connected(root) {
+        if self.is_connected_to_document(root) {
             let form_tree_root = self
                 .root_node_handle(root)
                 .unwrap_or_else(|| self.document_handle());
-            let document = self.document_handle();
+            let document = self
+                .owner_document_handle(root)
+                .unwrap_or_else(|| self.document_handle());
             let reference_source_roots = self
                 .shadow_roots_by_host
                 .borrow()
@@ -88,7 +90,10 @@ impl DomHost {
                 })
                 .collect()
         } else {
-            self.collect_matching_elements(root, false, |handle| {
+            // Parser-associated controls can remain outside the form while
+            // sharing its detached tree.
+            let tree_root = self.root_node_handle(root).unwrap_or(root);
+            self.collect_matching_elements(tree_root, false, |handle| {
                 self.is_listed_form_control_handle(handle)
                     && self.form_control_owner(handle) == Some(root)
             })
