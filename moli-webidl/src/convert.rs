@@ -615,10 +615,8 @@ impl<'s> WebIdlConverter<'s> for v8::Local<'s, v8::Promise> {
         context: Context,
         _options: &Self::Options,
     ) -> Result<Self, WebIdlError> {
-        if let Ok(promise) = v8::Local::<v8::Promise>::try_from(value) {
-            return Ok(promise);
-        }
-
+        // Web IDL creates a fresh intrinsic capability even for native Promises.
+        // Resolving it with the input must observe its `then` normally.
         let resolver = v8::PromiseResolver::new(scope)
             .ok_or_else(|| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("Promise")))?;
         let promise = resolver.get_promise(scope);
