@@ -16,6 +16,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+mod remote_objects;
+
 #[derive(Clone)]
 pub enum InspectorJson {
     Parsed(Value),
@@ -82,6 +84,12 @@ impl RawInspectorJson {
 }
 
 impl InspectorJson {
+    /// Collect response handles without materializing RemoteObject.value payloads.
+    /// Exception objects and property descriptors remain part of the protocol walk.
+    pub fn response_remote_object_ids(&self, max_depth: usize) -> serde_json::Result<Vec<String>> {
+        remote_objects::collect(self, max_depth)
+    }
+
     /// Validate an Inspector envelope and retain each field without decoding its
     /// body. Host-generated protocol messages with Moli metadata must use From<Value>.
     pub fn from_slice(bytes: &[u8]) -> serde_json::Result<Self> {

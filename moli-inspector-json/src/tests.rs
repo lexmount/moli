@@ -2,6 +2,91 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn response_handles_skip_user_values_and_preserve_exception_and_property_handles() {
+    for body in [
+        r#"{"result":{"value":{"objectId":"user","nested":[{"errorObjectId":"user-error"}]},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception","value":{"objectId":"user-exception"}}}}"#,
+        r#"{"result":[{"name":"x","value":{"type":"object","objectId":"value","value":[{"objectId":"user"}]}},{"name":"getter","get":{"type":"function","objectId":"get"},"set":{"type":"function","objectId":"set"},"symbol":{"type":"symbol","objectId":"symbol"}}],"internalProperties":[{"value":{"type":"object","objectId":"internal"}}],"privateProperties":[{"get":{"type":"function","objectId":"private"}}],"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}"#,
+        r#"{"object":{"type":"object","objectId":"node"},"objects":{"type":"object","objectId":"query"},"extension":{"value":{"objectId":"extension"}}}"#,
+        r#"{"result":{"type":"object","deepSerializedValue":{"type":"array","value":[{"type":"object","objectId":"deep"}]},"value":{"objectId":"user"}}}"#,
+    ] {
+        let raw =
+            InspectorJson::from_slice(format!(r#"{{"id":1,"result":{body}}}"#).as_bytes()).unwrap();
+        let parsed = InspectorJson::from(serde_json::from_str::<Value>(&raw.to_string()).unwrap());
+        let expected: &[&str] = if body.contains("internalProperties") {
+            &[
+                "exception",
+                "get",
+                "internal",
+                "private",
+                "set",
+                "symbol",
+                "value",
+            ]
+        } else if body.contains("extension") {
+            &["extension", "node", "query"]
+        } else if body.contains("deepSerializedValue") {
+            &["deep"]
+        } else {
+            &["exception", "result"]
+        };
+        assert_eq!(raw.response_remote_object_ids(1000).unwrap(), expected);
+        assert_eq!(parsed.response_remote_object_ids(1000).unwrap(), expected);
+        assert!(!raw.is_materialized());
+    }
+}
+
+#[test]
+fn response_handle_projection_preserves_wire_escapes_and_unknown_fields() {
+    let wire = br#"{"id":7,"result":{"result":{"value":{"objectId":"user","text":"\ud800","number":1e400},"t\u0079pe":"object","object\u0049d":"actual"},"exceptionDetails":{"exception":{"type":"object","objectId":"\ud800"}},"extension":{"value":{"objectId":"future"}}}}"#;
+    let raw = InspectorJson::from_slice(wire).unwrap();
+    let encoded = raw.to_string();
+    assert_eq!(
+        raw.response_remote_object_ids(1000).unwrap(),
+        ["actual", "future", "�"]
+    );
+    assert_eq!(raw.to_string(), encoded);
+    assert!(!raw.is_materialized());
+}
+
+#[test]
+fn response_handle_projection_has_the_same_depth_budget_for_raw_and_parsed() {
+    let mut value = json!({"objectId":"deep"});
+    for _ in 0..30 {
+        value = json!({"nested":value});
+    }
+    let parsed = InspectorJson::from(json!({"id":1,"result":{"extension":value}}));
+    let raw = InspectorJson::from_slice(parsed.to_string().as_bytes()).unwrap();
+    for depth in [0, 1, 2, 10, 32, 33, 34, 1000] {
+        assert_eq!(
+            raw.response_remote_object_ids(depth).unwrap(),
+            parsed.response_remote_object_ids(depth).unwrap()
+        );
+    }
+    assert_eq!(raw.response_remote_object_ids(1000).unwrap(), ["deep"]);
+    assert!(!raw.is_materialized());
+}
+
+#[test]
+fn response_handle_projection_skips_deep_user_values_and_bounds_unknown_structures() {
+    let deep = format!("{}0{}", "[".repeat(2000), "]".repeat(2000));
+    let raw = InspectorJson::from_slice(format!(r#"{{"id":1,"result":{{"result":{{"type":"object","value":{deep}}},"exceptionDetails":{{"exception":{{"type":"object","objectId":"exception"}}}}}}}}"#).as_bytes()).unwrap();
+    assert_eq!(raw.response_remote_object_ids(1000).unwrap(), ["exception"]);
+    assert!(!raw.is_materialized());
+
+    let deep = format!(
+        "{}{{\"objectId\":\"too-deep\"}}{}",
+        "[".repeat(1008),
+        "]".repeat(1008)
+    );
+    let raw = InspectorJson::from_slice(
+        format!(r#"{{"id":1,"result":{{"extension":{deep}}}}}"#).as_bytes(),
+    )
+    .unwrap();
+    assert!(raw.response_remote_object_ids(1000).unwrap().is_empty());
+    assert!(!raw.is_materialized());
+}
+
+#[test]
 fn every_isolated_surrogate_survives_id_and_session_rewrites() {
     for unit in 0xd800..=0xdfff {
         let body = format!(r#"{{"result":{{"type":"string","value":"\u{unit:04x}"}}}}"#);
