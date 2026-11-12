@@ -1743,6 +1743,29 @@ queueMicrotask(() => log.push('script-microtask'));
 }
 
 #[tokio::test]
+async fn resize_observer_delivery_follows_the_frames_animation_callbacks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_test_vm("https://resize-observer-after-raf.test/");
+    vm.eval(
+        r#"
+globalThis.log = [];
+const html = document.documentElement || document.appendChild(document.createElement('html'));
+const body = document.body || html.appendChild(document.createElement('body'));
+const target = body.appendChild(document.createElement('div'));
+target.style.cssText = 'width:50px;height:20px';
+new ResizeObserver(() => log.push('ro')).observe(target);
+requestAnimationFrame(() => { log.push('raf'); target.style.width = '200px'; });
+'observed'
+"#,
+    )
+    .expect("ResizeObserver setup should evaluate");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
+    assert_eq!(vm.eval("log.join()").unwrap(), "raf,ro");
+}
+
+#[tokio::test]
 async fn resize_observer_measures_real_layout_before_any_snapshot_exists() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_parsed_test_vm(
