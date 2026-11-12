@@ -202,9 +202,8 @@ impl CdpConnection {
                     );
                 }
                 if Some(id) == current_cmd_id {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(
-                        owner,
-                        message.value(),
+                    self.register_runtime_remote_object_ids_from_response_for_owner(
+                        owner, &message, None,
                     );
                     if matches!(message, InspectorJson::Raw(_)) {
                         message.set_session_id(current_session_id);
@@ -577,18 +576,11 @@ impl CdpConnection {
             let frontend_command_id = correlation.frontend_command_id().get();
             message.set_frontend_id(frontend_command_id);
             if project_runtime_object_ownership && message.payload().has_field("result") {
-                if let Some(object_group) = result_object_group.as_deref() {
-                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner,
-                        message.value(),
-                        object_group,
-                    );
-                } else {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(
-                        owner,
-                        message.value(),
-                    );
-                }
+                self.register_runtime_remote_object_ids_from_response_for_owner(
+                    owner,
+                    message.payload(),
+                    result_object_group.as_deref(),
+                );
             }
             self.complete_runtime_await_job(frontend_command_id, session_id.as_deref());
             let _ = self.remove_pending_inspector_await_for_owner(frontend_command_id, owner);
@@ -715,18 +707,11 @@ impl CdpConnection {
             }
         }
         let routed_session_id = response.session_id().map(str::to_owned);
-        if let Some(object_group) = response.object_group() {
-            self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                response.owner(),
-                response.message.value(),
-                object_group,
-            );
-        } else {
-            self.register_runtime_remote_object_ids_from_value_for_owner(
-                response.owner(),
-                response.message.value(),
-            );
-        }
+        self.register_runtime_remote_object_ids_from_response_for_owner(
+            response.owner(),
+            &response.message,
+            response.object_group(),
+        );
         let mut message = response.into_protocol_message();
         message.set_session_id(routed_session_id.as_deref());
         response_events.push(protocol_message_background_event(message));

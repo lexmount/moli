@@ -1345,6 +1345,90 @@ fn raw_inspector_handle_free_notifications_do_not_materialize_business_views() {
 }
 
 #[test]
+fn raw_runtime_responses_register_handles_without_materializing_user_values() {
+    for pending in [false, true] {
+        let mut conn = CdpConnection::default();
+        let mut context = BrowserContext::new("BID-raw-response".to_owned());
+        context.set_active_target_id("TID-raw-response".to_owned());
+        context.attach_active_session("SID-raw-response".to_owned());
+        conn.install_browser_context_fixture_for_test(context);
+        let owner = CommandOwnerScope::for_session("SID-raw-response");
+        if pending {
+            conn.try_register_pending_inspector_await_with_object_group_for_owner(
+                45,
+                &owner,
+                Some("raw-group"),
+            )
+            .unwrap();
+        }
+        let wire = format!(
+            r#"{{"id":45,"sessionId":"SID-raw-response","result":{{"result":{{"type":"object","objectId":"actual","value":{{"objectId":"user-object","text":"{}"}}}},"exceptionDetails":{{"exception":{{"type":"object","objectId":"exception"}}}}}}}}"#,
+            "x".repeat(1024 * 1024)
+        );
+        let message = InspectorJson::from_slice(wire.as_bytes()).unwrap();
+        let mut responses = Vec::new();
+        let mut notifications = Vec::new();
+        assert!(
+            conn.route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
+                message.clone(),
+                Some(45),
+                &owner,
+                &mut responses,
+                &mut notifications
+            )
+        );
+        assert!(!message.is_materialized());
+        assert_eq!(responses.len(), 1);
+        assert!(notifications.is_empty());
+        let output = responses[0].protocol_json().unwrap();
+        assert!(!output.is_materialized());
+        assert_eq!(output.to_string(), message.to_string());
+        for id in ["actual", "exception"] {
+            assert!(conn.runtime_remote_object_id_known_for_owner(&owner, id));
+            if pending {
+                assert_eq!(
+                    conn.runtime_remote_object_group_for_owner(&owner, id)
+                        .as_deref(),
+                    Some("raw-group")
+                );
+            }
+        }
+        assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-object"));
+    }
+}
+
+#[test]
+fn completed_runtime_await_registers_raw_response_groups_without_materializing() {
+    let mut conn = CdpConnection::default();
+    let mut context = BrowserContext::new("BID-raw-response".to_owned());
+    context.set_active_target_id("TID-raw-response".to_owned());
+    context.attach_active_session("SID-raw-response".to_owned());
+    conn.install_browser_context_fixture_for_test(context);
+    let owner = CommandOwnerScope::for_session("SID-raw-response");
+    conn.try_register_pending_inspector_await_with_object_group_for_owner(
+        45,
+        &owner,
+        Some("raw-group"),
+    )
+    .unwrap();
+    let entry = conn
+        .remove_pending_inspector_await_for_owner(45, &owner)
+        .unwrap();
+    let message = InspectorJson::from_slice(br#"{"id":45,"result":{"result":{"type":"object","objectId":"actual","value":{"objectId":"user-object"}},"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}}"#).unwrap();
+    let event = BackgroundProtocolEvent::immediate(message.clone());
+    conn.apply_completed_pending_inspector_await_entry(&owner, entry, &[event]);
+    assert!(!message.is_materialized());
+    for id in ["actual", "exception"] {
+        assert_eq!(
+            conn.runtime_remote_object_group_for_owner(&owner, id)
+                .as_deref(),
+            Some("raw-group")
+        );
+    }
+    assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-object"));
+}
+
+#[test]
 fn raw_inspector_unknown_notifications_still_register_remote_object_ownership() {
     let mut conn = CdpConnection::default();
     let mut context = BrowserContext::new("BID-raw-notification".to_owned());

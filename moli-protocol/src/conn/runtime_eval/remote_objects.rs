@@ -1,6 +1,42 @@
 use super::*;
 
 impl CdpConnection {
+    pub(super) fn register_runtime_remote_object_ids_from_response_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        message: &InspectorJson,
+        object_group: Option<&str>,
+    ) {
+        let object_ids = message
+            .response_remote_object_ids(MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "falling back to the structured Inspector ownership scan");
+                runtime_remote_object_ids_in_value(message.value())
+            });
+        if owner.session_id().is_some() {
+            if let Some(group) = object_group {
+                self.register_runtime_remote_object_ids_for_session_owner_with_group(
+                    owner.session_id(),
+                    object_ids,
+                    group,
+                );
+            } else {
+                self.register_runtime_remote_object_ids_for_session_owner(
+                    owner.session_id(),
+                    object_ids,
+                );
+            }
+        } else {
+            let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                if let Some(group) = object_group {
+                    state.register_runtime_remote_object_ids_with_group(object_ids, group);
+                } else {
+                    state.register_runtime_remote_object_ids(object_ids);
+                }
+            });
+        }
+    }
+
     pub(crate) fn validate_runtime_remote_object_ids_for_session_owner(
         &self,
         session_id: Option<&str>,

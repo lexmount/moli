@@ -980,12 +980,20 @@ impl CdpConnection {
                         result,
                         object_group,
                     );
-                } else if let Some(message) = event.protocol_message() {
-                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner,
-                        message,
-                        object_group,
-                    );
+                } else if let Some(message) = event.protocol_json() {
+                    if message.id_u64().is_some() {
+                        self.register_runtime_remote_object_ids_from_response_for_owner(
+                            owner,
+                            message,
+                            Some(object_group),
+                        );
+                    } else {
+                        self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                            owner,
+                            message.value(),
+                            object_group,
+                        );
+                    }
                 }
             }
         } else {
@@ -994,8 +1002,17 @@ impl CdpConnection {
                     event.command_response_payload_ref()
                 {
                     self.register_runtime_remote_object_ids_from_value_for_owner(owner, result);
-                } else if let Some(message) = event.protocol_message() {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, message);
+                } else if let Some(message) = event.protocol_json() {
+                    if message.id_u64().is_some() {
+                        self.register_runtime_remote_object_ids_from_response_for_owner(
+                            owner, message, None,
+                        );
+                    } else {
+                        self.register_runtime_remote_object_ids_from_value_for_owner(
+                            owner,
+                            message.value(),
+                        );
+                    }
                 }
             }
         }
