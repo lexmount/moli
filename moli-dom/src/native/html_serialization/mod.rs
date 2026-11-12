@@ -1,14 +1,93 @@
 mod engine;
 
 #[cfg(test)]
+mod embedded_tests;
+#[cfg(test)]
 mod tests;
 
-use super::{NativeDom, NativeNodeId};
+use super::{Attribute, NativeDom, NativeNodeId, Node};
+pub use engine::escape_html_attribute_into_string;
 pub(super) use engine::{
-    HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
-    serialize_html_with_shadow_root_provider,
+    HtmlSerializationTarget, HtmlSerializedShadowRoot, serialize_html_with_shadow_root_provider,
 };
 use engine::{serialize_html, serialize_html_with_limit};
+use std::borrow::Cow;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HtmlInsertionPoint {
+    BeforeNode,
+    FirstChild,
+    LastChild,
+}
+
+/// Trusted, already escaped export markup inserted at one traversal boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct HtmlSerializationInsertion<'a> {
+    pub node: NativeNodeId,
+    pub point: HtmlInsertionPoint,
+    pub markup: &'a str,
+}
+
+/// Read-only output rules. No rule changes the source nodes or their attributes.
+/// Ordinary Web serialization does not install a policy.
+pub trait HtmlSerializationPolicy {
+    /// Excluding a node excludes its entire subtree.
+    fn include_node(&self, _node: &Node) -> bool {
+        true
+    }
+
+    fn include_attribute(&self, _node: NativeNodeId, _attribute: &Attribute) -> bool {
+        true
+    }
+
+    /// Replace attributes with matching namespace/local name, then append new
+    /// attributes in slice order. Values still use the normal HTML escaper.
+    fn attribute_overrides(&self, _node: NativeNodeId) -> &[Attribute] {
+        &[]
+    }
+
+    fn insertion(&self) -> Option<HtmlSerializationInsertion<'_>> {
+        None
+    }
+
+    fn include_shadow_adopted_style_sheets(&self) -> bool {
+        true
+    }
+}
+
+/// A live embedded Document already present in the native DOM.
+pub struct HtmlEmbeddedDocument<'a> {
+    pub document: NativeNodeId,
+    pub url: Cow<'a, str>,
+}
+
+/// Lookup only: implementations must not load documents or execute scripts.
+pub trait HtmlEmbeddedDocumentProvider {
+    fn embedded_document(&self, owner: NativeNodeId) -> Option<HtmlEmbeddedDocument<'_>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlSerializationError {
+    InvalidNode { node: NativeNodeId },
+    CyclicEmbeddedDocument { document: NativeNodeId },
+    OutputLimitExceeded { max_bytes: usize },
+}
+
+impl std::fmt::Display for HtmlSerializationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidNode { node } => write!(f, "invalid HTML serialization node {node:?}"),
+            Self::CyclicEmbeddedDocument { document } => {
+                write!(f, "cyclic embedded Document {document:?}")
+            }
+            Self::OutputLimitExceeded { max_bytes } => write!(
+                f,
+                "serialized HTML exceeds the {max_bytes}-byte output limit"
+            ),
+        }
+    }
+}
+impl std::error::Error for HtmlSerializationError {}
 
 /// A bounded serialization stopped before appending bytes past its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -212,6 +212,7 @@ fn html_text_serialization_uses_the_actual_parent_and_scripting_mode() {
                     element,
                     &scripting_enabled_for_node,
                     crate::native::ShadowRootInclusion::None,
+                    crate::native::ShadowRootMarkupProfile::WebApi,
                     None,
                 ),
                 Some(format!("<{local_name}>{contents}</{local_name}>")),
@@ -255,6 +256,7 @@ fn html_serialization_queries_scripting_state_for_each_noscript_text_node() {
             container,
             &scripting_enabled_for_node,
             crate::native::ShadowRootInclusion::None,
+            crate::native::ShadowRootMarkupProfile::WebApi,
             None,
         ),
         Some(format!("<main>{expected}</main>"))

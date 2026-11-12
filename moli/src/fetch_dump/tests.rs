@@ -529,3 +529,68 @@ async fn render_page_dump_async_includes_network_trace_config_summary() -> Resul
     http_server.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn html_dump_profiles_preserve_golden_markup_and_the_live_source() -> Result<()> {
+    let (_browser, mut page, http_server) = load_page("<!doctype html><html><head><style>p{color:red}</style></head><body><nav>MENU</nav><p style=\"color:red\" onclick=\"void 0\">KEEP &amp; text</p><script>window.secret=1</script><x-card></x-card></body></html>").await?;
+    let setup = page.evaluate_runtime_expression_by_value_async(r#"
+        globalThis.exportShadow=document.querySelector('x-card').attachShadow({mode:'closed',slotAssignment:'manual'});
+        exportShadow.innerHTML='<b>SHADOW &amp; text</b>';
+        globalThis.exportChanges=0;
+        globalThis.exportObserver=new MutationObserver(records=>exportChanges+=records.length);
+        exportObserver.observe(document,{subtree:true,childList:true,attributes:true,characterData:true});
+        JSON.stringify([document.documentElement.outerHTML,exportShadow.innerHTML,document.baseURI])
+    "#).await?;
+    assert!(setup.get("exception").is_none(), "{setup}");
+    assert!(setup["value"].is_string(), "{setup}");
+    for bits in 0..8 {
+        let strip = StripOptions {
+            js: bits & 1 != 0,
+            css: bits & 2 != 0,
+            ui: bits & 4 != 0,
+        };
+        let mut expected = String::from("<!DOCTYPE html><html><head>");
+        if !strip.css {
+            expected.push_str("<style>p{color:red}</style>");
+        }
+        expected.push_str("</head><body>");
+        if !strip.ui {
+            expected.push_str("<nav>MENU</nav>");
+        }
+        expected.push_str("<p");
+        if !strip.css {
+            expected.push_str(" style=\"color:red\"");
+        }
+        if !strip.js {
+            expected.push_str(" onclick=\"void 0\"");
+        }
+        expected.push_str(">KEEP &amp; text</p>");
+        if !strip.js {
+            expected.push_str("<script>window.secret=1</script>");
+        }
+        expected.push_str("<x-card><template shadowrootmode=\"closed\" shadowrootslotassignment=\"manual\"><b>SHADOW &amp; text</b></template></x-card></body></html>");
+        for _ in 0..2 {
+            let output = render_page_dump_with_options_async(
+                &mut page,
+                DumpFormat::Html,
+                strip,
+                false,
+                false,
+                false,
+                None,
+            )
+            .await?;
+            assert_eq!(output, expected, "strip={bits}");
+            let snapshot=page.evaluate_runtime_expression_by_value_async("JSON.stringify([document.documentElement.outerHTML,exportShadow.innerHTML,document.baseURI])").await?;
+            assert_eq!(snapshot["value"], setup["value"]);
+            let changes = page
+                .evaluate_runtime_expression_by_value_async(
+                    "exportChanges+exportObserver.takeRecords().length",
+                )
+                .await?;
+            assert_eq!(changes["value"], 0);
+        }
+    }
+    http_server.abort();
+    Ok(())
+}

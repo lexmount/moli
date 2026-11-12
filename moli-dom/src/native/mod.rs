@@ -10,6 +10,8 @@ mod node;
 mod parser_construction;
 mod queries;
 mod scripts;
+#[cfg(any(test, feature = "test-support"))]
+pub mod serialization_probe;
 
 use std::sync::Arc;
 
@@ -33,9 +35,13 @@ pub use host::{
 };
 pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
-    ShadowRootRegistryAttributePolicy,
+    ShadowRootMarkupProfile, ShadowRootRegistryAttributePolicy,
 };
-pub use html_serialization::HtmlSerializationLimitExceeded;
+pub use html_serialization::{
+    HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlInsertionPoint, HtmlSerializationError,
+    HtmlSerializationInsertion, HtmlSerializationLimitExceeded, HtmlSerializationPolicy,
+    escape_html_attribute_into_string,
+};
 pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
     ProcessingInstruction, Text,
@@ -81,6 +87,8 @@ impl NativeNodeStorage {
     }
 
     fn push(&mut self, node: Node) {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::Mutation);
         let chunks = Arc::make_mut(&mut self.chunks);
         match chunks.last_mut() {
             Some(chunk) if chunk.len() < NATIVE_DOM_NODE_CHUNK_CAPACITY => {
@@ -144,12 +152,25 @@ impl<'a> DoubleEndedIterator for NativeDomNodes<'a> {
 impl ExactSizeIterator for NativeDomNodes<'_> {}
 impl std::iter::FusedIterator for NativeDomNodes<'_> {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct NativeDom {
     nodes: NativeNodeStorage,
     document_node_id: NativeNodeId,
     stylesheet_candidate_registries: StylesheetCandidateRegistries,
     parse_errors: Vec<String>,
+}
+
+impl Clone for NativeDom {
+    fn clone(&self) -> Self {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::Clone);
+        Self {
+            nodes: self.nodes.clone(),
+            document_node_id: self.document_node_id,
+            stylesheet_candidate_registries: self.stylesheet_candidate_registries.clone(),
+            parse_errors: self.parse_errors.clone(),
+        }
+    }
 }
 
 impl AsRef<NativeDom> for NativeDom {
@@ -242,6 +263,8 @@ impl NativeDom {
     }
 
     pub fn node_mut(&mut self, node_id: NativeNodeId) -> Option<&mut Node> {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::MutableNode);
         self.nodes.get_mut(node_id.index())
     }
 
@@ -659,10 +682,14 @@ impl NativeDom {
     }
 
     pub fn append_child(&mut self, parent: NativeNodeId, child: NativeNodeId) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::Mutation);
         self.insert_before(parent, child, None)
     }
 
     pub fn remove_child(&mut self, parent: NativeNodeId, child: NativeNodeId) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::Mutation);
         self.remove_child_with_stylesheet_candidate_changes(parent, child)
             .is_some()
     }
@@ -673,6 +700,8 @@ impl NativeDom {
         child: NativeNodeId,
         reference_child: Option<NativeNodeId>,
     ) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        serialization_probe::record(serialization_probe::Access::Mutation);
         self.insert_before_with_stylesheet_candidate_changes(parent, child, reference_child)
             .is_some()
     }

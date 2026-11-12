@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::Attribute;
 
 fn test_url() -> url::Url {
     url::Url::parse("https://inspector-shadow-serialization.test/").expect("test URL")
@@ -37,6 +38,7 @@ fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
             element,
             &scripting_enabled,
             ShadowRootInclusion::None,
+            ShadowRootMarkupProfile::WebApi,
             None,
         )
         .as_deref(),
@@ -48,7 +50,8 @@ fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
         host.outer_html_with_shadow_roots(
             element,
             &scripting_enabled,
-            ShadowRootInclusion::AllAuthorForInspector,
+            ShadowRootInclusion::AllAuthor,
+            ShadowRootMarkupProfile::Inspector,
             Some(&include_registry),
         )
         .as_deref(),
@@ -107,6 +110,7 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
             outer_host,
             &scripting_enabled,
             ShadowRootInclusion::None,
+            ShadowRootMarkupProfile::WebApi,
             None,
         )
         .as_deref(),
@@ -120,6 +124,7 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
                 serializable: false,
                 explicit: &[outer_root],
             },
+            ShadowRootMarkupProfile::WebApi,
             None,
         )
         .as_deref(),
@@ -137,7 +142,8 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
         host.outer_html_with_shadow_roots(
             outer_host,
             &scripting_enabled,
-            ShadowRootInclusion::AllAuthorForInspector,
+            ShadowRootInclusion::AllAuthor,
+            ShadowRootMarkupProfile::Inspector,
             None,
         )
         .as_deref(),
@@ -147,7 +153,8 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
         host.outer_html_with_shadow_roots(
             host.document_node_id(),
             &scripting_enabled,
-            ShadowRootInclusion::AllAuthorForInspector,
+            ShadowRootInclusion::AllAuthor,
+            ShadowRootMarkupProfile::Inspector,
             None,
         )
         .as_deref(),
@@ -157,7 +164,8 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
         host.outer_html_with_shadow_roots(
             outer_root,
             &scripting_enabled,
-            ShadowRootInclusion::AllAuthorForInspector,
+            ShadowRootInclusion::AllAuthor,
+            ShadowRootMarkupProfile::Inspector,
             None,
         )
         .as_deref(),
@@ -193,6 +201,7 @@ fn inspector_outer_html_walks_deep_shadow_trees_iteratively() {
             root,
             &scripting_enabled,
             ShadowRootInclusion::None,
+            ShadowRootMarkupProfile::WebApi,
             None,
         )
         .as_deref(),
@@ -202,7 +211,8 @@ fn inspector_outer_html_walks_deep_shadow_trees_iteratively() {
         .outer_html_with_shadow_roots(
             root,
             &scripting_enabled,
-            ShadowRootInclusion::AllAuthorForInspector,
+            ShadowRootInclusion::AllAuthor,
+            ShadowRootMarkupProfile::Inspector,
             None,
         )
         .expect("deep inspector outer HTML");
@@ -211,6 +221,10 @@ fn inspector_outer_html_walks_deep_shadow_trees_iteratively() {
     assert!(html.contains("<template shadowrootmode=\"closed\"><div>"));
     assert!(html.contains("leaf</div></template></div></template>"));
     assert!(html.ends_with("</div>"));
+    assert_eq!(
+        host.get_html_for_export(host.document_handle(), &scripting_enabled, None, None, None),
+        Ok(html)
+    );
 }
 
 #[test]
@@ -275,6 +289,7 @@ fn shadow_excluding_outer_html_matches_native_serializer() {
                 handle,
                 &scripting_enabled,
                 ShadowRootInclusion::None,
+                ShadowRootMarkupProfile::WebApi,
                 None,
             ),
             host.dom().outer_html(handle),
@@ -284,7 +299,13 @@ fn shadow_excluding_outer_html_matches_native_serializer() {
 }
 
 #[test]
-fn copy_export_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
+fn export_policy_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
+    struct StripCss;
+    impl HtmlSerializationPolicy for StripCss {
+        fn include_shadow_adopted_style_sheets(&self) -> bool {
+            false
+        }
+    }
     let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
     let element = host.create_element("div");
     assert!(host.append_child(host.document_node_id(), element));
@@ -300,15 +321,14 @@ fn copy_export_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
     let before = host
         .get_html(element, &scripting_enabled, true, &[])
         .unwrap();
-    let copy = host.dom().clone();
     assert_eq!(
-        host.get_html_from_copy(&copy, element, &scripting_enabled, &[root], true),
-        Some(before.clone())
+        host.get_html_for_export(element, &scripting_enabled, None, None, None),
+        Ok(before.clone())
     );
     assert_eq!(
-        host.get_html_from_copy(&copy, element, &scripting_enabled, &[root], false)
+        host.get_html_for_export(element, &scripting_enabled, Some(&StripCss), None, None)
             .as_deref(),
-        Some(concat!(
+        Ok(concat!(
             "<template shadowrootmode=\"closed\" shadowrootserializable=\"\" ",
             "shadowrootclonable=\"\"><b>KEEP</b></template>"
         ))
@@ -318,4 +338,88 @@ fn copy_export_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
         host.get_html(element, &scripting_enabled, true, &[]),
         Some(before)
     );
+}
+
+#[test]
+fn export_policy_filters_overrides_and_inserts_without_mutating_attributes() {
+    use crate::native::{HtmlInsertionPoint, HtmlSerializationInsertion};
+    struct Policy {
+        target: DomHandle,
+        attributes: [Attribute; 2],
+        insertion: HtmlInsertionPoint,
+    }
+    impl HtmlSerializationPolicy for Policy {
+        fn include_node(&self, node: &Node) -> bool {
+            !node.is_html_element_named("script")
+        }
+        fn include_attribute(&self, _: DomHandle, attribute: &Attribute) -> bool {
+            !attribute.name_matches("style")
+        }
+        fn attribute_overrides(&self, node: DomHandle) -> &[Attribute] {
+            if node == self.target {
+                &self.attributes
+            } else {
+                &[]
+            }
+        }
+        fn insertion(&self) -> Option<HtmlSerializationInsertion<'_>> {
+            Some(HtmlSerializationInsertion {
+                node: self.target,
+                point: self.insertion,
+                markup: "<b>inserted</b>",
+            })
+        }
+    }
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    host.reset_html_document_shell();
+    let body = host.document_body_handle().unwrap();
+    let link = host.create_element("a");
+    assert!(host.set_attribute(link, "href", "old"));
+    assert!(host.set_attribute(link, "style", "color:red"));
+    assert!(host.set_attribute_ns(
+        link,
+        Some("http://www.w3.org/1999/xlink"),
+        Some("xlink"),
+        "href",
+        "keep"
+    ));
+    let text = host.create_text_node("Link");
+    assert!(host.append_child(link, text));
+    let script = host.create_element("script");
+    let secret = host.create_text_node("secret");
+    assert!(host.append_child(script, secret));
+    assert!(host.append_child(link, script));
+    assert!(host.append_child(body, link));
+    let before = host.dom().serialize_document();
+    let attributes = [
+        Attribute::new("href".into(), "".into(), None, "<&\"\u{a0}".into()),
+        Attribute::new("data-export".into(), "".into(), None, "new".into()),
+    ];
+    let mut policy = Policy {
+        target: link,
+        attributes,
+        insertion: HtmlInsertionPoint::BeforeNode,
+    };
+    for (point, expected) in [
+        (
+            HtmlInsertionPoint::BeforeNode,
+            "<b>inserted</b><a href=\"&lt;&amp;&quot;&nbsp;\" xlink:href=\"keep\" data-export=\"new\">Link</a>",
+        ),
+        (
+            HtmlInsertionPoint::FirstChild,
+            "<a href=\"&lt;&amp;&quot;&nbsp;\" xlink:href=\"keep\" data-export=\"new\"><b>inserted</b>Link</a>",
+        ),
+        (
+            HtmlInsertionPoint::LastChild,
+            "<a href=\"&lt;&amp;&quot;&nbsp;\" xlink:href=\"keep\" data-export=\"new\">Link<b>inserted</b></a>",
+        ),
+    ] {
+        policy.insertion = point;
+        assert_eq!(
+            host.get_html_for_export(body, &scripting_enabled, Some(&policy), None, None)
+                .as_deref(),
+            Ok(expected)
+        );
+        assert_eq!(host.dom().serialize_document(), before);
+    }
 }
