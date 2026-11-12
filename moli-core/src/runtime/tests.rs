@@ -1880,6 +1880,129 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn navigation_engine_service_worker_multipart_redirect_preserves_protocol_body_text()
+-> Result<()> {
+    let (base_url, requests, server) = spawn_main_resource_service_worker_server().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut registration_page = browser
+        .fetch_allow_http_error_with_wait_until(
+            &format!("{base_url}/app/register.html"),
+            RenderedDomWaitUntil::Load,
+            Duration::from_secs(5),
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "globalThis.__mainResourceSwReady === 'ready:true'",
+            Duration::from_secs(5),
+        )
+        .await?;
+    registration_page
+        .evaluate_runtime_expression_async(
+            "navigator.serviceWorker.ready.then(registration => registration.navigationPreload.disable()).then(() => { globalThis.__multipartPreloadDisabled = true; })",
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut registration_page,
+            "globalThis.__multipartPreloadDisabled === true",
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    let mut engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
+        FetchConfig::default(),
+        browser._lifetime_owner.browser_context_owner.owner_access(),
+        OptionalResourceFetchMask::NONE,
+        true,
+    )?;
+    let initiator_url = Url::parse(&format!("{base_url}/app/register.html"))?;
+    let body_text = Arc::<str>::from(concat!(
+        "--upload\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nvalue\r\n",
+        "--upload\r\nContent-Disposition: form-data; name=\"file\"; filename=\"data.txt\"\r\n",
+        "Content-Type: text/plain\r\n\r\n\r\n--upload--\r\n"
+    ));
+    let body = bytes::Bytes::from(body_text.replace(
+        "\r\n\r\n\r\n--upload--",
+        "\r\n\r\nUNIQUE-SERVICE-WORKER-FILE-PAYLOAD\r\n--upload--",
+    ));
+
+    for status in [307, 308] {
+        for final_handler in ["worker", "fallback"] {
+            let final_path = format!("/app/multipart/{status}/{final_handler}");
+            let upload_path = format!("{final_path}/upload");
+            let navigation = engine
+                .fetch_navigation_streaming_raw_response_bytes_with_storage_async(
+                    NavigationResourceStorageHandles::new(
+                        browser.partition.cookie_store(),
+                        browser.partition.web_storage_store(),
+                        browser.partition.session_storage_store(),
+                    ),
+                    Some(&initiator_url),
+                    BrowserNavigationRequestKind::Navigate,
+                    true,
+                    None,
+                    None,
+                    "POST",
+                    &format!("{base_url}{upload_path}"),
+                    Some(body.clone()),
+                    Some(body_text.clone()),
+                    vec![(
+                        "Content-Type".to_owned(),
+                        "multipart/form-data; boundary=upload".to_owned(),
+                    )]
+                    .into(),
+                    None,
+                    FetchCancelHandle::new(),
+                )
+                .await?;
+            let response = navigation
+                .fetch_result
+                .into_response()
+                .into_lossy_materialized_text_response()
+                .await?;
+            assert_eq!(response.status, 200);
+            assert_eq!(
+                response.final_url.as_str(),
+                format!("{base_url}{final_path}")
+            );
+            assert_eq!(response.body_text(), "<body>multipart-final</body>");
+            assert_eq!(response.redirect_chain.len(), 1);
+            let redirect = &response.redirect_chain[0];
+            assert_eq!(redirect.status, status);
+            assert_eq!(redirect.source, moli_fetch::RedirectSource::ServiceWorker);
+            let dispatched = redirect
+                .dispatched_request
+                .as_ref()
+                .context("Service Worker navigation must retain its redirected request")?;
+            assert_eq!(dispatched.method, "POST");
+            assert_eq!(dispatched.body.as_ref(), Some(&body));
+            assert_eq!(dispatched.body_text().as_deref(), Some(body_text.as_ref()));
+
+            let observed = requests.lock().await;
+            for path in [&upload_path, &final_path] {
+                let hops = observed
+                    .iter()
+                    .filter(|request| request_path(request).as_ref() == Some(path))
+                    .collect::<Vec<_>>();
+                assert_eq!(hops.len(), 1, "exactly one network request for {path}");
+                assert!(hops[0].starts_with(&format!("POST {path} HTTP/1.1\r\n")));
+                assert_eq!(
+                    hops[0]
+                        .split_once("\r\n\r\n")
+                        .map(|(_, body)| body.as_bytes()),
+                    Some(body.as_ref()),
+                    "the server must receive the complete file upload at {path}"
+                );
+            }
+        }
+    }
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigation_engine_cookie_scope_is_bound_before_service_worker_interception() -> Result<()>
 {
     let (base_url, requests, server) = spawn_main_resource_service_worker_server().await?;
@@ -5826,6 +5949,39 @@ async fn spawn_main_resource_service_worker_server()
                     Err(_) => return,
                 };
                 let path = request_path(&request).unwrap_or_else(|| "/".to_owned());
+                if let Some(multipart_path) = path.strip_prefix("/app/multipart/") {
+                    let content_length = request
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    let mut body = vec![0; content_length];
+                    if stream.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    requests.lock().await.push(format!(
+                        "{request}{}",
+                        String::from_utf8(body).expect("multipart fixture uses ASCII file content")
+                    ));
+                    let response = if let Some(destination) = path.strip_suffix("/upload") {
+                        let (status, _) = multipart_path.split_once('/').unwrap();
+                        format!(
+                            "HTTP/1.1 {status} Redirect\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                    } else {
+                        let body = "<body>multipart-final</body>";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    return;
+                }
                 let preload_header_value = request
                     .lines()
                     .find_map(|line| {
@@ -6151,7 +6307,20 @@ self.addEventListener("message", event => {
 });
 self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);
-	  if (url.pathname === "/app/controlled.html") {
+	  if (url.pathname.startsWith("/app/multipart/")) {
+        if (event.request.redirect !== "manual") {
+          event.respondWith(Promise.reject(new Error("navigation redirect mode must remain manual")));
+        } else if (url.pathname.endsWith("/upload")) {
+          event.respondWith(fetch(event.request).then(response => {
+            if (response.type !== "opaqueredirect") {
+              throw new Error("navigation must follow the worker's opaqueredirect response");
+            }
+            return response;
+          }));
+        } else if (url.pathname.endsWith("/worker")) {
+          event.respondWith(fetch(event.request));
+        }
+	  } else if (url.pathname === "/app/controlled.html") {
 	    event.respondWith(new Response(
 	      "<!doctype html><body>sw-main:" +
 	        event.request.destination + ":" + event.request.mode +

@@ -12,6 +12,7 @@ fn redirected_head(allow_redirect_timing: bool) -> ResponseHead {
         headers,
         network_extra_info_available: false,
         request_extra_info: None,
+        dispatched_request: None,
         response_extra_info: None,
         redirect_has_extra_info: false,
         request_cookie_report: None,
