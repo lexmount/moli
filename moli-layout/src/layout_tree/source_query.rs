@@ -436,11 +436,35 @@ where
                 matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
             })
         };
-        let Some(principal) = output
-            .principal_box
-            .filter(|_| output.fragments.iter().any(is_inline))
-        else {
+        // Only a block-in-inline split creates continuation boxes, so ordinary
+        // inlines do no extra work.
+        let Some(principal) = output.principal_box.filter(|principal| {
+            output.fragments.iter().any(|id| {
+                self.fragment(*id).is_some_and(|fragment| {
+                    matches!(fragment.kind, LayoutFragmentKind::InlineBox { box_id, .. } if box_id != *principal)
+                })
+            })
+        }) else {
             return output.fragments.as_slice().into();
+        };
+        let has_inline_fragment =
+            |layout_box: &FrozenLayoutBox<N>| layout_box.geometry.fragments.iter().any(is_inline);
+        // The box's source ancestry reaches this inline through non-atomic
+        // inlines only (e.g. `<a><span><div>`).
+        let split_from_principal = |layout_box: &FrozenLayoutBox<N>| {
+            let mut parent = layout_box.geometry.structural_parent;
+            while let Some(id) = parent {
+                if id == principal {
+                    return true;
+                }
+                match self.boxes.get(id.index()) {
+                    Some(ancestor) if has_inline_fragment(ancestor) => {
+                        parent = ancestor.geometry.structural_parent;
+                    }
+                    _ => return false,
+                }
+            }
+            false
         };
         let owner = self
             .boxes
@@ -450,7 +474,8 @@ where
             .boxes
             .iter()
             .filter(|layout_box| {
-                layout_box.geometry.structural_parent == Some(principal)
+                !has_inline_fragment(layout_box)
+                    && split_from_principal(layout_box)
                     && layout_box
                         .geometry
                         .parent

@@ -2559,6 +2559,38 @@ fn inline_with_block_child_reports_the_block_geometry() {
 }
 
 #[test]
+fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
+    // <root><a><span><div 120x20/></span></a></root>
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("a", vec![2]),
+        Node::element("span", vec![3]),
+        Node::element("div", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+
+    let output = build(&source, &mut styles);
+    let block = output.client_rects_for_source(3)[0].bounding_rect();
+    for inline in [1, 2] {
+        let rects = output.client_rects_for_source(inline);
+        assert_eq!(rects.len(), 1, "{inline}: {rects:?}");
+        assert_rect(rects[0].bounding_rect(), block);
+    }
+}
+
+#[test]
 fn own_border_is_visual_geometry_not_scrollable_content() {
     let source = Source(vec![
         Node::element("root", vec![1]),
