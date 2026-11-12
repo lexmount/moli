@@ -124,9 +124,9 @@ impl PageNetworkPolicy {
         }
     }
 
-    /// Returns a policy with the same current values and independent mutable
-    /// state. This is the target-creation boundary; ordinary `clone()` keeps
-    /// sharing the original target policy.
+    /// Copies request configuration and network conditions into a new target.
+    /// Target-local protocol interception starts unconfigured; ordinary
+    /// `clone()` keeps sharing the original target policy.
     pub fn isolated_copy(&self) -> Self {
         Self::from_snapshot(self.snapshot())
     }
@@ -134,7 +134,8 @@ impl PageNetworkPolicy {
     /// Returns a Document-owned mutable view within the same Page target.
     ///
     /// Renderer Documents need independent request-policy state, but resource
-    /// reuse across top-level navigation remains owned by the stable Page.
+    /// reuse across top-level navigation and protocol interception remain
+    /// owned by the stable Page.
     pub fn isolated_same_page_copy(&self) -> Self {
         let mut copy = Self::from_snapshot_with_memory_cache_partition(
             self.snapshot(),
@@ -173,7 +174,7 @@ impl PageNetworkPolicy {
                 revision: snapshot.network_conditions_revision,
                 offline: snapshot.network_offline,
             })),
-            synchronous_xhr_intercepts: Arc::new(Mutex::new(snapshot.synchronous_xhr_intercepts)),
+            synchronous_xhr_intercepts: Arc::default(),
         }
     }
 
@@ -220,7 +221,8 @@ impl PageNetworkPolicy {
 
     /// Captures the current request configuration and network conditions.
     ///
-    /// A normal request preparation retains this complete snapshot. A
+    /// Protocol interception stays with its target and is not copied into
+    /// snapshots. A normal request preparation retains this snapshot. A
     /// long-lived resource lease instead uses [`Self::frozen_request_view`] so
     /// that DevTools network conditions remain live while request
     /// configuration cannot drift across JavaScript/CDP re-entry.
@@ -234,7 +236,6 @@ impl PageNetworkPolicy {
             extra_http_headers: state.extra_http_headers.clone(),
             browser_identity: state.browser_identity.clone(),
             network_offline: network_conditions.offline,
-            synchronous_xhr_intercepts: self.synchronous_xhr_intercepts.lock().clone(),
             blocked_url_patterns: state.blocked_url_patterns.clone(),
             optional_resource_fetch_mask: state.optional_resource_fetch_mask,
             subframe_loading_enabled: state.subframe_loading_enabled,
@@ -433,7 +434,6 @@ pub struct PageNetworkPolicySnapshot {
     extra_http_headers: SharedHeaderList,
     browser_identity: Option<Arc<moli_browser_profile::BrowserIdentityProfile>>,
     network_offline: bool,
-    synchronous_xhr_intercepts: Option<SharedPatternList>,
     blocked_url_patterns: SharedPatternList,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
@@ -540,6 +540,12 @@ mod tests {
         let lease = document.frozen_request_view();
         let target = page.isolated_copy();
         page.set_synchronous_xhr_interception_patterns(Some(&["*/api/*".to_owned()]));
+        let popup = page.isolated_copy();
+        assert!(
+            popup
+                .synchronous_xhr_interception_patterns(false)
+                .is_empty()
+        );
         for view in [&page, &document, &worker, &lease] {
             assert_eq!(
                 view.synchronous_xhr_interception_patterns(false).as_ref(),
