@@ -10,6 +10,7 @@ moli-fetch-types = { path = "../moli-fetch-types" }
 moli-header-field = { path = "../moli-header-field" }
 anyhow = "1.0.100"
 base64 = "0.22.1"
+indexmap = "2.11.0"
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-crypto = { path = "../moli-crypto" }
 moli-indexeddb = { path = "../moli-indexeddb" }
