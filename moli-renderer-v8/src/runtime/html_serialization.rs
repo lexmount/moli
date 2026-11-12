@@ -38,6 +38,10 @@ struct HtmlDumpPolicy {
 }
 
 impl HtmlSerializationPolicy for HtmlDumpPolicy {
+    fn has_filters(&self) -> bool {
+        self.strip != RendererContentStripOptions::default()
+    }
+
     fn include_node(&self, node: &Node) -> bool {
         !super::content_filter::should_strip_node(node, self.strip)
     }

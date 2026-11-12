@@ -59,6 +59,7 @@ struct HtmlSerializationOptions<'a> {
     scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
     policy: Option<&'a dyn HtmlSerializationPolicy>,
+    filtering: bool,
     insertion: Option<HtmlSerializationInsertion<'a>>,
     embedded_documents: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
 }
@@ -73,6 +74,7 @@ impl<'a> HtmlSerializationOptions<'a> {
             scripting_enabled_for_node,
             shadow_root_provider: None,
             policy: None,
+            filtering: false,
             insertion: None,
             embedded_documents: None,
         }
@@ -120,7 +122,7 @@ where
     }
 }
 
-#[inline]
+#[inline(always)]
 fn escape_html_attribute<S>(value: &str, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
@@ -379,7 +381,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
         if self
             .options
             .policy
-            .is_some_and(|p| POLICY && !p.include_node(node))
+            .is_some_and(|p| POLICY && self.options.filtering && !p.include_node(node))
         {
             return Ok(());
         }
@@ -434,17 +436,26 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     });
                     self.stack.push(HtmlSerializationFrame::EmbeddedAttributes);
                 } else {
-                    for attribute in element.attributes() {
-                        if self.out.limit_exceeded() {
-                            return Ok(());
+                    let filter = self
+                        .options
+                        .policy
+                        .filter(|_| POLICY && self.options.filtering);
+                    if overrides.is_empty() && filter.is_none() {
+                        for attribute in element.attributes() {
+                            if self.out.limit_exceeded() {
+                                return Ok(());
+                            }
+                            serialize_attribute(attribute, &mut self.out);
                         }
-                        let output = replacement_attribute(attribute, overrides);
-                        if self
-                            .options
-                            .policy
-                            .is_none_or(|p| !POLICY || p.include_attribute(id, output))
-                        {
-                            serialize_attribute(output, &mut self.out);
+                    } else {
+                        for attribute in element.attributes() {
+                            if self.out.limit_exceeded() {
+                                return Ok(());
+                            }
+                            let output = replacement_attribute(attribute, overrides);
+                            if filter.is_none_or(|p| p.include_attribute(id, output)) {
+                                serialize_attribute(output, &mut self.out);
+                            }
                         }
                     }
                     for attribute in overrides {
@@ -452,10 +463,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             .attributes()
                             .iter()
                             .any(|a| attribute_key_eq(a, attribute))
-                            && self
-                                .options
-                                .policy
-                                .is_none_or(|p| !POLICY || p.include_attribute(id, attribute))
+                            && filter.is_none_or(|p| p.include_attribute(id, attribute))
                         {
                             serialize_attribute(attribute, &mut self.out);
                         }
@@ -544,6 +552,10 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             .policy
             .filter(|_| POLICY)
             .map_or(&[][..], |p| p.attribute_overrides(state.owner));
+        let filter = self
+            .options
+            .policy
+            .filter(|_| POLICY && self.options.filtering);
         while state.next_attribute < element.attributes().len() + overrides.len() {
             let index = state.next_attribute;
             state.next_attribute += 1;
@@ -570,11 +582,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 self.out.push_str(" data-moli-frame-url=\"");
                 self.out.attribute(&state.embedded.url);
                 self.out.push('"');
-            } else if self
-                .options
-                .policy
-                .is_none_or(|p| !POLICY || p.include_attribute(state.owner, attribute))
-            {
+            } else if filter.is_none_or(|p| p.include_attribute(state.owner, attribute)) {
                 serialize_attribute(attribute, &mut self.out);
             }
         }
@@ -830,6 +838,7 @@ where
         options = options.with_shadow_root_provider(provider);
     }
     options.policy = policy;
+    options.filtering = policy.is_some_and(|p| p.has_filters());
     options.insertion = policy.and_then(|p| p.insertion());
     options.embedded_documents = embedded_documents;
     if let Some(limit) = max_bytes {

@@ -341,6 +341,85 @@ fn export_policy_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
 }
 
 #[test]
+fn export_without_filters_still_applies_projection_and_checks_output_limits() {
+    use crate::native::{HtmlInsertionPoint, HtmlSerializationInsertion};
+    struct Projection {
+        target: DomHandle,
+        body: DomHandle,
+        attributes: [Attribute; 1],
+    }
+    impl HtmlSerializationPolicy for Projection {
+        fn has_filters(&self) -> bool {
+            false
+        }
+        fn include_node(&self, _: &Node) -> bool {
+            panic!("projection does not filter nodes");
+        }
+        fn include_attribute(&self, _: DomHandle, _: &Attribute) -> bool {
+            panic!("projection does not filter attributes");
+        }
+        fn attribute_overrides(&self, node: DomHandle) -> &[Attribute] {
+            if node == self.target {
+                &self.attributes
+            } else {
+                &[]
+            }
+        }
+        fn insertion(&self) -> Option<HtmlSerializationInsertion<'_>> {
+            Some(HtmlSerializationInsertion {
+                node: self.body,
+                point: HtmlInsertionPoint::FirstChild,
+                markup: "<b>inserted</b>",
+            })
+        }
+    }
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    host.reset_html_document_shell();
+    let body = host.document_body_handle().unwrap();
+    let element = host.create_element("p");
+    assert!(host.set_attribute(element, "title", "old"));
+    assert!(host.set_attribute(element, "style", "color:red"));
+    let text = host.create_text_node("literal & text");
+    assert!(host.append_child(element, text));
+    assert!(host.append_child(body, element));
+    let before = host.dom().serialize_document();
+    let policy = Projection {
+        target: element,
+        body,
+        attributes: [Attribute::new(
+            "title".into(),
+            String::new(),
+            None,
+            "new & value".into(),
+        )],
+    };
+    let expected =
+        "<b>inserted</b><p title=\"new &amp; value\" style=\"color:red\">literal &amp; text</p>";
+    assert_eq!(
+        host.get_html_for_export(
+            body,
+            &scripting_enabled,
+            Some(&policy),
+            None,
+            Some(expected.len())
+        )
+        .unwrap(),
+        expected
+    );
+    assert!(
+        host.get_html_for_export(
+            body,
+            &scripting_enabled,
+            Some(&policy),
+            None,
+            Some(expected.len() - 1)
+        )
+        .is_err()
+    );
+    assert_eq!(host.dom().serialize_document(), before);
+}
+
+#[test]
 fn export_policy_filters_overrides_and_inserts_without_mutating_attributes() {
     use crate::native::{HtmlInsertionPoint, HtmlSerializationInsertion};
     struct Policy {
