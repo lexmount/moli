@@ -396,7 +396,7 @@ fn network_finished_event_for_target(
 }
 
 #[test]
-fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
+fn mixed_owner_protocol_output_retains_only_its_known_targets() {
     let mut conn = CdpConnection::new();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-known");
     let target_id = navigation.target_id().to_owned();
@@ -413,7 +413,7 @@ fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
                     .navigation_gate_target_ids(&state)
             })
             .unwrap(),
-        [target_id]
+        std::slice::from_ref(&target_id)
     );
 
     let unresolved = BackgroundProtocolEvent::immediate(json!({
@@ -422,12 +422,12 @@ fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
         "params": {}
     }));
     let mixed = ProtocolOutputSequence::from_background_events(vec![known, unresolved]);
-    assert!(
+    assert_eq!(
         owner
             .with_state(|state| mixed.navigation_gate_target_ids(&state))
-            .unwrap()
-            .is_empty(),
-        "an atomic batch with any unresolved owner must remain connection-gated"
+            .unwrap(),
+        [target_id],
+        "an unresolved sibling does not expand a batch's exact Target ownership"
     );
 }
 
@@ -2204,6 +2204,185 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
         &replacement
     ));
     assert!(!conn.has_inflight_background_navigation());
+}
+
+#[test]
+fn unattributed_fence_wait_does_not_block_an_independent_target() {
+    for snapshot in [false, true] {
+        let unresolved = publication_cursor(&unconstrained_renderer_publication(
+            PageId::new_for_testing(101),
+        ));
+        let conn = CdpConnection::new();
+        let context = conn.default_browser_context_id().to_owned();
+        let (mut scheduler, _tasks) = CdpScheduler::new(conn);
+        scheduler.apply_protocol_work_publications(vec![
+            moli_protocol::test_support::renderer_fenced_output_work(
+                1,
+                Vec::new(),
+                vec![RendererOutputFence::new_for_test(unresolved)],
+            ),
+            root_frame_stopped_loading_work_for_target(
+                2,
+                vec![None],
+                context,
+                "TID-independent".into(),
+                "FRAME-independent".into(),
+                "LOADER-independent".into(),
+            ),
+        ]);
+        if snapshot {
+            let work = std::mem::take(&mut scheduler.queues.protocol_residences);
+            assert!(
+                scheduler
+                    .complete_protocol_residence_snapshot(work)
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
+            assert!(scheduler.complete_next_protocol_residence().is_empty());
+        }
+        assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+        assert!(
+            matches!(scheduler.queues.protocol_residences.front(), Some(ProtocolSchedulerResidence::ProtocolWork { work, .. }) if work.publish_sequence().get()==1)
+        );
+    }
+}
+
+#[test]
+fn channel_cleanup_does_not_wait_for_its_targets_navigation() {
+    for snapshot in [false, true] {
+        let mut conn = CdpConnection::new();
+        let pending = arm_background_navigation_request(&mut conn, "LOADER-pending");
+        moli_protocol::test_support::publish_bidi_channel_cleanup(&mut conn, "retired-channel");
+        let wake = conn.take_scheduler_events();
+        let (mut scheduler, _tasks) = CdpScheduler::new(conn);
+        scheduler.apply_scheduler_events(wake);
+        if snapshot {
+            let work = std::mem::take(&mut scheduler.queues.protocol_residences);
+            assert!(
+                scheduler
+                    .complete_protocol_residence_snapshot(work)
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
+            assert!(scheduler.complete_next_protocol_residence().is_empty());
+        }
+        assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+        assert!(
+            !pending.is_cancelled(),
+            "cleanup does not replace the navigation"
+        );
+    }
+}
+
+#[tokio::test]
+async fn target_retirement_waits_for_its_command_but_not_the_load_it_cancels() {
+    tokio::task::LocalSet::new().run_until(async {
+    for snapshot in [false, true] {
+        let mut conn = CdpConnection::new();
+        let pending = arm_background_navigation_request(&mut conn, "LOADER-pending");
+        let context = conn.default_browser_context_id().to_owned();
+        let target = pending.target_id().to_owned();
+        moli_protocol::test_support::publish_protocol_work(&mut conn, |sequence| {
+            root_frame_stopped_loading_work_for_target(
+                sequence,
+                vec![None],
+                context,
+                target.clone(),
+                "FRAME-pending".into(),
+                "LOADER-pending".into(),
+            )
+        });
+        let (permit, output) = conn.begin_command_response_flush_permit();
+        moli_protocol::test_support::publish_retired_target_termination_after_command_output(
+            &mut conn, &target, output,
+        );
+        let wake = conn.take_scheduler_events();
+        let (mut scheduler, _tasks) = CdpScheduler::new(conn);
+        scheduler.apply_scheduler_events(wake);
+        assert_eq!(scheduler.next_ungated_protocol_residence_index(), None);
+        let _ = scheduler.finish_command_dispatch_output_flush(Some(
+            super::CommandOutputReleasePermit::new(permit, None),
+        ));
+        if snapshot {
+            let work = std::mem::take(&mut scheduler.queues.protocol_residences);
+            let _ = scheduler.complete_protocol_residence_snapshot(work);
+        } else {
+            assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(1));
+            let _ = scheduler.complete_next_protocol_residence();
+        }
+        assert_eq!(scheduler.queues.protocol_residence_len(), 1);
+        assert!(matches!(scheduler.queues.protocol_residences.front(),
+            Some(ProtocolSchedulerResidence::ProtocolWork { work, .. })
+                if work.is_root_frame_stopped_loading()));
+    }
+    }).await;
+}
+
+#[test]
+fn replacement_navigation_cannot_bypass_its_explicit_delivery_predecessor() {
+    for snapshot in [false, true] {
+        let mut conn = CdpConnection::new();
+        let pending = arm_background_navigation_request(&mut conn, "LOADER-pending");
+        let target = pending.target_id().to_owned();
+        let context = conn.default_browser_context_id().to_owned();
+        let source = publication_cursor(&unconstrained_renderer_publication(
+            PageId::new_for_testing(102),
+        ));
+        let unresolved = publication_cursor(&unconstrained_renderer_publication(
+            PageId::new_for_testing(103),
+        ));
+        let (mut scheduler, _tasks) = CdpScheduler::new(conn);
+        scheduler.queues.enqueue_renderer_output_publication(
+            source,
+            ProtocolOutputSequence::from_background_event(network_response_event_for_target(
+                DevToolsNetworkResourceType::Xhr,
+                "REQ-before-replacement",
+                &target,
+            )),
+            Vec::new(),
+            None,
+        );
+        scheduler.apply_protocol_work_publications(vec![
+            moli_protocol::test_support::protocol_work_from_renderer_output(
+                moli_protocol::test_support::renderer_fenced_output_work(
+                    1,
+                    Vec::new(),
+                    vec![RendererOutputFence::new_for_test(unresolved)],
+                ),
+                source,
+            ),
+            // Sharing a Target alone does not establish execution order. The
+            // navigation depends on delivery of this particular publication.
+            moli_protocol::test_support::protocol_work_after_renderer_delivery(
+                moli_protocol::test_support::retired_location_navigation_work_for_target(
+                    2,
+                    context,
+                    target,
+                    root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
+                ),
+                source,
+            ),
+        ]);
+        if snapshot {
+            let work = std::mem::take(&mut scheduler.queues.protocol_residences);
+            assert!(
+                scheduler
+                    .complete_protocol_residence_snapshot(work)
+                    .is_empty()
+            );
+        } else {
+            assert_eq!(
+                scheduler.next_ungated_protocol_residence_index(),
+                None,
+                "replacing a load does not satisfy an unrelated Renderer fence"
+            );
+            assert!(scheduler.complete_next_protocol_residence().is_empty());
+        }
+        assert_eq!(scheduler.queues.protocol_residence_len(), 2);
+        assert!(!pending.is_cancelled());
+    }
 }
 
 #[tokio::test]

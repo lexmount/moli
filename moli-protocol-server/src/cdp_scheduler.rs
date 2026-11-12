@@ -393,11 +393,9 @@ impl ProtocolOutputSequence {
         let mut target_ids = Vec::new();
         for event in &self.events {
             let Some(target_id) = conn.background_navigation_target_id_for_event(event) else {
-                // A publication is released atomically. If even one event has
-                // no exact owner, keep the whole batch behind the conservative
-                // connection-wide gate rather than attributing it to a known
-                // sibling event's target.
-                return Vec::new();
+                // Missing attribution is not a dependency on every Target.
+                // Keep the batch atomic and retain any exact owners it has.
+                continue;
             };
             if !target_ids.contains(&target_id) {
                 target_ids.push(target_id);
@@ -1393,6 +1391,7 @@ impl CdpScheduler {
         let mut protocol_output = match self
             .drain_inflight_background_navigation_before_internal_command(
                 receivers,
+                &command,
                 &navigation_context,
             )
             .await
@@ -1409,10 +1408,9 @@ impl CdpScheduler {
                 };
             }
         };
-        // Background navigation completion is deliberately drained before a
-        // command starts. Capture and authorize the Document only after that
-        // drain, so a DOM reference cannot pass a pre-drain check and then be
-        // dispatched to a replacement Document in the same Page.
+        // Document commands may have drained an earlier navigation. Capture
+        // and authorize their Document afterwards, so a DOM reference cannot
+        // pass a pre-drain check then reach a replacement in the same Page.
         let page_residence =
             self.document_residence_identity_for_devtools_context(&navigation_context);
         if expected_page.is_some_and(|expected| page_residence.as_ref() != Some(expected)) {
@@ -1610,12 +1608,29 @@ impl CdpScheduler {
         }
     }
 
-    async fn drain_inflight_background_navigation_before_internal_command(
+    pub(crate) async fn drain_inflight_background_navigation_before_internal_command(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
+        command: &AutomationCommand,
         context: &moli_protocol::automation::AutomationContext,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
+        // These commands settle or replace the request being waited on. They
+        // must reach their own owner without waiting for that request first.
+        if devtools_navigation_wait(command).is_some()
+            || matches!(
+                command,
+                AutomationCommand::CloseTarget(_)
+                    | AutomationCommand::RemoveBrowserContext(_)
+                    | AutomationCommand::ContinueInterceptedRequest(_)
+                    | AutomationCommand::ContinueInterceptedResponse(_)
+                    | AutomationCommand::ContinueWithAuth(_)
+                    | AutomationCommand::FailInterceptedRequest(_)
+                    | AutomationCommand::FulfillInterceptedRequest(_)
+            )
+        {
+            return Ok(out);
+        }
         while self
             .state
             .with_state(|state| {
@@ -2058,10 +2073,6 @@ impl CdpScheduler {
                 .expect("live protocol actor state");
             if has_pending_target_predecessor || has_pending_scheduler_predecessor {
                 retained.push_back(residence);
-                if target_ids.is_empty() {
-                    retained.append(&mut snapshot);
-                    break;
-                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
@@ -2190,12 +2201,6 @@ impl CdpScheduler {
                 &target_ids,
                 &blocked_target_ids,
             ) {
-                if target_ids.is_empty() {
-                    retained.push_back(residence);
-                    retained.append(&mut snapshot);
-                    self.queues.restore_snapshot_to_front(retained);
-                    return out;
-                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 retained.push_back(residence);
                 continue;
@@ -2210,12 +2215,6 @@ impl CdpScheduler {
                 })
                 .expect("live protocol actor state")
             {
-                if target_ids.is_empty() {
-                    retained.push_back(residence);
-                    retained.append(&mut snapshot);
-                    self.queues.restore_snapshot_to_front(retained);
-                    return out;
-                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 retained.push_back(residence);
                 continue;
@@ -2246,9 +2245,6 @@ impl CdpScheduler {
     }
 
     fn protocol_targets_have_inflight_background_navigation(&self, target_ids: &[String]) -> bool {
-        if target_ids.is_empty() {
-            return self.has_inflight_background_navigation();
-        }
         target_ids.iter().any(|target_id| {
             self.state
                 .with_state(|state| state.has_inflight_background_navigation_for_target(target_id))
@@ -2299,9 +2295,6 @@ impl CdpScheduler {
                 &target_ids,
                 &blocked_target_ids,
             ) {
-                if target_ids.is_empty() {
-                    return None;
-                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
@@ -2311,9 +2304,6 @@ impl CdpScheduler {
                 .expect("live protocol actor state")
                 == ProtocolSchedulerStep::Wait
             {
-                if target_ids.is_empty() {
-                    return None;
-                }
                 append_unique_target_ids(&mut blocked_target_ids, target_ids);
                 continue;
             }
@@ -2384,9 +2374,9 @@ impl CdpScheduler {
         Ok(())
     }
 
-    /// Keep each complete publication in target order, including any Native
-    /// insertion in its projection. Child output also waits for full delivery
-    /// of the publication that created its Page.
+    /// Complete whole publications with their explicit output dependencies.
+    /// Child output waits for delivery of the publication that created its Page.
+    /// Independent owner work settles under its own prerequisites.
     pub(crate) fn complete_protocol_work(
         &mut self,
         completion: protocol_task::ProtocolWorkCompletion,

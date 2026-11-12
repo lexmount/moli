@@ -388,6 +388,13 @@ All scenarios use local fixture documents, match the navigation's loader and
 and exactly one terminal per command, retain the full wire transcript, and use
 protocol events/responses instead of sleeps or retries.
 
+Five additional cases intercept a real navigation at the Fetch Request stage.
+Before releasing that request, an independent Page must execute, a replacement
+navigation must load, or `Page.stopLoading`, `Page.close`, and
+`Target.closeTarget` must complete. Stopping retains the old Document, replacement
+retains the new URL, and closing must emit the target's destruction. Every
+intercepted navigation still owes exactly one terminal response.
+
 Six mutation cases explicitly preserve Moli's current VM entry boundary:
 `DOM.setAttributeValue`, `DOM.removeNode`, `DOM.scrollIntoViewIfNeeded`,
 `CSS.setStyleSheetText`, `Page.setDocumentContent`, and
@@ -396,7 +403,7 @@ during ordinary pause in Chromium. This is a Moli implementation limitation,
 not a CDP requirement; supporting nested mutation later must deliberately update
 this expectation. CSS editing checks effective computed color, since Chromium
 changes CSSOM without rewriting the style element's DOM text. The group is
-calibrated against `/usr/bin/chromium` 145.0.7632.116 and can run unchanged using
+calibrated against Chromium 156.0.8078.73 and can run unchanged using
 `uv run moli-cdp-smoke --group cdp-ordering --endpoint URL`. Run a bounded stress
 check with `--group cdp-ordering --repeat 20 --jobs 4`; any failed run fails the
 suite.

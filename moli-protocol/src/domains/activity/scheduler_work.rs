@@ -474,14 +474,15 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    /// A current-document navigation must reach the owner that cancels the
-    /// old request, including when earlier observations are waiting on it.
-    /// Independent activation still preserves ordering with earlier work.
+    /// Spell out each payload's navigation dependency. Navigation and
+    /// retirement must reach the owner that cancels an old request. Other
+    /// work retains its explicit Page, output and command prerequisites.
     pub fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match &self.payload {
             ProtocolSchedulerWorkPayload::TopLevelNavigationOwnerAction(_)
             | ProtocolSchedulerWorkPayload::NavigationRequestContinuation(..)
-            | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_) => {
+            | ProtocolSchedulerWorkPayload::NavigationProtocolCompletion(_)
+            | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => {
                 // A settled native commit must get past the old document's
                 // load residence: its final publication releases that very
                 // lifecycle observation. Independent activation preserves a
@@ -493,10 +494,15 @@ impl ProtocolSchedulerWork {
             {
                 ProtocolNavigationDependency::ReplacesPendingLoad
             }
-            ProtocolSchedulerWorkPayload::RendererFencedOutput(_) => {
+            ProtocolSchedulerWorkPayload::RendererFencedOutput(_)
+            | ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_) => {
                 ProtocolNavigationDependency::Independent
             }
-            _ => ProtocolNavigationDependency::AfterLoad,
+            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_)
+            | ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_) => {
+                ProtocolNavigationDependency::AfterLoad
+            }
         }
     }
 
