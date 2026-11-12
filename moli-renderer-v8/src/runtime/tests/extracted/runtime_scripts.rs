@@ -166,11 +166,11 @@ async fn outer_html_document_command_includes_only_author_shadow_roots() {
 
     let ordinary = outer_html_for_renderer_document(&page, false).await;
     let serialize_html = serialize_html_for_renderer_page(&page).await;
-    assert_eq!(ordinary, serialize_html);
     assert!(!ordinary.contains("shadowrootmode"));
     assert!(!ordinary.contains("shadow"));
 
     let including_shadow = outer_html_for_renderer_document(&page, true).await;
+    assert_eq!(serialize_html, including_shadow);
     assert!(including_shadow.contains(concat!(
         "<x-host id=\"host\"><template shadowrootmode=\"closed\">",
         "<span>shadow</span></template>light</x-host>"
