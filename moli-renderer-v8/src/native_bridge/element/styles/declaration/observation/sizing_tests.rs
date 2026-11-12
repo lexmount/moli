@@ -41,6 +41,49 @@ fn sizes(read: &ComputedStyleRead<'_>) -> [String; 4] {
 }
 
 #[test]
+fn indexed_geometry_keeps_published_values_until_the_snapshot_is_replaced() {
+    let mut vm = fixture("<div id=target class=sized>Visible text</div>");
+    sample(&mut vm);
+    let read = r#"JSON.stringify((()=>{
+      const el=document.getElementById('target');
+      return [el.getBoundingClientRect().width,el.offsetWidth,el.getClientRects()[0].width];
+    })())"#;
+    assert_eq!(vm.eval(read).unwrap(), "[120,120,120]");
+    // Build and reuse the source index before changing any live inputs.
+    assert_eq!(vm.eval(read).unwrap(), "[120,120,120]");
+    vm.eval("document.getElementById('target').style.width='60px';'changed'")
+        .unwrap();
+    assert_eq!(vm.eval(read).unwrap(), "[120,120,120]");
+    sample(&mut vm);
+    assert_eq!(vm.eval(read).unwrap(), "[60,60,60]");
+    vm.eval("globalThis.removedIndexedTarget=document.getElementById('target');removedIndexedTarget.remove();'removed'").unwrap();
+    assert_eq!(vm.eval("JSON.stringify([removedIndexedTarget.getBoundingClientRect().width,removedIndexedTarget.offsetWidth,removedIndexedTarget.getClientRects().length])").unwrap(), "[0,0,0]");
+}
+
+#[test]
+fn indexed_geometry_does_not_survive_document_open_replacement() {
+    let mut vm = fixture("<div id=target class=sized>Before</div>");
+    sample(&mut vm);
+    assert_eq!(
+        vm.eval("document.getElementById('target').getBoundingClientRect().width")
+            .unwrap(),
+        "120"
+    );
+    vm.eval(r#"document.open();document.write('<!doctype html><div id=target style="width:90px;height:50px">After</div>');document.close();'replaced'"#).unwrap();
+    sample(&mut vm);
+    assert_eq!(
+        vm.eval("document.getElementById('target').getBoundingClientRect().width")
+            .unwrap(),
+        "90"
+    );
+    assert_eq!(
+        vm.eval("document.getElementById('target').innerText")
+            .unwrap(),
+        "After"
+    );
+}
+
+#[test]
 fn computed_size_property_batch_looks_up_one_element_once_without_a_document_index() {
     let mut vm = fixture("<div id=target class=sized></div>");
     sample(&mut vm);

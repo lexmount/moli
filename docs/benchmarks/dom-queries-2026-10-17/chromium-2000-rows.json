@@ -1,0 +1,341 @@
+{
+  "metadata": {
+    "label": "chromium-chromium-156.0.8078.4-2000-rows",
+    "browserVersion": "156.0.8078.4",
+    "playwrightVersion": "1.64.1",
+    "platform": "linux",
+    "arch": "x64",
+    "nodeVersion": "v24.17.0",
+    "rows": 2000,
+    "elementsPerRow": 4,
+    "selectedElements": 4000,
+    "repeats": 3,
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "fixtureSha256": "a7b6e40f5afe94fa1e8af1febadad49b92d2892e69aa5f62b3aba7143bb984aa",
+    "timestamp": "2026-10-17T17:15:55.497Z",
+    "note": "First/repeat reads are per fresh page. Navigation ends at DOMContentLoaded. Read cases use in-page performance.now(); evaluate/evaluate-all use client wall time and separately report callback work time. CDP uses the existing layout policy.",
+    "revision": "chromium-156.0.8078.4",
+    "host": {
+      "kernel": "6.6.87.2-microsoft-standard-WSL2",
+      "platform": "x86_64",
+      "logicalCpus": 20,
+      "loadAverageAtStart": [
+        1.77392578125,
+        1.61767578125,
+        1.2099609375
+      ]
+    },
+    "benchmarkSha256": "fd9028c9d535cfad02f698ff28c06a551818e6ac3620bc288ef850240a8c4539"
+  },
+  "samples": [
+    {
+      "case": "rects",
+      "sample": 0,
+      "navigationMs": 16.051901000000043,
+      "firstMs": 3.5,
+      "repeatMs": 2.800000011920929,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 0,
+      "navigationMs": 15.448137999999972,
+      "firstMs": 3.399999976158142,
+      "repeatMs": 2.600000023841858,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 0,
+      "navigationMs": 14.442804999999908,
+      "firstMs": 3,
+      "repeatMs": 3.0999999940395355,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 0,
+      "navigationMs": 14.563496999999984,
+      "firstMs": 4.4000000059604645,
+      "repeatMs": 0,
+      "checksum": 224,
+      "elements": 4000
+    },
+    {
+      "case": "inner-text",
+      "sample": 0,
+      "navigationMs": 15.043317000000002,
+      "firstMs": 0.800000011920929,
+      "repeatMs": 0.5,
+      "checksum": 39779,
+      "elements": 4000
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 0,
+      "navigationMs": 14.452644000000078,
+      "firstMs": 0.20000001788139343,
+      "repeatMs": 0,
+      "checksum": 1180,
+      "elements": 4000
+    },
+    {
+      "case": "observe",
+      "sample": 0,
+      "navigationMs": 16.809604000000036,
+      "firstMs": 6.5,
+      "repeatMs": 3.5999999940395355,
+      "checksum": 113131559,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate",
+      "sample": 0,
+      "navigationMs": 14.916097000000036,
+      "firstMs": 57.50152800000001,
+      "firstWorkMs": 1.199999988079071,
+      "repeatMs": 1.5491219999998975,
+      "repeatWorkMs": 0.20000001788139343,
+      "checksum": 35780,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 0,
+      "navigationMs": 14.777196000000004,
+      "firstMs": 78.74968000000013,
+      "firstWorkMs": 1,
+      "repeatMs": 6.224457000000029,
+      "repeatWorkMs": 0.19999998807907104,
+      "checksum": 35780,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 1,
+      "navigationMs": 13.287374,
+      "firstMs": 71.48702900000012,
+      "firstWorkMs": 1,
+      "repeatMs": 7.962711000000127,
+      "repeatWorkMs": 0.20000001788139343,
+      "checksum": 35780,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate",
+      "sample": 1,
+      "navigationMs": 14.984029999999848,
+      "firstMs": 57.342869000000064,
+      "firstWorkMs": 1.199999988079071,
+      "repeatMs": 1.5546320000000833,
+      "repeatWorkMs": 0.19999998807907104,
+      "checksum": 35780,
+      "elements": 4000
+    },
+    {
+      "case": "observe",
+      "sample": 1,
+      "navigationMs": 14.493536999999833,
+      "firstMs": 6.4000000059604645,
+      "repeatMs": 3.5999999940395355,
+      "checksum": 113131559,
+      "elements": 4000
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 1,
+      "navigationMs": 14.661761999999953,
+      "firstMs": 0.09999999403953552,
+      "repeatMs": 0,
+      "checksum": 1180,
+      "elements": 4000
+    },
+    {
+      "case": "inner-text",
+      "sample": 1,
+      "navigationMs": 13.293241999999964,
+      "firstMs": 0.800000011920929,
+      "repeatMs": 0.8999999761581421,
+      "checksum": 39779,
+      "elements": 4000
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 1,
+      "navigationMs": 14.636723000000075,
+      "firstMs": 0.10000002384185791,
+      "repeatMs": 0,
+      "checksum": 224,
+      "elements": 4000
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 1,
+      "navigationMs": 15.559592000000066,
+      "firstMs": 3,
+      "repeatMs": 3.199999988079071,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 1,
+      "navigationMs": 12.60892899999999,
+      "firstMs": 3,
+      "repeatMs": 2.4000000059604645,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects",
+      "sample": 1,
+      "navigationMs": 13.059081999999762,
+      "firstMs": 3.100000023841858,
+      "repeatMs": 2.5999999940395355,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects",
+      "sample": 2,
+      "navigationMs": 16.414494999999988,
+      "firstMs": 3.5,
+      "repeatMs": 2.699999988079071,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects-warm-layout",
+      "sample": 2,
+      "navigationMs": 15.45558200000005,
+      "firstMs": 3,
+      "repeatMs": 2.5,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "rects-after-screenshot",
+      "sample": 2,
+      "navigationMs": 14.991166999999678,
+      "firstMs": 7,
+      "repeatMs": 2.7999999821186066,
+      "checksum": 113056000,
+      "elements": 4000
+    },
+    {
+      "case": "single-rect-after-screenshot",
+      "sample": 2,
+      "navigationMs": 15.061521000000084,
+      "firstMs": 0.09999999403953552,
+      "repeatMs": 0,
+      "checksum": 224,
+      "elements": 4000
+    },
+    {
+      "case": "inner-text",
+      "sample": 2,
+      "navigationMs": 14.825833999999759,
+      "firstMs": 0.699999988079071,
+      "repeatMs": 0.6000000238418579,
+      "checksum": 39779,
+      "elements": 4000
+    },
+    {
+      "case": "element-inner-text",
+      "sample": 2,
+      "navigationMs": 19.098019000000022,
+      "firstMs": 0.20000001788139343,
+      "repeatMs": 0.09999999403953552,
+      "checksum": 1180,
+      "elements": 4000
+    },
+    {
+      "case": "observe",
+      "sample": 2,
+      "navigationMs": 14.94660900000008,
+      "firstMs": 5.800000011920929,
+      "repeatMs": 3.399999976158142,
+      "checksum": 113131559,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate",
+      "sample": 2,
+      "navigationMs": 18.00429699999995,
+      "firstMs": 53.06121699999994,
+      "firstWorkMs": 1.0999999940395355,
+      "repeatMs": 1.481217999999899,
+      "repeatWorkMs": 0.09999999403953552,
+      "checksum": 35780,
+      "elements": 4000
+    },
+    {
+      "case": "evaluate-all",
+      "sample": 2,
+      "navigationMs": 12.752910000000156,
+      "firstMs": 74.95665400000007,
+      "firstWorkMs": 0.8999999761581421,
+      "repeatMs": 6.239419999999882,
+      "repeatWorkMs": 0.19999998807907104,
+      "checksum": 35780,
+      "elements": 4000
+    }
+  ],
+  "medians": {
+    "rects": {
+      "navigationMs": 16.051901000000043,
+      "firstMs": 3.5,
+      "repeatMs": 2.699999988079071
+    },
+    "rects-warm-layout": {
+      "navigationMs": 15.448137999999972,
+      "firstMs": 3,
+      "repeatMs": 2.5
+    },
+    "rects-after-screenshot": {
+      "navigationMs": 14.991166999999678,
+      "firstMs": 3,
+      "repeatMs": 3.0999999940395355
+    },
+    "single-rect-after-screenshot": {
+      "navigationMs": 14.636723000000075,
+      "firstMs": 0.10000002384185791,
+      "repeatMs": 0
+    },
+    "inner-text": {
+      "navigationMs": 14.825833999999759,
+      "firstMs": 0.800000011920929,
+      "repeatMs": 0.6000000238418579
+    },
+    "element-inner-text": {
+      "navigationMs": 14.661761999999953,
+      "firstMs": 0.20000001788139343,
+      "repeatMs": 0
+    },
+    "observe": {
+      "navigationMs": 14.94660900000008,
+      "firstMs": 6.4000000059604645,
+      "repeatMs": 3.5999999940395355
+    },
+    "evaluate": {
+      "navigationMs": 14.984029999999848,
+      "firstMs": 57.342869000000064,
+      "firstWorkMs": 1.199999988079071,
+      "repeatMs": 1.5491219999998975,
+      "repeatWorkMs": 0.19999998807907104
+    },
+    "evaluate-all": {
+      "navigationMs": 13.287374,
+      "firstMs": 74.95665400000007,
+      "firstWorkMs": 1,
+      "repeatMs": 6.239419999999882,
+      "repeatWorkMs": 0.19999998807907104
+    }
+  }
+}
