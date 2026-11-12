@@ -41,7 +41,7 @@ use crate::runtime::{
     ServiceWorkerNotificationCompletion, ServiceWorkerNotificationEvent,
     ServiceWorkerPeriodicSyncCompletion, ServiceWorkerPeriodicSyncEvent,
     ServiceWorkerPushCompletion, ServiceWorkerPushEvent, ServiceWorkerSyncCompletion,
-    ServiceWorkerSyncEvent, service_worker_exposed_client_id,
+    ServiceWorkerSyncEvent,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{BroadcastChannelId, MessagePortId, NetworkBodySourceId};
@@ -1235,16 +1235,8 @@ fn new_service_worker_fetch_event<'s>(
     handled: v8::Local<'s, v8::Promise>,
     preload_response: v8::Local<'s, v8::Promise>,
 ) -> v8::Local<'s, v8::Object> {
-    let client_id = event
-        .request
-        .client_id
-        .map(service_worker_exposed_client_id)
-        .unwrap_or_default();
-    let resulting_client_id = event
-        .request
-        .resulting_client_id
-        .map(service_worker_exposed_client_id)
-        .unwrap_or_default();
+    let client_id = event.client_ids.client_id.as_str();
+    let resulting_client_id = event.client_ids.resulting_client_id.as_str();
     let object = ServiceWorkerFetchEventDeclaration {
         r#type: v8::String::new(scope, "fetch").unwrap(),
         default_prevented: false,
@@ -1261,8 +1253,8 @@ fn new_service_worker_fetch_event<'s>(
         request,
         handled,
         preload_response,
-        &client_id,
-        &resulting_client_id,
+        client_id,
+        resulting_client_id,
     );
     object
 }

@@ -415,6 +415,22 @@ impl ServiceWorkerRuntimeService {
         };
         let (dispatch_event, start_launch, fallback_job) = {
             let mut state = self.inner.state.lock();
+            // Freeze the environment IDs when this fetch is admitted. The
+            // internal routing IDs can outlive the Document they identify.
+            let exposed_id = |id| {
+                state
+                    .live_clients
+                    .get(&id)
+                    .map(|client| client.exposed_id.clone())
+                    .unwrap_or_default()
+            };
+            let client_ids = crate::service_worker_runtime::ServiceWorkerFetchEventClientIds {
+                client_id: request.client_id.map(exposed_id).unwrap_or_default(),
+                resulting_client_id: request
+                    .resulting_client_id
+                    .map(exposed_id)
+                    .unwrap_or_default(),
+            };
             let (document_url, storage_key) = match state.live_clients.get(&controller_client_id) {
                 Some(client) => (client.document_url.clone(), client.storage_key.clone()),
                 None => return Err(Box::new(fetch_job)),
@@ -464,6 +480,7 @@ impl ServiceWorkerRuntimeService {
                     ServiceWorkerEventId(self.inner.next_event_id.fetch_add(1, Ordering::Relaxed));
                 dispatched_event_id = Some(event_id);
                 let event = ServiceWorkerFetchEvent {
+                    client_ids,
                     event_id,
                     owner: version.run_owner(),
                     request,
@@ -487,6 +504,7 @@ impl ServiceWorkerRuntimeService {
                 let action = match &version.running_state {
                     ServiceWorkerVersionRunningState::Running { host } => {
                         let event = ServiceWorkerFetchEvent {
+                            client_ids,
                             event_id,
                             owner: version.run_owner(),
                             request,
@@ -497,6 +515,7 @@ impl ServiceWorkerRuntimeService {
                     ServiceWorkerVersionRunningState::Starting { .. } => {
                         version.pending_start_events.push_back(
                             ServiceWorkerPendingStartEvent::Fetch(ServiceWorkerFetchEvent {
+                                client_ids,
                                 event_id,
                                 owner: version.run_owner(),
                                 request,
@@ -520,6 +539,7 @@ impl ServiceWorkerRuntimeService {
                             version.script_kind,
                         );
                         let event = ServiceWorkerFetchEvent {
+                            client_ids,
                             event_id,
                             owner,
                             request,

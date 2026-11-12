@@ -94,6 +94,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
     request: ServiceWorkerFetchRequest,
 ) -> (ServiceWorkerFetchCompletion, String) {
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id: ServiceWorkerEventId::from_u64_for_worker(event_id),
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),

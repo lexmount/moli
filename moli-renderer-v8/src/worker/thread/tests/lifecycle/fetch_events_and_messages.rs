@@ -235,6 +235,7 @@ async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_bac
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(59);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -377,6 +378,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
     let event_id = ServiceWorkerEventId::from_u64_for_worker(19);
     let run = crate::runtime::RendererServiceWorkerRunIdentity::fresh();
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -494,6 +496,7 @@ async fn service_worker_fetch_respond_with_readable_stream_error_fails_open_stre
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(21);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -568,6 +571,7 @@ async fn service_worker_fetch_respond_with_invalid_readable_stream_chunk_fails_o
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(22);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -642,6 +646,7 @@ async fn service_worker_fetch_stream_cancel_from_parent_notifies_source_and_fail
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(20);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -1281,6 +1286,7 @@ async fn service_worker_fetch_event_request_signal_aborts_with_parent_reason() {
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(27);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -1495,6 +1501,7 @@ async fn service_worker_fetch_respond_with_keeps_response_when_handler_throws_af
     );
     let event_id = ServiceWorkerEventId::from_u64_for_worker(25);
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -2208,6 +2215,7 @@ async fn service_worker_opaque_headers_precede_orb_validation_and_cache_preserve
         request.request_mode = moli_fetch::RequestMode::NoCors;
         request.destination = ServiceWorkerRequestDestination::Script;
         handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+            client_ids: Default::default(),
             event_id: ServiceWorkerEventId::from_u64_for_worker(31),
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
                 ServiceWorkerVersionId::from_u64_for_test(1),
@@ -2451,5 +2459,37 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
     server
         .await
         .expect("service worker opaque body server should finish");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_fetch_event_uses_supplied_document_client_id_snapshots() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.onfetch = event => event.respondWith(new Response(JSON.stringify({
+            clientId: event.clientId, resultingClientId: event.resultingClientId
+        })));
+    "#,
+    );
+    let mut request = service_worker_fetch_request_for_test();
+    request.client_id =
+        Some(crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(7));
+    request.resulting_client_id =
+        Some(crate::service_worker_runtime::ServiceWorkerClientId::from_u64_for_test(8));
+    let ids = crate::service_worker_runtime::ServiceWorkerFetchEventClientIds {
+        client_id: "client-document-source".to_owned(),
+        resulting_client_id: "client-document-result".to_owned(),
+    };
+    let completion =
+        dispatch_service_worker_fetch_event_with_client_ids_for_test(&mut handle, 29, request, ids)
+            .await;
+    let ServiceWorkerFetchResult::Response(response) = completion.result else {
+        panic!("expected fetch response")
+    };
+    assert_eq!(
+        String::from_utf8(response.body).unwrap(),
+        r#"{"clientId":"client-document-source","resultingClientId":"client-document-result"}"#
+    );
     handle.terminate_and_join();
 }
