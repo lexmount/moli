@@ -264,7 +264,7 @@ fn event_is_trusted_getter_function<'s>(
     rv.set(v8::Boolean::new(scope, trusted).into());
 }
 
-pub(in crate::context_bootstrap) fn event_trusted<'s>(
+pub(crate) fn event_trusted<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {

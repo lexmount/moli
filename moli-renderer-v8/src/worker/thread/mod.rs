@@ -46,7 +46,9 @@ mod isolate;
 mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
-pub(in crate::worker) use dispatch::service_worker_respond_with_callback;
+pub(in crate::worker) use dispatch::{
+    service_worker_respond_with_callback, service_worker_wait_until_callback,
+};
 
 use super::bitmap_tasks::WorkerBitmapTasks;
 use super::canvas_blob_tasks::WorkerCanvasBlobTasks;

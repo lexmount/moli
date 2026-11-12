@@ -381,7 +381,7 @@ pub(crate) use self::events::{
     clear_event_composed_path, construct_original_error_event, construct_original_message_event,
     error_event_handler_arguments, event_attribute, event_backing, event_bool_attribute,
     event_initialized, event_internal_bool_flag, event_is_dispatching, event_is_error_event,
-    event_is_mouse_event, event_private_value, event_source_retargets_on_access,
+    event_is_mouse_event, event_private_value, event_source_retargets_on_access, event_trusted,
     initialize_event_object, initialize_event_object_with_type, initialize_event_wrapper,
     initialize_native_security_policy_violation_event, mark_agent_submit_event, mark_event_trusted,
     new_event_state, new_event_wrapper, set_event_composed_path, set_event_internal_flag,
