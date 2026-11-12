@@ -1492,14 +1492,16 @@ impl PageVm {
         let pending_runtime_work = self
             .vm_mut()
             .has_post_domcontentloaded_runtime_work_for_wait()
-            || self
-                .vm_mut()
-                .has_post_domcontentloaded_load_delaying_runtime_work()
-            || self.vm().has_pending_child_document_lifecycle()
-            || self.vm().has_loading_dedicated_workers()
             || self.vm().has_pending_webcrypto_tasks()
             || self.vm().has_pending_opfs_tasks();
         state.saw_post_domcontentloaded_runtime_work |= pending_runtime_work;
+        // Loads that may still mutate the DOM hold the stability timer, but
+        // unlike runtime script work they do not select the longer quiet window.
+        let pending_loads = self
+            .vm_mut()
+            .has_post_domcontentloaded_load_delaying_runtime_work()
+            || self.vm().has_pending_child_document_lifecycle()
+            || self.vm().has_loading_dedicated_workers();
         let has_long_pending_timeout = self
             .vm()
             .ms_to_next_timeout()
@@ -1508,12 +1510,12 @@ impl PageVm {
             "{snapshot}|html:{serialized_document}|network:{}|pending:{}|runtime:{}",
             self.vm().subresource_activity_epoch(),
             pending_subresource_requests,
-            pending_runtime_work
+            pending_runtime_work || pending_loads
         );
 
         let now = std::time::Instant::now();
         let mut stable_remaining = DOM_STABLE_POLL_INTERVAL;
-        if pending_subresource_requests == 0 && !pending_runtime_work {
+        if pending_subresource_requests == 0 && !pending_runtime_work && !pending_loads {
             if state.last_snapshot.as_deref() != Some(snapshot.as_str()) {
                 state.saw_long_pending_timeout_for_observation = has_long_pending_timeout;
             } else {
