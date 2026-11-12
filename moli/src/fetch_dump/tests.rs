@@ -662,3 +662,47 @@ async fn html_dump_profiles_preserve_golden_markup_and_the_live_source() -> Resu
     http_server.abort();
     Ok(())
 }
+
+#[tokio::test]
+async fn html_dump_filters_template_contents_and_includes_inert_author_shadow_roots() -> Result<()>
+{
+    let (_browser, mut page, http_server) = load_page("<!doctype html><template id=content><nav>MENU</nav><script>secret=1</script><style>b{color:red}</style><div style=\"color:red\" onclick=\"void 0\">KEEP</div><x-card></x-card><iframe srcdoc=\"<script>inert=1</script><p>unparsed</p>\"></iframe></template>").await?;
+    let setup=page.evaluate_runtime_expression_by_value_async("document.getElementById('content').content.querySelector('x-card').attachShadow({mode:'closed'}).innerHTML='<style>b{color:red}</style><b>SHADOW</b>'; 'ready'").await?;
+    assert!(setup.get("exception").is_none(), "{setup}");
+    let before = page.serialize_html_async().await?;
+    assert!(
+        before.contains("shadowrootmode=\"closed\"") && before.contains("SHADOW"),
+        "{before}"
+    );
+    let output = render_page_dump_with_options_async(
+        &mut page,
+        DumpFormat::Html,
+        StripOptions {
+            js: true,
+            css: true,
+            ui: true,
+        },
+        false,
+        true,
+        false,
+        None,
+    )
+    .await?;
+    for removed in ["MENU", "secret=1", "color:red", "onclick="] {
+        assert!(!output.contains(removed), "{output}");
+    }
+    assert!(
+        output.contains("<div>KEEP</div>") && output.contains("<b>SHADOW</b>"),
+        "{output}"
+    );
+    // Inert owners have no live child Document. Preserve their raw srcdoc;
+    // exporting is not an HTML sanitizer and must not parse/load that string.
+    assert!(
+        output
+            .contains("srcdoc=\"&lt;script&gt;inert=1&lt;/script&gt;&lt;p&gt;unparsed&lt;/p&gt;\""),
+        "{output}"
+    );
+    assert_eq!(page.serialize_html_async().await?, before);
+    http_server.abort();
+    Ok(())
+}
