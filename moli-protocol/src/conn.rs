@@ -126,7 +126,8 @@ pub use crate::domains::network::IoStreamState;
 pub(crate) use automation_command::AutomationCommandResult;
 pub use automation_command::{
     AutomationCommandDispatchOutcome, AutomationCommandTaskStep,
-    CompletedAutomationCommandDispatch, PendingAutomationCommandDispatch,
+    CompletedAutomationCommandDispatch, PendingAutomationCommandAdmission,
+    PendingAutomationCommandDispatch,
 };
 #[cfg(test)]
 pub(crate) use bidi_channel_work::BidiChannelOwnerActionKind;
