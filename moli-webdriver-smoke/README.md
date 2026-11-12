@@ -80,8 +80,14 @@ non-yielding WebDriver timeout behavior.
   `emulation.setUserAgentOverride`, `emulation.setLocaleOverride`,
   `emulation.setTimezoneOverride`, `emulation.setNetworkConditions`, storage
   isolation, `storage.setCookie`, `storage.getCookies`, and `session.end`.
-  Twenty-three cross-engine `bidi-network` scenarios cover iframe event ownership,
-  request identity, and subscription initialization. Six keep the foreground tab
+  Twenty-nine cross-engine `bidi-network` scenarios cover iframe event ownership,
+  request identity, subscription initialization, and navigation independence.
+  Six hold Page A's HTTP response at an explicit server barrier while Page B
+  resolves its exact realm and sends two channel messages. A then completes,
+  closes, or accepts a replacement navigation before the held response is
+  released; shared and isolated user contexts are covered. Closing must not
+  revive A, and a late response must not replace its successor Document.
+  Six keep the foreground tab
   active while an unattached background Page inserts, navigates, or nests an
   iframe. They cover shared and separate user contexts, require request/response
   and DOMContentLoaded/load events to identify the loaded child context, and read
