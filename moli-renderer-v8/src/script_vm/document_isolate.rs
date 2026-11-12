@@ -434,11 +434,13 @@ impl RendererPageScriptEnvironment {
         }
     }
 
-    pub(super) fn inherit_window_identity(&self, host: &mut PageScriptHost) {
-        if let Some(name) = self.inner.browsing_context_name.get() {
-            host.bind_browsing_context_name(name.clone());
-            host.bind_auxiliary_window(self.inner.auxiliary_window.get().cloned());
-        }
+    pub(super) fn inherit_window_identity(&self, host: &mut PageScriptHost) -> bool {
+        let Some(name) = self.inner.browsing_context_name.get() else {
+            return false;
+        };
+        host.bind_browsing_context_name(name.clone());
+        host.bind_auxiliary_window(self.inner.auxiliary_window.get().cloned());
+        true
     }
 
     pub(crate) fn set_opener(&self, opener: Option<v8::Global<v8::Object>>) {

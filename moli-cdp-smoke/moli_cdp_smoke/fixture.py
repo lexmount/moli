@@ -1346,6 +1346,9 @@ class FixtureServer:
                                 "<!doctype html><title>navigation committed</title>"
                                 "<main id='navigation-committed'>replacement</main>"
                             )
+                    except (BrokenPipeError, ConnectionResetError):
+                        # A target closed at this gate cancels its HTTP socket.
+                        pass
                     finally:
                         gate.response_completed.set()
                 elif route == "/navigation-suspension-gate/reset":

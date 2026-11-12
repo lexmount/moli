@@ -1,5 +1,99 @@
 use super::*;
 
+#[tokio::test]
+async fn replacement_document_retains_window_identity_after_target_unregistration() {
+    use crate::{
+        network::{RendererResourceTaskRunner, context::DocumentResourceLoaderBootstrap},
+        runtime::{
+            RendererBrowserContextRuntime, RendererOutputStreamIdentity, RendererTurnOutputJournal,
+        },
+        script_vm::{RendererIsolateHandle, RendererPageScriptEnvironment},
+    };
+
+    crate::ensure_v8_for_test();
+    for (auxiliary, window_name) in [
+        (false, ""),
+        (false, "retiring-page"),
+        (true, ""),
+        (true, "retiring-page"),
+    ] {
+        let runtime_owner = RendererBrowserContextRuntime::new();
+        let runtime = runtime_owner.handle();
+        let root_frame_id = "TID-retiring-page";
+        let name = runtime.browsing_context_name(root_frame_id);
+        name.set(window_name.to_owned());
+        let group = name.group();
+        let window = auxiliary.then(|| runtime.new_auxiliary_window());
+        if let Some(window) = &window {
+            runtime.bind_auxiliary_window(root_frame_id, window.clone());
+        }
+        let tasks = crate::page_task_queue::PageTaskQueueTestHarness::new();
+        let task_sender = tasks.owner_attached_runtime_page_task_sender_for_test();
+        let bootstrap = RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(
+            task_sender.v8_foreground_task_sender(),
+        )
+        .expect("Page isolate");
+        let environment = RendererPageScriptEnvironment::new(
+            12346,
+            bootstrap.clone_renderer_document_isolate_handle_for_owner_retention(),
+            bootstrap.inspector_isolate_backend_handle(),
+            tasks.residence().runtime_source(),
+            RendererTurnOutputJournal::new(
+                RendererOutputStreamIdentity::new_page_for_protocol_test(
+                    crate::PageId::new_for_testing(12346),
+                ),
+            ),
+        );
+        environment.bind_window_identity(name.clone(), window.clone());
+        // Target removal runs on the protocol owner while the renderer can
+        // still be finishing an already admitted replacement Document.
+        runtime.forget_browsing_context_name(root_frame_id);
+        runtime.close_auxiliary_window(root_frame_id);
+        let loader =
+            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+        let document = DomHost::from_dom(NativeDom::new(
+            Url::parse("https://retiring-page.test/replacement").unwrap(),
+        ));
+        let mut vm = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
+            document,
+            &Default::default(),
+            task_sender,
+            tasks.parser_boundary_sender(),
+            RendererResourceCompletionSender::direct_completion_only(),
+            DocumentResourceLoaderBootstrap::new(
+                loader.handle(),
+                RendererResourceTaskRunner::from_current_tokio().unwrap(),
+            ),
+            runtime,
+            Default::default(),
+            bootstrap.with_renderer_page_script_environment(environment),
+            &[],
+            crate::runtime::new_shared_renderer_backend_node_registry(),
+            Some(root_frame_id.to_owned()),
+            None,
+            None,
+            None,
+        )
+        .expect("replacement bootstrap")
+        .finish()
+        .expect("replacement ownership");
+
+        assert_eq!(*vm._context_host.borrow().browsing_context_name(), name);
+        assert_eq!(
+            vm._context_host.borrow().browsing_context_name().group(),
+            group
+        );
+        assert_eq!(vm._context_host.borrow().auxiliary_window(), window);
+        assert_eq!(vm.eval("window.name").unwrap(), window_name);
+        if let Some(window) = window {
+            assert!(
+                window.is_closed(),
+                "replacement must retain the closed auxiliary identity"
+            );
+        }
+    }
+}
+
 #[test]
 fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
     let mut vm = new_storage_test_vm("https://strict-window-binding.test/");

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,11 @@ from ..navigation import navigate as navigate_document
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
 from ..serve import BrowserProcess
 from .browser_endpoint import browser_endpoint_lifecycle
+
+
+def _navigation_gate_control(fixture: str, action: str) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{fixture}/navigation-suspension-gate/{action}", timeout=2) as response:
+        return json.load(response)
 
 
 def process_descriptors(pid: int) -> dict[int, str]:
@@ -153,6 +160,90 @@ class LifecycleProbe:
         assert_equal(value.get("result", {}).get("value"), "plain ok", "real HTTP document after churn")
         await self.close(target)
 
+    async def close_during_navigation(
+        self, fixture: str, mode: str, release_before_close: bool, background: bool,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"url": "about:blank", "background": background}
+        if mode == "context":
+            params.update(await self.call("Target.createBrowserContext"))
+        target = (await self.call("Target.createTarget", params))["targetId"]
+        session = await self.attach(target)
+        await self.call("Page.enable", session=session)
+        # Replace the initial empty Document and materialize its Window before
+        # racing a second, cross-origin Document bootstrap against retirement.
+        await navigate_document(self.client, session, {
+            "url": "data:text/html,<script>window.name='retiring-page'</script>",
+        }, on_message=self.observe)
+        await asyncio.to_thread(_navigation_gate_control, fixture, "reset")
+        navigation = await self.client.send("Page.navigate", {
+            "url": f"{fixture}/navigation-suspension-gated-document",
+        }, session_id=session)
+
+        async def request_seen() -> bool:
+            status = await asyncio.to_thread(_navigation_gate_control, fixture, "status")
+            return status["requestSeen"] is True
+
+        responses: dict[int, dict[str, Any]] = {}
+        recent: list[dict[str, Any]] = []
+        try:
+            await wait_until(request_seen, "retiring target navigation reached HTTP gate")
+            if release_before_close:
+                await asyncio.to_thread(_navigation_gate_control, fixture, "release")
+            if mode == "target":
+                close = await self.client.send("Target.closeTarget", {"targetId": target})
+            elif mode == "page":
+                close = await self.client.send("Page.close", session_id=session)
+            else:
+                close = await self.client.send("Target.disposeBrowserContext", {
+                    "browserContextId": params["browserContextId"],
+                })
+            try:
+                async with asyncio.timeout(10):
+                    while not ({navigation, close} <= responses.keys() and target in self.destroyed):
+                        message = await self.client.recv()
+                        self.observe(message)
+                        recent.append(message)
+                        del recent[:-20]
+                        if message.get("method") in ("Inspector.targetCrashed", "Target.targetCrashed"):
+                            raise SmokeError(f"target crashed during {mode} navigation close: {message}")
+                        if message.get("id") in (navigation, close):
+                            responses[message["id"]] = message
+                        if message.get("id") == close and (
+                            "error" in message or not isinstance(message.get("result"), dict)
+                        ):
+                            raise SmokeError(f"{mode} navigation close failed: {message}")
+            except TimeoutError as error:
+                raise SmokeError(
+                    f"{mode} navigation close timed out: target={target} session={session} "
+                    f"release_before_close={release_before_close} responses={responses} recent={recent}"
+                ) from error
+            terminal = responses[close]
+            if mode == "target":
+                assert_equal(terminal["result"].get("success"), True, "in-flight Target.closeTarget accepted")
+            navigation_terminal = responses[navigation]
+            if "error" in navigation_terminal:
+                assert_equal(navigation_terminal["error"].get("code"), -32000,
+                             "navigation terminates with a target/frame cancellation error")
+            elif not isinstance(navigation_terminal.get("result", {}).get("frameId"), str):
+                raise SmokeError(f"navigation returned no terminal frame identity: {navigation_terminal}")
+            # Chromium can acknowledge cancellation with a loader-only reply.
+            # The required terminal is paired with this exact target's close
+            # receipt/destruction, not an engine-specific errorText string.
+            self.destroyed.remove(target)
+        finally:
+            await asyncio.to_thread(_navigation_gate_control, fixture, "release")
+
+        async def response_completed() -> bool:
+            status = await asyncio.to_thread(_navigation_gate_control, fixture, "status")
+            return status["responseCompleted"] is True
+
+        await wait_until(response_completed, "retired navigation fixture handler completed")
+        targets = (await self.call("Target.getTargets"))["targetInfos"]
+        assert_equal(any(item["targetId"] == target for item in targets), False,
+                     "in-flight target stays retired after response release")
+        return {"targetId": target, "sessionId": session,
+                "navigation": responses[navigation], "close": responses[close]}
+
 
 async def run_target_lifecycle_group(
     endpoint: str, fixture: str, results: list[dict[str, Any]], serve: BrowserProcess | None,
@@ -171,6 +262,26 @@ async def run_target_lifecycle_group(
         peer = (await probe.call("Target.createTarget", {"url": "about:blank"}))["targetId"]
         peer_session = await probe.attach(peer)
         await probe.call("Runtime.evaluate", {"expression": "globalThis.lifecycleSentinel = 42"}, peer_session)
+
+        for mode in ("target", "page", "context"):
+            # Keep the renderer-session Page.close route gated: Chromium can
+            # reject it during a cross-process Document swap. The browser-level
+            # target/context routes also race the released response.
+            for release_before_close in ((False,) if mode == "page" else (False, True)):
+                for background in (False, True):
+                    observed = await probe.close_during_navigation(
+                        fixture, mode, release_before_close, background,
+                    )
+                    sentinel = await probe.call("Runtime.evaluate", {
+                        "expression": "globalThis.lifecycleSentinel", "returnByValue": True,
+                    }, peer_session)
+                    assert_equal(sentinel.get("result", {}).get("value"), 42,
+                                 "peer survives closing an in-flight navigation")
+                    await probe.navigate(f"{fixture}/plain?after-inflight-{mode}")
+                    record(results, "target_lifecycle_inflight_navigation_close", {
+                        "mode": mode, "releaseBeforeClose": release_before_close,
+                        "background": background, "observed": observed,
+                    })
 
         modes = (("target", 800), ("page", 800), ("detach", 128), ("context", 64))
         # Warm all closure routes and the shared network machinery once, then

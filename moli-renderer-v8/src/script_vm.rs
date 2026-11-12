@@ -2173,25 +2173,25 @@ impl ScriptVmPageRealmBootstrap {
             .bind_deferred_context_host_release_queue(
                 renderer_document_isolate.deferred_context_host_release_queue(),
             );
-        if let Some(root_frame_id) = root_frame_id.as_deref() {
-            let name = context_host
-                .borrow()
-                .browser_context_runtime()
-                .browsing_context_name(root_frame_id);
-            if let Some(group) = browsing_context_group {
-                name.set_group(group);
-            }
-            context_host.borrow_mut().bind_browsing_context_name(name);
-            let window = context_host
-                .borrow()
-                .browser_context_runtime()
-                .auxiliary_window(root_frame_id);
-            context_host.borrow_mut().bind_auxiliary_window(window);
-        }
-        if root_frame_id.is_none()
-            && let Some(environment) = renderer_page_script_environment.as_ref()
+        // A replacement belongs to the existing Page even after Target close
+        // has removed its browser-context lookup entries. Only the first
+        // Document obtains identity from that registry; subsequent Documents
+        // retain the Page's exact name cell and auxiliary close state.
         {
-            environment.inherit_window_identity(&mut context_host.borrow_mut());
+            let mut host = context_host.borrow_mut();
+            let inherited_window_identity = renderer_page_script_environment
+                .as_ref()
+                .is_some_and(|environment| environment.inherit_window_identity(&mut host));
+            if let Some(root_frame_id) = root_frame_id.as_deref() {
+                if !inherited_window_identity {
+                    let runtime = host.browser_context_runtime().clone();
+                    host.bind_browsing_context_name(runtime.browsing_context_name(root_frame_id));
+                    host.bind_auxiliary_window(runtime.auxiliary_window(root_frame_id));
+                }
+                if let Some(group) = browsing_context_group {
+                    host.browsing_context_name().set_group(group);
+                }
+            }
         }
         let main_document_owner = context_host
             .borrow()
