@@ -961,13 +961,18 @@ impl Request {
         )
     }
 
+    /// The selected referrer source, before applying the destination's policy.
+    pub fn referrer_source_url(&self) -> Option<&Url> {
+        match &self.referrer_source {
+            ReferrerSource::Client => self.client_referrer_url.as_ref(),
+            ReferrerSource::None => None,
+            ReferrerSource::Url(url) => Some(url),
+        }
+    }
+
     /// Computes Referer from the selected source without consulting cookie state.
     pub fn referrer_header_value(&self, request_url: &Url) -> Option<String> {
-        let referrer_url = match &self.referrer_source {
-            ReferrerSource::Client => self.client_referrer_url.as_ref()?,
-            ReferrerSource::None => return None,
-            ReferrerSource::Url(url) => url,
-        };
+        let referrer_url = self.referrer_source_url()?;
         crate::referrer_header_value(
             referrer_url,
             request_url,
