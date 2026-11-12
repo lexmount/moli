@@ -1,10 +1,9 @@
-//! Serve mode keeps the `--cookie-file` export in step with every cookie
-//! source: network-stack `Set-Cookie` responses, CDP `Network.setCookie`, and
-//! `document.cookie` writes all land in the file on graceful exit and survive
-//! a restart.
+//! Explicit `--cookie-jar` output includes every cookie source on graceful
+//! shutdown. Cookie inputs remain input-only, including FIFO streams.
 
 use std::{
-    io::{BufRead, BufReader},
+    ffi::OsStr,
+    io::{BufRead, BufReader, Read},
     net::SocketAddr,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -25,6 +24,13 @@ type WsSocket = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::Tc
 struct ServingChild {
     child: Child,
     port: u16,
+    stderr: Option<thread::JoinHandle<String>>,
+}
+
+impl ServingChild {
+    fn take_stderr(&mut self) -> String {
+        self.stderr.take().unwrap().join().expect("stderr reader")
+    }
 }
 
 impl Drop for ServingChild {
@@ -34,6 +40,9 @@ impl Drop for ServingChild {
             // natural exit before dropping the guard.
             let _ = self.child.kill();
             let _ = self.child.wait();
+        }
+        if let Some(stderr) = self.stderr.take() {
+            let _ = stderr.join();
         }
     }
 }
@@ -48,6 +57,15 @@ fn unique_temp_file(name: &str) -> PathBuf {
 
 /// Spawns `moli serve` on an ephemeral port and reports the listening port.
 fn spawn_serving_child(cookie_file: &std::path::Path) -> ServingChild {
+    spawn_serving_child_with_args(&[
+        OsStr::new("--cookie-file"),
+        cookie_file.as_os_str(),
+        OsStr::new("--cookie-jar"),
+        cookie_file.as_os_str(),
+    ])
+}
+
+fn spawn_serving_child_with_args(args: &[&OsStr]) -> ServingChild {
     let child = Command::new(env!("CARGO_BIN_EXE_moli"))
         .args([
             "serve",
@@ -59,20 +77,27 @@ fn spawn_serving_child(cookie_file: &std::path::Path) -> ServingChild {
             "info",
             "--http-no-proxy",
             "*",
-            "--cookie-file",
-            &cookie_file.to_string_lossy(),
         ])
-        .stdout(Stdio::null())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("moli serve should spawn");
-    let mut serving = ServingChild { child, port: 0 };
+    let mut serving = ServingChild {
+        child,
+        port: 0,
+        stderr: None,
+    };
     let stderr = serving.child.stderr.take().expect("child stderr is piped");
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
+    serving.stderr = Some(thread::spawn(move || {
         let mut ready_sender = Some(ready_sender);
+        let mut output = String::new();
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             let plain = strip_ansi_escapes::strip_str(&line);
+            output.push_str(&plain);
+            output.push('\n');
             if !plain.contains("protocol server listening") {
                 continue;
             }
@@ -86,7 +111,8 @@ fn spawn_serving_child(cookie_file: &std::path::Path) -> ServingChild {
                 let _ = sender.send(port);
             }
         }
-    });
+        output
+    }));
     serving.port = ready_receiver
         .recv_timeout(Duration::from_secs(15))
         .expect("moli serve reports its listening port");
@@ -245,8 +271,165 @@ fn cookie_file_entries(content: &str) -> Vec<String> {
         .collect()
 }
 
+const SEED_COOKIE: &str = "example.test\tFALSE\t/\tFALSE\t2147483647\tsid\tseed\n";
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_cookie_file_export_includes_cdp_and_document_cookies() {
+async fn serve_cookie_inputs_are_never_implicit_outputs() {
+    let input = unique_temp_file("serve-cookie-input-only");
+    let missing = unique_temp_file("serve-cookie-missing-input");
+    std::fs::write(&input, SEED_COOKIE).unwrap();
+    let mut serving = spawn_serving_child_with_args(&[
+        OsStr::new("--cookie-file"),
+        input.as_os_str(),
+        OsStr::new("--cookie-file"),
+        missing.as_os_str(),
+    ]);
+    let mut socket = connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+    assert!(
+        close_browser_and_wait_exit(&mut socket, &mut serving)
+            .await
+            .success()
+    );
+    assert_eq!(std::fs::read_to_string(&input).unwrap(), SEED_COOKIE);
+    assert!(
+        !missing.exists(),
+        "a missing cookie input must not become an output"
+    );
+    std::fs::remove_file(input).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_cookie_fifo_input_does_not_block_browser_close() {
+    use std::os::unix::fs::FileTypeExt;
+
+    struct Writer(Child);
+    impl Drop for Writer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let pipe = unique_temp_file("serve-cookie-fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut writer = Writer(
+        Command::new("sh")
+            .args(["-c", "printf '%s' \"$1\" > \"$2\"", "serve-cookie-writer"])
+            .arg(SEED_COOKIE)
+            .arg(&pipe)
+            .spawn()
+            .unwrap(),
+    );
+    let mut serving =
+        spawn_serving_child_with_args(&[OsStr::new("--cookie-file"), pipe.as_os_str()]);
+    // Readiness follows import EOF, so the producer has closed its only writer.
+    assert!(writer.0.wait().unwrap().success());
+    let mut socket = connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+    let session = attached_page_session(&mut socket, 1).await;
+    let cookies = send_cdp_command(
+        &mut socket,
+        3,
+        "Network.getCookies",
+        Some(&session),
+        json!({"urls": ["http://example.test/"]}),
+    )
+    .await;
+    assert_eq!(
+        cookies["result"]["cookies"][0]["value"], "seed",
+        "{cookies}"
+    );
+    assert!(
+        close_browser_and_wait_exit(&mut socket, &mut serving)
+            .await
+            .success()
+    );
+    assert!(std::fs::metadata(&pipe).unwrap().file_type().is_fifo());
+    std::fs::remove_file(pipe).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_without_export_keeps_cookie_database_lazy() {
+    let profile = unique_temp_file("serve-no-cookie-export");
+    let mut serving =
+        spawn_serving_child_with_args(&[OsStr::new("--profile-dir"), profile.as_os_str()]);
+    let mut socket = connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+    assert!(
+        close_browser_and_wait_exit(&mut socket, &mut serving)
+            .await
+            .success()
+    );
+    let stderr = serving.take_stderr();
+    assert!(!stderr.contains("failed to snapshot cookies"), "{stderr}");
+    let profile_handle = moli_browser_profile::BrowserProfile::open(&profile).unwrap();
+    assert!(!profile_handle.default_partition().cookies_path().exists());
+    drop(profile_handle);
+    std::fs::remove_dir_all(profile).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_cookie_jar_can_write_stdout_without_overwriting_input() {
+    let input = unique_temp_file("serve-cookie-stdout-input");
+    std::fs::write(&input, SEED_COOKIE).unwrap();
+    let mut serving = spawn_serving_child_with_args(&[
+        OsStr::new("--cookie-file"),
+        input.as_os_str(),
+        OsStr::new("--cookie-jar"),
+        OsStr::new("-"),
+    ]);
+    let mut socket = connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+    assert!(
+        close_browser_and_wait_exit(&mut socket, &mut serving)
+            .await
+            .success()
+    );
+    let mut output = String::new();
+    serving
+        .child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut output)
+        .unwrap();
+    assert_eq!(cookie_file_entries(&output), ["sid=seed"], "{output}");
+    assert_eq!(std::fs::read_to_string(&input).unwrap(), SEED_COOKIE);
+    std::fs::remove_file(input).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_cookie_jar_write_failure_preserves_clean_shutdown() {
+    let input = unique_temp_file("serve-cookie-write-failure-input");
+    let output = unique_temp_file("serve-cookie-write-failure-directory");
+    std::fs::write(&input, SEED_COOKIE).unwrap();
+    std::fs::create_dir(&output).unwrap();
+    let mut serving = spawn_serving_child_with_args(&[
+        OsStr::new("--cookie-file"),
+        input.as_os_str(),
+        OsStr::new("--cookie-jar"),
+        output.as_os_str(),
+    ]);
+    let mut socket = connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+    assert!(
+        close_browser_and_wait_exit(&mut socket, &mut serving)
+            .await
+            .success()
+    );
+    let stderr = serving.take_stderr();
+    assert!(stderr.contains("failed to save cookie jar"), "{stderr}");
+    assert!(output.is_dir());
+    assert_eq!(std::fs::read_to_string(&input).unwrap(), SEED_COOKIE);
+    std::fs::remove_dir(output).unwrap();
+    std::fs::remove_file(input).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_cookie_jar_export_includes_cdp_and_document_cookies() {
     let (_fixture_addr, fixture_base) = spawn_cookie_fixture().await;
     let cookie_file = unique_temp_file("serve-cookie-file");
     let mut serving = spawn_serving_child(&cookie_file);
@@ -334,7 +517,7 @@ async fn serve_cookie_file_export_includes_cdp_and_document_cookies() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn serve_restores_the_exported_cookie_file_on_restart() {
+async fn serve_restores_the_exported_cookie_jar_on_restart() {
     let (_fixture_addr, fixture_base) = spawn_cookie_fixture().await;
     let cookie_file = unique_temp_file("serve-cookie-restart");
     std::fs::write(&cookie_file, "").expect("seed an empty cookie file");

@@ -242,7 +242,7 @@ pub async fn run_cli_with_config<W: Write>(
             finalize_fetch_browser(browser, args.cookie_jar.as_deref(), stdout, result)
                 .map_err(|error| with_fetch_context(error, &args.url))?;
         }
-        Commands::Serve(_) => {
+        Commands::Serve(args) => {
             let additional_cookies = cookie_header_from_args(&config)?;
             config
                 .browser
@@ -266,10 +266,7 @@ pub async fn run_cli_with_config<W: Write>(
                 NavigationRuntimeConfig::from(&config.browser),
             );
             let result = server.serve().await;
-            // Export before the partition drops so a graceful shutdown keeps
-            // every accepted cookie, including CDP-injected and document.cookie
-            // writes that never pass through the network stack.
-            finalize_serve_cookies(&storage_partition, &config);
+            finalize_serve_cookies(&storage_partition, args.cookie_jar.as_deref(), stdout);
             result.context("protocol server failed")?;
         }
         Commands::Import(args) => {
@@ -527,11 +524,16 @@ fn finalize_fetch_browser<W: Write>(
     result
 }
 
-/// Writes the cookie files loaded on startup back with the session's final
-/// cookies, mirroring fetch mode's exit-time export. Literal `--cookie` data
-/// and stdin stay input-only. As in fetch, an export failure is logged and
-/// does not replace the serve result.
-fn finalize_serve_cookies(storage_partition: &StoragePartitionState, config: &AppConfig) {
+/// Exports to an explicit output without inferring outputs from cookie inputs.
+/// As in fetch, export failures do not replace the serve result.
+fn finalize_serve_cookies(
+    storage_partition: &StoragePartitionState,
+    cookie_jar: Option<&str>,
+    stdout: &mut impl Write,
+) {
+    let Some(path) = cookie_jar else {
+        return;
+    };
     let cookies = match storage_partition.cookies() {
         Ok(cookies) => cookies,
         Err(error) => {
@@ -539,28 +541,19 @@ fn finalize_serve_cookies(storage_partition: &StoragePartitionState, config: &Ap
             return;
         }
     };
-    for path in serve_cookie_file_output_paths(config) {
-        match cookie_cache::save_cookie_file(path, cookies.clone()) {
-            Ok(report) if report.skipped_partitioned > 0 => tracing::warn!(
-                skipped = report.skipped_partitioned,
-                "omitted partitioned cookies from Netscape cookie file"
-            ),
-            Err(error) => tracing::warn!(error = %error, "failed to save cookie file"),
-            Ok(_) => {}
-        }
+    let saved = if path == "-" {
+        cookie_cache::write_cookie_file(stdout, cookies)
+    } else {
+        cookie_cache::save_cookie_file(path, cookies)
+    };
+    match saved {
+        Ok(report) if report.skipped_partitioned > 0 => tracing::warn!(
+            skipped = report.skipped_partitioned,
+            "omitted partitioned cookies from Netscape cookie jar"
+        ),
+        Err(error) => tracing::warn!(error = %error, "failed to save cookie jar"),
+        Ok(_) => {}
     }
-}
-
-/// Cookie-file arguments that were loaded from a path may be written back;
-/// literal header data and stdin reads cannot.
-fn serve_cookie_file_output_paths(config: &AppConfig) -> Vec<&str> {
-    config
-        .fetch
-        .cookie_files
-        .iter()
-        .filter(|source| !source.is_empty() && !source.contains('=') && source.as_str() != "-")
-        .map(String::as_str)
-        .collect()
 }
 
 #[cfg(test)]

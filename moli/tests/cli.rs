@@ -369,6 +369,31 @@ fn app_config_accepts_cookie_file_for_cdp_serve() {
 }
 
 #[test]
+fn serve_cookie_jar_output_is_independent_of_cookie_inputs() {
+    for output in ["/tmp/final-cookies.txt", "-"] {
+        let cli = Cli::try_parse_from([
+            "moli",
+            "serve",
+            "--cookie-file",
+            "/tmp/input-cookies.txt",
+            "--cookie-jar",
+            "/tmp/overridden.txt",
+            "--cookie-jar",
+            output,
+        ])
+        .unwrap();
+        let Commands::Serve(args) = &cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(args.cookie_jar.as_deref(), Some(output));
+        assert_eq!(
+            AppConfig::from_cli(&cli).unwrap().fetch.cookie_files,
+            ["/tmp/input-cookies.txt"]
+        );
+    }
+}
+
+#[test]
 fn parses_trace_network_fetch_flag() {
     let cli = Cli::try_parse_from(normalize_args_for_compat([
         "moli",
@@ -665,6 +690,7 @@ fn infers_serve_mode_when_called_without_args() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            cookie_jar: None,
             debugger: false,
             host: "127.0.0.1".to_owned(),
             port: 9222,
@@ -693,6 +719,7 @@ fn parses_serve_flags_with_explicit_command() {
     assert_eq!(
         cli.command,
         Commands::Serve(Box::new(ServeArgs {
+            cookie_jar: None,
             debugger: false,
             host: "0.0.0.0".to_owned(),
             port: 9333,
