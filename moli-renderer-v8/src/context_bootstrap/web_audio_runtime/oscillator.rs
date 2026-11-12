@@ -142,28 +142,20 @@ fn initialize<'s>(
         return false;
     }
     source::initialize_scheduling(scope, oscillator);
-    let nyquist = audio_context_sample_rate(scope, context) / 2.0;
-    let frequency = audio_param(scope, 440.0, -nyquist, nyquist);
-    let detune = detune_param(scope);
-    // Keep the AudioParam's default metadata independent of its initial value.
-    define_non_enumerable_number_property(
-        scope,
-        frequency,
-        "value",
-        controls.frequency.clamp(-nyquist, nyquist),
-    );
-    let detune_limit = (1200.0_f32 * f32::MAX.log2()) as f64;
-    define_non_enumerable_number_property(
-        scope,
-        detune,
-        "value",
-        controls.detune.clamp(-detune_limit, detune_limit),
-    );
+    let native = backend::create_node(scope, context, NodeKind::Oscillator);
+    let frequency = native.param("frequency");
+    frequency.set_value(controls.frequency as f32);
+    let detune = native.param("detune");
+    detune.set_value(controls.detune as f32);
+    let frequency = audio_param::wrap(scope, frequency);
+    let detune = audio_param::wrap(scope, detune);
+    backend::initialize(scope, oscillator, State::Node(native));
     set_private_value(scope, oscillator, FREQUENCY, frequency.into());
     set_private_value(scope, oscillator, DETUNE, detune.into());
-    set_type(scope, oscillator, controls.kind);
     if let Some(wave) = controls.periodic_wave {
         set_wave(scope, oscillator, wave);
+    } else {
+        set_type(scope, oscillator, controls.kind);
     }
     true
 }
@@ -258,6 +250,18 @@ fn slot_getter<'s>(
 }
 
 fn set_type<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>, kind: Kind) {
+    if let Some(state) = backend::get(scope, node)
+        && let State::Node(Node::Oscillator(native)) = &mut *state.borrow_mut()
+    {
+        use web_audio_api::node::OscillatorType;
+        native.set_type(match kind {
+            Kind::Sine => OscillatorType::Sine,
+            Kind::Square => OscillatorType::Square,
+            Kind::Sawtooth => OscillatorType::Sawtooth,
+            Kind::Triangle => OscillatorType::Triangle,
+            Kind::Custom => unreachable!("custom waves use set_wave"),
+        });
+    }
     let token = v8str(scope, kind.token());
     set_private_value(scope, node, TYPE, token.into());
     set_private_value(scope, node, WAVE, v8::null(scope).into());

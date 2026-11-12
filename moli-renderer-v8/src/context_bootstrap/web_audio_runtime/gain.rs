@@ -94,19 +94,18 @@ fn initialize<'s>(
     context: v8::Local<'s, v8::Object>,
     value: f32,
 ) -> bool {
-    let gain = audio_param(scope, 1.0, f32::MIN as f64, f32::MAX as f64);
-    if gain.create_data_property(
-        scope,
-        v8str(scope, "value").into(),
-        v8::Number::new(scope, f64::from(value)).into(),
-    ) != Some(true)
-        || GainNodeObjectDeclaration::new(gain)
-            .initialize(scope, node)
-            .is_err()
+    let native = backend::create_node(scope, context, NodeKind::Gain);
+    let parameter = native.param("gain");
+    parameter.set_value(value);
+    let gain = audio_param::wrap(scope, parameter);
+    if GainNodeObjectDeclaration::new(gain)
+        .initialize(scope, node)
+        .is_err()
     {
         return false;
     }
     graph::initialize_node(scope, node, context);
+    backend::initialize(scope, node, State::Node(native));
     true
 }
 

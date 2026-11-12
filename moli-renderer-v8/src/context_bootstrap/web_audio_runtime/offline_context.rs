@@ -151,8 +151,13 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     };
 
     let context = args.this();
+    let native = backend::Context::offline(
+        options.number_of_channels as usize,
+        options.length as usize,
+        options.sample_rate,
+    );
+    backend::initialize(scope, context, State::Context(native));
     let destination = audio_destination_node(scope, context);
-    let compressors = v8::Array::new(scope, 0);
     let modules = new_web_audio_map_object(scope);
     let module_list = v8::Array::new(scope, 0);
     let processors = new_web_audio_map_object(scope);
@@ -172,19 +177,9 @@ pub(in crate::context_bootstrap) fn constructor<'s>(
     set_web_audio_number_slot(scope, context, RENDER_QUANTUM_SIZE, f64::from(quantum));
     let length = f64::from(options.length);
     let sample_rate = f64::from(options.sample_rate);
-    OfflineAudioContextObjectDeclaration::new(
-        0.0,
-        length,
-        sample_rate,
-        length,
-        sample_rate,
-        f64::from(options.number_of_channels),
-        compressors,
-        "suspended",
-        destination,
-    )
-    .initialize(scope, context)
-    .expect("OfflineAudioContext declaration should initialize object");
+    OfflineAudioContextObjectDeclaration::new(length, sample_rate, "suspended", destination)
+        .initialize(scope, context)
+        .expect("OfflineAudioContext declaration should initialize object");
     rv.set(context.into());
 }
 

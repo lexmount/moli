@@ -1,13 +1,11 @@
-//! Minimal connection/start bookkeeping for the existing audio backend.
-//!
-//! Reachability can establish silence without pretending to implement DSP. Keep
-//! connections in native slots, handle cycles, and snapshot input availability
-//! before completion callbacks can disconnect or reconnect nodes.
+//! WebIDL connection validation and GC-managed graph relationships.
+//! Native nodes supply PCM; graph snapshots also guard unsupported processors.
 
 use super::*;
 
 const CONTEXT: &str = "__moliAudioNodeContext";
 const ANALYSERS: &str = "__moliAudioContextActiveAnalysers";
+const DEMANDED: &str = "__moliAudioContextDemandedCompressors";
 const DESTINATION: &str = "__moliAudioContextDestination";
 const INPUTS: &str = "__moliAudioNodeInputs";
 const OUTPUTS: &str = "__moliAudioNodeOutputs";
@@ -250,6 +248,9 @@ pub(super) fn connect<'s>(
     {
         return Some(destination);
     }
+    with_native_connection(scope, source, destination, |source, destination| {
+        source.audio_node().connect(destination.audio_node());
+    });
     let record = v8::Object::new(scope);
     set_private_value(scope, record, EDGE_SOURCE, source.into());
     set_private_value(scope, record, EDGE_DESTINATION, destination.into());
@@ -257,11 +258,12 @@ pub(super) fn connect<'s>(
     set_web_audio_number_slot(scope, record, EDGE_INPUT, f64::from(input));
     add_edge(scope, source, OUTPUTS, record);
     add_edge(scope, destination, INPUTS, record);
-    if get_private_value(scope, destination, ANALYSER_FFT_SIZE_SLOT).is_some() {
+    if is_analyser(scope, destination) {
         // Track candidates for offline automatic pull: analysers with input
         // can process even without an output connection.
         add_edge(scope, context, ANALYSERS, destination);
     }
+    update_pull_demand(scope, context);
     Some(destination)
 }
 
@@ -303,14 +305,25 @@ pub(super) fn disconnect<'s>(
         return;
     }
     for connection in selected {
+        with_native_connection(
+            scope,
+            source,
+            connection.destination,
+            |source, destination| {
+                source
+                    .audio_node()
+                    .disconnect_dest(destination.audio_node());
+            },
+        );
         remove_edge(scope, source, OUTPUTS, connection.record);
         remove_edge(scope, connection.destination, INPUTS, connection.record);
-        if get_private_value(scope, connection.destination, ANALYSER_FFT_SIZE_SLOT).is_some()
+        if is_analyser(scope, connection.destination)
             && objects(scope, connection.destination, INPUTS).is_empty()
         {
             remove_edge(scope, context, ANALYSERS, connection.destination);
         }
     }
+    update_pull_demand(scope, context);
 }
 
 #[derive(Default)]
@@ -389,6 +402,11 @@ pub(super) fn start_source<'s>(
         throw_range_error(scope, "Audio source start arguments must not be negative.");
         return false;
     }
+    if let Some(state) = backend::get(scope, node)
+        && let State::Node(Node::Oscillator(native)) = &mut *state.borrow_mut()
+    {
+        native.start_at(when);
+    }
     set_web_audio_number_slot(scope, node, START_TIME, when);
     true
 }
@@ -410,6 +428,11 @@ pub(super) fn stop_source<'s>(
     if when < 0.0 {
         throw_range_error(scope, "Audio source stop time must not be negative.");
         return;
+    }
+    if let Some(state) = backend::get(scope, node)
+        && let State::Node(Node::Oscillator(native)) = &mut *state.borrow_mut()
+    {
+        native.stop_at(when);
     }
     set_web_audio_number_slot(scope, node, STOP_TIME, when);
 }
@@ -452,8 +475,8 @@ fn has_started_source<'s>(
                 );
                 return None;
             }
-            // Only the pre-existing oscillator backend supplies its synthetic
-            // signal. A null-buffer source must continue to render silence.
+            // Oscillators supply native PCM. A null-buffer source continues
+            // to render silence.
             has_input |= web_api_interfaces::OscillatorNode::is_instance(scope, node);
         }
         pending.extend(input_nodes(scope, node));
@@ -508,4 +531,77 @@ pub(super) fn rendered_with_input<'s>(
     node: v8::Local<'s, v8::Object>,
 ) -> bool {
     get_private_value(scope, node, RENDERED_INPUT).is_some_and(|value| value.boolean_value(scope))
+}
+
+fn is_analyser<'s>(scope: &mut v8::PinScope<'s, '_>, node: v8::Local<'s, v8::Object>) -> bool {
+    backend::get(scope, node)
+        .is_some_and(|state| matches!(&*state.borrow(), State::Node(Node::Analyser(_))))
+}
+
+fn set_demand<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    node: v8::Local<'s, v8::Object>,
+    active: bool,
+) -> bool {
+    if let Some(state) = backend::get(scope, node)
+        && let State::Node(Node::Compressor { demanded, .. }) = &*state.borrow()
+    {
+        demanded.store(active, std::sync::atomic::Ordering::Release);
+        return true;
+    }
+    false
+}
+
+// Demand and input availability are different: a pulled compressor processes
+// silent input too. This only selects processors; it never substitutes PCM or
+// decides whether the output is silent from graph reachability.
+fn update_pull_demand<'s>(scope: &mut v8::PinScope<'s, '_>, context: v8::Local<'s, v8::Object>) {
+    let previous = objects(scope, context, DEMANDED);
+    let mut pending = objects(scope, context, ANALYSERS);
+    pending.extend(web_audio_object_slot(scope, context, DESTINATION));
+    let mut visited = Vec::new();
+    let mut demanded = Vec::new();
+    while let Some(node) = pending.pop() {
+        if visited.contains(&node) {
+            continue;
+        }
+        visited.push(node);
+        if backend::get(scope, node)
+            .is_some_and(|state| matches!(*state.borrow(), State::ModuleWorklet))
+        {
+            // Module-only worklets have no DSP pull edge yet. Do not propagate
+            // native processor demand across a control-only connection.
+            continue;
+        }
+        pending.extend(input_nodes(scope, node));
+        if set_demand(scope, node, true) {
+            demanded.push(node.into());
+        }
+    }
+    // Retained processors must not briefly observe false on the audio thread
+    // just because an unrelated edge changed in the control thread.
+    for node in previous {
+        if !visited.contains(&node) {
+            set_demand(scope, node, false);
+        }
+    }
+    let nodes = v8::Array::new_with_elements(scope, &demanded);
+    set_private_value(scope, context, DEMANDED, nodes.into());
+}
+
+fn with_native_connection<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+    destination: v8::Local<'s, v8::Object>,
+    operation: impl FnOnce(&Node, &Node),
+) {
+    if let Some(source) = backend::get(scope, source)
+        && let Some(destination) = backend::get(scope, destination)
+        && let (State::Node(source), State::Node(destination)) =
+            (&*source.borrow(), &*destination.borrow())
+    {
+        operation(source, destination);
+    }
+    // Control-only nodes retain their logical edges. Offline preflight rejects
+    // active paths that require processors the native backend cannot provide.
 }

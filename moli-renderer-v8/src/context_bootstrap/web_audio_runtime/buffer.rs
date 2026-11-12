@@ -108,9 +108,15 @@ fn initialize_empty<'s>(
 ) {
     let channels: Vec<_> = (0..options.number_of_channels)
         .map(|_| {
-            let data = build_channel_data_view(scope, options.length as usize, false);
-            v8::Local::<v8::Float32Array>::try_from(data)
-                .expect("Channel data should be Float32Array")
+            let store = v8::ArrayBuffer::new_backing_store_from_vec(vec![
+                0_u8;
+                options.length as usize
+                    * size_of::<f32>()
+            ])
+            .make_shared();
+            let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+            v8::Float32Array::new(scope, buffer, 0, options.length as usize)
+                .expect("validated channel length should fit")
         })
         .collect();
     initialize(
@@ -189,23 +195,45 @@ fn new_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object>
     buffer
 }
 
-pub(super) fn rendered<'s>(
+pub(super) fn new_buffer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    length: usize,
+    number_of_channels: u32,
+    length: u32,
     sample_rate: f64,
-    channels: u32,
-    has_input: bool,
-) -> v8::Local<'s, v8::Object> {
-    let data: Vec<_> = (0..channels)
-        .map(|_| {
-            let data = build_channel_data_view(scope, length, has_input);
-            v8::Local::<v8::Float32Array>::try_from(data)
-                .expect("Channel data should be Float32Array")
-        })
-        .collect();
+) -> Option<v8::Local<'s, v8::Object>> {
+    let options = Options {
+        number_of_channels,
+        length,
+        sample_rate: sample_rate as f32,
+    };
+    if !validate(scope, &options) {
+        return None;
+    }
     let buffer = new_object(scope);
-    initialize(scope, buffer, length as u32, sample_rate, &data);
-    buffer
+    initialize_empty(scope, buffer, options);
+    Some(buffer)
+}
+
+pub(super) fn write_channel<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    buffer: v8::Local<'s, v8::Object>,
+    channel: u32,
+    samples: &[f32],
+) -> Option<()> {
+    if !valid_channel(scope, buffer, channel) {
+        return None;
+    }
+    let channels = web_audio_array_slot(scope, buffer, CHANNELS)?;
+    let keeper = channels
+        .get_index(scope, channel)
+        .and_then(|value| v8::Local::<v8::ArrayBuffer>::try_from(value).ok())?;
+    let storage = keeper.get_backing_store();
+    for (sample, bytes) in samples.iter().zip(storage.chunks_exact(size_of::<f32>())) {
+        for (byte, value) in bytes.iter().zip(sample.to_ne_bytes()) {
+            byte.set(value);
+        }
+    }
+    Some(())
 }
 
 pub(super) fn sample_rate<'s>(
@@ -428,7 +456,21 @@ fn copy_channel<'s>(
     let Some(parsed) = webidl::parse_args::<CopyArgs>(scope, &args) else {
         return;
     };
+    if parsed.array.length() == 0 {
+        return;
+    }
     if !valid_channel(scope, args.this(), parsed.channel) {
+        return;
+    }
+    let views = web_audio_array_slot(scope, args.this(), VIEWS)
+        .expect("AudioBuffer should have channel views");
+    if views
+        .get_index(scope, parsed.channel)
+        .and_then(|value| v8::Local::<v8::Float32Array>::try_from(value).ok())
+        .is_some_and(|view| view.length() == 0)
+    {
+        // A manually detached public view makes that channel unavailable. The
+        // acquisition path clears these slots before creating fresh views.
         return;
     }
     let length = web_audio_number_slot(scope, args.this(), LENGTH).unwrap_or(0.0) as usize;

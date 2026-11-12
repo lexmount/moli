@@ -216,7 +216,7 @@ fn eval_follows_load_handler_navigation_chains_like_direct_fetch() -> Result<()>
 }
 
 #[test]
-fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
+fn eval_can_use_realtime_audio_oscillator_and_analyser_nodes() -> Result<()> {
     let output = run_eval(
         "data:text/html,<!doctype html><title>Web Audio</title>",
         r#"(async () => {
@@ -224,7 +224,9 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
           const oscillator = context.createOscillator();
           const analyser = context.createAnalyser();
           oscillator.type = 'triangle';
-          oscillator.frequency.setValueAtTime(880, context.currentTime);
+          oscillator.frequency.value = 880;
+          const frequency = oscillator.frequency.value;
+          const scheduled = oscillator.frequency.setValueAtTime(880, context.currentTime);
           analyser.fftSize = 32;
           const connected = oscillator.connect(analyser).connect(context.destination);
           // Before starting the source, the analyser must be silent. Reading
@@ -239,7 +241,8 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
           await context.close();
           return {
             oscillator: oscillator instanceof OscillatorNode,
-            frequency: oscillator.frequency.value,
+            frequency,
+            scheduledSameParameter: scheduled === oscillator.frequency,
             analyser: analyser instanceof AnalyserNode,
             connected: connected === context.destination,
             readReturnedUndefined: readResult === undefined,
@@ -260,6 +263,7 @@ fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
         serde_json::json!({
             "oscillator": true,
             "frequency": 880,
+            "scheduledSameParameter": true,
             "analyser": true,
             "connected": true,
             "readReturnedUndefined": true,
