@@ -983,7 +983,13 @@ mod tests {
                 last_start_error: None,
             },
         );
-        ServiceWorkerControlState::new(registration_id, Some(version_id), script_url, scope_url)
+        ServiceWorkerControlState::new(
+            registration_id,
+            Some(version_id),
+            "activated",
+            script_url,
+            scope_url,
+        )
     }
 
     fn test_fetch_request(
@@ -1147,7 +1153,7 @@ mod tests {
                 last_start_error: None,
             },
         );
-        ServiceWorkerControlState::new(registration_id, None, script_url, scope_url)
+        ServiceWorkerControlState::new(registration_id, None, "activated", script_url, scope_url)
     }
 
     fn snapshot_for_registration(
