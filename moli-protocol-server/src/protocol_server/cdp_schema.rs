@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use moli_protocol_cdp::CDP_PROTOCOL_JSON;
+use moli_protocol_cdp::upstream_protocol_schema;
 use serde_json::Value;
 
 // Browser events emitted by the protocol owner and renderer agents. V8 events
@@ -123,8 +123,7 @@ const IMPLEMENTED_BROWSER_EVENTS: &[(&str, &[&str])] = &[
 pub(super) fn advertised_protocol_json() -> &'static str {
     static JSON: OnceLock<String> = OnceLock::new();
     JSON.get_or_init(|| {
-        let mut protocol: Value =
-            serde_json::from_str(CDP_PROTOCOL_JSON).expect("embedded CDP protocol is valid JSON");
+        let mut protocol = upstream_protocol_schema();
         let extensions: Value = serde_json::from_str(include_str!("protocol_extensions.json"))
             .expect("Moli protocol extensions are valid JSON");
         let domains = protocol["domains"].as_array_mut().expect("CDP domains");
@@ -246,7 +245,7 @@ mod tests {
     #[test]
     fn advertised_commands_and_events_keep_their_complete_definitions() {
         let advertised: Value = serde_json::from_str(advertised_protocol_json()).unwrap();
-        let upstream: Value = serde_json::from_str(CDP_PROTOCOL_JSON).unwrap();
+        let upstream = upstream_protocol_schema();
         let extensions: Value =
             serde_json::from_str(include_str!("protocol_extensions.json")).unwrap();
         for advertised_domain in advertised["domains"].as_array().unwrap() {
@@ -297,7 +296,7 @@ mod tests {
     #[test]
     fn advertised_tracing_events_cover_both_transfer_modes() {
         let advertised: Value = serde_json::from_str(advertised_protocol_json()).unwrap();
-        let upstream: Value = serde_json::from_str(CDP_PROTOCOL_JSON).unwrap();
+        let upstream = upstream_protocol_schema();
         for event in ["dataCollected", "tracingComplete"] {
             assert_eq!(
                 definition(domain(&advertised, "Tracing"), "events", event),
@@ -309,7 +308,7 @@ mod tests {
     #[test]
     fn advertised_commands_match_the_dispatcher_and_server() {
         let advertised: Value = serde_json::from_str(advertised_protocol_json()).unwrap();
-        let upstream: Value = serde_json::from_str(CDP_PROTOCOL_JSON).unwrap();
+        let upstream = upstream_protocol_schema();
         let mut expected = BTreeSet::from(["Browser.close".to_owned()]);
         for (domain, commands) in moli_protocol::implemented_cdp_commands() {
             expected.extend(commands.iter().map(|command| format!("{domain}.{command}")));

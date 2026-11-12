@@ -9,9 +9,12 @@ stable snapshot and does not describe all current Runtime commands and types.
 
 Keep these files unchanged from upstream. When upgrading V8, update both from a
 matching pinned protocol revision and recheck the JS schema against the vendored
-PDL. Builds compact and embed them without a network dependency. The server
-filters commands and events to its implementation, retaining all types for
-cross-domain references. Moli-only definitions live in
+PDL. Builds compact them, compress with the existing `brotlic` dependency at
+quality 11, and embed only the `.json.br` bytes, without a network dependency.
+The server decodes and filters the schema on its first discovery request, then
+caches the final response with `OnceLock`. All types remain available for
+cross-domain references. The uncompressed build artifact is used only by the
+byte-for-byte round-trip test. Moli-only definitions live in
 `moli-protocol-server/src/protocol_server/protocol_extensions.json`.
 
 Upstream licensing is preserved in `LICENSE`.
