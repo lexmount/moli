@@ -1199,10 +1199,25 @@ where
         parent: LayoutBoxId,
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
-        let establishes_inline_context = children
-            .iter()
-            .copied()
-            .any(|child| self.is_meaningful_inline_in_flow(world, child))
+        // Floats do not switch a flow container to block children. Like Blink's
+        // LayoutBlockFlow, a float-only container still establishes an IFC.
+        // Flex/grid items ignore their authored float and must never turn
+        // their container into an inline formatting context.
+        let display = world
+            .box_by_id(parent)
+            .ok_or(LayoutError::InvalidBoxReference {
+                index: parent.index(),
+            })?
+            .style
+            .display();
+        let establishes_inline_context = !display.is_flex_container()
+            && !display.is_grid_container()
+            && children.iter().copied().any(|child| {
+                self.is_meaningful_inline_in_flow(world, child)
+                    || world.box_by_id(child).is_some_and(|layout_box| {
+                        layout_box.style.taffy.float != taffy::Float::None
+                    })
+            })
             && !children
                 .iter()
                 .copied()
