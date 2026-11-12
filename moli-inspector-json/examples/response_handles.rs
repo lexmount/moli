@@ -2,7 +2,7 @@
 //! Use one fresh process per mode and fixture; both modes use the System allocator.
 use moli_inspector_json::InspectorJson;
 use serde_json::{Value, json};
-use std::{hint::black_box, time::Instant};
+use std::{collections::BTreeSet, hint::black_box, time::Instant};
 
 fn materialized_handles(message: &InspectorJson) -> Vec<String> {
     let mut ids = Vec::new();
@@ -40,6 +40,7 @@ fn main() {
     let mut queue = Vec::with_capacity(count);
     let started = Instant::now();
     let mut handles = 0;
+    let mut object_ids = BTreeSet::new();
     for _ in 0..count {
         let message = InspectorJson::from_slice(&bytes).unwrap();
         let ids = if mode == "materialize" {
@@ -47,7 +48,8 @@ fn main() {
         } else {
             message.response_remote_object_ids(1000).unwrap()
         };
-        handles += black_box(ids).len();
+        handles += black_box(&ids).len();
+        object_ids.extend(ids);
         queue.push(message);
     }
     let nanos = started.elapsed().as_nanos();
@@ -62,7 +64,7 @@ fn main() {
     };
     println!(
         "{}",
-        json!({"mode":mode,"messages":count,"fixture_bytes":bytes.len(),"handles":handles,"ns_per_message":nanos/count as u128,"peak_rss_kib":kib("VmHWM:"),"rss_kib":kib("VmRSS:")})
+        json!({"mode":mode,"messages":count,"fixture_bytes":bytes.len(),"handles":handles,"object_ids":object_ids,"ns_per_message":nanos/count as u128,"peak_rss_kib":kib("VmHWM:"),"rss_kib":kib("VmRSS:")})
     );
     black_box(&queue);
 }
