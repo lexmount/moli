@@ -528,7 +528,8 @@ fn computed_style_result(properties: Vec<(String, String)>) -> Value {
                     "computedStyle": properties
                         .into_iter()
                         .map(|(name, value)| json!({ "name": name, "value": value }))
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
+        "extraFields": { "isAppearanceBase": false }
     })
 }
 
@@ -975,6 +976,10 @@ mod tests {
         .await;
         let computed = take_response_by_id(&mut ctx, 204);
         assert_eq!(computed["sessionId"], "SID-background");
+        assert_eq!(
+            computed["result"]["extraFields"],
+            json!({ "isAppearanceBase": false })
+        );
         let computed_properties = computed["result"]["computedStyle"]
             .as_array()
             .expect("computedStyle array");
