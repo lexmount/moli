@@ -298,3 +298,66 @@ fn embedded_attribute_resumption_applies_the_same_policy_as_ordinary_elements() 
     assert!(output.contains("data-extra=\"last\""));
     assert!(!output.contains("stale"));
 }
+
+#[test]
+fn namespaced_frame_attributes_do_not_replace_the_null_namespace_export_values() {
+    for author_attributes in [false, true] {
+        let mut host = host();
+        let root = host.document_handle();
+        let owner = child(&mut host, root, "iframe");
+        for (namespace, prefix, label) in [
+            ("http://www.w3.org/XML/1998/namespace", None, "xml"),
+            ("urn:frame-metadata", Some("p"), "custom"),
+        ] {
+            for name in ["srcdoc", "data-moli-frame-url"] {
+                assert!(host.set_attribute_ns(
+                    owner,
+                    Some(namespace),
+                    prefix,
+                    name,
+                    &format!("{label} & value"),
+                ));
+            }
+        }
+        if author_attributes {
+            assert!(host.set_attribute_ns(owner, None, None, "srcdoc", "stale"));
+            assert!(host.set_attribute_ns(owner, None, None, "data-moli-frame-url", "stale"));
+        }
+        assert!(host.set_attribute(owner, "data-after", "tail"));
+        let document = host.create_detached_html_document();
+        let b = child(&mut host, document, "b");
+        text(&mut host, b, "live & child");
+        let docs = Documents {
+            entries: vec![(owner, document, "https://frame.test/?a=1&b=2".into())],
+            ..Default::default()
+        };
+        let metadata = concat!(
+            " xml:srcdoc=\"xml &amp; value\"",
+            " xml:data-moli-frame-url=\"xml &amp; value\"",
+            " p:srcdoc=\"custom &amp; value\"",
+            " p:data-moli-frame-url=\"custom &amp; value\"",
+        );
+        let embedded = format!(
+            " srcdoc=\"{}\" data-moli-frame-url=\"https://frame.test/?a=1&amp;b=2\"",
+            escape("<b>live &amp; child</b>"),
+        );
+        let expected = if author_attributes {
+            format!("<iframe{metadata}{embedded} data-after=\"tail\"></iframe>")
+        } else {
+            format!("<iframe{metadata} data-after=\"tail\"{embedded}></iframe>")
+        };
+        let before = host.dom().serialize_document();
+        assert_eq!(export(&host, &docs, None).unwrap(), expected);
+        assert_eq!(host.dom().serialize_document(), before);
+        assert_eq!(
+            export(&host, &docs, Some(expected.len() - 1)),
+            Err(HtmlSerializationError::OutputLimitExceeded {
+                max_bytes: expected.len() - 1,
+            }),
+        );
+        assert_eq!(
+            export(&host, &docs, Some(expected.len())).unwrap(),
+            expected
+        );
+    }
+}

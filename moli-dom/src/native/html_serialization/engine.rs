@@ -624,12 +624,12 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 }
                 attribute
             };
-            if attribute.name_matches("srcdoc") {
+            if attribute.namespace().is_empty() && attribute.local_name() == "srcdoc" {
                 state.wrote_srcdoc = true;
                 self.start_embedded(state)?;
                 return Ok(());
             }
-            if attribute.name_matches("data-moli-frame-url") {
+            if attribute.namespace().is_empty() && attribute.local_name() == "data-moli-frame-url" {
                 state.wrote_url = true;
                 self.out.push_str(" data-moli-frame-url=\"");
                 self.out.attribute_value(&state.embedded.url);
