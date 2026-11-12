@@ -1249,8 +1249,7 @@ async fn classic_session_runtime_loop(
             let mut shutdown_requested = false;
             {
                 let attached = attached_bidi.as_mut().expect("attached BiDi socket");
-                let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
-                adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
+                adapter_scheduler.schedule_turn_if_needed(&scheduler, false);
                 tokio::select! {
                     biased;
                     completion = receivers.protocol_work_completion_rx.recv() => {
@@ -1261,7 +1260,7 @@ async fn classic_session_runtime_loop(
                     }
                     _ = receivers.state_events_ready.notified() => {
                         scheduler.apply_protocol_state_events();
-                        if !attached.actor.resume_pending_runtime_admission(&mut scheduler, &mut receivers).await {
+                        if !attached.actor.advance_pending_commands(&mut scheduler, &mut receivers).await {
                             detach_bidi = true;
                         }
                     }
@@ -1293,7 +1292,7 @@ async fn classic_session_runtime_loop(
                             detach_bidi = true;
                         }
                     }
-                    publication = receivers.renderer_publication_rx.recv(), if !page_javascript_blocked => {
+                    publication = receivers.renderer_publication_rx.recv() => {
                         let Some(publication) = publication else {
                             break;
                         };
@@ -1309,7 +1308,6 @@ async fn classic_session_runtime_loop(
                     }
                     actor_input = attached.actor.recv_attached_input(
                         &mut adapter_scheduler,
-                        page_javascript_blocked,
                     ) => {
                         match actor_input {
                             BidiSocketActorInput::Socket(Some(message)) => {
@@ -1322,6 +1320,9 @@ async fn classic_session_runtime_loop(
                                 {
                                     detach_bidi = true;
                                 }
+                            }
+                            BidiSocketActorInput::InputDeadline => {
+                                if !attached.actor.advance_pending_commands(&mut scheduler, &mut receivers).await { detach_bidi = true; }
                             }
                             BidiSocketActorInput::Socket(None) => {
                                 detach_bidi = true;
@@ -1350,10 +1351,10 @@ async fn classic_session_runtime_loop(
                                     detach_bidi = true;
                                 }
                             }
-                            BidiSocketActorInput::RuntimeWorkflowReady(Some(ready)) => {
-                                if !attached.actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
+                            BidiSocketActorInput::AutomationWorkflowReady(Some(ready)) => {
+                                if !attached.actor.handle_automation_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
                             }
-                            BidiSocketActorInput::RuntimeWorkflowReady(None) => { detach_bidi = true; }
+                            BidiSocketActorInput::AutomationWorkflowReady(None) => { detach_bidi = true; }
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }
@@ -1396,8 +1397,7 @@ async fn classic_session_runtime_loop(
                     .await;
             }
         } else {
-            let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
-            adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
+            adapter_scheduler.schedule_turn_if_needed(&scheduler, false);
             tokio::select! {
                 biased;
                 completion = receivers.protocol_work_completion_rx.recv() => {
@@ -1432,14 +1432,14 @@ async fn classic_session_runtime_loop(
                     };
                     let _ = scheduler.route_background_event_around_inflight_navigation(event);
                 }
-                publication = receivers.renderer_publication_rx.recv(), if !page_javascript_blocked => {
+                publication = receivers.renderer_publication_rx.recv() => {
                     let Some(publication) = publication else {
                         break;
                     };
                     let _ = adapter_scheduler
                         .ingest_renderer_publication(&mut scheduler, publication);
                 }
-                input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
+                input = adapter_scheduler.recv_input() => {
                     let _ = adapter_scheduler
                         .advance_input(&mut scheduler, input);
                 }

@@ -40,7 +40,7 @@ async fn ace_page_task_waiter_rejoins_once_and_releases_input_blocking() {
                     &mut in_flight,
                     &mut next_token,
                 );
-                assert!(page_javascript_owner_is_blocked(&scheduler, &in_flight));
+                assert!(embedder_input_is_exclusive(&in_flight));
                 assert!(in_flight[&1].command().is_none(), "no CDP metadata");
                 for turn in 0..2 {
                     let InFlightWork::AcePageTask(task) = &in_flight[&1] else {
@@ -69,11 +69,11 @@ async fn ace_page_task_waiter_rejoins_once_and_releases_input_blocking() {
                             received.try_recv().is_err(),
                             "recovery still owns the reply"
                         );
-                        assert!(page_javascript_owner_is_blocked(&scheduler, &in_flight));
+                        assert!(embedder_input_is_exclusive(&in_flight));
                     }
                 }
                 assert!(in_flight.is_empty());
-                assert!(!page_javascript_owner_is_blocked(&scheduler, &in_flight));
+                assert!(!embedder_input_is_exclusive(&in_flight));
                 let error = received.await.unwrap().unwrap_err();
                 assert_eq!(error.code, if abort_recovery { 500 } else { 404 });
             }

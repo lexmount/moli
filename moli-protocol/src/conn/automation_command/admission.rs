@@ -1,6 +1,6 @@
 use super::*;
 
-/// A Runtime command waiting for its browsing context's Document to be ready.
+/// An automation command waiting for its browsing context's Document to be ready.
 /// The original host and binding remain authoritative across navigation, but
 /// the Document scope is captured only when dispatch can actually start.
 #[derive(Debug)]
@@ -10,24 +10,46 @@ pub struct PendingAutomationCommandAdmission {
 }
 
 impl CdpConnection {
-    pub(crate) fn start_runtime_command_with_navigation_admission(
+    /// Capture the original target and session binding for multi-step input.
+    pub fn automation_page_host_scope(
+        &mut self,
+        context: &AutomationContext,
+    ) -> Option<ProtocolPageHostScope> {
+        let owner = self.command_owner_scope_for_devtools_context(context)?;
+        ProtocolPageHostScope::capture_for_operation(self, &owner).ok()
+    }
+
+    pub fn automation_page_host_can_start_operation(&self, scope: &ProtocolPageHostScope) -> bool {
+        scope.can_start_operation(self)
+    }
+
+    fn automation_document_admission_is_pending(&mut self, context: &AutomationContext) -> bool {
+        self.has_inflight_background_navigation_for_devtools_context(context)
+            || matches!(
+                self.devtools_context_document_navigation_state(context),
+                DevToolsDocumentNavigationState::PendingNavigation
+                    | DevToolsDocumentNavigationState::AwaitingCommit
+            )
+    }
+
+    pub(crate) fn start_automation_command_with_navigation_admission(
         &mut self,
         command: AutomationCommand,
     ) -> Result<AutomationCommandTaskStep, Box<PendingAutomationCommandAdmission>> {
         let context = command.context();
         if context.target_id.is_some()
-            && self.has_inflight_background_navigation_for_devtools_context(context)
+            && self.automation_document_admission_is_pending(context)
             && let Some(owner) = self.command_owner_scope_for_devtools_context(context)
             && let Ok(host) = ProtocolPageHostScope::capture(self, &owner)
         {
-            return self.resume_runtime_command_admission(Box::new(
+            return self.resume_automation_command_admission(Box::new(
                 PendingAutomationCommandAdmission { command, host },
             ));
         }
         Ok(self.start_automation_command_dispatch(command))
     }
 
-    pub(crate) fn resume_runtime_command_admission(
+    pub(crate) fn resume_automation_command_admission(
         &mut self,
         pending: Box<PendingAutomationCommandAdmission>,
     ) -> Result<AutomationCommandTaskStep, Box<PendingAutomationCommandAdmission>> {
@@ -36,14 +58,14 @@ impl CdpConnection {
                 AutomationCommandDispatchOutcome::new_with_protocol_events(
                     Err(DevToolsError::new(
                         DevToolsErrorKind::NoSuchTarget,
-                        "Browsing context closed before Runtime command admission",
+                        "Browsing context closed before command admission",
                     )),
                     Vec::new(),
                     Vec::new(),
                 ),
             )));
         }
-        if self.has_inflight_background_navigation_for_devtools_context(pending.command.context()) {
+        if self.automation_document_admission_is_pending(pending.command.context()) {
             return Err(pending);
         }
         // Validation and dispatch share one finite owner turn. No unrelated
@@ -77,7 +99,7 @@ mod tests {
             realm_type: None,
         });
         let pending = conn
-            .start_runtime_command_with_navigation_admission(command)
+            .start_automation_command_with_navigation_admission(command)
             .err()
             .expect("a live navigation defers admission");
         (conn, pending)
@@ -85,7 +107,7 @@ mod tests {
 
     fn assert_revoked(conn: &mut CdpConnection, pending: Box<PendingAutomationCommandAdmission>) {
         let Ok(AutomationCommandTaskStep::Complete(outcome)) =
-            conn.resume_runtime_command_admission(pending)
+            conn.resume_automation_command_admission(pending)
         else {
             panic!("a revoked host must end admission without dispatch");
         };
@@ -101,7 +123,7 @@ mod tests {
         let (mut conn, pending) = fixture();
         let original = pending.host.clone();
         let pending = conn
-            .resume_runtime_command_admission(pending)
+            .resume_automation_command_admission(pending)
             .err()
             .expect("no readiness progress without a Document");
         assert!(original.is_current(&conn));

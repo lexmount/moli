@@ -2,6 +2,7 @@ use super::*;
 
 mod bidi_commands;
 mod browsing_contexts;
+mod command_progress;
 mod dialog_policy;
 mod element_references;
 mod events_and_network;

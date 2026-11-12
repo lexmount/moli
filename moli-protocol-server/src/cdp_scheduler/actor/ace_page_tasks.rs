@@ -21,7 +21,6 @@ fn owner_output_metadata() -> InFlightCommandMetadata {
         id: None,
         session_id: None,
         started: None,
-        executes_page_javascript: false,
         command_output_session_id: None,
         internal_response: None,
     }

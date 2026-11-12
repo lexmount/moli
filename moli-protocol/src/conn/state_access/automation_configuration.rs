@@ -42,7 +42,10 @@ impl ProtocolWorkflowState<'_> {
         context: &mut CommandDispatchContext,
     ) {
         if let Some(scope) = scope {
-            if !scope.is_current(self.connection) || self.connection.has_pending_javascript_dialog()
+            if !scope.is_current(self.connection)
+                || self
+                    .connection
+                    .owner_has_pending_javascript_dialog(scope.owner())
             {
                 return;
             }

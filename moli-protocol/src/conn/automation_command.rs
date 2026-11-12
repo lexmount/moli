@@ -195,9 +195,6 @@ impl CdpConnection {
         dispatch_context: &mut CommandDispatchContext,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
     ) {
-        if self.has_pending_javascript_dialog() {
-            return;
-        }
         let session_id = context
             .session_id
             .as_ref()
@@ -212,6 +209,9 @@ impl CdpConnection {
             }
             None => CommandOwnerScope::capture(self, session_id),
         };
+        if self.owner_has_pending_javascript_dialog(&owner) {
+            return;
+        }
         crate::domains::activity::project_protocol_local_command_outputs(
             self,
             &owner,

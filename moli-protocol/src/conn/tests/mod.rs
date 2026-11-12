@@ -644,6 +644,55 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
 }
 
 #[test]
+fn navigation_gate_keeps_worker_sessions_out_of_unrelated_page_loads() {
+    use crate::conn::CdpSessionRoute;
+    let mut conn = CdpConnection::new();
+    let mut context = BrowserContext::new("BID-worker-gate".to_owned());
+    context.set_active_target_id("TID-page");
+    context.attach_active_session("SID-page");
+    let navigation = context
+        .start_document_navigation_for_active_target("LOADER-page".to_owned())
+        .unwrap();
+    context
+        .active_page_target_mut()
+        .runtime_slot
+        .page_slot_mut()
+        .claim_background_navigation_completion(&navigation, None)
+        .unwrap();
+    conn.install_browser_context_fixture_for_test(context);
+    for route in [
+        CdpSessionRoute::DedicatedWorkerTarget {
+            browser_context_id: "BID-worker-gate".into(),
+            target_id: "TID-dedicated".into(),
+        },
+        CdpSessionRoute::SharedWorkerTarget {
+            browser_context_id: "BID-worker-gate".into(),
+            target_id: "TID-shared".into(),
+        },
+        CdpSessionRoute::ServiceWorkerTarget {
+            browser_context_id: "BID-worker-gate".into(),
+            target_id: "TID-service".into(),
+        },
+    ] {
+        let target_id = route.target_id().unwrap().to_owned();
+        conn.register_session_route_for_test("SID-worker", route);
+        let event = BackgroundProtocolEvent::immediate(json!({
+            "sessionId":"SID-worker", "method":"Network.responseReceived", "params":{
+                "requestId":"worker-script", "type":"Script", "response":{"url":"https://example.test/worker.js", "status":200}
+            }
+        }));
+        assert!(event.should_wait_for_background_navigation_completion());
+        assert!(conn.has_inflight_background_navigation());
+        assert_eq!(
+            conn.background_navigation_target_id_for_event(&event)
+                .as_deref(),
+            Some(target_id.as_str())
+        );
+        assert!(!conn.has_inflight_background_navigation_for_target(&target_id));
+    }
+}
+
+#[test]
 fn navigation_background_event_queue_drains_current_token() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("CTX-nav".to_owned());

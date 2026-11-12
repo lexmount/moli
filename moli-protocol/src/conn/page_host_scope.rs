@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 /// Original target host and binding, independent of Document replacements.
 /// Public script results and cancellation can outlive their starting Document.
 #[derive(Clone, Debug)]
-pub(crate) struct ProtocolPageHostScope {
+pub struct ProtocolPageHostScope {
     owner: CommandOwnerScope,
     host: crate::conn::PageTargetHostIdentity,
     binding: Option<crate::conn::SessionDisposalWait>,
@@ -15,6 +15,11 @@ pub(crate) struct ProtocolPageHostScope {
 }
 
 impl ProtocolPageHostScope {
+    /// Input devices belong to the target host, independently of its Document.
+    pub fn same_host(&self, other: &Self) -> bool {
+        self.host.matches(&other.host)
+    }
+
     pub(crate) fn capture(conn: &CdpConnection, owner: &CommandOwnerScope) -> Result<Self> {
         let session = owner
             .session_id()

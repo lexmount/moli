@@ -128,8 +128,8 @@ async fn runtime_admission_scenario(attached: bool, query: &str, operation: &str
 
     let control = match operation {
         "complete" => {
-            // The admitted command remains the sole pending Runtime command;
-            // moving admission must not silently enable concurrent execution.
+            // A different context has an independent command owner even
+            // while #5 retains its exact Document admission wait.
             let second = send_bidi_command(
                 &mut socket,
                 7,
@@ -137,11 +137,8 @@ async fn runtime_admission_scenario(attached: bool, query: &str, operation: &str
                 json!({"context": &sibling}),
             )
             .await;
-            assert_bidi_error(
-                &second,
-                "unsupported operation",
-                "one pending Runtime command",
-            );
+            assert_eq!(second["id"], 7, "{second}");
+            bidi_window_realm(&second, &sibling);
             release.send(true).unwrap();
             None
         }

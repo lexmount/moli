@@ -1708,14 +1708,18 @@ impl CdpConnection {
             .page_session_state()
     }
 
+    pub(crate) fn owner_has_pending_javascript_dialog(&self, owner: &CommandOwnerScope) -> bool {
+        self.target_session_owner_ref_for_owner(owner)
+            .is_some_and(|owner| owner.target().has_pending_javascript_dialog())
+    }
+
     /// Includes dialogs from the addressed Page's child frames and DevTools sessions.
     pub fn has_pending_javascript_dialog_for_devtools_context(
         &self,
         context: &AutomationContext,
     ) -> bool {
         self.command_owner_scope_for_devtools_context(context)
-            .and_then(|owner| self.target_session_owner_ref_for_owner(&owner))
-            .is_some_and(|owner| owner.target().has_pending_javascript_dialog())
+            .is_some_and(|owner| self.owner_has_pending_javascript_dialog(&owner))
     }
 
     pub(crate) fn target_devtools_session_state_for_session(
