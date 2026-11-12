@@ -125,7 +125,7 @@ So renderst du eine Seite mit Molis Standard-Abschlussstrategie als Markdown:
 ```bash
 moli fetch \
   --dump markdown \
-  --wait-until done \
+  --wait done \
   https://example.com
 ```
 
@@ -228,7 +228,7 @@ Rechenintensive Browser-Operationen sind in Moli standardmäßig deaktiviert und
 | `--layout` | `LayoutPolicy::OnDemand` — echtes Layout, Geometrie, Hit-Testing, Koordinateneingaben, Screenshots und Screencast |
 | `--resource` | Alle optionalen visuellen und Medienressourcengruppen laden |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Eine bestimmte optionale Ressourcengruppe einzeln aktivieren |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Persistenz gezielt aktivieren, je nach Bedarf des Workloads |
+| `--profile-dir`, `--http-cache-dir`, `--cookie` | Persistenz gezielt aktivieren, je nach Bedarf des Workloads |
 
 Das Layoutergebnis ist ein bei Bedarf erzeugter Snapshot, kein dauerhaft gepflegter Zustand: Die erste Geometrieanfrage (Kaltstart) baut aus dem aktuellen DOM/Stil einen temporären Arbeitsbaum auf und friert dessen kanonische Geometrie in einen unveränderlichen, vom DOM unabhängigen `FrozenLayoutTree` ein — nur dieser jeweils neueste Baum wird vorgehalten. Normale Geometrieabfragen können ihn auch nach Seitenänderungen weiterverwenden; Screenshots und Screencasts dagegen bauen jedes Mal neu auf, ersetzen den eingefrorenen Baum und greifen nie auf alte Zeichenergebnisse zurück.
 

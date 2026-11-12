@@ -127,7 +127,7 @@ Moli의 기본 완료 전략으로 페이지를 Markdown으로 렌더링합니�
 ```bash
 moli fetch \
   --dump markdown \
-  --wait-until done \
+  --wait done \
   https://example.com
 ```
 
@@ -271,7 +271,7 @@ Moli에서 비용이 큰 브라우저 작업은 명시적으로 활성화해야 
 | `--layout` | `LayoutPolicy::OnDemand` — 실제 레이아웃, 기하 정보, 히트 테스트, 좌표 입력, 스크린샷, 스크린캐스트 |
 | `--resource` | 선택적인 모든 시각·미디어 리소스 패밀리 가져오기 |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | 특정 선택적 리소스 패밀리 하나 활성화 |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | 워크로드에 필요한 영속성을 선택적으로 활성화 |
+| `--profile-dir`, `--http-cache-dir`, `--cookie` | 워크로드에 필요한 영속성을 선택적으로 활성화 |
 
 레이아웃은 지속해서 관리되는 상태가 아니라 온디맨드 스냅샷입니다. 첫 번째 기하 정보
 요청(콜드 스타트)은 현재 DOM과 스타일에서 작업 레이아웃 트리를 빌드하고, 표준 기하

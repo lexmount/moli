@@ -12,13 +12,13 @@ search them concurrently across suitable engines.
 This is one job; dispatch the batch before awaiting individual results:
 
 ```bash
-moli fetch --timeout 10000 --wait-until done --dump markdown "$SEARCH_URL"
+moli fetch --timeout 10000 --wait done --dump markdown "$SEARCH_URL"
 ```
 
 Keep stdout, stderr, and exit status separate for each job. An outer
 `timeout 15s` can bound the process, allowing startup and cleanup around the
 10-second request timeout. Continue other jobs when one fails. For readiness
-failures or empty output, try `--wait-until domcontentloaded`; for page shells,
+failures or empty output, try `--wait domcontentloaded`; for page shells,
 inspect `--dump html`. On a CAPTCHA or access block, queue another engine with
 Moli. Toutiao's `snssdk143` shell can need the same readiness change. Persistent
 requests can prevent `networkidle` from completing.
@@ -29,7 +29,7 @@ Extract result elements with `textContent`; `innerText` depends on layout.
 `--eval` and `--eval-file` are alternatives to `--dump`:
 
 ```bash
-moli fetch --timeout 10000 --wait-until done --eval '
+moli fetch --timeout 10000 --wait done --eval '
 Array.from(document.querySelectorAll("li.b_algo")).map((row) => {
   const link = row.querySelector("h2 a[href]");
   return {

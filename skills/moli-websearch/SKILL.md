@@ -66,10 +66,10 @@ and source fetches. Extend it only for explicit upload/rendering waits.
 Dispatch the selected jobs concurrently:
 
 ```bash
-moli fetch --timeout 10000 --wait-until done --dump markdown "$SEARCH_URL"
+moli fetch --timeout 10000 --wait done --dump markdown "$SEARCH_URL"
 ```
 
-Use `--wait-until domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
+Use `--wait domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
 
 ## Workflow
 

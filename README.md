@@ -128,7 +128,7 @@ Render the page as Markdown with Moli's default completion strategy:
 ```bash
 moli fetch \
   --dump markdown \
-  --wait-until done \
+  --wait done \
   https://example.com
 ```
 
@@ -279,7 +279,7 @@ enabled by default:
 | `--layout` | `LayoutPolicy::OnDemand` — real layout, geometry, hit-testing, coordinate input, screenshots, screencast |
 | `--resource` | Fetch all optional visual/media resource families |
 | `--image`, `--font`, `--audio`, `--video`, `--media`, `--text-track` | Enable one specific optional resource family |
-| `--profile-dir`, `--http-cache-dir`, `--cookie-file` | Selectively enable the persistence required by the workload |
+| `--profile-dir`, `--http-cache-dir`, `--cookie` | Selectively enable the persistence required by the workload |
 
 Layout is an on-demand snapshot rather than continuously maintained state. The
 first geometry request (a cold start) builds a working layout tree from the

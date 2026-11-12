@@ -563,7 +563,7 @@ if (!uuid) throw new Error('Unsplash upload returned no UUID');
 Then outside CDP:
 
 ```bash
-moli fetch --dump markdown --wait-until done \
+moli fetch --dump markdown --wait done \
   "https://unsplash.com/s/visual/$UUID"
 ```
 
