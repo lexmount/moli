@@ -123,13 +123,9 @@ async fn popup_navigation_uses_source_referrer_policy_and_window_features() {
             "(()=>{{let m=document.querySelector('meta[name=referrer]');if(!m){{m=document.createElement('meta');m.name='referrer';document.head.append(m)}}m.content={};return true}})()", json!(policy)
         )).await;
         let url = format!("{base}/child-{index}");
-        let name = if features.is_empty() {
-            format!("child-{index}")
-        } else {
-            // Noopener/noreferrer must create a new context even when this
-            // related name already belongs to the first ordinary popup.
-            "child-0".to_owned()
-        };
+        // An existing named window is reused even with noopener/noreferrer
+        // (HTML rules for choosing a navigable), so every case uses a new name.
+        let name = format!("child-{index}");
         let (_, mut child) = open_http_popup(addr, &mut parent, &name, &url, features).await;
         wait_for_http_document(&mut child, &url).await;
         assert_eq!(
