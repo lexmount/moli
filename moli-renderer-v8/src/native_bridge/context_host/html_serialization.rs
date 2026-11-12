@@ -1,4 +1,4 @@
-use super::super::PageScriptHost;
+use super::PageScriptHost;
 use crate::dom::native::{
     HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlSerializationError,
     HtmlSerializationPolicy,
