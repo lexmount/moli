@@ -22,6 +22,12 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_object<'s>(
     store: v8::Local<'s, v8::Object>,
     info: &IndexInfo,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(index) = cached_schema_handle(scope, store, INDEX_CACHE_SLOT, &info.name)
+        && !crate::context_bootstrap::indexed_db::indexed_db_index_is_deleted(scope, index)
+        && indexed_db_index_info(scope, index).is_some_and(|current| current.name == info.name)
+    {
+        return Some(index);
+    }
     let index = create_failed_index_object(scope, store, info)?;
     let storage_scope = indexed_db_typed_storage_scope(scope, store);
     let owner = indexed_db_typed_execution_owner(scope, store)
@@ -34,6 +40,7 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_object<'s>(
         storage_scope,
     );
     register_indexed_db_index_lifecycle(scope, index, store, info)?;
+    cache_schema_handle(scope, store, INDEX_CACHE_SLOT, &info.name, index)?;
     Some(index)
 }
 

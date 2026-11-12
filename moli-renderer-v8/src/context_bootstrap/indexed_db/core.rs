@@ -22,6 +22,7 @@ use super::{
 use crate::context_bootstrap::indexed_db::{
     INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_STORE_TRANSACTION,
     SCHEMA_AUTO_INCREMENT_SLOT, SCHEMA_KEY_PATH_SLOT, SCHEMA_MULTI_ENTRY_SLOT, SCHEMA_UNIQUE_SLOT,
+    indexed_db_index_info, indexed_db_object_store_name,
 };
 use std::collections::BTreeSet;
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
