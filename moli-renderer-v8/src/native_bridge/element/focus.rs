@@ -4,7 +4,8 @@ use super::super::{
     JsContextHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
 };
 use super::forms::{
-    dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
+    dispatch_text_control_event, form_control_is_effectively_disabled, is_text_control,
+    text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
 use super::global_attributes::parse_tab_index_attribute;
@@ -649,10 +650,22 @@ fn update_focus_from_previous_with_previous_focus_within(
         }
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
     }
+    // A blur callback can focus another target. Preserve its selection and
+    // finish that nested transition instead of projecting the superseded one.
+    if unsafe { &*runtime_ptr }.active_element_handle() != next {
+        return;
+    }
     let window_focus_transition =
         window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
     if let Some((previous_window, _)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
+    }
+    if let Some(handle) = next {
+        let _ = crate::context_bootstrap::focus_text_control_selection(scope, runtime_ptr, handle);
+        let runtime = unsafe { &mut *runtime_ptr };
+        if is_text_control(runtime, handle) {
+            runtime.note_text_control_selection(handle);
+        }
     }
     let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
     if let Some(next_handle) = next {
