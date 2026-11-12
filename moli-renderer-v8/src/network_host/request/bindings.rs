@@ -166,6 +166,42 @@ pub(crate) fn request_constructor_callback<'s>(
 
 use crate::network_host::fetch_surface::callback_base_url;
 
+/// Reify a stored native cache key without running author URL conversion or
+/// constructors. Internal URLs may carry credentials supplied by XHR.
+pub(crate) fn build_cached_request_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    url: &str,
+    method: &str,
+    headers: &[(String, String)],
+) -> Option<v8::Local<'s, v8::Object>> {
+    let headers = build_headers_object_with_state(
+        scope,
+        headers,
+        request_headers_guard_for_mode("cors"),
+        true,
+    );
+    let signal = new_abort_signal_for_request_with_source(scope, None)?;
+    RequestInstanceDeclaration::new(
+        method.to_owned(),
+        url.to_owned(),
+        headers,
+        "about:client".to_owned(),
+        String::new(),
+        "cors".to_owned(),
+        "same-origin".to_owned(),
+        "default".to_owned(),
+        "follow".to_owned(),
+        String::new(),
+        false,
+        "auto".to_owned(),
+        signal,
+        "half".to_owned(),
+        v8::null(scope).into(),
+    )
+    .bind(scope)
+    .ok()
+}
+
 /// Build an intercepted internal Request without invoking author constructors
 /// or RequestInit conversion, retaining its privileged header entries.
 pub(crate) fn build_service_worker_request_object<'s>(

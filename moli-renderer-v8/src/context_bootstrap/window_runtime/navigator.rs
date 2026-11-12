@@ -2883,19 +2883,14 @@ fn cache_entries_to_request_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: &[StorageBucketCacheMatch],
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let global = scope.get_current_context().global(scope);
-    let constructor = global
-        .get(scope, v8str(scope, "Request").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let requests = v8::Array::new(scope, entries.len() as i32);
     for (index, entry) in entries.iter().enumerate() {
-        let request_url = v8_string(scope, &entry.request_url)?;
-        let init = ObjectLiteralDeclaration::bind(scope);
-        let method = v8_string(scope, &entry.request.method)?;
-        init.set_string_property(scope, "method", method.into());
-        let headers = headers_entries_to_init_array(scope, &entry.request.headers);
-        init.set_string_property(scope, "headers", headers.into());
-        let request = constructor.new_instance(scope, &[request_url.into(), init.into_value()])?;
+        let request = crate::network_host::build_cached_request_object(
+            scope,
+            &entry.request_url,
+            &entry.request.method,
+            &entry.request.headers,
+        )?;
         if requests.set_index(scope, index as u32, request.into()) != Some(true) {
             return None;
         }

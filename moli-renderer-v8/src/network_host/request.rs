@@ -9,7 +9,7 @@ use super::headers::{
 use super::*;
 
 pub(crate) use self::bindings::{
-    build_service_worker_request_object, request_constructor_callback,
+    build_cached_request_object, build_service_worker_request_object, request_constructor_callback,
 };
 pub(crate) use self::error::{FetchArgumentError, RequestUrlError};
 pub(in crate::network_host) use self::init::request_credentials_mode_label;
