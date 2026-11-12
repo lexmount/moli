@@ -279,8 +279,9 @@ pub struct FetchArgs {
     /// to see timeout warnings.
     #[arg(
         short,
-        long,
-        aliases = ["wait-ms", "timeout-ms"],
+        long = "timeout-ms",
+        aliases = ["timeout", "wait-ms"],
+        value_name = "MILLISECONDS",
         default_value_t = 25_000
     )]
     pub timeout: u64,
@@ -878,6 +879,22 @@ mod tests {
     }
 
     #[test]
+    fn timeout_help_uses_milliseconds_only_for_fetch() {
+        let fetch_help = Cli::try_parse_from(["moli", "fetch", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(fetch_help.contains("-t, --timeout-ms <MILLISECONDS>"));
+        assert!(!fetch_help.contains("--timeout <"));
+        assert!(!fetch_help.contains("--wait-ms"));
+
+        let serve_help = Cli::try_parse_from(["moli", "serve", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(serve_help.contains("-t, --timeout <TIMEOUT>"));
+        assert!(!serve_help.contains("--timeout-ms"));
+    }
+
+    #[test]
     fn fetch_help_labels_literal_and_regex_response_waits() {
         let help = Cli::try_parse_from(["moli", "fetch", "--help"])
             .unwrap_err()
@@ -1045,7 +1062,7 @@ mod tests {
             "load",
             "--wait-selector",
             "main",
-            "--timeout",
+            "--timeout-ms",
             "5000",
             "--layout",
             "--image",

@@ -1213,24 +1213,26 @@ fn does_not_infer_subcommand_from_flag() {
 }
 
 #[test]
-fn parses_fetch_wait_until_and_timeout() {
-    let cli = Cli::try_parse_from(normalize_args_for_compat([
-        "moli",
-        "fetch",
-        "--wait-until",
-        "networkidle",
-        "--timeout",
-        "1500",
-        "https://example.com",
-    ]))
-    .unwrap();
+fn parses_fetch_wait_until_and_timeout_spellings_as_milliseconds() {
+    for flag in ["--timeout-ms", "--timeout", "--wait-ms", "-t"] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat([
+            "moli",
+            "fetch",
+            "--wait-until",
+            "networkidle",
+            flag,
+            "1500",
+            "https://example.com",
+        ]))
+        .unwrap();
 
-    let Commands::Fetch(args) = cli.command else {
-        panic!("expected fetch command");
-    };
+        let Commands::Fetch(args) = cli.command else {
+            panic!("expected fetch command");
+        };
 
-    assert_eq!(args.wait_until, FetchWaitUntil::NetworkIdle);
-    assert_eq!(args.timeout, 1500);
+        assert_eq!(args.wait_until, FetchWaitUntil::NetworkIdle);
+        assert_eq!(args.timeout, 1500, "{flag}");
+    }
 }
 
 #[test]

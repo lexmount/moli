@@ -21,7 +21,7 @@ Launch compatible URL methods from the engine table concurrently under the
 once as the `ENC` query value; each command is one job:
 
 ```bash
-moli fetch --timeout 10000 --wait done --dump markdown "$SEARCH_URL"
+moli fetch --timeout-ms 10000 --wait done --dump markdown "$SEARCH_URL"
 ```
 
 An outer `timeout 15s` allows startup and cleanup around the 10-second request

@@ -12,7 +12,7 @@ search them concurrently across suitable engines.
 This is one job; dispatch the batch before awaiting individual results:
 
 ```bash
-moli fetch --timeout 10000 --wait done --dump markdown "$SEARCH_URL"
+moli fetch --timeout-ms 10000 --wait done --dump markdown "$SEARCH_URL"
 ```
 
 Keep stdout, stderr, and exit status separate for each job. An outer
@@ -29,7 +29,7 @@ Extract result elements with `textContent`; `innerText` depends on layout.
 `--eval` and `--eval-file` are alternatives to `--dump`:
 
 ```bash
-moli fetch --timeout 10000 --wait done --eval '
+moli fetch --timeout-ms 10000 --wait done --eval '
 Array.from(document.querySelectorAll("li.b_algo")).map((row) => {
   const link = row.querySelector("h2 a[href]");
   return {
@@ -51,7 +51,7 @@ For a requested Bing screenshot, this tested recipe uses a longer timeout
 for rendering:
 
 ```bash
-moli fetch --timeout 60000 --delay-ms 30000 --layout --resource \
+moli fetch --timeout-ms 60000 --delay-ms 30000 --layout --resource \
   --dump screenshot_full "$SEARCH_URL" > bing-results.png
 ```
 

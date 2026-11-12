@@ -61,12 +61,12 @@ with network and session. Encode the query as `Q` or the public image URL as
 | Baidu | Local file: [auto-upload and hydrated cards](references/cdp-driver.md#browser-uploads). |
 | SauceNAO | Public URL through the [homepage form](references/cdp-driver.md#browser-uploads). |
 
-Use a 10-second request timeout (`--timeout 10000`) by default for searches
+Use a 10-second request timeout (`--timeout-ms 10000`) by default for searches
 and source fetches. Extend it only for explicit upload/rendering waits.
 Dispatch the selected jobs concurrently:
 
 ```bash
-moli fetch --timeout 10000 --wait done --dump markdown "$SEARCH_URL"
+moli fetch --timeout-ms 10000 --wait done --dump markdown "$SEARCH_URL"
 ```
 
 Use `--wait domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
@@ -101,7 +101,7 @@ Use `--wait domcontentloaded` for Toutiao, Sogou Weixin, and Naver.
    for API responses. Enable layout for interactive uploads or screenshots;
    save binary captures to files.
 5. Fetch supporting source pages concurrently with
-   `moli fetch --timeout 10000 --dump markdown`, verify coverage of each
+   `moli fetch --timeout-ms 10000 --dump markdown`, verify coverage of each
    subquestion, then cite sources beside claims. Report useful engines,
    uncertainty, and failed attempts. Use
    [moli-webfetch](../moli-webfetch/SKILL.md) for advanced retrieval.

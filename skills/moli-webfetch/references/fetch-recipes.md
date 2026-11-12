@@ -113,7 +113,7 @@ a better completion signal:
   supplied response criteria must match one response. Literal and regex forms
   of the same criterion are mutually exclusive.
 - `--delay-ms <ms>`: use only when the site has no observable readiness signal.
-- `--timeout <ms>`: bound navigation and explicit waits; the default is 25000.
+- `--timeout-ms <ms>`: bound navigation and explicit waits; the default is 25000.
 
 Examples:
 
