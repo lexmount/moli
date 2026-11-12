@@ -34,13 +34,29 @@ impl PageVm {
         // Child Documents live in the same DOM copy, so strip them before
         // their markup is folded into the owners' `srcdoc` attributes.
         let top_document = dom.document_node_id();
+        let shadow_roots = self
+            .vm()
+            .document_runtime
+            .dom_host()
+            .snapshot_shadow_root_bindings();
         apply_strip_options(&mut dom, top_document, options.strip);
         for (_, _, child_document) in &child_frames {
             apply_strip_options(&mut dom, *child_document, options.strip);
         }
+        // Shadow trees are separate fragments in the copy; strip them too.
+        for binding in &shadow_roots {
+            apply_strip_options(&mut dom, binding.root, options.strip);
+        }
         self.inline_child_frame_markups_into_dump_dom(&mut dom, child_frames);
 
-        dom.serialize_document()
+        if shadow_roots.is_empty() {
+            return dom.serialize_document();
+        }
+        // Serialize shadow roots as `<template shadowrootmode>`, as child
+        // frames already do.
+        self.vm()
+            .document_markup_from_copy(top_document, &dom)
+            .unwrap_or_else(|| dom.serialize_document())
     }
 
     fn render_markdown_dump(&self, strip: RendererPageDumpStripOptions) -> String {

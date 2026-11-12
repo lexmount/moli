@@ -443,6 +443,16 @@ impl ScriptVm {
             .child_browsing_context_document_snapshot_from_copy(frame_id, dom)
     }
 
+    pub(crate) fn document_markup_from_copy(
+        &self,
+        document: crate::dom::NodeId,
+        dom: &crate::dom::native::NativeDom,
+    ) -> Option<String> {
+        self._context_host
+            .borrow()
+            .document_markup_from_copy(document, dom)
+    }
+
     pub(crate) fn take_pending_location_navigation_with_seed(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {

@@ -3525,11 +3525,16 @@ impl PageVm {
     }
 
     pub(crate) fn serialize_html(&self) -> String {
+        let host = self.vm().document_runtime.dom_host();
+        let dom = host.dom();
+        if host.snapshot_shadow_root_bindings().is_empty() {
+            return dom.serialize_document();
+        }
+        // Include shadow roots as `<template shadowrootmode>`, like the
+        // post-processed dump and child frames.
         self.vm()
-            .document_runtime
-            .dom_host()
-            .dom()
-            .serialize_document()
+            .document_markup_from_copy(dom.document_node_id(), dom)
+            .unwrap_or_else(|| dom.serialize_document())
     }
 
     pub(crate) fn client_rect_for_object_id(
