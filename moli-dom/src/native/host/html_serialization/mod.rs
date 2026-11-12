@@ -54,7 +54,6 @@ impl DomHost {
         max_bytes: Option<usize>,
     ) -> Result<String, HtmlSerializationError> {
         self.serialize_html_with_shadow_roots(
-            &self.dom,
             handle,
             HtmlSerializationTarget::ChildrenOnly,
             scripting,
@@ -68,42 +67,6 @@ impl DomHost {
         .ok_or(HtmlSerializationError::InvalidNode { node: handle })
     }
 
-    /// Serializes an existing export copy with the live host's root bindings.
-    /// Kept only until page-level exports switch to the read-only engine.
-    pub fn get_html_from_copy(
-        &self,
-        dom: &NativeDom,
-        handle: DomHandle,
-        scripting: &dyn Fn(DomHandle) -> bool,
-        explicit: &[DomHandle],
-        include_adopted_style_sheets: bool,
-    ) -> Option<String> {
-        struct OmitStyleSheets;
-        impl HtmlSerializationPolicy for OmitStyleSheets {
-            fn include_shadow_adopted_style_sheets(&self) -> bool {
-                false
-            }
-        }
-        self.serialize_html_with_shadow_roots(
-            dom,
-            handle,
-            HtmlSerializationTarget::ChildrenOnly,
-            scripting,
-            ShadowRootInclusion::SerializableOrExplicit {
-                serializable: false,
-                explicit,
-            },
-            ShadowRootMarkupProfile::WebApi,
-            None,
-            (!include_adopted_style_sheets)
-                .then_some(&OmitStyleSheets as &dyn HtmlSerializationPolicy),
-            None,
-            None,
-        )
-        .ok()
-        .flatten()
-    }
-
     pub fn get_html_with_shadow_root_registry_attribute_policy(
         &self,
         handle: DomHandle,
@@ -113,7 +76,6 @@ impl DomHost {
         registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
-            &self.dom,
             handle,
             HtmlSerializationTarget::ChildrenOnly,
             scripting,
@@ -140,7 +102,6 @@ impl DomHost {
         registry: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
-            &self.dom,
             handle,
             HtmlSerializationTarget::IncludeNode,
             scripting,
@@ -157,7 +118,6 @@ impl DomHost {
 
     fn serialize_html_with_shadow_roots(
         &self,
-        dom: &NativeDom,
         handle: DomHandle,
         target: HtmlSerializationTarget,
         scripting: &dyn Fn(DomHandle) -> bool,
@@ -181,10 +141,11 @@ impl DomHost {
                 // Only author roots enter this native registry; UA trees are renderer projections.
                 ShadowRootInclusion::AllAuthor => {
                     profile == ShadowRootMarkupProfile::Inspector
-                        || dom
+                        || self
+                            .dom
                             .node(host)
                             .and_then(Node::owner_document)
-                            .and_then(|document| dom.node(document))
+                            .and_then(|document| self.dom.node(document))
                             .and_then(Node::as_document)
                             .is_none_or(|document| !document.is_inert_template_document())
                 }
@@ -208,7 +169,7 @@ impl DomHost {
             && inclusion != ShadowRootInclusion::None)
             .then_some(&provider);
         serialize_html_with_shadow_root_provider(
-            dom, handle, target, scripting, provider, policy, embedded, max_bytes,
+            &self.dom, handle, target, scripting, provider, policy, embedded, max_bytes,
         )
     }
 

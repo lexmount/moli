@@ -28,12 +28,6 @@ pub(crate) struct ChildBrowsingContextFrameSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChildBrowsingContextDocumentSnapshot {
-    pub(crate) url: String,
-    pub(crate) markup: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DetachedChildBrowsingContextDocumentSnapshot {
     pub(crate) parent_frame_id: String,
     pub(crate) frame_id: String,

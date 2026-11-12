@@ -57,7 +57,7 @@ async fn external_boot_script_combining_baidu_compat_surfaces_completes() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/baidu-boot")).await?;
+    let mut page = browser.fetch(&server.url("/compat/baidu-boot")).await?;
 
     assert_eq!(page.final_url().path(), "/compat/baidu-boot");
     assert_eq!(page.final_url().query(), Some("boot=1"));
@@ -124,7 +124,7 @@ async fn fetch_host_resolve_override_preserves_requested_wpt_host() -> Result<()
     config.fetch_mut().set_http_no_proxy(Some("*".to_owned()));
     let browser = Browser::new(config)?;
 
-    let page = browser.fetch(&mapped_url).await?;
+    let mut page = browser.fetch(&mapped_url).await?;
 
     assert_eq!(page.final_url().as_str(), mapped_url);
     assert!(
@@ -143,7 +143,7 @@ async fn external_boot_script_can_still_trigger_location_replace() -> Result<()>
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/baidu-location-replace-boot"))
         .await?;
 
@@ -165,7 +165,7 @@ async fn fetch_decodes_gbk_document_from_meta_charset() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/encoding/gbk-meta")).await?;
+    let mut page = browser.fetch(&server.url("/encoding/gbk-meta")).await?;
     let html = page.serialize_html_async().await.unwrap();
 
     assert!(html.contains("太平洋家居 GBK OK"), "html={html}");
@@ -181,7 +181,7 @@ async fn classic_script_resource_inherits_document_encoding() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/encoding/shift-jis-classic-script"))
         .await?;
     let html = page.serialize_html_async().await.unwrap();
@@ -267,7 +267,7 @@ async fn large_static_query_selector_all_subset_does_not_eagerly_wrap_every_node
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/encoding/large-static-nodelist-subset"))
         .await?;
     let html = page.serialize_html_async().await.unwrap();
@@ -290,7 +290,7 @@ async fn large_child_static_query_selector_all_subset_does_not_eagerly_wrap_ever
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/encoding/large-child-static-nodelist-subset-parent"))
         .await?;
     let html = page.serialize_html_async().await.unwrap();
@@ -329,8 +329,8 @@ async fn fetches_concurrently_with_shared_browser_state() -> Result<()> {
     let slow_b_url = server.url("/concurrent-shared-state-b");
 
     let (first, second) = tokio::join!(browser.fetch(&slow_a_url), browser.fetch(&slow_b_url),);
-    let first = first?;
-    let second = second?;
+    let mut first = first?;
+    let mut second = second?;
     let first_html = first.serialize_html_async().await.unwrap();
     let second_html = second.serialize_html_async().await.unwrap();
 
@@ -366,7 +366,7 @@ async fn fetch_respects_request_timeout_but_default_timeout_allows_slow_fixture(
     );
 
     let default_browser = Browser::new(AppConfig::default())?;
-    let page = default_browser.fetch(&server.url("/slow-a")).await?;
+    let mut page = default_browser.fetch(&server.url("/slow-a")).await?;
     assert!(
         page.serialize_html_async()
             .await
@@ -383,8 +383,8 @@ async fn keeps_cookies_between_requests() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let first = browser.fetch(&server.url("/cookie")).await?;
-    let second = browser.fetch(&server.url("/cookie")).await?;
+    let mut first = browser.fetch(&server.url("/cookie")).await?;
+    let mut second = browser.fetch(&server.url("/cookie")).await?;
 
     assert!(
         first
@@ -410,7 +410,7 @@ async fn propagates_cookies_across_redirects() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/redirect-cookie")).await?;
+    let mut page = browser.fetch(&server.url("/redirect-cookie")).await?;
 
     assert_eq!(page.status(), 200);
     assert_eq!(page.final_url().path(), "/cookie");
@@ -430,7 +430,7 @@ async fn serves_script_fixture() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/script")).await?;
+    let mut page = browser.fetch(&server.url("/script")).await?;
 
     assert_eq!(page.requested_url().path(), "/script");
     assert!(
@@ -547,7 +547,7 @@ async fn fetch_with_domcontentloaded_does_not_wait_for_network_started_from_domc
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-domcontentloaded-fetch"),
             RenderedDomWaitUntil::DomContentLoaded,
@@ -645,7 +645,7 @@ async fn main_document_lifecycle_performance_event_end_matches_chromium_microtas
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/main-document-lifecycle-performance-event-end"))
         .await?;
     let html = page.serialize_html_async().await?;
@@ -879,7 +879,7 @@ async fn fetch_with_domcontentloaded_does_not_wait_for_parser_module_tla_dynamic
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/parser-owned-module-tla-dynamic-import-delays-domcontentloaded"),
             RenderedDomWaitUntil::DomContentLoaded,
@@ -923,7 +923,7 @@ document.documentElement.setAttribute('data-import-color',
         );
         let mut url = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
         url.query_pairs_mut().append_pair("markup", &markup);
-        let page = browser
+        let mut page = browser
             .fetch_with_wait_until(
                 url.as_str(),
                 RenderedDomWaitUntil::DomContentLoaded,
@@ -945,7 +945,7 @@ async fn fetch_with_done_does_not_requeue_stylesheet_load_on_media_change() -> R
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/stylesheet-media-change-load-handler-does-not-requeue"),
             RenderedDomWaitUntil::Done,
@@ -1110,7 +1110,7 @@ async fn fetch_with_load_waits_for_slow_runtime_script_started_from_domcontentlo
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-domcontentloaded-runtime-script-slow"),
             RenderedDomWaitUntil::Load,
@@ -1147,7 +1147,7 @@ async fn fetch_with_load_waits_for_detached_eager_image_terminal_events() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default().with_image_fetch_enabled(true))?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/detached-eager-images-delay-load"),
             RenderedDomWaitUntil::Load,
@@ -1265,7 +1265,7 @@ async fn fetch_with_load_completes_lazy_geometry_offset_chain_scan() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/lazy-geometry-offset-chain"),
             RenderedDomWaitUntil::Load,
@@ -1326,7 +1326,7 @@ async fn fetch_with_networkidle_waits_for_network_started_from_domcontentloaded(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-domcontentloaded-fetch"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1357,7 +1357,7 @@ async fn fetch_with_domstable_waits_for_runtime_script_started_from_domcontentlo
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-domcontentloaded-runtime-script"),
             RenderedDomWaitUntil::DomStable,
@@ -1395,7 +1395,7 @@ async fn fetch_with_domstable_waits_for_slow_runtime_script_started_from_domcont
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-domcontentloaded-runtime-script-very-slow"),
             RenderedDomWaitUntil::DomStable,
@@ -1506,7 +1506,7 @@ async fn fetch_with_networkidle_waits_for_delayed_fetch_dom_mutation() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-delayed-fetch"),
             RenderedDomWaitUntil::Load,
@@ -1528,7 +1528,7 @@ async fn fetch_with_networkidle_waits_for_delayed_fetch_dom_mutation() -> Result
             .contains(">settled<")
     );
 
-    let networkidle_page = browser
+    let mut networkidle_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-delayed-fetch"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1559,7 +1559,7 @@ async fn fetch_with_domstable_waits_for_delayed_fetch_dom_mutation() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-delayed-fetch"),
             RenderedDomWaitUntil::Load,
@@ -1581,7 +1581,7 @@ async fn fetch_with_domstable_waits_for_delayed_fetch_dom_mutation() -> Result<(
             .contains(">settled<")
     );
 
-    let domstable_page = browser
+    let mut domstable_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-delayed-fetch"),
             RenderedDomWaitUntil::DomStable,
@@ -1612,7 +1612,7 @@ async fn fetch_with_domstable_waits_for_late_complete_dom_mutation() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-delayed-dom-mutation"),
             RenderedDomWaitUntil::DomStable,
@@ -1648,7 +1648,7 @@ async fn fetch_with_domstable_waits_for_inflight_slow_fetch_dom_mutation() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-fetch"),
             RenderedDomWaitUntil::Load,
@@ -1670,7 +1670,7 @@ async fn fetch_with_domstable_waits_for_inflight_slow_fetch_dom_mutation() -> Re
             .contains(">settled-very-slow<")
     );
 
-    let domstable_page = browser
+    let mut domstable_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-fetch"),
             RenderedDomWaitUntil::DomStable,
@@ -1692,7 +1692,7 @@ async fn fetch_with_domstable_waits_for_inflight_slow_xhr_dom_mutation() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-xhr"),
             RenderedDomWaitUntil::Load,
@@ -1714,7 +1714,7 @@ async fn fetch_with_domstable_waits_for_inflight_slow_xhr_dom_mutation() -> Resu
             .contains(">settled-very-slow<")
     );
 
-    let domstable_page = browser
+    let mut domstable_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-xhr"),
             RenderedDomWaitUntil::DomStable,
@@ -1736,7 +1736,7 @@ async fn fetch_with_domstable_continues_after_timer_callback_error() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-timer-callback-error"),
             RenderedDomWaitUntil::DomStable,
@@ -1780,7 +1780,7 @@ async fn fetch_with_networkidle_succeeds_on_static_page_without_extra_requests()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/static"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1804,7 +1804,7 @@ async fn fetch_with_networkidle_waits_for_inflight_xhr_dom_mutation() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-xhr"),
             RenderedDomWaitUntil::Load,
@@ -1826,7 +1826,7 @@ async fn fetch_with_networkidle_waits_for_inflight_xhr_dom_mutation() -> Result<
             .contains(">settled-very-slow<")
     );
 
-    let networkidle_page = browser
+    let mut networkidle_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-complete-slow-xhr"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1847,7 +1847,7 @@ async fn fetch_with_domstable_keeps_interval_after_timer_callback_error() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-interval-callback-error"),
             RenderedDomWaitUntil::DomStable,
@@ -1897,7 +1897,7 @@ async fn fetch_with_domstable_does_not_expose_or_call_page_timer_driver() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-timer-driver-wrapper-tamper"),
             RenderedDomWaitUntil::DomStable,
@@ -1948,7 +1948,7 @@ async fn fetch_with_domstable_ignores_page_tampered_outer_html_getter() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-outer-html-tamper"),
             RenderedDomWaitUntil::DomStable,
@@ -2015,7 +2015,7 @@ async fn fetch_with_networkidle_waits_for_later_activity_before_quiet_window() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let load_page = browser
+    let mut load_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-staggered-fetch"),
             RenderedDomWaitUntil::Load,
@@ -2037,7 +2037,7 @@ async fn fetch_with_networkidle_waits_for_later_activity_before_quiet_window() -
             .contains(">settled-second<")
     );
 
-    let networkidle_page = browser
+    let mut networkidle_page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-staggered-fetch"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -2068,7 +2068,7 @@ async fn fetch_with_networkidle_returns_best_effort_with_periodic_interval_fetch
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-interval-fetch"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -2091,7 +2091,7 @@ async fn fetch_with_domstable_returns_best_effort_with_periodic_dom_mutation() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/wait-until-interval-dom-mutation"),
             RenderedDomWaitUntil::DomStable,
@@ -2115,8 +2115,8 @@ async fn cookie_path_scope_matches_only_valid_path_boundaries() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
 
     let _ = browser.fetch(&server.url("/cookie-scope/set")).await?;
-    let matching = browser.fetch(&server.url("/cookie-scope/check")).await?;
-    let non_matching = browser
+    let mut matching = browser.fetch(&server.url("/cookie-scope/check")).await?;
+    let mut non_matching = browser
         .fetch(&server.url("/cookie-scope-extra/check"))
         .await?;
 
@@ -2147,7 +2147,7 @@ async fn ignores_invalid_domain_cookies_end_to_end() -> Result<()> {
     let _ = browser
         .fetch(&server.url("/cookie-invalid-domain/set"))
         .await?;
-    let check = browser
+    let mut check = browser
         .fetch(&server.url("/cookie-invalid-domain/check"))
         .await?;
 
@@ -2170,7 +2170,7 @@ async fn replaces_cookie_value_when_server_sets_same_cookie_again() -> Result<()
 
     let _ = browser.fetch(&server.url("/cookie-replace/red")).await?;
     let _ = browser.fetch(&server.url("/cookie-replace/blue")).await?;
-    let check = browser.fetch(&server.url("/cookie-replace/check")).await?;
+    let mut check = browser.fetch(&server.url("/cookie-replace/check")).await?;
 
     let html = check.serialize_html_async().await.unwrap();
     assert!(html.contains("replace-cookie=blue"));
@@ -2185,7 +2185,7 @@ async fn carries_and_replaces_cookies_across_multi_hop_redirect_chain() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/redirect-cookie-chain/start"))
         .await?;
 

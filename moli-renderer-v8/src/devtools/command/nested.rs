@@ -69,7 +69,7 @@ impl RendererPageCommand {
             | Self::ResetCssAgentSession { .. }
             | Self::OuterHtmlForDocument { .. }
             | Self::OuterHtmlForNode { .. }
-            | Self::SerializeDocument
+            | Self::SerializeDocument { .. }
             | Self::LayoutMetrics
             | Self::PublishLayout
             | Self::CaptureScreenshot(..)
@@ -153,7 +153,7 @@ impl RendererPageCommand {
             | Self::TriggerAutofill(..)
             | Self::ResetNavigationHistory
             | Self::SetFileInputFilesForBackendNodeId { .. }
-            | Self::RenderPageDump { .. }
+            | Self::RenderMarkdown { .. }
             | Self::PrintToPdf(..)
             | Self::SearchResourceByLines(..)
             | Self::ContinuePendingSubresourceFetch { .. }

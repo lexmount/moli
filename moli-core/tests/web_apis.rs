@@ -56,7 +56,7 @@ async fn browser_surface_compat_supports_storage_navigator_arrays_and_history_st
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/browser-surface"))
         .await?;
 
@@ -168,7 +168,7 @@ async fn canvas_to_data_url_exists_and_handles_zero_size() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/canvas-to-data-url-exists-and-handles-zero-size"))
         .await?;
 
@@ -207,7 +207,7 @@ async fn event_handler_accessors_cover_attribute_property_and_body_onload_reflec
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/event-handler-accessors"))
         .await?;
 
@@ -233,7 +233,7 @@ async fn html_content_accessors_cover_inner_outer_html_and_inner_text() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/html-content-accessors"))
         .await?;
 
@@ -275,7 +275,7 @@ async fn details_dialog_accessors_cover_open_return_value_and_close_event() -> R
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/details-dialog-accessors"))
         .await?;
 
@@ -333,7 +333,7 @@ async fn html_element_reflected_accessors_cover_simple_tag_specific_surface() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/html-element-reflected-accessors"))
         .await?;
 
@@ -413,7 +413,7 @@ async fn html_element_reflected_accessors_cover_simple_tag_specific_surface() ->
 async fn script_state_snapshot_handles_throwing_to_primitive() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/script-state-snapshot-handles-throwing-to-primitive"))
         .await?;
 
@@ -470,7 +470,7 @@ async fn script_state_snapshot_handles_throwing_to_primitive() -> Result<()> {
 async fn script_state_snapshot_ignores_set_prototype_tamper() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/script-state-snapshot-ignores-set-prototype-tamper"))
         .await?;
 
@@ -495,7 +495,7 @@ async fn style_link_stylesheet_accessors_keep_link_sheet_null_without_source() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/style-link-stylesheet-accessors"))
         .await?;
 
@@ -570,7 +570,7 @@ async fn shadow_dom_slot_template_accessors_cover_wrapper_identity_and_assignmen
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/shadow-dom-slot-template-accessors"))
         .await?;
 
@@ -608,7 +608,7 @@ async fn navigator_extended_exposes_connection_send_beacon_and_stubs() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigator-extended"))
         .await?;
 
@@ -736,7 +736,7 @@ async fn dom_content_loaded_event_has_correct_bubbles_and_cancelable() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/event-bubbles")).await?;
+    let mut page = browser.fetch(&server.url("/compat/event-bubbles")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -766,7 +766,7 @@ async fn event_listener_exceptions_do_not_abort_dispatch() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/event-listener-exception-dispatch"))
         .await?;
 
@@ -810,7 +810,7 @@ async fn custom_element_callback_exceptions_do_not_abort_reactions() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/custom-element-callback-exception"))
         .await?;
 
@@ -935,7 +935,7 @@ async fn sync_foreach_callback_exceptions_propagate_and_stop_iteration() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/sync-foreach-callback-exception"))
         .await?;
 
@@ -1123,7 +1123,7 @@ async fn window_queue_microtask_ignores_promise_tamper() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/queue-microtask-ignores-promise-tamper"))
         .await?;
 
@@ -1227,7 +1227,7 @@ async fn mutation_observer_ignores_page_tampered_queue_microtask() -> Result<()>
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/mutation-observer-ignores-page-tampered-queue-microtask"))
         .await?;
 
@@ -1265,7 +1265,7 @@ async fn xhr_ignores_page_tampered_queue_microtask() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/xhr-ignores-page-tampered-queue-microtask"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1307,7 +1307,7 @@ async fn mutation_observer_delivers_multiple_matching_observers_in_creation_orde
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/mutation-observer-ordering"))
         .await?;
 
@@ -1607,7 +1607,7 @@ async fn url_search_params_and_form_data_cover_native_constructor_and_iteration_
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/url-form-data")).await?;
+    let mut page = browser.fetch(&server.url("/compat/url-form-data")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -1729,7 +1729,7 @@ async fn form_data_ignores_page_tampered_node_contains() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/form-data-ignores-page-tampered-node-contains"))
         .await?;
 
@@ -1777,7 +1777,7 @@ async fn fetch_user_agent_suffix_updates_navigator_user_agent_surface() -> Resul
     config.fetch_mut().set_user_agent_suffix("internal-tester");
     let browser = Browser::new(config)?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-host-globals"))
         .await?;
 
@@ -1800,7 +1800,7 @@ async fn browser_surface_details_expose_array_like_tags_and_storage_methods() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/browser-surface-details"))
         .await?;
 
@@ -1922,7 +1922,7 @@ async fn window_crypto_exposes_random_values_random_uuid_and_subtle() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/window-crypto"),
             RenderedDomWaitUntil::DomStable,
@@ -2057,7 +2057,7 @@ async fn window_named_access_exposes_elements_by_id_without_shadowing_builtins()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-named-access"))
         .await?;
 
@@ -2201,7 +2201,7 @@ async fn window_css_exposes_escape_and_supports() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/window-css")).await?;
+    let mut page = browser.fetch(&server.url("/compat/window-css")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -2396,7 +2396,7 @@ async fn servo_match_media_parsing_cases_serialize_like_wpt_subset() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-parsing"))
         .await?;
 
@@ -2488,7 +2488,7 @@ async fn servo_style_attr_braces_drop_only_malformed_declarations() -> Result<()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-style-attr-braces"))
         .await?;
 
@@ -2538,7 +2538,7 @@ async fn servo_style_attr_urls_preserve_url_tokens_across_base_variants() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-style-attr-urls"))
         .await?;
 
@@ -2570,7 +2570,7 @@ async fn servo_query_is_supports_complex_selector_list_arguments() -> Result<()>
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/servo-query-is")).await?;
+    let mut page = browser.fetch(&server.url("/compat/servo-query-is")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -2618,7 +2618,7 @@ async fn servo_query_where_supports_complex_selector_list_arguments() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-query-where"))
         .await?;
 
@@ -2669,7 +2669,7 @@ async fn servo_match_media_case_insensitive_rules_apply_and_non_ascii_stays_inva
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-case-insensitive"))
         .await?;
 
@@ -2707,7 +2707,7 @@ async fn servo_match_media_invalid_media_type_keywords_serialize_to_not_all() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-invalid-types"))
         .await?;
 
@@ -2769,7 +2769,7 @@ async fn servo_match_media_feature_states_follow_default_browser_like_assumption
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-feature-states"))
         .await?;
 
@@ -2894,7 +2894,7 @@ async fn servo_match_media_aspect_ratio_serialization_adds_ratio_spacing() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-aspect-ratio-serialization"))
         .await?;
 
@@ -2926,7 +2926,7 @@ async fn servo_match_media_preferences_follow_fixed_default_profile() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-match-media-preferences"))
         .await?;
 
@@ -3030,7 +3030,7 @@ async fn servo_media_query_list_event_target_surface_matches_wpt_subset() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-media-query-list-event-target"))
         .await?;
 
@@ -3098,7 +3098,7 @@ async fn servo_css_supports_conditions_cover_roundtrip_shaped_subsets() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-css-supports-conditions"))
         .await?;
 
@@ -3142,7 +3142,7 @@ async fn chrome_cssfloat_cssom_exposes_cssfloat_on_inline_and_computed_style() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-cssfloat-cssom"))
         .await?;
 
@@ -3174,7 +3174,7 @@ async fn chrome_css_escape_dom_api_covers_identifier_escaping_subset() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-css-escape-dom-api"))
         .await?;
 
@@ -3260,7 +3260,7 @@ async fn chrome_css_supports_dom_api_covers_condition_and_property_value_subset(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-css-supports-dom-api"))
         .await?;
 
@@ -3370,7 +3370,7 @@ async fn chrome_css_supports_shorthands_and_wide_keywords_cover_subset() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-css-supports-shorthands"))
         .await?;
 
@@ -3588,7 +3588,7 @@ async fn chrome_css_supports_boolean_syntax_covers_negation_and_operator_rules()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-css-supports-syntax"))
         .await?;
 
@@ -3662,7 +3662,7 @@ async fn chrome_css_supports_coercion_and_invalid_value_cases_cover_subset() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-css-supports-coercion"))
         .await?;
 
@@ -3754,7 +3754,7 @@ async fn chrome_fontfaceset_basic_set_operations_track_size_and_type_errors() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-basic"))
         .await?;
 
@@ -3846,7 +3846,7 @@ async fn chrome_fontfaceset_iteration_exposes_set_like_iteration_surface() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-iteration"))
         .await?;
 
@@ -3908,7 +3908,7 @@ async fn chrome_fontfaceset_check_returns_true_for_platform_font_queries_subset(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-platform-fonts"))
         .await?;
 
@@ -3952,7 +3952,7 @@ async fn chrome_fontfaceset_detached_document_surface_does_not_crash_subset() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-unattached-document"))
         .await?;
 
@@ -3979,7 +3979,7 @@ async fn chrome_webfont_insert_rule_path_handles_multiple_font_face_rules_withou
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-webfont-insert-rule-no-crash"))
         .await?;
 
@@ -4005,7 +4005,7 @@ async fn chrome_media_query_list_add_and_remove_listener_cover_wpt_subset() -> R
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-media-query-list-add-remove-listener"))
         .await?;
 
@@ -4095,7 +4095,7 @@ async fn chrome_cssstyledeclaration_set_property_preserves_priority_override_sub
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-important-js-override"))
         .await?;
 
@@ -4145,7 +4145,7 @@ async fn chrome_cssstylesheet_rule_mutation_keeps_cssrules_list_operable_subset(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-cssstylesheet-rule-mutation-v2"))
         .await?;
 
@@ -4302,7 +4302,7 @@ async fn chrome_delete_rule_path_does_not_crash_subset() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-delete-rule-no-crash"))
         .await?;
 
@@ -4329,7 +4329,7 @@ async fn chrome_box_sizing_aliases_match_prefixed_and_unprefixed_surface_subset(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-box-sizing-backwards-compat"))
         .await?;
 
@@ -4403,7 +4403,7 @@ async fn chrome_fontfaceset_ready_on_detached_frame_document_does_not_crash_subs
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-detached-frame-ready"))
         .await?;
 
@@ -4423,7 +4423,7 @@ async fn chrome_fontfaceset_ready_keeps_stable_promise_until_loading_starts_subs
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-ready-basic"))
         .await?;
 
@@ -4468,7 +4468,7 @@ async fn chrome_fontfaceset_ignores_invalid_css_connected_generic_family_names_s
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-invalid-family-names"))
         .await?;
 
@@ -4488,7 +4488,7 @@ async fn chrome_fontfaceset_set_operations_cover_connected_and_manual_faces_subs
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-set-operations-subset"))
         .await?;
 
@@ -4580,7 +4580,7 @@ async fn servo_fontfaceset_historical_rejects_constructing_with_iterable() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-historical"))
         .await?;
 
@@ -4600,7 +4600,7 @@ async fn servo_fontfaceset_connected_has_tracks_style_removal_and_manual_faces()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-connected"))
         .await?;
 
@@ -4686,7 +4686,7 @@ async fn servo_fontfaceset_connected_ignores_page_tampered_style_queries() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server.url("/compat/servo-fontfaceset-connected-ignore-page-tampered-style-queries"),
         )
@@ -4766,7 +4766,7 @@ async fn servo_fontfaceset_clear_and_delete_keep_css_connected_faces() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-connected-clear-delete"))
         .await?;
 
@@ -4804,7 +4804,7 @@ async fn servo_fontfaceset_has_tracks_css_connected_and_manual_faces() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-has"))
         .await?;
 
@@ -4866,7 +4866,7 @@ async fn servo_fontfaceset_delete_and_clear_do_not_remove_css_connected_faces() 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-delete-clear-css-connected"))
         .await?;
 
@@ -4963,7 +4963,7 @@ async fn servo_fontfaceset_empty_family_load_resolves_to_array() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-empty-family-load"))
         .await?;
 
@@ -4983,7 +4983,7 @@ async fn servo_fontfaceset_load_after_removing_document_element_does_not_crash()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-no-root-element"))
         .await?;
 
@@ -5004,7 +5004,7 @@ async fn servo_fontfaceset_update_after_stylesheet_change_updates_document_fonts
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-update-after-stylesheet-change"))
         .await?;
 
@@ -5030,7 +5030,7 @@ async fn servo_fontfaceset_load_uses_updated_css_connected_faces() -> Result<()>
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-load-css-connected"))
         .await?;
 
@@ -5051,7 +5051,7 @@ async fn chrome_stylesheetlist_style_only_keeps_connected_style_nodes_when_disab
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-stylesheetlist-style-only"))
         .await?;
 
@@ -5083,7 +5083,7 @@ async fn chrome_stylesheetlist_item_returns_entries_and_null_out_of_bounds() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-stylesheetlist-item"))
         .await?;
 
@@ -5157,7 +5157,7 @@ async fn chrome_stylesheetlist_mixed_link_and_style_entries_follow_disabled_rule
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-stylesheetlist-mixed-disabled"))
         .await?;
 
@@ -5213,7 +5213,7 @@ async fn chrome_cssom_missing_arguments_throw_on_css_style_declaration_methods()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-cssom-missing-arguments"))
         .await?;
 
@@ -5270,7 +5270,7 @@ async fn chrome_overflow_property_serializes_shorthand_and_longhands_like_blink_
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-overflow-property"))
         .await?;
 
@@ -5428,7 +5428,7 @@ async fn abort_signal_any_aborts_from_first_source_and_preserves_reason() -> Res
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/abort-signal-any"))
         .await?;
 
@@ -5514,7 +5514,7 @@ async fn blob_urls_cover_create_object_url_fetch_xhr_and_revoke() -> Result<()> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/blob-urls")).await?;
+    let mut page = browser.fetch(&server.url("/compat/blob-urls")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -5592,7 +5592,7 @@ async fn dom_rect_constructor_exposes_mutable_core_fields_and_derived_edges() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/dom-rect")).await?;
+    let mut page = browser.fetch(&server.url("/compat/dom-rect")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -5628,7 +5628,7 @@ async fn image_data_exposes_constructor_dimensions_and_mutable_clamped_storage()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/image-data")).await?;
+    let mut page = browser.fetch(&server.url("/compat/image-data")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -5688,7 +5688,7 @@ async fn web_streams_cover_response_body_readers_pipe_and_text_codec_wrappers() 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/compat/web-streams")).await?;
+    let mut page = browser.fetch(&server.url("/compat/web-streams")).await?;
 
     assert!(
         page.serialize_html_async()
@@ -6181,7 +6181,7 @@ async fn window_host_globals_expose_aliases_performance_and_visual_viewport() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-host-globals"))
         .await?;
 

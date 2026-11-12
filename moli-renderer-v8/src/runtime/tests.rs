@@ -279,7 +279,9 @@ async fn recv_page_lifecycle_until(
 
 async fn serialize_html_for_renderer_page(page: &RendererPageHandle) -> String {
     let (reply, _) = page
-        .run_async_command(RendererPageCommand::SerializeDocument)
+        .run_async_command(RendererPageCommand::SerializeDocument {
+            options: crate::RendererHtmlSerializeOptions::default(),
+        })
         .await
         .expect("renderer page should serialize HTML");
     match reply {

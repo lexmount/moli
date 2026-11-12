@@ -5,7 +5,7 @@ use url::Url;
 
 use crate::dom::forms::InputType;
 use crate::dom::native::NativeNodeId;
-use crate::runtime::page_surface::RendererPageDumpStripOptions;
+use crate::runtime::page_surface::RendererContentStripOptions;
 
 use super::live_dom::MarkdownSource;
 
@@ -38,7 +38,7 @@ pub(super) struct MarkdownDom<'a, D: MarkdownSource> {
     attribute_overrides: HashMap<NativeNodeId, HashMap<String, String>>,
     unchecked_controls: HashSet<NativeNodeId>,
     fragment_links: bool,
-    strip: RendererPageDumpStripOptions,
+    strip: RendererContentStripOptions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +54,7 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
         dom: &'a D,
         styles: impl IntoIterator<Item = (NativeNodeId, ExportStyle)>,
         base_url: Option<&Url>,
-        strip: RendererPageDumpStripOptions,
+        strip: RendererContentStripOptions,
     ) -> Self {
         // The caller supplies element styles in DOM pre-order. Inherited state
         // below is computed once, after the parent has been visited.
@@ -341,11 +341,11 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
                 suppressed.insert(node);
             }
         }
-        suppressed.extend(
-            node_order
-                .into_iter()
-                .filter(|node| super::should_strip_node(dom.native(), *node, strip)),
-        );
+        suppressed.extend(node_order.into_iter().filter(|node| {
+            dom.native()
+                .node(*node)
+                .is_some_and(|node| super::super::content_filter::should_strip_node(node, strip))
+        }));
         Self {
             dom,
             suppressed,

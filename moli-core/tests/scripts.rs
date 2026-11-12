@@ -61,7 +61,7 @@ async fn parse_time_inline_classic_scripts_observe_partial_dom_during_initial_pa
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/parse-time-inline-classic"))
         .await?;
 
@@ -94,7 +94,7 @@ async fn parse_time_external_classic_scripts_observe_partial_dom_during_initial_
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/parse-time-external-classic"))
         .await?;
 
@@ -162,7 +162,7 @@ async fn parse_time_async_classic_scripts_can_run_during_parse_before_late_dom_a
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/parse-time-async-classic"))
         .await?;
 
@@ -819,7 +819,7 @@ async fn runtime_inserted_stylesheet_load_can_trigger_location_replace() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/runtime-inserted-stylesheet-load-triggers-location-replace"))
         .await?;
 
@@ -1423,7 +1423,7 @@ async fn document_open_during_parser_script_with_pending_written_external_is_ign
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/document-open-during-parser-script-with-pending-written-external-is-ignored",
         ))
@@ -2341,7 +2341,7 @@ async fn document_write_replacement_syncs_style_sources_before_written_scripts()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/document-write-replacement-style-source-sync"))
         .await?;
 
@@ -2427,7 +2427,7 @@ async fn document_write_inserted_external_script_resumes_chunked_root_input() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = tokio::time::timeout(
+    let mut page = tokio::time::timeout(
         Duration::from_secs(5),
         browser.fetch(&server.url("/compat/document-write-inserted-external-resumes-chunked-root")),
     )
@@ -2775,13 +2775,13 @@ async fn document_write_module_runs_without_hanging_late_stylesheet_tail() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/document-write-late-stylesheet-does-not-block-written-module"))
         .await?;
 
+    let html = page.serialize_html_async().await?;
     let result = diagnostic_global(&page, "documentWriteLateStyleResult");
     let order = diagnostic_global(&page, "documentWriteLateStyleOrder");
-    let html = page.serialize_html_async().await?;
     assert_eq!(
         result,
         Some(&JsValueSnapshot::String(
@@ -4282,7 +4282,7 @@ async fn module_dependency_fetch_uses_module_credentials_mode() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
 
     let _ = browser.fetch(&server.url("/cookie")).await?;
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/module-dependency-fetch-uses-module-credentials"))
         .await?;
 
@@ -5071,7 +5071,7 @@ async fn audio_worklet_module_imports_wasm_source_phase() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/audio-worklet-wasm-source-phase"),
             RenderedDomWaitUntil::NetworkIdle,

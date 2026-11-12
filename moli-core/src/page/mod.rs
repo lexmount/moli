@@ -93,8 +93,9 @@ pub use moli_renderer_v8::{
     RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
-    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererContentStripOptions,
+    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
+    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -107,14 +108,14 @@ pub use moli_renderer_v8::{
     RendererDomFocusOutcome, RendererDomMutationEvent, RendererDomMutationEventBatch,
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererFrameToken,
-    RendererInputDispatchOutcome, RendererInspectorCommandRoute, RendererInterceptedDrag,
-    RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
-    RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
-    RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
-    RendererMainDocumentCommit, RendererMainDocumentResource, RendererNavigationInitiator,
+    RendererHtmlSerializeOptions, RendererInputDispatchOutcome, RendererInspectorCommandRoute,
+    RendererInterceptedDrag, RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+    RendererJavaScriptDialogResult, RendererJavaScriptDialogSource, RendererLayoutMetrics,
+    RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
+    RendererLifecycleTerminationStamp, RendererMainDocumentCommit, RendererMainDocumentResource,
+    RendererMarkdownOptions, RendererNavigationInitiator,
     RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
-    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReplacementError,
+    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageReplacementError,
     RendererPageReplacementFailureDisposition, RendererPdfOptions, RendererPendingAuxiliaryPage,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
@@ -181,7 +182,8 @@ pub use protocol_support::{
 };
 pub use renderer_command_support::DocumentNodeClientRectResolution;
 pub use renderer_command_support::{
-    DocumentNodeRuntimeObjectResolution, PageObservableOutputUpdate, TestingOutcome,
+    DocumentNodeRuntimeObjectResolution, PageObservableOutputUpdate, SerializedHtmlDocument,
+    TestingOutcome,
 };
 
 #[cfg(test)]

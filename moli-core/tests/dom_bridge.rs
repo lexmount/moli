@@ -764,7 +764,7 @@ async fn selection_contains_node_ignores_page_tampered_node_contains() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/selection-contains-node-ignores-page-tampered-node-contains"))
         .await?;
 
@@ -827,7 +827,7 @@ async fn selection_set_base_and_extent_ignores_page_tampered_compare_document_po
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/selection-set-base-and-extent-ignores-page-tampered-compare-document-position",
         ))

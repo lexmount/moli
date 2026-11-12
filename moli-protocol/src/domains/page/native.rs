@@ -106,7 +106,9 @@ fn prepare(
                 ));
             }
             Ok(Operation::new(
-                Command::SerializeDocument,
+                Command::SerializeDocument {
+                    options: Default::default(),
+                },
                 |reply| match reply {
                     Ok(Reply::SerializedDocument { url, html }) => {
                         Response::success(json!({"data": build_mhtml_snapshot(&url, &html)}))

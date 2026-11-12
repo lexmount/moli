@@ -1,7 +1,7 @@
-use crate::dom::native::{NativeDom, NativeNodeId};
-use crate::runtime::page_surface::{
-    RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
-};
+#[cfg(test)]
+use crate::dom::native::NativeDom;
+use crate::dom::native::NativeNodeId;
+use crate::runtime::page_surface::{RendererContentStripOptions, RendererMarkdownOptions};
 use moli_html2md::Dom;
 use moli_page_types::MAX_DOM_OUTPUT_TREE_DEPTH;
 
@@ -11,55 +11,8 @@ mod live_dom;
 mod visibility;
 
 impl PageVm {
-    pub(crate) fn render_page_dump(&mut self, options: RendererPageDumpOptions) -> String {
-        if options.format == RendererPageDumpFormat::Markdown {
-            return self.render_markdown_dump(options.strip);
-        }
-        let mut dom = self.vm().document_runtime.dom_host().dom().clone();
-
-        if options.with_base {
-            let href = self
-                .vm()
-                .document_runtime
-                .document_url()
-                .as_str()
-                .to_owned();
-            inject_base_href(&mut dom, &href);
-        }
-        let child_frames = if options.with_frames {
-            self.vm().live_child_document_handles_in_snapshot_order()
-        } else {
-            Vec::new()
-        };
-        // Child Documents live in the same DOM copy, so strip them before
-        // their markup is folded into the owners' `srcdoc` attributes.
-        let top_document = dom.document_node_id();
-        let shadow_roots = self
-            .vm()
-            .document_runtime
-            .dom_host()
-            .snapshot_shadow_root_bindings();
-        apply_strip_options(&mut dom, top_document, options.strip);
-        for (_, _, child_document) in &child_frames {
-            apply_strip_options(&mut dom, *child_document, options.strip);
-        }
-        // Shadow trees are separate fragments in the copy; strip them too.
-        for binding in &shadow_roots {
-            apply_strip_options(&mut dom, binding.root, options.strip);
-        }
-        self.inline_child_frame_markups_into_dump_dom(&mut dom, child_frames, !options.strip.css);
-
-        if shadow_roots.is_empty() {
-            return dom.serialize_document();
-        }
-        // Serialize shadow roots as `<template shadowrootmode>`, as child
-        // frames already do.
-        self.vm()
-            .document_markup_from_copy(top_document, &dom, !options.strip.css)
-            .unwrap_or_else(|| dom.serialize_document())
-    }
-
-    fn render_markdown_dump(&self, strip: RendererPageDumpStripOptions) -> String {
+    pub(crate) fn render_markdown(&self, options: RendererMarkdownOptions) -> String {
+        let strip = options.strip;
         let host = self.vm().document_runtime.dom_host();
         let dom = live_dom::LiveDom::new(host);
         if dom.has_shadow_roots() {
@@ -72,7 +25,7 @@ impl PageVm {
     fn render_markdown_source(
         &self,
         dom: &impl live_dom::MarkdownSource,
-        strip: RendererPageDumpStripOptions,
+        strip: RendererContentStripOptions,
     ) -> String {
         let base_url = self.vm().document_runtime.dom_host().document_base_url();
         let native = dom.native();
@@ -124,153 +77,6 @@ impl PageVm {
             .collect();
         render_markdown_view(dom, styles, base_url.as_ref(), strip)
     }
-
-    fn inline_child_frame_markups_into_dump_dom(
-        &self,
-        dom: &mut NativeDom,
-        child_frames: Vec<(String, NativeNodeId, NativeNodeId)>,
-        include_shadow_style_sheets: bool,
-    ) {
-        // Snapshot order lists a parent frame before its descendants. Walk it
-        // backwards so a nested owner's `srcdoc` is already in the copy when
-        // its parent Document is serialized.
-        for (frame_id, owner_node_id, _) in child_frames.into_iter().rev() {
-            let Some(snapshot) = self
-                .vm()
-                .child_browsing_context_document_snapshot_from_copy(
-                    &frame_id,
-                    dom,
-                    include_shadow_style_sheets,
-                )
-            else {
-                continue;
-            };
-            let _ = dom.set_attribute(owner_node_id, "srcdoc", &snapshot.markup);
-            let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
-        }
-    }
-}
-
-fn inject_base_href(dom: &mut NativeDom, href: &str) {
-    let head = ensure_head_node(dom);
-    let existing_base = first_direct_html_child(dom, head, "base");
-
-    if let Some(base_id) = existing_base {
-        let _ = dom.set_attribute(base_id, "href", href);
-        return;
-    }
-
-    let base_id = dom.create_element("base");
-    let _ = dom.set_attribute(base_id, "href", href);
-    let first_child = dom.first_child(head);
-    let _ = dom.insert_before(head, base_id, first_child);
-}
-
-fn first_direct_html_child(
-    dom: &NativeDom,
-    parent: NativeNodeId,
-    local_name: &str,
-) -> Option<NativeNodeId> {
-    dom.find_child(parent, |child_id| {
-        dom.node(child_id)
-            .and_then(|node| node.as_element())
-            .is_some_and(|element| element.is_html_element(local_name))
-    })
-}
-
-fn ensure_head_node(dom: &mut NativeDom) -> NativeNodeId {
-    if let Some(head) = dom.head_node_id() {
-        return head;
-    }
-
-    let html = dom.document_element_node_id().unwrap_or_else(|| {
-        let html = dom.create_element("html");
-        let _ = dom.append_child(dom.document_node_id(), html);
-        html
-    });
-
-    let head = dom.create_element("head");
-    let body = dom.body_node_id();
-    let _ = dom.insert_before(html, head, body);
-    head
-}
-
-fn apply_strip_options(
-    dom: &mut NativeDom,
-    root: NativeNodeId,
-    strip: RendererPageDumpStripOptions,
-) {
-    if !strip.js && !strip.ui && !strip.css {
-        return;
-    }
-
-    let mut node_ids = Vec::new();
-    collect_node_ids(dom, root, &mut node_ids);
-
-    for node_id in &node_ids {
-        if strip.css {
-            let _ = dom.remove_attribute(*node_id, "style");
-        }
-        if strip.js {
-            for attribute_name in dom.get_attribute_names(*node_id).unwrap_or_default() {
-                if attribute_name.starts_with("on") {
-                    let _ = dom.remove_attribute(*node_id, &attribute_name);
-                }
-            }
-        }
-    }
-
-    let mut remove = Vec::new();
-    for node_id in node_ids {
-        if should_strip_node(dom, node_id, strip) {
-            remove.push(node_id);
-        }
-    }
-
-    remove.sort_by_key(|node_id| std::cmp::Reverse(node_id.index()));
-    remove.dedup();
-    for node_id in remove {
-        if let Some(parent_id) = dom.parent_node(node_id) {
-            let _ = dom.remove_child(parent_id, node_id);
-        }
-    }
-}
-
-fn should_strip_node(
-    dom: &NativeDom,
-    node_id: NativeNodeId,
-    strip: RendererPageDumpStripOptions,
-) -> bool {
-    let Some(element) = dom.node(node_id).and_then(|node| node.as_element()) else {
-        return false;
-    };
-    let tag = element.local_name();
-    (strip.js && matches!(tag, "script" | "noscript"))
-        || (strip.css
-            && (tag == "style"
-                || (tag == "link"
-                    && element
-                        .attribute("rel")
-                        .unwrap_or_default()
-                        .split_ascii_whitespace()
-                        .any(|token| token.eq_ignore_ascii_case("stylesheet")))))
-        || (strip.ui
-            && matches!(
-                tag,
-                "header"
-                    | "footer"
-                    | "nav"
-                    | "aside"
-                    | "form"
-                    | "input"
-                    | "button"
-                    | "select"
-                    | "textarea"
-                    | "option"
-                    | "dialog"
-                    | "menu"
-                    | "menuitem"
-            ))
 }
 
 fn collect_node_ids(
@@ -304,7 +110,7 @@ fn render_markdown_view(
     dom: &impl live_dom::MarkdownSource,
     styles: Vec<(NativeNodeId, visibility::ExportStyle)>,
     base_url: Option<&url::Url>,
-    strip: RendererPageDumpStripOptions,
+    strip: RendererContentStripOptions,
 ) -> String {
     let root = dom
         .native()

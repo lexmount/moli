@@ -5209,7 +5209,7 @@ async fn fetch_streaming_chunked_html_parses_incrementally_across_utf8_boundarie
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/streaming/chunked-html"))
         .await?;
 

@@ -1,19 +1,14 @@
 use super::*;
-use crate::runtime::page_surface::{
-    RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
-};
+use crate::runtime::page_surface::{RendererContentStripOptions, RendererMarkdownOptions};
 
 mod shadow_dom;
 
-fn options(strip_css: bool) -> RendererPageDumpOptions {
-    RendererPageDumpOptions {
-        format: RendererPageDumpFormat::Markdown,
-        strip: RendererPageDumpStripOptions {
+fn options(strip_css: bool) -> RendererMarkdownOptions {
+    RendererMarkdownOptions {
+        strip: RendererContentStripOptions {
             css: strip_css,
             ..Default::default()
         },
-        with_base: false,
-        with_frames: false,
     }
 }
 
@@ -35,7 +30,7 @@ async fn markdown_content_visibility_excludes_locked_contents() {
         ] {
             page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(source).unwrap())).unwrap();
             for strip_css in [false, true] {
-                assert_eq!(page.render_page_dump(options(strip_css)), expected, "{source}; strip_css={strip_css}");
+                assert_eq!(page.render_markdown(options(strip_css)), expected, "{source}; strip_css={strip_css}");
             }
         }
     }).await;
@@ -58,7 +53,7 @@ async fn markdown_content_visibility_retains_disclosure_and_source_exceptions() 
                 <pre><code>Source before<span class=locked style='display:block'>Collapsed source</span>Source after</code></pre>`;
         "#).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             for kept in ["Tab content", "Searchable content", "Native disclosure", "Controlled disclosure", "Nested panel", "Source before", "Collapsed source", "Source after"] {
                 assert!(output.contains(kept), "missing {kept}; strip_css={strip_css}: {output}");
             }
@@ -78,12 +73,12 @@ async fn markdown_popup_controllers_do_not_recover_hidden_sections() {
             let source = format!("<button aria-expanded=false aria-haspopup='{popup}' aria-controls=panel>Open</button><section id=panel style='display:none'>Controlled content</section><p>Visible article</p>");
             page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(&source).unwrap())).unwrap();
             for strip_css in [false, true] {
-                let output = page.render_page_dump(options(strip_css));
+                let output = page.render_markdown(options(strip_css));
                 assert_eq!(output.contains("Controlled content"), recover, "aria-haspopup={popup}; strip_css={strip_css}: {output}");
                 assert!(output.contains("Visible article"), "{output}");
             }
             page.vm_mut().eval("document.getElementById('panel').style.display = 'block'").unwrap();
-            assert!(page.render_page_dump(options(false)).contains("Controlled content"), "visible popup content should remain readable");
+            assert!(page.render_markdown(options(false)).contains("Controlled content"), "visible popup content should remain readable");
         }
     }).await;
 }
@@ -98,7 +93,7 @@ async fn markdown_preserves_large_json_in_visible_source() {
             let source = format!("<pre><code>before\n<span {hidden}>{payload}</span>\nafter</code></pre><div hidden>{payload}</div>");
             page.vm_mut().eval(&format!("document.body.innerHTML = {}", serde_json::to_string(&source).unwrap())).unwrap();
             for strip_css in [false, true] {
-                let output = page.render_page_dump(options(strip_css));
+                let output = page.render_markdown(options(strip_css));
                 assert!(output.contains(&format!("before\n{payload}\nafter")), "source was changed; {hidden}; strip_css={strip_css}: {output}");
                 assert_eq!(output.matches(&payload).count(), 1, "ordinary hidden state must remain omitted: {output}");
             }
@@ -144,7 +139,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div role="dialog" id="dialog" class="off">Cookie template</div>`;
         "##).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             for kept in ["Visible body", "Restored child", "Panel content", "ARIA panel content", "Disclosure content", "Closed details content", "Parser trap", "Accessible helper", "Faded text", "Transparent parent", "Transparent child", "hidden suffix", "Published Angular article", "Published Vue article", "CSS override VISIBLE", "Stylesheet override ALSO VISIBLE", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
@@ -160,19 +155,19 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             assert!(!output.contains("<sup>settings</sup>"), "{output}");
         }
         page.vm_mut().eval("document.getElementById('waiting').className = ''").unwrap();
-        assert!(page.render_page_dump(options(false)).contains("Translation pending"));
+        assert!(page.render_markdown(options(false)).contains("Translation pending"));
         assert_eq!(page.vm_mut().eval("document.querySelector('style').textContent.includes('.off')").unwrap(), "true");
         page.vm_mut().eval(r#"
             document.documentElement.style.opacity = '0';
             document.body.innerHTML = '<article>Whole-page loading veil</article>';
         "#).unwrap();
-        assert!(page.render_page_dump(options(false)).contains("Whole-page loading veil"));
+        assert!(page.render_markdown(options(false)).contains("Whole-page loading veil"));
         page.vm_mut().eval(r#"
             document.documentElement.style.opacity = '';
             document.body.style.visibility = 'hidden';
             document.body.innerHTML = '<article style="visibility:visible">Font loading veil<div style="visibility:hidden">Independent hidden text</div></article>';
         "#).unwrap();
-        let root_visibility = page.render_page_dump(options(false));
+        let root_visibility = page.render_markdown(options(false));
         assert!(root_visibility.contains("Font loading veil"), "{root_visibility}");
         assert!(!root_visibility.contains("Independent hidden text"), "{root_visibility}");
         page.vm_mut().eval("document.body.style.visibility = ''").unwrap();
@@ -180,7 +175,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             document.head.innerHTML = '<style>.action{display:block}</style>';
             document.body.innerHTML = '<a class="action" href="/accept">Accept</a><a class="action" href="/reject">Reject</a>';
         "#).unwrap();
-        let actions = page.render_page_dump(options(false));
+        let actions = page.render_markdown(options(false));
         assert!(actions.contains("[Accept](https://example.test/accept)\n\n[Reject](https://example.test/reject)"), "{actions}");
         page.vm_mut().eval(r##"
             document.head.innerHTML = `<script>
@@ -202,7 +197,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div role="dialog" id="privacy" style="display:none">Privacy policy with cookie settings</div></article>`;
         "##).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert_eq!(output.matches("A detailed review starts").count(), 1, "{output}");
             assert!(!output.contains("retains the final conclusion."), "{output}");
             assert!(output.contains("A detailed review starts..."), "{output}");
@@ -220,7 +215,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="visibility-panel" style="visibility:hidden">Visibility disclosure</section>
                 <section id="unreferenced" style="display:none">Hidden template</section>`;
         "##).unwrap();
-        let expanded = page.render_page_dump(options(false));
+        let expanded = page.render_markdown(options(false));
         assert!(expanded.contains("Expandable history"), "{expanded}");
         assert!(expanded.contains("Visibility disclosure"), "{expanded}");
         assert!(!expanded.contains("Hidden unrelated sibling"), "{expanded}");
@@ -232,7 +227,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <button aria-expanded="false" aria-controls="nested-panel">Nested panel</button>
                 <section id="nested-panel" style="visibility:hidden">Lead <p><span>Full disclosure body</span></p><div style="visibility:hidden"><span>Nested hidden duplicate</span></div></section>`;
         "##).unwrap();
-        let nested_visibility = page.render_page_dump(options(false));
+        let nested_visibility = page.render_markdown(options(false));
         assert!(nested_visibility.contains("Full disclosure body"), "{nested_visibility}");
         assert!(!nested_visibility.contains("Nested hidden duplicate"), "{nested_visibility}");
         page.vm_mut().eval(r#"
@@ -242,7 +237,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <section id="styled-panel" style="visibility:hidden">Styled disclosure<div class="nested-hidden">Stylesheet hidden duplicate</div></section>
                 <p>Account <span class="forced-baseline" style="vertical-align:super">settings</span></p>`;
         "#).unwrap();
-        let cascaded_visibility = page.render_page_dump(options(false));
+        let cascaded_visibility = page.render_markdown(options(false));
         assert!(cascaded_visibility.contains("Styled disclosure"), "{cascaded_visibility}");
         assert!(!cascaded_visibility.contains("Stylesheet hidden duplicate"), "{cascaded_visibility}");
         assert!(cascaded_visibility.contains("Account settings"), "{cascaded_visibility}");
@@ -251,7 +246,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             document.body.style.visibility = 'hidden';
             document.body.innerHTML = '<main>Root veil text<div class="nested-hidden">Root stylesheet hidden duplicate</div></main>';
         "#).unwrap();
-        let cascaded_root_visibility = page.render_page_dump(options(false));
+        let cascaded_root_visibility = page.render_markdown(options(false));
         assert!(cascaded_root_visibility.contains("Root veil text"), "{cascaded_root_visibility}");
         assert!(!cascaded_root_visibility.contains("Root stylesheet hidden duplicate"), "{cascaded_root_visibility}");
         page.vm_mut().eval(r#"
@@ -268,7 +263,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         "#).unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('variable-hidden')).visibility").unwrap(), "hidden");
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('fallback-hidden')).visibility").unwrap(), "hidden");
-        let inherited_visibility = page.render_page_dump(options(false));
+        let inherited_visibility = page.render_markdown(options(false));
         for text in ["Invalid variable inherits the veil", "Variable fallback inherits the veil", "Origin revert inherits the veil", "Layer revert inherits the veil"] {
             assert!(inherited_visibility.contains(text), "missing {text}: {inherited_visibility}");
         }
@@ -301,7 +296,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <button onclick="revealUnrelated(document.getElementById('unrelated-target'))">Other</button>
                 <section id="unrelated-target" style="display:none">Unrelated mutation hidden state</section>`;
         "##).unwrap();
-        let related = page.render_page_dump(options(false));
+        let related = page.render_markdown(options(false));
         assert!(!related.contains("Hidden telemetry state"), "{related}");
         assert!(!related.contains("Hidden diagnostic state"), "{related}");
         assert!(!related.contains("Hidden read-only state"), "{related}");
@@ -317,21 +312,21 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(!related.contains("Unrelated mutation hidden state"), "{related}");
         page.vm_mut().eval("document.querySelector('.hovl a').click()").unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('results')).display").unwrap(), "inline");
-        let shown_pair = page.render_page_dump(options(false));
+        let shown_pair = page.render_markdown(options(false));
         assert!(shown_pair.contains("Paired expandable results"), "{shown_pair}");
         page.vm_mut().eval("document.querySelectorAll('.hovl a')[1].click()").unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('results')).display").unwrap(), "none");
-        assert!(!page.render_page_dump(options(false)).contains("Paired expandable results"));
+        assert!(!page.render_markdown(options(false)).contains("Paired expandable results"));
         page.vm_mut().eval("document.querySelector('button[onclick*=records]').click()").unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('records')).display").unwrap(), "block");
-        assert!(page.render_page_dump(options(false)).contains("Function-revealed records"));
+        assert!(page.render_markdown(options(false)).contains("Function-revealed records"));
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
                 <p style="color:white;background-image:linear-gradient(black,black)">Visible gradient text</p>
                 <div style="color:white;background-image:linear-gradient(black,black)"><p>Visible inherited gradient text</p></div>
                 <div style="color:white;background:white"><img src="/photo.png" alt="Photo"></div>`;
         "#).unwrap();
-        let painted = page.render_page_dump(options(false));
+        let painted = page.render_markdown(options(false));
         assert!(painted.contains("Visible gradient text"), "{painted}");
         assert!(painted.contains("Visible inherited gradient text"), "{painted}");
         assert!(painted.contains("![Photo](https://example.test/photo.png)"), "{painted}");
@@ -342,7 +337,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <div style="color:white;background-image:linear-gradient(black,black)"><p style="background:white">Hidden on opaque child</p></div>
                 <article><p>A detailed review... <a href="#complete">Read more</a></p><div hidden><div id="complete" style="display:none">A detailed review includes the full conclusion.</div></div></article>`;
         "##).unwrap();
-        let composite = page.render_page_dump(options(false));
+        let composite = page.render_markdown(options(false));
         assert!(composite.contains("Visible on grey"), "{composite}");
         assert!(composite.contains("Visible shadow"), "{composite}");
         assert!(composite.contains("Hidden on opaque child"), "{composite}");
@@ -354,7 +349,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             document.getElementById('check').checked = true;
             document.getElementById('notes').value = 'Edited notes';
         "#).unwrap();
-        let controls = page.render_page_dump(options(false));
+        let controls = page.render_markdown(options(false));
         assert!(controls.contains("Edited"), "{controls}");
         assert!(controls.contains("☑"), "{controls}");
         assert!(controls.contains("Edited notes"), "{controls}");
@@ -364,7 +359,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
             document.body.innerHTML = '<div title="Group"><textarea id="notes">Old default</textarea></div>';
             document.getElementById('notes').value = '';
         "#).unwrap();
-        let cleared = page.render_page_dump(options(false));
+        let cleared = page.render_markdown(options(false));
         assert!(!cleared.contains("Old default"), "{cleared}");
         page.vm_mut().eval(r#"
             document.body.innerHTML = `
@@ -374,7 +369,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <img srcset="safe.jpg 1x, invalid.jpg +2x" alt="Invalid density">
                 <img srcset="invalid.jpg test(a, phantom.jpg 4x, b), safe-parentheses.jpg 1x" alt="Parentheses">`;
         "#).unwrap();
-        let responsive = page.render_page_dump(options(false));
+        let responsive = page.render_markdown(options(false));
         assert!(responsive.contains("![Responsive](https://example.test/large.png)"), "{responsive}");
         assert!(responsive.contains("![Comma URL](https://cdn.example/c_fill,w_640/photo.jpg)"), "{responsive}");
         assert!(responsive.contains("![Lazy responsive](https://example.test/lazy-large.png)"), "{responsive}");
@@ -382,7 +377,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         assert!(responsive.contains("![Parentheses](https://example.test/safe-parentheses.jpg)"), "{responsive}");
         assert!(!responsive.contains("phantom.jpg"), "{responsive}");
         page.vm_mut().eval("document.documentElement.style.display = 'none'").unwrap();
-        assert!(page.render_page_dump(options(false)).is_empty());
+        assert!(page.render_markdown(options(false)).is_empty());
     }).await;
 }
 
@@ -404,7 +399,7 @@ async fn markdown_preserves_text_without_guessing_paint_or_framework_state() {
                 <div style="display:none">Hidden template</div>`;
         "##).unwrap();
         for strip_css in [false, true] {
-            let result = page.render_page_dump(options(strip_css));
+            let result = page.render_markdown(options(strip_css));
             for kept in ["Scroll-entry article", "Article over photograph", "Published framework article", "A detailed review..."] {
                 assert!(result.contains(kept), "missing {kept}: {result}");
             }
@@ -430,7 +425,7 @@ async fn markdown_content_panels_do_not_reveal_hidden_navigation() {
                 <section role="tabpanel" id="panel" style="display:none">Technical specifications</section>
                 <details><summary>Details</summary>Native disclosure content</details>`;
         "##).unwrap();
-        let result = page.render_page_dump(options(false));
+        let result = page.render_markdown(options(false));
         for kept in ["Technical specifications", "Native disclosure content"] {
             assert!(result.contains(kept), "missing {kept}: {result}");
         }
@@ -453,7 +448,7 @@ async fn markdown_keeps_collapsed_source_lines_but_not_hidden_source_blocks() {
                 <pre style="visibility:hidden">Invisible outer source</pre>
                 <pre>Code<button>Copy</button></pre>`;
         "##).unwrap();
-        let result = page.render_page_dump(options(false));
+        let result = page.render_markdown(options(false));
         for kept in ["Collapsed source line", "Detailed records"] {
             assert!(result.contains(kept), "missing {kept}: {result}");
         }
@@ -472,27 +467,24 @@ async fn markdown_live_textarea_and_hidden_content_survive_dump_options() {
             document.head.innerHTML = '<style>.hidden{display:none}</style>';
             document.body.innerHTML = '<textarea value="Nonstandard attribute">Old default</textarea><p class="hidden">Private hidden copy</p><p>Published text</p>';
         "#).unwrap();
-        let initial = page.render_page_dump(options(false));
+        let initial = page.render_markdown(options(false));
         assert!(initial.contains("Old default"), "{initial}");
         assert!(!initial.contains("Nonstandard attribute"), "{initial}");
         page.vm_mut().eval("document.querySelector('textarea').value = 'Live text'").unwrap();
-        for with_frames in [false, true] {
-            for with_base in [false, true] {
+
                 for strip_css in [false, true] {
-                    let mut config = options(strip_css);
-                    config.with_frames = with_frames;
-                    config.with_base = with_base;
-                    let output = page.render_page_dump(config);
+                    let config = options(strip_css);
+
+                    let output = page.render_markdown(config);
                     assert!(output.contains("Live text"), "{output}");
                     assert!(output.contains("Published text"), "{output}");
                     for excluded in ["Old default", "Nonstandard attribute", "Private hidden copy"] {
                         assert!(!output.contains(excluded), "{excluded}: {output}");
                     }
                 }
-            }
-        }
+
         page.vm_mut().eval("document.querySelector('textarea').value = ''").unwrap();
-        let output = page.render_page_dump(options(false));
+        let output = page.render_markdown(options(false));
         assert!(!output.contains("Old default") && !output.contains("Live text"), "{output}");
     }).await;
 }
@@ -517,7 +509,7 @@ async fn markdown_document_export_distinguishes_source_from_hidden_interface() {
                 <iframe data-original="embed.html"></iframe>
                 <p><span style="display:table-row">Row one</span><span style="display:table-row">Row two</span></p>`;
         "##).unwrap();
-        let output = page.render_page_dump(options(false));
+        let output = page.render_markdown(options(false));
         for kept in ["Article introduction", "Article conclusion", "Article disclosure", "Retained source line", "https://example.test/article/small-diagram.png", "https://example.test/article/movie.mp4", "https://example.test/article/sound.ogg", "https://example.test/article/embed.html", "Row one\n\nRow two"] {
             assert!(output.contains(kept), "missing {kept}: {output}");
         }
@@ -528,7 +520,7 @@ async fn markdown_document_export_distinguishes_source_from_hidden_interface() {
             document.body.style.visibility = '';
             document.body.innerHTML = '<button role=" TAB " aria-controls="duplicate">Tab</button><section id="duplicate" hidden>First target</section><section id="duplicate" hidden>Second target</section>';
         "##).unwrap();
-        let output = page.render_page_dump(options(false));
+        let output = page.render_markdown(options(false));
         assert!(output.contains("First target"), "{output}");
         assert!(!output.contains("Second target"), "{output}");
     }).await;
@@ -548,7 +540,7 @@ async fn markdown_nested_disclosures_and_resource_urls() {
                 <video data-original="../movie.mp4"></video>`;
         "#).unwrap();
         for strip_css in [false, true] {
-            let result = page.render_page_dump(options(strip_css));
+            let result = page.render_markdown(options(strip_css));
             for kept in ["Nested specifications", "Searchable article", "https://example.test/photo.png", "https://example.test/movie.mp4"] {
                 assert!(result.contains(kept), "missing {kept}: {result}");
             }
@@ -598,7 +590,7 @@ async fn markdown_live_structure_and_visibility_have_exact_outputs() {
         ] {
             page.vm_mut().eval(&format!("document.body.innerHTML={}", serde_json::to_string(source).unwrap())).unwrap();
             for strip_css in [false, true] {
-                assert_eq!(page.render_page_dump(options(strip_css)), expected, "{source}");
+                assert_eq!(page.render_markdown(options(strip_css)), expected, "{source}");
             }
         }
     }).await;
@@ -618,7 +610,7 @@ async fn markdown_hidden_structure_keeps_restored_descendants_and_changed_contro
             document.querySelector('#r').value='25';
             document.querySelector('#c').value='#00ff00';
         "##).unwrap();
-        assert_eq!(page.render_page_dump(options(false)),
+        assert_eq!(page.render_markdown(options(false)),
             "<table>\n<tbody>\n<tr>\n<th>Visible</th>\n</tr>\n<tr>\n<td colspan=\"2\"></td>\n</tr>\n</tbody>\n</table>\n\n25 #00ff00");
 
     }).await;
@@ -633,7 +625,7 @@ async fn markdown_export_preserves_cssom_display_and_the_dom() {
         let snapshot = "JSON.stringify([document.body.innerHTML, getComputedStyle(document.querySelector('a')).display])";
         let before = page.vm_mut().eval(snapshot).unwrap();
         assert!(before.contains("block"), "{before}");
-        assert_eq!(page.render_page_dump(options(false)), "[A B](https://example.test/x)");
+        assert_eq!(page.render_markdown(options(false)), "[A B](https://example.test/x)");
         assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
     }).await;
 }

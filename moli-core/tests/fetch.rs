@@ -47,7 +47,7 @@ async fn fetches_static_fixture() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.session().open(&server.url("/static")).await?;
+    let mut page = browser.session().open(&server.url("/static")).await?;
 
     assert_eq!(page.status(), 200);
     assert!(
@@ -71,7 +71,7 @@ async fn follows_redirects() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser.fetch(&server.url("/redirect")).await?;
+    let mut page = browser.fetch(&server.url("/redirect")).await?;
 
     assert_eq!(page.status(), 200);
     assert_eq!(page.final_url().path(), "/static");
@@ -107,7 +107,7 @@ async fn fetch_renders_403_challenge_document() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_allow_http_error(&server.url("/net/upstream/xhr/403-challenge"))
         .await?;
     assert_eq!(page.status(), 403);
@@ -143,7 +143,7 @@ async fn fetch_allow_http_error_returns_page_for_success() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_allow_http_error(&server.url("/static"))
         .await?;
     assert_eq!(page.status(), 200);
@@ -213,7 +213,7 @@ async fn fetch_allow_http_error_renders_404_response() -> Result<()> {
     let browser = Browser::new(AppConfig::default())?;
     let url = server.url("/net/upstream/xhr/404");
 
-    let page = browser.fetch_allow_http_error(&url).await?;
+    let mut page = browser.fetch_allow_http_error(&url).await?;
     assert_eq!(page.status(), 404);
     assert_eq!(page.final_url().as_str(), url);
     assert!(
@@ -237,7 +237,7 @@ async fn follows_location_replace_during_page_load() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/location-nav/replace-source"))
         .await?;
 
@@ -266,7 +266,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let assign_page = browser
+    let mut assign_page = browser
         .fetch(&server.url("/location-nav/assign-source"))
         .await?;
     assert_eq!(assign_page.final_url().path(), "/location-nav/target");
@@ -286,7 +286,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
             .contains("assign-source")
     );
 
-    let href_page = browser
+    let mut href_page = browser
         .fetch(&server.url("/location-nav/href-source"))
         .await?;
     assert_eq!(href_page.final_url().path(), "/location-nav/target");
@@ -306,7 +306,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
             .contains("href-source")
     );
 
-    let pathname_page = browser
+    let mut pathname_page = browser
         .fetch(&server.url("/location-nav/pathname-source"))
         .await?;
     assert_eq!(
@@ -329,7 +329,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
             .contains("pathname-source")
     );
 
-    let search_page = browser
+    let mut search_page = browser
         .fetch(&server.url("/location-nav/search-source"))
         .await?;
     assert_eq!(
@@ -352,7 +352,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
             .contains("search-source")
     );
 
-    let host_page = browser
+    let mut host_page = browser
         .fetch(&server.url("/location-nav/host-source"))
         .await?;
     assert_eq!(host_page.final_url().host_str(), Some("localhost"));
@@ -372,7 +372,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
             .contains("host-source")
     );
 
-    let hostname_page = browser
+    let mut hostname_page = browser
         .fetch(&server.url("/location-nav/hostname-source"))
         .await?;
     assert_eq!(hostname_page.final_url().host_str(), Some("localhost"));
@@ -397,7 +397,7 @@ async fn follows_location_assign_href_and_search_setters_during_page_load() -> R
 
     let target_server = FixtureServer::spawn().await?;
     let target_port = fixture_url_port(&target_server.url("/static"));
-    let port_page = browser
+    let mut port_page = browser
         .fetch(&server.url(&format!(
             "/location-nav/port-source?targetPort={target_port}"
         )))
@@ -438,7 +438,7 @@ async fn follows_location_reload_during_page_load() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/location-nav/reload-source"))
         .await?;
 
@@ -466,7 +466,7 @@ async fn follows_same_href_location_assignment_after_script_cookie_challenge() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/location-nav/same-href-cookie-challenge"))
         .await?;
 
@@ -497,7 +497,7 @@ async fn follows_chained_location_navigation_during_page_load() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/location-nav/chain-source"))
         .await?;
 
@@ -533,7 +533,7 @@ async fn follows_timeout_chained_location_navigation_during_network_idle_wait() 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/location-nav/chain-timeout-source"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -580,7 +580,7 @@ async fn follows_timeout_chained_location_navigation_during_domstable_wait() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/location-nav/chain-timeout-source"),
             RenderedDomWaitUntil::DomStable,
@@ -646,7 +646,7 @@ async fn follows_async_location_search_during_network_idle_wait() -> Result<()> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/location-nav/search-async-source"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -679,7 +679,7 @@ async fn follows_async_location_search_during_domstable_wait() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/location-nav/search-async-source"),
             RenderedDomWaitUntil::DomStable,
@@ -764,7 +764,7 @@ async fn follows_post_parse_timeout_location_assign_during_page_load() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/location-nav/assign-post-parse-timeout-source"),
             RenderedDomWaitUntil::DomStable,
@@ -802,7 +802,7 @@ async fn repeated_date_locale_formatting_does_not_crash_fetch() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/date-locale-bomb"))
         .await?;
 
@@ -822,7 +822,7 @@ async fn date_locale_methods_return_stable_values_and_invalid_date() -> Result<(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/date-locale-details"))
         .await?;
 

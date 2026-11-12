@@ -128,7 +128,7 @@ async fn history_pushstate_and_replacestate_resolve_relative_urls_and_update_loc
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-relative/base/index.html"))
         .await?;
 
@@ -261,7 +261,7 @@ async fn history_pushstate_and_replacestate_reject_cross_origin_urls_with_securi
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-cross-origin-security-error"))
         .await?;
 
@@ -373,7 +373,7 @@ async fn history_length_and_state_assignments_do_not_mutate_public_surface() -> 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server
                 .url("/compat/history-length-and-state-assignments-do-not-mutate-public-surface"),
@@ -422,7 +422,7 @@ async fn history_navigation_brand_and_descriptor_surface_matches_chromium() -> R
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-navigation-brand-and-descriptor-surface"))
         .await?;
 
@@ -624,7 +624,7 @@ async fn history_go_zero_reloads_current_document() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-go-zero-reloads-current-document"))
         .await?;
 
@@ -720,7 +720,7 @@ async fn history_go_nan_reloads_current_document() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-go-nan-reloads-current-document"))
         .await?;
 
@@ -816,7 +816,7 @@ async fn history_go_no_argument_reloads_current_document() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-go-no-argument-reloads-current-document"))
         .await?;
 
@@ -912,7 +912,7 @@ async fn history_go_rejects_symbol_and_bigint() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-go-rejects-symbol-and-bigint"))
         .await?;
 
@@ -1158,7 +1158,7 @@ async fn history_scroll_restoration_ignores_invalid_values() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-scroll-restoration-invalid-value-ignored"))
         .await?;
 
@@ -1298,7 +1298,7 @@ async fn history_initial_navigation_current_entry_index_starts_at_zero() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-initial-navigation-current-entry-index-starts-at-zero"))
         .await?;
 
@@ -1339,7 +1339,7 @@ async fn history_pushstate_does_not_set_navigation_current_entry_state() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-pushstate-does-not-set-navigation-current-entry-state"))
         .await?;
 
@@ -1809,7 +1809,7 @@ async fn navigation_currententrychange_fires_on_same_document_hash_navigation() 
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-currententrychange-on-hash-navigation"))
         .await?;
 
@@ -1850,7 +1850,7 @@ async fn navigation_currententrychange_ignores_page_tampered_dispatch_event() ->
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server
                 .url("/compat/navigation-currententrychange-ignores-page-tampered-dispatch-event"),
@@ -1908,7 +1908,7 @@ async fn navigation_update_current_entry_updates_state_and_fires_currententrycha
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/navigation-update-current-entry-updates-state-and-fires-currententrychange",
         ))
@@ -2060,7 +2060,7 @@ async fn history_pushstate_dispatches_navigation_currententrychange_event_surfac
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/history-pushstate-dispatches-navigation-currententrychange-event-surface",
         ))
@@ -2150,7 +2150,7 @@ async fn navigation_reload_reloads_current_document() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-reload-reloads-current-document"))
         .await?;
 
@@ -2279,7 +2279,7 @@ async fn navigation_activation_initial_surface() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-activation-initial-surface"))
         .await?;
 
@@ -2460,7 +2460,7 @@ async fn navigation_activation_cross_document_destination_surface() -> Result<()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server.url("/compat/navigation-activation-cross-document-destination-surface-source"),
         )
@@ -2577,7 +2577,7 @@ async fn navigation_activation_cross_document_traverse_to_destination_surface() 
     let dest_url = server
         .url("/compat/navigation-activation-cross-document-traverse-to-destination-surface-dest");
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &source_url,
             RenderedDomWaitUntil::DomStable,
@@ -2601,7 +2601,7 @@ async fn navigation_navigate_cross_document_push_destination_surface() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server
                 .url("/compat/navigation-navigate-cross-document-push-destination-surface-source"),
@@ -2763,7 +2763,7 @@ async fn navigation_navigate_argument_validation_matches_chromium() -> Result<()
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-navigate-argument-validation"))
         .await?;
 
@@ -4188,7 +4188,7 @@ async fn navigation_navigate_persists_state_to_destination_entry() -> Result<()>
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-navigate-state-persists-to-destination"))
         .await?;
 
@@ -4254,7 +4254,7 @@ async fn navigation_navigate_cross_document_result_promises_do_not_settle_before
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server.url(
                 "/compat/navigation-navigate-cross-document-result-promises-do-not-settle-before-destination-load",
@@ -4321,7 +4321,7 @@ async fn navigation_navigate_cross_document_does_not_dispatch_currententrychange
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/navigation-navigate-cross-document-does-not-dispatch-currententrychange-in-source",
         ))
@@ -4386,7 +4386,7 @@ async fn navigation_entries_expose_current_entry_metadata_and_identity() -> Resu
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/navigation-entries-expose-current-entry-metadata-and-identity"))
         .await?;
 
