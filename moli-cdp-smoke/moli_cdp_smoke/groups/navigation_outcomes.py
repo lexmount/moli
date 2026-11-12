@@ -48,6 +48,7 @@ async def run_navigation_outcomes_group(state: SmokeState) -> None:
         "Page.navigate",
         "Runtime.evaluate",
         "Fetch.enable",
+        "Fetch.continueRequest",
         "Fetch.failRequest",
         "Fetch.continueResponse",
         "Fetch.fulfillRequest",
@@ -194,6 +195,15 @@ def _contracts() -> tuple[NavigationOutcomeContract, ...]:
                 partial(_mixed_redirect_request_metadata, action=action, attachment=True),
             )
             for action in ("fail", "continue")
+        ),
+        *(
+            NavigationOutcomeContract(
+                f"navigate_service_worker_fallback_preserves_redirect_pause_{action}",
+                "A network redirect into an unhandled Service Worker scope keeps "
+                "later Document requests paused before they reach the server.",
+                partial(_service_worker_redirect_fallback, action=action),
+            )
+            for action in ("continue", "fail", "fulfill")
         ),
     )
 
@@ -769,6 +779,98 @@ async def _mixed_redirect_request_metadata(
         assert_equal(len(request_extra_info()), len(observed), "mixed redirect ExtraInfo after completion")
         assert_equal(response_extra_info(), [307, 303, 200], "mixed redirect response ExtraInfo after completion")
         return {"action": action, "attachment": attachment, "requests": observed, "finalUrl": urls[-1]}
+
+
+async def _service_worker_redirect_fallback(
+    state: SmokeState, *, action: str
+) -> dict[str, Any]:
+    async with _new_probe(state) as probe:
+        await probe.page.goto(f"{state.fixture}/fetch-dispatch/page", wait_until="load")
+        await _evaluate_value(probe.cdp, """
+          globalThis.__navigationFallbackReady = false;
+          navigator.serviceWorker.register('/fetch-dispatch/sw.js', {scope:'/fetch-dispatch/'})
+            .then(() => navigator.serviceWorker.ready)
+            .then(() => { globalThis.__navigationFallbackReady = true; });
+          true;
+        """)
+        await wait_until(
+            lambda: probe.page.evaluate(
+                "__navigationFallbackReady && !!navigator.serviceWorker.controller"
+            ),
+            "navigation fallback controlling service worker",
+        )
+        paths = [
+            f"{path}?case=navigation-sw-fallback-{action}"
+            for path in (
+                "/navigation-sw-fallback-start",
+                "/fetch-dispatch/nav-fallback/middle",
+                "/fetch-dispatch/nav-fallback/final",
+            )
+        ]
+        urls = [f"{state.fixture}{path}" for path in paths]
+        for path in paths:
+            state.fixture_server.reset_request_count(path)
+        paused: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        probe.cdp.on("Fetch.requestPaused", paused.put_nowait)
+        await probe.cdp.send("Fetch.enable", {"patterns": [{
+            "urlPattern": "*", "resourceType": "Document", "requestStage": "Request",
+        }]})
+        probe.events.clear()
+        navigation = asyncio.create_task(probe.cdp.send("Page.navigate", {"url": urls[0]}))
+        try:
+            for index, url in enumerate(urls):
+                await wait_until(
+                    lambda: not paused.empty() or state.fixture_server.request_count(paths[-1]) > 0,
+                    f"service worker fallback pause before {url}",
+                )
+                if paused.empty():
+                    raise SmokeError(
+                        f"final request reached the server without Fetch.requestPaused: {url}"
+                    )
+                request = paused.get_nowait()
+                assert_equal(request["request"]["url"], url, "fallback paused redirect URL")
+                assert_equal("responseStatusCode" in request, False, "fallback Request-stage pause")
+                for pending_path in paths[index:]:
+                    assert_equal(state.fixture_server.request_count(pending_path), 0,
+                                 f"server request count before releasing {pending_path}")
+                params = {"requestId": request["requestId"]}
+                if index < 2 or action == "continue":
+                    await probe.cdp.send("Fetch.continueRequest", params)
+                elif action == "fail":
+                    await probe.cdp.send("Fetch.failRequest", {
+                        **params, "errorReason": "BlockedByClient",
+                    })
+                else:
+                    await probe.cdp.send("Fetch.fulfillRequest", {
+                        **params,
+                        "responseCode": 200,
+                        "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
+                        "body": base64.b64encode(b"<main>fulfilled fallback</main>").decode(),
+                    })
+            result = await navigation
+            assert_equal(result.get("errorText"),
+                         "net::ERR_BLOCKED_BY_CLIENT" if action == "fail" else None,
+                         "fallback navigation error")
+            await wait_until(
+                lambda: any(event["method"] == "Page.loadEventFired" for event in probe.events),
+                "fallback navigation Document load",
+            )
+            counts = [state.fixture_server.request_count(path) for path in paths]
+            assert_equal(counts, [1, 1, 1 if action == "continue" else 0],
+                         "fallback server requests after final action")
+            if action != "fail":
+                assert_equal(await _evaluate_value(probe.cdp, "location.href"), urls[-1],
+                             "fallback final Document URL")
+                assert_equal(await _evaluate_value(probe.cdp, "document.body.textContent"),
+                             "network fallback" if action == "continue" else "fulfilled fallback",
+                             "fallback final Document body")
+            return {"action": action, "requestUrls": urls, "serverRequests": counts}
+        finally:
+            await probe.cdp.send("Fetch.disable")
+            if not navigation.done():
+                navigation.cancel()
+                with suppress(asyncio.CancelledError):
+                    await navigation
 
 
 async def _wait_for_document_response(

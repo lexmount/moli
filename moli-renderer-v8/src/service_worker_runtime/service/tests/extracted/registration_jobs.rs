@@ -227,6 +227,7 @@ fn pending_unregistration_deletion_clears_owner_state() {
             state.pending_fetch_jobs.insert(
                 event_id,
                 ServiceWorkerFetchJob {
+                    initial_redirect_count: 0,
                     request: {
                         let origin = moli_url::WebOrigin::from_url(&request_url);
                         let initiator = request_url.clone();

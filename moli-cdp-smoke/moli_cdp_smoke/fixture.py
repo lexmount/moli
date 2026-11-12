@@ -707,6 +707,16 @@ class FixtureServer:
                     self._send_html("<!doctype html><main>plain ok</main>")
                 elif route == "/fetch-dispatch/page":
                     self._send_html("<!doctype html><main>resource dispatch</main>")
+                elif route in {"/navigation-sw-fallback-start", "/fetch-dispatch/nav-fallback/middle"}:
+                    outer._record_resource_request(self.path, self.headers)
+                    destination = ("middle" if route == "/navigation-sw-fallback-start" else "final")
+                    self._send_common(
+                        HTTPStatus.FOUND, "text/plain", b"",
+                        {"Location": f"/fetch-dispatch/nav-fallback/{destination}?{parsed.query}"},
+                    )
+                elif route == "/fetch-dispatch/nav-fallback/final":
+                    outer._record_resource_request(self.path, self.headers)
+                    self._send_html("<!doctype html><main>network fallback</main>")
                 elif route == "/fetch-dispatch/sw.js":
                     resources = {
                         "font.woff2": ("font/woff2", (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()),

@@ -269,7 +269,7 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
         job.cancel_pending_navigation_preload();
         if let Some(completion_tx) = job.direct_completion_tx.take() {
-            if job.request.redirect_count() != 0 {
+            if job.request.redirect_count() > job.initial_redirect_count {
                 self.dispatch_direct_fetch_network_fallback(job, completion_tx);
                 return;
             }
@@ -1170,6 +1170,7 @@ mod tests {
         state.pending_fetch_jobs.insert(
             event_id,
             ServiceWorkerFetchJob {
+                initial_redirect_count: 0,
                 request: {
                     let origin = moli_url::WebOrigin::from_url(&document_url);
                     let initiator = (document_url).clone();
@@ -2043,6 +2044,7 @@ mod tests {
         let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
         let request_url = url("https://example.test/app/post");
         let mut job = ServiceWorkerFetchJob {
+            initial_redirect_count: 0,
             request: {
                 let origin = moli_url::WebOrigin::from_url(&request_url);
                 let initiator = request_url.clone();
