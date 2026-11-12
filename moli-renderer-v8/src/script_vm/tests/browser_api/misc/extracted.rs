@@ -14,6 +14,7 @@ mod platform_compat;
 mod popup_window;
 mod script_security;
 mod service_worker_clients;
+mod service_worker_csp;
 mod service_worker_events;
 mod service_worker_popup;
 mod service_worker_registration;

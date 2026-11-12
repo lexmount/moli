@@ -314,6 +314,12 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     ) {
         return;
     }
+    // The container owns the returned promise and its rejection values even
+    // when a register method from another Window is borrowed.
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             return;
@@ -425,6 +431,8 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     }
+    // Check the container owner's current policy after author conversions,
+    // before any job (including reuse of an existing registration) is queued.
     if host
         .check_service_worker_registration_csp_for_owner(scope, owner, &script_url)
         .blocks_request()

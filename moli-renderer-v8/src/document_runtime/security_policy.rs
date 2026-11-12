@@ -1501,51 +1501,6 @@ impl DocumentRuntime {
         )
     }
 
-    pub(crate) fn service_worker_registration_csp_check_for_document(
-        &self,
-        document_handle: Option<DomHandle>,
-        document_url: &Url,
-        document_origin: Option<&Url>,
-        policy_container: &DocumentPolicyContainer,
-        script_url: &Url,
-    ) -> DocumentContentSecurityPolicyCheck {
-        if self.bypass_content_security_policy() {
-            return DocumentContentSecurityPolicyCheck {
-                report_only_violations: Vec::new(),
-                enforced_violations: Vec::new(),
-            };
-        }
-        let policies = self.document_content_security_policies_for_optional_document(
-            document_handle,
-            &policy_container.response_content_security_policies,
-            &policy_container.content_security_reporting_endpoints,
-        );
-        let kind = ContentSecurityPolicyResourceKind::WorkerConstructor;
-        let redirect = ContentSecurityPolicyRedirectStatus::NoRedirect;
-        let enforced_violation = document_url_policy_violation_from_document_policies(
-            policies,
-            document_url,
-            document_origin,
-            script_url,
-            kind,
-            redirect,
-            ContentSecurityPolicyDisposition::Enforce,
-        );
-        let report_only_violation = document_url_policy_violation(
-            &policy_container.response_content_security_report_only_policies,
-            &policy_container.content_security_reporting_endpoints,
-            document_url,
-            script_url,
-            kind,
-            redirect,
-            ContentSecurityPolicyDisposition::Report,
-        );
-        DocumentContentSecurityPolicyCheck {
-            report_only_violations: report_only_violation.into_iter().collect(),
-            enforced_violations: enforced_violation.into_iter().collect(),
-        }
-    }
-
     pub(crate) fn document_connect_policy_snapshot_for_document(
         &self,
         document_handle: Option<DomHandle>,
