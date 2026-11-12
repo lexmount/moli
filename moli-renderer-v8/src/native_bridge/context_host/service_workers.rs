@@ -1531,13 +1531,18 @@ impl PageScriptHost {
         else {
             return;
         };
-        let result = self
-            .browser_context_runtime
-            .service_worker_runtime()
-            .client_navigate_result_for_current_window_client(
-                continuation.source_version_id,
-                client_id,
-            );
+        let result = self.child_browsing_context_ancestor_origins(handle).map_or(
+            Ok(None),
+            |ancestor_origins| {
+                self.browser_context_runtime
+                    .service_worker_runtime()
+                    .client_navigate_result_for_current_window_client(
+                        continuation.source_version_id,
+                        client_id,
+                        ancestor_origins,
+                    )
+            },
+        );
         self.browser_context_runtime
             .service_worker_runtime()
             .enqueue_client_navigate_completed(
@@ -1756,7 +1761,11 @@ impl PageScriptHost {
         };
         self.browser_context_runtime
             .service_worker_runtime()
-            .client_navigate_result_for_current_window_client(pending.source_version_id, client_id)
+            .client_navigate_result_for_current_window_client(
+                pending.source_version_id,
+                client_id,
+                Vec::new(),
+            )
             .map_err(|error| match error {
                 crate::service_worker_runtime::ServiceWorkerClientNavigateError::TypeError(
                     message,
@@ -1929,6 +1938,12 @@ impl PageScriptHost {
             },
             focused,
             last_focus_order: self.window_last_focus_order(owner),
+            ancestor_origins: match owner {
+                OwnerDispatchScope::Child(handle) => self
+                    .child_browsing_context_ancestor_origins(handle)
+                    .expect("a current child Document has an ancestor origins snapshot"),
+                OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => Vec::new(),
+            },
         }
     }
 

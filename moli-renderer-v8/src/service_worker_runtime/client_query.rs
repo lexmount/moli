@@ -12,12 +12,13 @@ use super::{
     state::WeakServiceWorkerRuntimeService,
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerWindowClientState {
     pub(crate) frame_type: ServiceWorkerClientFrameType,
     pub(crate) visibility_state: ServiceWorkerClientVisibilityState,
     pub(crate) focused: bool,
     pub(crate) last_focus_order: Option<u64>,
+    pub(crate) ancestor_origins: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -83,6 +84,7 @@ impl ServiceWorkerClientQueryAccumulator {
                     client.frame_type = state.frame_type;
                     client.visibility_state = state.visibility_state;
                     client.focused = state.focused;
+                    client.ancestor_origins = state.ancestor_origins;
                 }
                 if let Some(order) = state.last_focus_order {
                     pending.focus_orders.insert(client_id, order);

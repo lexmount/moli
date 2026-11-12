@@ -1341,6 +1341,7 @@ fn new_service_worker_message_event_with_parts<'s>(
                     "top-level",
                     "visible",
                     false,
+                    &[],
                 )
                 .map(v8::Local::into)
             })
