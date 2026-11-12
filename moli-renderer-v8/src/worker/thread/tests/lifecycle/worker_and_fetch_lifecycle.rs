@@ -814,6 +814,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
     request.destination = ServiceWorkerRequestDestination::Document;
     request.request_mode = moli_fetch::RequestMode::Navigate;
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -936,6 +937,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
     request.destination = ServiceWorkerRequestDestination::Document;
     request.request_mode = moli_fetch::RequestMode::Navigate;
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -1034,6 +1036,7 @@ async fn service_worker_fetch_event_preload_response_rejects_before_response() {
     request.destination = ServiceWorkerRequestDestination::Document;
     request.request_mode = moli_fetch::RequestMode::Navigate;
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -1112,6 +1115,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
     request.destination = ServiceWorkerRequestDestination::Document;
     request.request_mode = moli_fetch::RequestMode::Navigate;
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
@@ -1233,6 +1237,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
     request.destination = ServiceWorkerRequestDestination::Document;
     request.request_mode = moli_fetch::RequestMode::Navigate;
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids: Default::default(),
         event_id,
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
