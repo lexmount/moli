@@ -218,6 +218,19 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
     fn attribute(&mut self, value: &str) {
         if EMBEDDED && self.attribute_depth == 0 {
             escape_html_attribute(value, self.sink);
+        } else if EMBEDDED {
+            // An attribute value has one more encoding layer than surrounding
+            // markup. Compose those layers instead of rescanning each entity.
+            let mut writer = HtmlEscapingWriter::<_, true> {
+                sink: &mut *self.sink,
+                attribute_depth: self.attribute_depth + 1,
+            };
+            for ch in value.chars() {
+                if writer.limit_exceeded() {
+                    break;
+                }
+                writer.push(ch);
+            }
         } else {
             escape_html_attribute(value, self);
         }
@@ -987,6 +1000,15 @@ mod escaping_tests {
                     writer.push(ch);
                 }
                 assert_eq!(output, expected);
+                let mut expected_attribute = String::new();
+                escape_html_attribute(&expected, &mut expected_attribute);
+                output.clear();
+                HtmlEscapingWriter::<_, true> {
+                    sink: &mut output,
+                    attribute_depth: depth,
+                }
+                .attribute(&input);
+                assert_eq!(output, expected_attribute);
             }
         }
     }
