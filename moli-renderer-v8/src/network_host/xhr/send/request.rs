@@ -19,6 +19,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) resource_loader: crate::network::context::DocumentResourceLoader,
     pub(super) document_url: url::Url,
     pub(super) document_referrer_policy: Option<String>,
+    referrer_source: Option<url::Url>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) network_partition_key: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
@@ -30,6 +31,32 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) use_cors_preflight: bool,
     pub(super) initiator_url: String,
+}
+
+impl PreparedXhrSendRequest {
+    pub(super) fn request(&self) -> moli_fetch::Request {
+        // Network dispatch and Service Worker metadata share the captured
+        // client's referrer without rebinding its cookie or request origin.
+        moli_fetch::Request::new_bytes(
+            &self.method,
+            self.resolved_url.as_str(),
+            self.send_body.clone(),
+            self.request_headers.clone(),
+        )
+        .expect("xhr request url was already resolved")
+        .with_fetch_referrer(self.referrer_source.as_ref().map_or("", url::Url::as_str))
+        .expect("XHR referrer source is a captured Document URL")
+        .with_initiator_url(&self.document_url)
+        .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+            document_referrer_policy: self.document_referrer_policy.clone(),
+            ..Default::default()
+        })
+        .with_request_origin(self.request_origin.clone())
+        .with_credentials_mode(self.credentials_mode)
+        .with_network_partition_key(self.network_partition_key.clone())
+        .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Xhr)
+        .with_use_cors_preflight(self.use_cors_preflight)
+    }
 }
 
 pub(super) enum XhrSendPrepareError {
@@ -104,6 +131,7 @@ pub(super) fn prepare_xhr_send_request<'s>(
         request_origin,
         network_partition_key,
         document_referrer_policy,
+        referrer_source: host.document_referrer_source_url_for_dispatch_scope(owner),
         policy_context,
         resolved_url,
         method,
