@@ -1320,7 +1320,8 @@ impl JsContextHost {
         let document_url = self.child_browsing_context_current_url(handle)?;
         let storage_context = self.storage_context_for_child_browsing_context(handle)?;
         let storage_key = storage_context.storage_key().serialized_storage_key();
-        let controller_source = if moli_url::is_about_srcdoc(&document_url)
+        let controller_source = if (moli_url::is_about_srcdoc(&document_url)
+            || document_url.scheme() == "blob")
             && storage_context.origin() != "null"
             && self.child_browsing_context_secure_context_available(handle)
         {
