@@ -434,6 +434,43 @@ impl PageScriptHost {
         unsafe { &*self.document_runtime }.cross_origin_isolated()
     }
 
+    pub(crate) fn check_service_worker_registration_csp_for_owner(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        script_url: &url::Url,
+    ) -> DocumentCspOutcome {
+        let Some(document) = self.owner_document_policy_snapshot(owner) else {
+            return DocumentCspOutcome::Allowed;
+        };
+        let origin = self
+            .window_document_origin(owner)
+            .and_then(|origin| url::Url::parse(&origin).ok());
+        // SAFETY: this host and the DocumentRuntime are owned by the same ScriptVm.
+        let (report_only, enforced) = unsafe { &*self.document_runtime }
+            .service_worker_registration_csp_check_for_document(
+                document.document_handle,
+                &document.document_url,
+                origin.as_ref(),
+                &document.policy_container,
+                script_url,
+            )
+            .into_violations();
+        let host_ptr: *mut Self = self;
+        if let Some(violation) = report_only {
+            self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                scope, host_ptr, owner, &violation,
+            );
+        }
+        let Some(violation) = enforced else {
+            return DocumentCspOutcome::Allowed;
+        };
+        self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+            scope, host_ptr, owner, &violation,
+        );
+        DocumentCspOutcome::Blocked(violation)
+    }
+
     pub(crate) fn check_top_document_subresource_csp<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

@@ -458,6 +458,29 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
+    if !request_context.registration_urls_match_origin(&script_url, &scope_url) {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The script and scope must have the document's origin.",
+            "SecurityError",
+        );
+        rv.set(promise.into());
+        return;
+    }
+    if host
+        .check_service_worker_registration_csp_for_owner(scope, owner, &script_url)
+        .blocks_request()
+    {
+        reject_service_worker_promise_with_dom_exception(
+            scope,
+            resolver,
+            "The ServiceWorker script URL violates the document's Content Security Policy.",
+            "SecurityError",
+        );
+        rv.set(promise.into());
+        return;
+    }
     let (request_id, document_owner, completion_tx) =
         host.register_pending_service_worker_register(scope, resolver, request_context.owner());
     host.start_service_worker_runtime(
