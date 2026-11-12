@@ -822,6 +822,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         f(&mut self.target_mut().owner_state)
     }
 
+    pub(super) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
+        self.target()
+            .fetch_owner
+            .subresource_response_is_paused(request_id)
+    }
+
     pub(super) fn configure_fetch(
         &mut self,
         command_session_id: Option<String>,

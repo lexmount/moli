@@ -360,13 +360,8 @@ fn emit_complete_subresource_network_delivery_record(
                 redirect_chain,
             );
             for event_session_id in event_session_ids {
-                let blocked_intercepts = matching_subresource_network_intercepts(
-                    conn,
-                    owner,
-                    FetchRequestStage::Response,
-                    resource_type,
-                    final_url,
-                );
+                // Complete records have already delivered their response and
+                // body. A matching rule cannot make them resumably paused.
                 emit_response_received(
                     out,
                     event_session_id.as_deref(),
@@ -384,7 +379,7 @@ fn emit_complete_subresource_network_delivery_record(
                     output.negotiated_http_version(),
                     output.network_request_headers().is_some(),
                     resource_type,
-                    &blocked_intercepts,
+                    &[],
                     None,
                 );
             }
@@ -553,18 +548,19 @@ fn emit_staged_subresource_response_started(
         output.redirect_chain(),
     );
     for event_session_id in event_session_ids {
-        let blocked_intercepts = matching_subresource_network_intercepts(
-            conn,
-            owner,
-            FetchRequestStage::Response,
-            resource_type,
-            output.final_url(),
-        );
-        let fetch_request_id = (!blocked_intercepts.is_empty())
-            .then(|| {
-                conn.in_flight_subresource_fetch_request_id_for_owner(owner, output.handle().get())
-            })
-            .flatten();
+        let fetch_request_id = conn
+            .paused_subresource_fetch_response_request_id_for_owner(owner, output.handle().get());
+        let blocked_intercepts = if fetch_request_id.is_some() {
+            matching_subresource_network_intercepts(
+                conn,
+                owner,
+                FetchRequestStage::Response,
+                resource_type,
+                output.final_url(),
+            )
+        } else {
+            Vec::new()
+        };
         emit_response_received(
             out,
             event_session_id.as_deref(),
