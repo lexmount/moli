@@ -2097,6 +2097,7 @@ async fn substring_pattern_request_pause_continues_asynchronous_xhr_onto_the_net
 
 #[tokio::test]
 async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -2104,18 +2105,19 @@ async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
         )
     }
 
-    async fn api() -> impl IntoResponse {
-        ([(CONTENT_TYPE.as_str(), "text/plain")], "api-body")
-    }
-
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let api_requests = requests.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            Router::new()
-                .route("/page", get(page))
-                .route("/api", get(api)),
+            Router::new().route("/page", get(page)).route(
+                "/api",
+                get(move || {
+                    api_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { "api-body" }
+                }),
+            ),
         )
         .await
         .unwrap();
@@ -2180,6 +2182,26 @@ async fn wide_interception_keeps_offline_emulation_for_synchronous_xhr() {
         "a synchronous XHR under interception and offline emulation must not reach the network; sent={:?}",
         ctx.sent
     );
+
+    let request_id = ctx
+        .sent
+        .iter()
+        .find_map(|message| {
+            (message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"] == format!("http://{addr}/api"))
+            .then(|| message["params"]["requestId"].as_str().unwrap().to_owned())
+        })
+        .expect("offline XHR request id");
+    assert!(
+        ctx.sent.iter().any(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == request_id
+                && message["params"]["errorText"] == "Network emulation offline"
+        }),
+        "offline must be the failure reason: {:?}",
+        ctx.sent
+    );
+    assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
 
     server.abort();
 }
