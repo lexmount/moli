@@ -1386,6 +1386,29 @@ fetch('/api')
         "works-fetch-cookie"
     );
     assert_eq!(extra_info["params"]["headers"]["Cookie"], "sid=1");
+    // The cookie-bearing request reports its observed wire headers in one
+    // ExtraInfo, before its response.
+    let extra_info_headers = extra_info["params"]["headers"].as_object().unwrap();
+    assert!(
+        extra_info_headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("host")),
+        "{extra_info}"
+    );
+    let position = |method: &str| {
+        messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message["method"] == json!(method)
+                    && message["params"]["requestId"] == json!(fetch_request_id)
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>()
+    };
+    let extra_info_positions = position("Network.requestWillBeSentExtraInfo");
+    assert_eq!(extra_info_positions.len(), 1);
+    assert!(extra_info_positions[0] < position("Network.responseReceived")[0]);
 
     server.abort();
 }

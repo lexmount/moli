@@ -19,6 +19,7 @@ pub(crate) struct TargetNetworkOutputQueue {
     websocket_event_count: usize,
     next_delivery_order_index: usize,
     completed_subresource_handles: HashSet<SubresourceNetworkRequestHandle>,
+    subresource_request_extra_info_handles: HashSet<SubresourceNetworkRequestHandle>,
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
@@ -2926,6 +2927,7 @@ impl TargetNetworkOutputQueue {
             request_headers,
             request_cookie_report,
         );
+        self.subresource_request_extra_info_handles.insert(handle);
         self.delivery_outputs
             .push_subresource(TargetSubresourcePlanOutput::RequestExtraInfo(output));
         self.subresource_record_count = index + 1;
@@ -2942,17 +2944,26 @@ impl TargetNetworkOutputQueue {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
             return;
         };
-        if request.request_cookie_report().is_some() {
+        if self
+            .subresource_request_extra_info_handles
+            .contains(&handle)
+        {
             return;
         }
         let request_headers = network_request_headers
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
-        let Some(request_cookie_report) = request_cookie_report.cloned().or_else(|| {
-            network_request_headers
-                .is_some()
-                .then(StoredCookieQueryReport::default)
-        }) else {
+        // The staged request's cookie report is reported here, with the wire
+        // headers when known, as the request's single ExtraInfo.
+        let Some(request_cookie_report) = request_cookie_report
+            .or(request.request_cookie_report())
+            .cloned()
+            .or_else(|| {
+                network_request_headers
+                    .is_some()
+                    .then(StoredCookieQueryReport::default)
+            })
+        else {
             return;
         };
         self.append_subresource_request_extra_info(

@@ -124,6 +124,7 @@ fn emit_subresource_redirect_events(
                     !redirect.cookie_set_reports.is_empty(),
                     redirect.request_cookie_report.as_ref(),
                     &[],
+                    true,
                 );
             }
             emit_redirect_response_received_extra_info(
@@ -322,6 +323,7 @@ fn emit_complete_subresource_network_delivery_record(
                     .then(|| output.request_cookie_report())
                     .flatten(),
                 &[],
+                true,
             );
         }
     }
@@ -491,6 +493,7 @@ fn emit_staged_subresource_request_started(
                 false,
                 output.request_cookie_report(),
                 &[],
+                false,
             );
         }
     }
