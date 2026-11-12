@@ -31,8 +31,10 @@ fn normalize_url_pattern_for_wildcard(pattern: &str) -> Vec<u8> {
 ///
 /// This intentionally supports the small wildcard surface used by CDP Fetch
 /// and Network blocking patterns: `*` matches any sequence, `?` matches one
-/// byte, and `\` escapes the following byte.
+/// byte, and `\` escapes the following byte. Match the request URL without its
+/// fragment, retaining the path, query and any percent-encoded `#` characters.
 pub fn url_pattern_matches(pattern: &str, value: &str) -> bool {
+    let value = value.split_once('#').map_or(value, |(url, _)| url);
     let normalized = normalize_url_pattern_for_wildcard(pattern);
     Wildcard::new(&normalized).is_ok_and(|wildcard| wildcard.is_match(value.as_bytes()))
 }
@@ -78,6 +80,33 @@ mod tests {
         assert!(url_pattern_matches(
             r"https://example.com/path\",
             r"https://example.com/path\"
+        ));
+    }
+
+    #[test]
+    fn url_pattern_matching_ignores_fragments_but_preserves_path_and_query() {
+        for url in [
+            "https://example.com/blocked",
+            "https://example.com/blocked#",
+            "https://example.com/blocked#ignored",
+        ] {
+            assert!(url_pattern_matches("*/blocked", url), "{url}");
+        }
+        assert!(url_pattern_matches(
+            "*/blocked?token=expected",
+            "https://example.com/blocked?token=expected#ignored"
+        ));
+        assert!(!url_pattern_matches(
+            "*/blocked?token=other",
+            "https://example.com/blocked?token=expected#ignored"
+        ));
+        assert!(!url_pattern_matches(
+            "*/blocked",
+            "https://example.com/allowed#/blocked"
+        ));
+        assert!(url_pattern_matches(
+            "*/literal%23hash?token=%23",
+            "https://example.com/literal%23hash?token=%23#ignored"
         ));
     }
 }

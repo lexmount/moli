@@ -2368,7 +2368,7 @@ async fn synchronous_worker_xhr_uses_exact_interception_urls() {
         "params":{"awaitPromise":true,"expression":format!(r#"new Promise((resolve,reject)=>{{
             const worker=new Worker(URL.createObjectURL(new Blob([`
                 const results=[];
-                for(const path of ['/allowed','/blocked']) {{
+                for(const path of ['/allowed','/blocked','/blocked#ignored']) {{
                     try {{const xhr=new XMLHttpRequest();xhr.open('GET','http://{addr}'+path,false);xhr.send();results.push(xhr.status+':'+xhr.responseText);}}
                     catch(error){{results.push(error.name);}}
                 }}
@@ -2379,7 +2379,7 @@ async fn synchronous_worker_xhr_uses_exact_interception_urls() {
         }})"#)}})).await;
     let result = take_response_by_id(&mut ctx, 38802);
     assert_eq!(
-        result["result"]["result"]["value"], r#"["200:allowed","NetworkError"]"#,
+        result["result"]["result"]["value"], r#"["200:allowed","NetworkError","NetworkError"]"#,
         "{result}"
     );
     assert_eq!(allowed.load(Ordering::SeqCst), 1);
@@ -2416,6 +2416,16 @@ async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
                     }),
                 )
                 .route(
+                    "/redirect-fragment",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::FOUND,
+                            [("location", "/blocked#ignored")],
+                            "",
+                        )
+                    }),
+                )
+                .route(
                     "/blocked",
                     get(move || {
                         hits.fetch_add(1, Ordering::SeqCst);
@@ -2436,10 +2446,17 @@ async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
     ctx.expect_result(38810, json!({}), Some("SID-1"));
     enable_runtime_async(&mut ctx, "SID-1", 38811).await;
     ctx.process_async(json!({"id":38812,"method":"Runtime.evaluate","sessionId":"SID-1",
-        "params":{"expression":"(() => {try{const xhr=new XMLHttpRequest();xhr.open('GET','/redirect',false);xhr.send();return xhr.responseText;}catch(error){return error.name;}})()"}})).await;
+        "params":{"expression":r#"JSON.stringify(['/blocked#ignored','/redirect','/redirect-fragment'].map(path => {
+            try {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', path, false);
+                xhr.send();
+                return xhr.responseText;
+            } catch (error) { return error.name; }
+        }))"#}})).await;
     let result = take_response_by_id(&mut ctx, 38812);
     assert_eq!(
-        result["result"]["result"]["value"], "NetworkError",
+        result["result"]["result"]["value"], r#"["NetworkError","NetworkError","NetworkError"]"#,
         "{result}"
     );
     assert_eq!(
