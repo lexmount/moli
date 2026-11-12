@@ -4,6 +4,78 @@ use crate::runtime::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+async fn native_pdf_prints_dense_link_columns_without_losing_content_or_annotations() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/dense-links.html")?,
+        );
+        page_vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+            inner_width: 300,
+            inner_height: 300,
+            ..Default::default()
+        }))?;
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body { margin:0 }
+a { position:absolute; top:20px; width:0.0625px; height:10px }
+p { position:absolute; top:60px; margin:0 }
+</style>`;
+document.body.innerHTML = '<p>Dense link content</p>' +
+    Array.from({length:1600}, (_, i) =>
+        `<a href="https://example.org/dense" style="left:${i / 8}px"></a>`).join('');
+'installed'
+"#,
+        )?;
+        let reply = page_vm.print_to_pdf(RendererPrintToPdfRequest {
+            options: moli_paint::pdf::PdfOptions {
+                width: 300.0,
+                height: 300.0,
+                margin_left: 0.0,
+                margin_right: 0.0,
+                margin_top: 0.0,
+                margin_bottom: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        })?;
+        let RendererPrintToPdfReply::Printed(bytes) = reply else {
+            anyhow::bail!("dense link PDF failed: {reply:?}");
+        };
+        let document = lopdf::Document::load_mem(&bytes)?;
+        let mut links = 0;
+        for object in document.objects.values() {
+            let Ok(dict) = object.as_dict() else { continue };
+            if dict.get(b"Subtype").and_then(|o| o.as_name()).ok() != Some(b"Link") {
+                continue;
+            }
+            links += 1;
+            assert_eq!(
+                dict.get(b"A")?.as_dict()?.get(b"URI")?.as_str()?,
+                b"https://example.org/dense"
+            );
+        }
+        assert_eq!(links, 1_600);
+        let text = document
+            .extract_text(&[1])?
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Dense link content"), "{text:?}");
+        assert_eq!(
+            page_vm.vm_mut().eval("matchMedia('print').matches")?,
+            "false"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("dense link pages should retain their PDF content and annotations");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn native_pdf_resolves_links_base_urls_anchors_and_embedded_frames() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

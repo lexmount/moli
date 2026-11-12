@@ -122,10 +122,23 @@ pub(super) fn collect(snapshot: &PaintSnapshot) -> Result<Vec<LinkRegion>, PdfEr
         };
         scopes.push(Scope { clip, hidden });
     }
-    deduplicate(regions, &mut budget)
+    Ok(deduplicate(regions, &mut budget))
 }
 
-fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Result<Vec<LinkRegion>, PdfError> {
+fn target_key(target: &PaintLinkTarget) -> (&str, Option<(u32, u32)>) {
+    // Signed zero compares equal in PaintLinkTarget and must share a bucket.
+    let coordinate = |value: f32| if value == 0.0 { 0 } else { value.to_bits() };
+    (
+        target.url.as_ref(),
+        target
+            .destination
+            .map(|point| (coordinate(point.x), coordinate(point.y))),
+    )
+}
+
+fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Vec<LinkRegion> {
+    // Sweep each complete target separately so unrelated annotations cannot
+    // consume each other's active-candidate budget.
     // Paint phases can emit text children before their enclosing inline anchor.
     // A top-to-bottom sweep, with larger polygons first at the same top, visits
     // each container before its descendants regardless of their paint order.
@@ -135,34 +148,54 @@ fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Result<Vec<LinkR
         .iter()
         .enumerate()
         .map(|(index, region)| {
-            let (top, bottom) = region.polygon.iter().fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |(top, bottom), point| (top.min(point.y), bottom.max(point.y)),
-            );
-            (index, top, bottom, area(&region.polygon).abs())
+            let bounds = region
+                .polygon
+                .iter()
+                .map(|point| Rect::new(point.x, point.y, point.x, point.y))
+                .reduce(|bounds, point| bounds.union(point))
+                .unwrap_or(Rect::ZERO);
+            (index, bounds, area(&region.polygon).abs())
         })
         .collect::<Vec<_>>();
-    order.sort_by(|(_, a_top, _, a_area), (_, b_top, _, b_area)| {
-        a_top
-            .total_cmp(b_top)
+    order.sort_by(|(a, a_bounds, a_area), (b, b_bounds, b_area)| {
+        target_key(&regions[*a].target)
+            .cmp(&target_key(&regions[*b].target))
+            .then_with(|| a_bounds.y0.total_cmp(&b_bounds.y0))
             .then_with(|| b_area.total_cmp(a_area))
     });
-    let mut active: Vec<(usize, f64)> = Vec::new();
+    let mut active: Vec<(usize, Rect)> = Vec::new();
+    let mut target = None;
     let mut keep = vec![false; regions.len()];
-    for (index, top, bottom, _) in order {
-        spend(budget, active.len().saturating_add(1))?;
-        active.retain(|&(_, bottom)| bottom + 1e-6 >= top);
+    for (index, bounds, _) in order {
         let region = &regions[index];
+        if target != Some(&region.target) {
+            active.clear();
+            target = Some(&region.target);
+        }
+        // Account for both pruning and scanning the active target bucket.
+        // Deduplication is optional: an exhausted budget must not discard
+        // already-clipped regions or fail an otherwise printable document.
+        if spend(budget, active.len().saturating_mul(2).saturating_add(1)).is_err() {
+            return regions;
+        }
+        active.retain(|&(_, other)| other.y1 + 1e-6 >= bounds.y0);
         let mut duplicate = false;
-        for &(other, _) in &active {
-            let other = &regions[other];
-            if other.target != region.target {
+        for &(other, other_bounds) in &active {
+            if other_bounds.x0 > bounds.x0 + 1e-6
+                || other_bounds.x1 + 1e-6 < bounds.x1
+                || other_bounds.y1 + 1e-6 < bounds.y1
+            {
                 continue;
             }
-            spend(
+            let other = &regions[other];
+            if spend(
                 budget,
                 region.polygon.len().saturating_mul(other.polygon.len()),
-            )?;
+            )
+            .is_err()
+            {
+                return regions;
+            }
             if region.polygon.iter().all(|p| contains(&other.polygon, *p)) {
                 duplicate = true;
                 break;
@@ -170,14 +203,14 @@ fn deduplicate(regions: Vec<LinkRegion>, budget: &mut usize) -> Result<Vec<LinkR
         }
         if !duplicate {
             keep[index] = true;
-            active.push((index, bottom));
+            active.push((index, bounds));
         }
     }
-    Ok(regions
+    regions
         .into_iter()
         .zip(keep)
         .filter_map(|(region, keep)| keep.then_some(region))
-        .collect())
+        .collect()
 }
 
 pub(super) struct PageLinks<'a> {
@@ -394,4 +427,59 @@ fn curved_clip(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region() -> LinkRegion {
+        LinkRegion {
+            polygon: rectangle(Affine::IDENTITY, Rect::new(0.0, 0.0, 10.0, 10.0)),
+            target: PaintLinkTarget {
+                url: "https://example.com/link".into(),
+                destination: None,
+            },
+        }
+    }
+
+    #[test]
+    fn exhausted_deduplication_budget_preserves_all_collected_regions() {
+        // Include exhaustion during a containment check and after a duplicate
+        // has already been found, as well as before any work can start.
+        for mut budget in [0, 1, 5, 25] {
+            let regions = deduplicate(vec![region(), region(), region()], &mut budget);
+            assert_eq!(regions.len(), 3);
+        }
+    }
+
+    #[test]
+    fn target_buckets_preserve_destination_equality_and_distinct_destinations() {
+        let regions = [0.0, 1.0, -0.0]
+            .map(|x| {
+                let mut region = region();
+                region.target.destination = Some(moli_layout::PaintPoint::new(x, 0.0));
+                region
+            })
+            .into();
+        let regions = deduplicate(regions, &mut 1_000);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].target.destination.unwrap().x, 0.0);
+        assert_eq!(regions[1].target.destination.unwrap().x, 1.0);
+    }
+
+    #[test]
+    fn unrelated_targets_do_not_exhaust_the_deduplication_budget() {
+        let mut regions = (0..100)
+            .map(|index| {
+                let mut region = region();
+                region.target.url = format!("https://example.com/link/{index}").into();
+                region
+            })
+            .collect::<Vec<_>>();
+        let mut duplicate = region();
+        duplicate.target.url = regions[0].target.url.clone();
+        regions.push(duplicate);
+        assert_eq!(deduplicate(regions, &mut 1_000).len(), 100);
+    }
 }
