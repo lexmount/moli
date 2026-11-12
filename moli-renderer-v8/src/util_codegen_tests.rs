@@ -45,6 +45,7 @@ fn run(scope: &mut v8::PinScope<'_, '_>, source: &str, nonce: Option<&str>) -> S
         0,
         Some(&url),
         &metadata,
+        false,
     );
     let source = v8_string(scope, source).unwrap();
     let script = v8::Script::compile(scope, source, Some(&origin)).unwrap();

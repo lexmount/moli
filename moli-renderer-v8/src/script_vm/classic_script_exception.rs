@@ -31,6 +31,7 @@ impl ScriptVm {
         report: &V8ExceptionReport,
         muted_errors: bool,
     ) -> Result<()> {
+        let muted_errors = muted_errors || report.muted_errors;
         self.with_default_context_scope(|scope, host_ptr| {
             let error_value = if muted_errors {
                 None

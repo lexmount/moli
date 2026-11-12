@@ -229,6 +229,75 @@ async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details()
     );
 }
 
+#[tokio::test]
+async fn opaque_classic_script_functions_keep_muted_errors_in_later_window_callbacks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for muted in [false, true] {
+        let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+        vm.eval(
+            r#"
+            globalThis.__opaqueErrorReports = [];
+            onerror = (message, source, line, column, error) => {
+              __opaqueErrorReports.push({message, source, line, column,
+                errorIsNull: error === null, exactError: error === globalThis.__opaqueSecret});
+              return true;
+            };
+            "installed";
+            "#,
+        )
+        .expect("error observer");
+        let source = r#"
+            globalThis.__opaqueSecret = new Error('runtime secret');
+            globalThis.__throwOpaque = function throwOpaque() { throw __opaqueSecret; };
+        "#;
+        let mut script = ready_dynamic_runtime_script(40);
+        script.url = Url::parse("https://cdn.test/opaque-classic.js").unwrap();
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            muted,
+            None,
+        );
+        vm.execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("script defining the later callback");
+        vm.eval(
+            "addEventListener('opaque-probe', __throwOpaque); dispatchEvent(new Event('opaque-probe')); 'dispatched'",
+        )
+        .expect("listener exception must be reported without escaping dispatch");
+        vm.eval("setTimeout(__throwOpaque, 0); 'scheduled'")
+            .expect("timer callback");
+        assert!(
+            vm.run_next_due_timer_callback_for_test(&loader)
+                .await
+                .expect("timer exception must be reported")
+        );
+        let caller = ready_dynamic_runtime_script(41);
+        vm.execute_loaded_prepared_script_source(&caller, "__throwOpaque();", None)
+            .await
+            .expect("unmuted caller must preserve the throwing script's opaque origin");
+
+        let valid = if muted {
+            r#"__opaqueErrorReports.length === 3 && __opaqueErrorReports.every(report =>
+                report.message === 'Script error.' && report.source === '' &&
+                report.line === 0 && report.column === 0 && report.errorIsNull && !report.exactError)"#
+        } else {
+            r#"__opaqueErrorReports.length === 3 && __opaqueErrorReports.every(report =>
+                report.message.includes('runtime secret') &&
+                report.source === 'https://cdn.test/opaque-classic.js' &&
+                report.line > 0 && report.column > 0 && !report.errorIsNull && report.exactError)"#
+        };
+        assert_eq!(
+            vm.eval(valid).unwrap(),
+            "true",
+            "muted={muted}: {}",
+            vm.eval("JSON.stringify(__opaqueErrorReports)").unwrap()
+        );
+    }
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,

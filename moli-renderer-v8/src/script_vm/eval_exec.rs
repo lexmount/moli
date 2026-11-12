@@ -140,6 +140,8 @@ fn report_script_exception_to_current_window(
     scope: &mut v8::PinScope<'_, '_>,
     report: &V8ExceptionReport,
 ) {
+    let exposed = report.for_error_event();
+    let report = exposed.as_ref();
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -257,6 +259,7 @@ fn run_source_text_on_current_stack_with_completion(
             line_offset,
             Some(provenance.module_base_url()),
             &import_metadata,
+            script_fetch_metadata.is_some_and(|metadata| metadata.muted_errors),
         )
     });
     let script = v8::Script::compile(&scope, source, origin.as_ref()).ok_or_else(|| {

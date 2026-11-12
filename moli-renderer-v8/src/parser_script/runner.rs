@@ -634,6 +634,7 @@ where
             if !owner.is_current_parser_script_owner(script.context()) {
                 return None;
             }
+            let source_script = script.runner_script().cloned();
             let network_request_handle = source_result.network_request_handle();
             let network_record_urls = script
                 .runner_script()
@@ -648,6 +649,7 @@ where
                 network_result.as_ref(),
                 network_record_urls,
                 network_request_handle,
+                source_script,
             );
             owner.parser_script_source_result_action(action)
         })
@@ -669,6 +671,7 @@ where
                 if !owner.is_current_parser_script_owner(script.context()) {
                     return None;
                 }
+                let source_script = script.runner_script().cloned();
                 let network_request_handle = source_result.network_request_handle();
                 let network_record_urls = script
                     .runner_script()
@@ -684,6 +687,7 @@ where
                         network_result.as_ref(),
                         network_record_urls,
                         network_request_handle,
+                        source_script,
                     ),
                 )
             },
@@ -722,6 +726,7 @@ where
                 return Some(ParserClassicScriptSourceResultApplication::Waiting);
             };
             let source_result = source_identity.into_source_result(source_load_outcome);
+            let source_script = script.runner_script().cloned();
             let network_request_handle = source_result.network_request_handle();
             let (notification, network_result) =
                 script.notify_runner_source_result_with_network_result(source_result)?;
@@ -733,6 +738,7 @@ where
                 network_result.as_ref(),
                 network_record_urls,
                 network_request_handle,
+                source_script,
             );
             Some(ParserClassicScriptSourceResultApplication::Applied(
                 owner.parser_script_source_result_action(action),
