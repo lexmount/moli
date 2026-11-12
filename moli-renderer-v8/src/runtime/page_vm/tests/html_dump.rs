@@ -2,6 +2,36 @@ use super::*;
 use crate::runtime::page_surface::{RendererContentStripOptions, RendererHtmlSerializeOptions};
 
 #[tokio::test(flavor = "current_thread")]
+async fn html_dump_without_child_documents_preserves_shadows_and_output_limits() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.test/").unwrap(),
+        );
+        page.vm_mut().eval(r#"
+            document.body.innerHTML = '<p title="&amp;&quot;">BEFORE &amp; text</p><div id=host></div><p>AFTER</p>';
+            document.getElementById('host').attachShadow({mode:'closed'}).innerHTML = '<b>SHADOW</b>';
+        "#).unwrap();
+        let expected = page.serialize_html(Default::default()).unwrap();
+        assert!(expected.contains("BEFORE &amp; text") && expected.contains("SHADOW"));
+        assert!(expected.contains("title=\"&amp;&quot;\""));
+        let options = RendererHtmlSerializeOptions {
+            with_frames: true,
+            max_output_bytes: Some(expected.len()),
+            ..Default::default()
+        };
+        assert_eq!(page.serialize_html(options).unwrap(), expected);
+        assert!(page.serialize_html(RendererHtmlSerializeOptions {
+            max_output_bytes: Some(expected.len() - 1),
+            ..options
+        }).is_err());
+        assert_eq!(page.serialize_html(options).unwrap(), expected);
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn html_dump_reads_live_frames_and_keeps_dom_indices_and_observers_unchanged() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

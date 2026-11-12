@@ -43,7 +43,8 @@ impl PageScriptHost {
             document,
             &scripting,
             policy,
-            with_frames.then_some(self as &dyn HtmlEmbeddedDocumentProvider),
+            (with_frames && !self.child_browsing_context_document_handles.is_empty())
+                .then_some(self as &dyn HtmlEmbeddedDocumentProvider),
             max_bytes,
         )
     }

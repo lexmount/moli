@@ -101,6 +101,7 @@ impl HtmlSerializationSink for String {
     }
 }
 
+#[inline]
 fn escape_html_text<S>(value: &str, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
@@ -119,6 +120,7 @@ where
     }
 }
 
+#[inline]
 fn escape_html_attribute<S>(value: &str, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
@@ -138,15 +140,17 @@ where
     }
 }
 
-fn serialize_cdata_section<S>(value: &str, out: &mut S, raw_text_parent: bool, html_document: bool)
-where
-    S: HtmlSerializationSink + ?Sized,
-{
+fn serialize_cdata_section<S: HtmlSerializationSink, const EMBEDDED: bool>(
+    value: &str,
+    out: &mut HtmlEscapingWriter<'_, S, EMBEDDED>,
+    raw_text_parent: bool,
+    html_document: bool,
+) {
     if html_document {
         if raw_text_parent {
             out.push_str(value);
         } else {
-            escape_html_text(value, out);
+            out.text(value);
         }
     } else {
         out.push_str("<![CDATA[");
@@ -184,6 +188,38 @@ fn is_void_html_element(namespace: &str, local_name: &str) -> bool {
 struct HtmlEscapingWriter<'a, S, const EMBEDDED: bool> {
     sink: &'a mut S,
     attribute_depth: usize,
+}
+
+impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, EMBEDDED> {
+    // Choose once per value. Ordinary text must not pay a frame-depth branch
+    // for every character just because another node embeds a Document.
+    #[inline]
+    fn text(&mut self, value: &str) {
+        if EMBEDDED && let [byte] = value.as_bytes() {
+            match byte {
+                b'&' => self.push_str("&amp;"),
+                b'<' => self.push_str("&lt;"),
+                b'>' => self.push_str("&gt;"),
+                b'"' => self.push('"'),
+                _ => self.sink.push(char::from(*byte)),
+            }
+            return;
+        }
+        if EMBEDDED && self.attribute_depth == 0 {
+            escape_html_text(value, self.sink);
+        } else {
+            escape_html_text(value, self);
+        }
+    }
+
+    #[inline]
+    fn attribute(&mut self, value: &str) {
+        if EMBEDDED && self.attribute_depth == 0 {
+            escape_html_attribute(value, self.sink);
+        } else {
+            escape_html_attribute(value, self);
+        }
+    }
 }
 
 impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
@@ -378,7 +414,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                         .any(|a| a.namespace().is_empty() && a.local_name() == "is")
                 {
                     self.out.push_str(" is=\"");
-                    escape_html_attribute(name, &mut self.out);
+                    self.out.attribute(name);
                     self.out.push('"');
                 }
                 // Filtering happens before lookup; excluded ancestors never
@@ -435,7 +471,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 ) {
                     self.out.push_str(text.data());
                 } else {
-                    escape_html_text(text.data(), &mut self.out);
+                    self.out.text(text.data());
                 }
             }
             NodeData::CDataSection(cdata) => serialize_cdata_section(
@@ -532,7 +568,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             if attribute.name_matches("data-moli-frame-url") {
                 state.wrote_url = true;
                 self.out.push_str(" data-moli-frame-url=\"");
-                escape_html_attribute(&state.embedded.url, &mut self.out);
+                self.out.attribute(&state.embedded.url);
                 self.out.push('"');
             } else if self
                 .options
@@ -549,7 +585,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
         }
         if !state.wrote_url {
             self.out.push_str(" data-moli-frame-url=\"");
-            escape_html_attribute(&state.embedded.url, &mut self.out);
+            self.out.attribute(&state.embedded.url);
             self.out.push('"');
         }
         self.end_open_element(state.owner);
@@ -590,11 +626,15 @@ fn replacement_attribute<'a>(
         .find(|a| attribute_key_eq(a, attribute))
         .unwrap_or(attribute)
 }
-fn serialize_attribute<S: HtmlSerializationSink>(attribute: &super::super::Attribute, out: &mut S) {
+#[inline(always)]
+fn serialize_attribute<S: HtmlSerializationSink, const EMBEDDED: bool>(
+    attribute: &super::super::Attribute,
+    out: &mut HtmlEscapingWriter<'_, S, EMBEDDED>,
+) {
     out.push(' ');
     attribute.push_html_serialized_name(|part| out.push_str(part));
     out.push_str("=\"");
-    escape_html_attribute(attribute.value(), out);
+    out.attribute(attribute.value());
     out.push('"');
 }
 
@@ -839,6 +879,70 @@ pub(super) fn serialize_html_with_limit(
 #[cfg(test)]
 mod escaping_tests {
     use super::*;
+
+    #[test]
+    fn single_byte_text_keeps_text_and_nested_attribute_escaping() {
+        for byte in 0..=127 {
+            let value = char::from(byte).to_string();
+            let mut expected = String::new();
+            escape_html_text(&value, &mut expected);
+            for depth in 0..8 {
+                let mut output = String::new();
+                HtmlEscapingWriter::<_, true> {
+                    sink: &mut output,
+                    attribute_depth: depth,
+                }
+                .text(&value);
+                assert_eq!(output, expected, "byte={byte}, depth={depth}");
+                let mut next = String::new();
+                escape_html_attribute(&expected, &mut next);
+                expected = next;
+            }
+        }
+    }
+
+    #[test]
+    fn value_escaping_preserves_rules_and_limits_at_each_embedding_depth() {
+        let value = "prefix<&>\"\u{a0}雪🙂tail";
+        let mut expected_text = "prefix&lt;&amp;&gt;\"&nbsp;雪🙂tail".to_owned();
+        let mut expected_attribute = "prefix&lt;&amp;&gt;&quot;&nbsp;雪🙂tail".to_owned();
+        for depth in 0..8 {
+            let expected = format!("{expected_text}{expected_attribute}");
+            let mut output = String::new();
+            let mut writer = HtmlEscapingWriter::<_, true> {
+                sink: &mut output,
+                attribute_depth: depth,
+            };
+            writer.text(value);
+            writer.attribute(value);
+            assert_eq!(output, expected, "depth={depth}");
+            for limit in [0, expected.len() - 1, expected.len()] {
+                let mut output = BoundedHtmlSerialization::new(limit);
+                let mut writer = HtmlEscapingWriter::<_, true> {
+                    sink: &mut output,
+                    attribute_depth: depth,
+                };
+                writer.text(value);
+                writer.attribute(value);
+                if limit < expected.len() {
+                    assert_eq!(
+                        output.finish(),
+                        Err(HtmlSerializationLimitExceeded { max_bytes: limit })
+                    );
+                } else {
+                    assert_eq!(output.finish().unwrap(), expected);
+                }
+            }
+            for value in [&mut expected_text, &mut expected_attribute] {
+                *value = value
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('"', "&quot;")
+                    .replace('\u{a0}', "&nbsp;");
+            }
+        }
+    }
 
     #[test]
     fn fixed_depth_writer_matches_repeated_attribute_escaping_for_unicode_and_token_splits() {
