@@ -880,6 +880,7 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
                 handle,
                 &scripting_enabled_for_node,
                 crate::dom::native::ShadowRootInclusion::None,
+                crate::dom::native::ShadowRootMarkupProfile::WebApi,
                 None,
             )
             .unwrap_or_default()

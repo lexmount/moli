@@ -1441,7 +1441,7 @@ impl ScriptVm {
     ) -> Option<String> {
         let host = self._context_host.borrow();
         let shadow_root_inclusion = if include_shadow_dom {
-            ShadowRootInclusion::AllAuthorForInspector
+            ShadowRootInclusion::AllAuthor
         } else {
             ShadowRootInclusion::None
         };
@@ -1454,6 +1454,7 @@ impl ScriptVm {
             handle,
             &scripting_enabled_for_node,
             shadow_root_inclusion,
+            crate::dom::native::ShadowRootMarkupProfile::Inspector,
             Some(&should_serialize_registry_attribute),
         )
     }

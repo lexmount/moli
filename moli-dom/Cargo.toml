@@ -4,6 +4,9 @@ name = "moli-dom"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+test-support = []
+
 [dependencies]
 html5ever = "0.40"
 indexmap = "2.14.2"

@@ -56,6 +56,8 @@ impl NativeDom {
     }
 
     pub fn set_attribute(&mut self, node_id: NativeNodeId, name: &str, value: &str) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        super::serialization_probe::record(super::serialization_probe::Access::Mutation);
         let Some(normalized_name) = self.normalized_attribute_name(node_id, name) else {
             return false;
         };
@@ -85,6 +87,8 @@ impl NativeDom {
         local_name: &str,
         value: &str,
     ) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        super::serialization_probe::record(super::serialization_probe::Access::Mutation);
         let namespace = namespace.unwrap_or_default();
         let base_document =
             self.base_element_attribute_owner_document(node_id, Some(namespace), local_name);
@@ -109,6 +113,8 @@ impl NativeDom {
     }
 
     pub fn remove_attribute(&mut self, node_id: NativeNodeId, name: &str) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        super::serialization_probe::record(super::serialization_probe::Access::Mutation);
         let Some(normalized_name) = self.normalized_attribute_name(node_id, name) else {
             return false;
         };
@@ -130,6 +136,8 @@ impl NativeDom {
         namespace: Option<&str>,
         local_name: &str,
     ) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        super::serialization_probe::record(super::serialization_probe::Access::Mutation);
         let namespace = namespace.unwrap_or_default();
         let base_document =
             self.base_element_attribute_owner_document(node_id, Some(namespace), local_name);
