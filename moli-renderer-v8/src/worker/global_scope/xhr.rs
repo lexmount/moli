@@ -4,7 +4,6 @@ use crate::network_host::{
 };
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
@@ -611,28 +610,20 @@ fn send_synchronous_worker_xhr(
         .as_ref()
         .map(|timeout| after(timeout.wait_delay))
         .unwrap_or_else(never);
-    let spawn_result = thread::Builder::new()
-        .name("lm-worker-sync-xhr-fetch".to_owned())
-        .spawn(move || {
-            let result = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to build worker sync XHR fetch runtime: {error}"))
-                .and_then(|runtime| {
-                    runtime.block_on(fetch_browser_subresource_with_preflight_headers(
-                        loader.request_client().clone(),
-                        request,
-                        Some(worker_cancel_handle),
-                        preflight_headers,
-                    ))
-                });
-            let _ = response_tx.send(result);
-        });
+    load.task_runner().spawn(async move {
+        let result = fetch_browser_subresource_with_preflight_headers(
+            loader.request_client().clone(),
+            request,
+            Some(worker_cancel_handle),
+            preflight_headers,
+        )
+        .await;
+        let _ = response_tx.send(result);
+    });
 
-    let result = match spawn_result {
-        Ok(_) => select! {
+    let result = select! {
             recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("worker sync XHR fetch thread dropped response channel".to_owned())
+                Err("worker sync XHR resource task dropped response channel".to_owned())
             }),
             recv(timeout_rx) -> _ => {
                 let timeout = xhr_timeout.as_ref().expect("never channel should not fire without xhr timeout");
@@ -658,10 +649,6 @@ fn send_synchronous_worker_xhr(
                 );
                 return;
             }
-        },
-        Err(error) => Err(format!(
-            "failed to spawn worker sync XHR fetch thread: {error}"
-        )),
     };
 
     match result {
