@@ -817,6 +817,7 @@ mod inspector;
 mod native_drag_data;
 mod promise_rejection_task;
 mod script_preparation_error;
+mod service_worker_query;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod canvas_blob_serialization;
 mod device_sensor;

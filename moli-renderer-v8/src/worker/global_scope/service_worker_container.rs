@@ -270,11 +270,12 @@ pub(crate) fn try_worker_service_worker_get_registration<'s>(
             Some(snapshot)
         })
     };
-    let value = snapshot
-        .and_then(|snapshot| build_worker_service_worker_registration(scope, &snapshot).ok())
-        .map(Into::into)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.resolve(scope, value);
+    queue_worker_service_worker_query(
+        scope,
+        &state,
+        resolver,
+        crate::types::ServiceWorkerRegistrationQueryResult::One(snapshot.map(Box::new)),
+    );
     true
 }
 
@@ -305,15 +306,69 @@ pub(crate) fn try_worker_service_worker_get_registrations<'s>(
             })
             .unwrap_or_default()
     };
-    let result = v8::Array::new(scope, snapshots.len() as i32);
-    for (index, snapshot) in snapshots.iter().enumerate() {
-        if let Ok(object) = build_worker_service_worker_registration(scope, snapshot) {
-            let _ = result.set_index(scope, index as u32, object.into());
-        }
-    }
-    let _ = result.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-    let _ = resolver.resolve(scope, result.into());
+    queue_worker_service_worker_query(
+        scope,
+        &state,
+        resolver,
+        crate::types::ServiceWorkerRegistrationQueryResult::All(snapshots),
+    );
     true
+}
+
+fn queue_worker_service_worker_query(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    resolver: v8::Local<'_, v8::PromiseResolver>,
+    result: crate::types::ServiceWorkerRegistrationQueryResult,
+) {
+    let mut state = state.borrow_mut();
+    let request_id =
+        state.register_pending_service_worker_registration_query(v8::Global::new(scope, resolver));
+    if state
+        .worker_wake_tx
+        .send(WorkerMessage::ServiceWorkerRegistrationQueryResult {
+            request_id,
+            result: Box::new(result),
+        })
+        .is_err()
+    {
+        state
+            .pending_service_worker_registration_queries
+            .remove(&request_id);
+    }
+}
+
+pub(in crate::worker) fn drain_service_worker_registration_query_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    result: crate::types::ServiceWorkerRegistrationQueryResult,
+) {
+    let Some(pending) = state
+        .borrow_mut()
+        .pending_service_worker_registration_queries
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &pending);
+    let value = match result {
+        crate::types::ServiceWorkerRegistrationQueryResult::One(snapshot) => snapshot
+            .and_then(|snapshot| build_worker_service_worker_registration(scope, &snapshot).ok())
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        crate::types::ServiceWorkerRegistrationQueryResult::All(snapshots) => {
+            let array = v8::Array::new(scope, snapshots.len() as i32);
+            for (index, snapshot) in snapshots.iter().enumerate() {
+                if let Ok(object) = build_worker_service_worker_registration(scope, snapshot) {
+                    let _ = array.set_index(scope, index as u32, object.into());
+                }
+            }
+            let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+            array.into()
+        }
+    };
+    let _ = resolver.resolve(scope, value);
 }
 
 pub(super) fn build_worker_service_worker_registration<'s>(

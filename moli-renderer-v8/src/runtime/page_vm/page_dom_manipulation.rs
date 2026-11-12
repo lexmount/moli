@@ -39,6 +39,11 @@ impl PageVm {
                 .map(|outcome| {
                     outcome.map_action(PageDomManipulationTurnAction::FileEntryFileCallback)
                 }),
+            RendererPageDomManipulationTask::ServiceWorkerQuery(task) => self
+                .apply_selected_page_service_worker_query_turn(task)
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::ServiceWorkerQuery)
+                }),
             RendererPageDomManipulationTask::ScriptPreparationError(task) => self
                 .apply_selected_page_script_preparation_error_turn(task)
                 .map(|outcome| {

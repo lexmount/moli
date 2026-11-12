@@ -127,6 +127,7 @@ mod resource_timing;
 mod service_worker_api;
 mod service_worker_container;
 pub(crate) use service_worker_api::worker_service_worker_object;
+pub(in crate::worker) use service_worker_container::drain_service_worker_registration_query_result;
 use service_worker_container::{
     WorkerServiceWorkerRegistration, build_worker_service_worker_registration,
     worker_service_worker_registration_unregister,

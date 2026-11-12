@@ -194,6 +194,7 @@ mod script_preparation_error;
 mod service_worker;
 mod service_worker_client_message;
 mod service_worker_internal;
+mod service_worker_query;
 mod shared_worker_client_event;
 mod storage_event_delivery;
 mod streams_from;

@@ -2393,3 +2393,120 @@ async fn navigator_service_worker_update_in_worker_preserves_events_and_install_
     .await;
     server.await.expect("worker update server");
 }
+
+#[tokio::test]
+async fn service_worker_registration_queries_settle_in_tasks_and_freeze_lists() {
+    let (base_url, server) = spawn_service_worker_script_server(vec!["/app/empty.js"]).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__queryTaskDone = false;
+        globalThis.__queryTaskChecks = [];
+        async function observeQuery(call, inspect) {
+            let marker = false;
+            const observed = call().then(value => [marker, inspect(value)].join(':'),
+                error => [marker, error.name].join(':'));
+            queueMicrotask(() => { marker = true; });
+            return observed;
+        }
+        (async () => {
+            const sw = navigator.serviceWorker;
+            __queryTaskChecks.push(...await Promise.all([
+                observeQuery(() => sw.getRegistration(), value => value === undefined),
+                observeQuery(() => sw.getRegistrations(), value => Array.isArray(value) && Object.isFrozen(value) && value.length === 0),
+                observeQuery(() => sw.getRegistration('http://['), () => 'unexpected'),
+                observeQuery(() => sw.getRegistration('https://different-origin.test/'), () => 'unexpected')
+            ]));
+            const registration = await sw.register('empty.js');
+            const worker = registration.installing || registration.waiting || registration.active;
+            if (worker.state !== 'activated') await new Promise(resolve => worker.addEventListener('statechange', () => {
+                if (worker.state === 'activated') resolve();
+            }));
+            __queryTaskChecks.push(...await Promise.all([
+                observeQuery(() => sw.getRegistration('page.html#fragment'), value => value === registration),
+                observeQuery(() => sw.getRegistrations(), value => Object.isFrozen(value) && value.length === 1 && value[0] === registration),
+                observeQuery(() => sw.getRegistration('/unregistered/'), value => value === undefined)
+            ]));
+            const first = await sw.getRegistrations(), second = await sw.getRegistrations();
+            __queryTaskChecks.push(first !== second && Object.getPrototypeOf(first) === Array.prototype);
+        })().catch(error => { __queryTaskChecks.push('error:' + error.name + ':' + error.message); })
+          .finally(() => { __queryTaskDone = true; });
+    "#).unwrap();
+    assert_eq!(vm.eval("String(__queryTaskChecks.length)").unwrap(), "0");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__queryTaskDone)",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__queryTaskChecks.join('|')").unwrap(),
+        "true:true|true:true|false:TypeError|false:SecurityError|true:true|true:true|true:true|true"
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn worker_service_worker_registration_queries_settle_during_module_top_level_await() {
+    const CLASSIC: &str = concat!(
+        include_str!("service_worker_registration_query_worker.js"),
+        "\nrun().then(value => postMessage(value), error => postMessage('error:' + error));"
+    );
+    const MODULE: &str = concat!(
+        include_str!("service_worker_registration_query_worker.js"),
+        "\npostMessage(await run());"
+    );
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/empty.js",
+            "text/javascript",
+            "// empty service worker",
+        ),
+        ("/app/query-classic.js", "text/javascript", CLASSIC),
+        ("/app/query-module.js", "text/javascript", MODULE),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/page.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__workerQueryTaskDone = false;
+        globalThis.__workerQueryTaskResults = [];
+        (async () => {
+            const reg = await navigator.serviceWorker.register('empty.js');
+            const sw = reg.installing || reg.waiting || reg.active;
+            if (sw.state !== 'activated') await new Promise(resolve => sw.addEventListener('statechange', () => {
+                if (sw.state === 'activated') resolve();
+            }));
+            for (const type of ['classic', 'module']) {
+                __workerQueryTaskResults.push(await new Promise((resolve, reject) => {
+                    const worker = new Worker('query-' + type + '.js', {type});
+                    worker.onmessage = event => { resolve(event.data); worker.terminate(); };
+                    worker.onerror = event => reject(new Error(event.message));
+                }));
+            }
+        })().catch(error => { __workerQueryTaskResults.push('error:' + error.name + ':' + error.message); })
+          .finally(() => { __workerQueryTaskDone = true; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(__workerQueryTaskDone)",
+        "true",
+    )
+    .await;
+    let expected = "true:true|true:true|true:true|false:TypeError|false:SecurityError|true";
+    assert_eq!(
+        vm.eval("__workerQueryTaskResults.join(';')").unwrap(),
+        format!("{expected};{expected}")
+    );
+    server.await.unwrap();
+}

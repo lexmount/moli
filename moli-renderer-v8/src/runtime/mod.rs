@@ -153,6 +153,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use self::page_vm::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerInternalTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerQuery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageSharedWorkerClientEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageStorageEventDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageTextTrackDefaultMode;

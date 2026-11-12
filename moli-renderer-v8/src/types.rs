@@ -1162,6 +1162,13 @@ pub(super) struct ServiceWorkerRegisterCompletion {
     >,
 }
 
+/// Registration identities captured by a ServiceWorkerContainer lookup.
+#[derive(Debug)]
+pub(crate) enum ServiceWorkerRegistrationQueryResult {
+    One(Option<Box<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot>>),
+    All(Vec<crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot>),
+}
+
 #[derive(Debug)]
 pub(super) struct ServiceWorkerReadyCompletion {
     pub(super) request_id: u64,

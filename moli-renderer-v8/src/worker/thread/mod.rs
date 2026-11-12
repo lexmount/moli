@@ -2072,6 +2072,7 @@ async fn worker_main(
         pending_service_worker_clients_open_windows: std::collections::HashMap::new(),
         pending_service_worker_show_notifications: std::collections::HashMap::new(),
         pending_service_worker_updates: std::collections::HashMap::new(),
+        pending_service_worker_registration_queries: std::collections::HashMap::new(),
         pending_service_worker_unregistrations: std::collections::HashMap::new(),
         service_worker_update_request_ids: Default::default(),
         pending_service_worker_get_notifications: std::collections::HashMap::new(),
@@ -2952,6 +2953,21 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_service_worker_update_result(scope, &state, request_id, *result);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::ServiceWorkerRegistrationQueryResult { request_id, result },
+            )) => {
+                // Internal Promise completions must also run while a module's
+                // top-level await is pending; deferring them would deadlock it.
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                super::global_scope::drain_service_worker_registration_query_result(
+                    scope, &state, request_id, *result,
+                );
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

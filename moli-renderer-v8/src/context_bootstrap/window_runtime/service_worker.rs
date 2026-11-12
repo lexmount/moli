@@ -1135,20 +1135,13 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
                 return;
             }
         };
-    let value: v8::Local<'_, v8::Value> = host
-        .service_worker_registration_for_client(&request_context, &client_url)
-        .map(|state| {
-            build_service_worker_registration_object_for_container(
-                scope,
-                args.this(),
-                state.scope_url().as_str(),
-                service_worker_registration_snapshot_script_url(&state),
-                ServiceWorkerRegistrationPhase::Snapshot(&state),
-            )
-            .into()
-        })
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    let _ = resolver.resolve(scope, value);
+    let result = host.service_worker_registration_for_client(&request_context, &client_url);
+    host.queue_service_worker_query_task(
+        scope,
+        resolver,
+        args.this(),
+        crate::types::ServiceWorkerRegistrationQueryResult::One(result.map(Box::new)),
+    );
     rv.set(promise.into());
 }
 
@@ -1172,20 +1165,52 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_c
             Some(host.service_worker_registrations(&request_context))
         })
         .unwrap_or_default();
-    let registrations = v8::Array::new(scope, states.len() as i32);
-    for (index, state) in states.into_iter().enumerate() {
-        let registration = build_service_worker_registration_object_for_container(
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.queue_service_worker_query_task(
             scope,
+            resolver,
             args.this(),
-            state.scope_url().as_str(),
-            service_worker_registration_snapshot_script_url(&state),
-            ServiceWorkerRegistrationPhase::Snapshot(&state),
+            crate::types::ServiceWorkerRegistrationQueryResult::All(states),
         );
-        let value: v8::Local<'_, v8::Value> = registration.into();
-        let _ = registrations.set_index(scope, index as u32, value);
     }
-    let _ = resolver.resolve(scope, registrations.into());
     rv.set(resolver.get_promise(scope).into());
+}
+
+/// Build query results only after the owning DOM-manipulation task is selected.
+pub(crate) fn settle_service_worker_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resolver: v8::Local<'s, v8::PromiseResolver>,
+    container: v8::Local<'s, v8::Object>,
+    result: crate::types::ServiceWorkerRegistrationQueryResult,
+) {
+    fn registration<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        container: v8::Local<'s, v8::Object>,
+        snapshot: &crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
+    ) -> v8::Local<'s, v8::Object> {
+        build_service_worker_registration_object_for_container(
+            scope,
+            container,
+            snapshot.scope_url().as_str(),
+            service_worker_registration_snapshot_script_url(snapshot),
+            ServiceWorkerRegistrationPhase::Snapshot(snapshot),
+        )
+    }
+    let value = match result {
+        crate::types::ServiceWorkerRegistrationQueryResult::One(snapshot) => snapshot
+            .map(|snapshot| registration(scope, container, &snapshot).into())
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        crate::types::ServiceWorkerRegistrationQueryResult::All(snapshots) => {
+            let array = v8::Array::new(scope, snapshots.len() as i32);
+            for (index, snapshot) in snapshots.iter().enumerate() {
+                let value = registration(scope, container, snapshot).into();
+                let _ = array.set_index(scope, index as u32, value);
+            }
+            let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+            array.into()
+        }
+    };
+    let _ = resolver.resolve(scope, value);
 }
 
 pub(in crate::context_bootstrap) fn navigator_service_worker_controller_getter_callback<'s>(

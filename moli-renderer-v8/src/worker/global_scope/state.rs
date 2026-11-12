@@ -214,6 +214,8 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `clients.openWindow()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_clients_open_windows:
         HashMap<u64, PendingServiceWorkerClientsOpenWindow>,
+    pub(in crate::worker) pending_service_worker_registration_queries:
+        HashMap<u64, v8::Global<v8::PromiseResolver>>,
     pub(in crate::worker) pending_service_worker_unregistrations:
         HashMap<u64, v8::Global<v8::PromiseResolver>>,
     /// In-flight Service Worker register/update requests keyed by request id.

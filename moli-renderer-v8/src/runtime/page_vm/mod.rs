@@ -113,6 +113,7 @@ mod page_main_document_runtime;
 mod page_main_native_module_task;
 mod page_main_parser_continuation;
 mod page_media_element_event;
+mod page_service_worker_query;
 mod page_webtransport;
 pub(crate) use page_webtransport::AuthorizedCurrentPageWebTransport;
 mod page_webrtc;
@@ -264,6 +265,7 @@ pub(crate) use page_resource_completion::{
 pub(crate) use page_script_preparation_error::AuthorizedCurrentPageScriptPreparationError;
 pub(crate) use page_service_worker_client_message::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use page_service_worker_internal::AuthorizedCurrentPageServiceWorkerInternalTask;
+pub(crate) use page_service_worker_query::AuthorizedCurrentPageServiceWorkerQuery;
 pub(crate) use page_shared_worker_client_event::AuthorizedCurrentPageSharedWorkerClientEvent;
 pub(crate) use page_storage_event_delivery::AuthorizedCurrentPageStorageEventDelivery;
 pub(crate) use page_text_track_default_mode::AuthorizedCurrentPageTextTrackDefaultMode;

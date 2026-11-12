@@ -19,6 +19,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     HashChange,
     ElementToggle,
     FileEntryFileCallback,
+    ServiceWorkerQuery,
     ScriptPreparationError,
     PromiseRejection,
     MainDocumentLifecycle,
@@ -53,6 +54,9 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::FileEntryFileCallback,
                 RendererPageDomManipulationOwner::FileEntryFileCallback(_)
+            ) | (
+                Self::ServiceWorkerQuery,
+                RendererPageDomManipulationOwner::ServiceWorkerQuery(_)
             ) | (
                 Self::ScriptPreparationError,
                 RendererPageDomManipulationOwner::ScriptPreparationError(_)

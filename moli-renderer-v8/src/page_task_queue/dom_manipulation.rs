@@ -51,6 +51,10 @@ use super::{
         RendererPageScriptPreparationErrorOwner, RendererPageScriptPreparationErrorSender,
         RendererPageScriptPreparationErrorTask,
     },
+    service_worker_query::{
+        RendererPageServiceWorkerQueryOwner, RendererPageServiceWorkerQuerySender,
+        RendererPageServiceWorkerQueryTask,
+    },
     storage_event_delivery::{
         RendererPageStorageEventDeliveryOwner, RendererPageStorageEventDeliverySender,
         RendererPageStorageEventDeliveryTask,
@@ -106,6 +110,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     HashChange(RendererPageHashChangeDeliveryOwner),
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
+    ServiceWorkerQuery(RendererPageServiceWorkerQueryOwner),
     ScriptPreparationError(RendererPageScriptPreparationErrorOwner),
     PromiseRejection(RendererPagePromiseRejectionOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
@@ -129,6 +134,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     HashChange(RendererPageHashChangeDeliveryTask),
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
+    ServiceWorkerQuery(RendererPageServiceWorkerQueryTask),
     ScriptPreparationError(RendererPageScriptPreparationErrorTask),
     PromiseRejection(RendererPagePromiseRejectionTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
@@ -159,6 +165,9 @@ impl RendererPageDomManipulationTask {
             }
             Self::FileEntryFileCallback(task) => {
                 RendererPageDomManipulationOwner::FileEntryFileCallback(task.owner())
+            }
+            Self::ServiceWorkerQuery(task) => {
+                RendererPageDomManipulationOwner::ServiceWorkerQuery(task.owner())
             }
             Self::ScriptPreparationError(task) => {
                 RendererPageDomManipulationOwner::ScriptPreparationError(task.owner())
@@ -221,6 +230,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     HashChange(super::PageHashChangeDeliveryTurnAction),
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
+    ServiceWorkerQuery(super::PageServiceWorkerQueryTurnAction),
     ScriptPreparationError(super::PageScriptPreparationErrorTurnAction),
     PromiseRejection(super::PagePromiseRejectionTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
@@ -279,6 +289,9 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn file_entry_file_callback(&self) -> RendererPageFileEntryFileCallbackSender {
         RendererPageFileEntryFileCallbackSender::new(self.route.clone(), self.root_document)
+    }
+    pub(crate) fn service_worker_query(&self) -> RendererPageServiceWorkerQuerySender {
+        RendererPageServiceWorkerQuerySender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn script_preparation_error(&self) -> RendererPageScriptPreparationErrorSender {
