@@ -5056,6 +5056,8 @@ fn lightweight_popup_document_open_callback<'s>(
             document_handle,
             "",
         );
+        unsafe { &*host_ptr }
+            .reset_meta_content_security_policy_processing_for_document(document_handle);
         set_lightweight_popup_document_write_session(scope, document, true);
     }
     rv.set(document.into());
@@ -5102,6 +5104,8 @@ fn lightweight_popup_document_write_or_writeln_callback<'s>(
             document_handle,
             "",
         );
+        unsafe { &*host_ptr }
+            .reset_meta_content_security_policy_processing_for_document(document_handle);
         set_lightweight_popup_document_write_session(scope, document, true);
     }
     let mut html = String::new();

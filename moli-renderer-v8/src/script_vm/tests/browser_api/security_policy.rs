@@ -1,6 +1,114 @@
 use super::*;
 
 #[test]
+fn document_open_keeps_policy_and_processes_meta_in_the_new_stream() {
+    for owner in ["window", "frame.contentWindow"] {
+        let mut vm = new_storage_test_vm("https://document-open-policy.test/");
+        vm.document_runtime
+            .dom_host_mut()
+            .reset_html_document_shell();
+        assert_eq!(
+            vm.eval(&format!(
+                r#"(() => {{
+                    const frame = document.createElement('iframe');
+                    document.body.appendChild(frame);
+                    const popup = open();
+                    const owner = {owner};
+                    const doc = owner.document;
+                    const RealmEvalError = owner.eval('EvalError');
+                    const meta = doc.createElement('meta');
+                    meta.setAttribute('http-equiv', 'Content-Security-Policy');
+                    meta.setAttribute('content', "script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+                    doc.head.appendChild(meta);
+                    const evaluate = () => {{
+                        try {{ return owner.eval('40 + 2'); }}
+                        catch (error) {{ return error.name + ':' + (error instanceof RealmEvalError); }}
+                    }};
+                    const before = evaluate();
+                    doc.open(); doc.close();
+                    const after = evaluate();
+                    meta.setAttribute('content', "script-src 'self' 'unsafe-inline'");
+                    doc.head.appendChild(meta);
+                    const tightened = evaluate();
+                    doc.open(); doc.close();
+                    const retained = evaluate();
+                    const sameDocument = doc === owner.document;
+                    popup.close(); frame.remove();
+                    return JSON.stringify([before, after, tightened, retained, sameDocument]);
+                }})()"#
+            ))
+            .unwrap(),
+            r#"[42,42,"EvalError:true","EvalError:true",true]"#,
+            "{owner}: document.open must retain installed CSP while processing reinserted meta in the new stream",
+        );
+    }
+}
+
+#[tokio::test]
+async fn document_open_keeps_policy_for_lightweight_popup_javascript_execution() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://document-open-popup-policy.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"globalThis.__popupOpenCspResult = 'pending';
+        (async () => {
+            const popup = open();
+            const doc = popup.document;
+            const meta = doc.createElement('meta');
+            meta.httpEquiv = 'Content-Security-Policy';
+            meta.content = "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+            doc.head.appendChild(meta);
+            const evaluate = () => new Promise(resolve => {
+                window.addEventListener('message', event => {
+                    if (event.source === popup) resolve(event.data);
+                }, {once: true});
+                popup.location.href = `javascript:
+                    try { opener.postMessage(eval('40 + 2'), '*'); }
+                    catch (error) {
+                        opener.postMessage(error.name + ':' + (error instanceof EvalError), '*');
+                    }
+                    void 0;
+                `;
+            });
+            try {
+                const before = await evaluate();
+                // main's lightweight popup stream retains its head. Remove the
+                // meta explicitly to isolate installed-policy lifetime from
+                // the separate full popup input-stream replacement work.
+                meta.remove();
+                doc.open(); doc.close();
+                const after = await evaluate();
+                meta.content = "script-src 'self' 'unsafe-inline'";
+                doc.head.appendChild(meta);
+                const tightened = await evaluate();
+                meta.remove();
+                doc.open(); doc.close();
+                const retained = await evaluate();
+                return [before, after, tightened, retained, doc === popup.document];
+            } finally { popup.close(); }
+        })().then(
+            value => __popupOpenCspResult = JSON.stringify(value),
+            error => __popupOpenCspResult = String(error)
+        );"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupOpenCspResult !== 'pending')",
+        "true",
+        "popup document.open CSP retention through native Javascript URL tasks",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__popupOpenCspResult").unwrap(),
+        r#"[42,42,"EvalError:true","EvalError:true",true]"#,
+    );
+}
+
+#[test]
 fn inline_script_and_handler_csp_accept_base64url_hashes() {
     for hash in [
         "sha256-1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30c=",

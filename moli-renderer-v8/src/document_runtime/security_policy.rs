@@ -1909,6 +1909,17 @@ impl DocumentRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn reset_meta_content_security_policy_processing_for_document(
+        &self,
+        document: DomHandle,
+    ) {
+        // Opening a new input stream retains this Document's installed policies
+        // and the shared policy source used by its existing local workers.
+        self.processed_meta_content_security_policy_handles
+            .borrow_mut()
+            .retain(|(owner, _)| *owner != document);
+    }
+
     pub(crate) fn process_connected_meta_content_security_policies(&self, roots: &[DomHandle]) {
         for &root in roots {
             let mut stack = vec![root];
@@ -2702,6 +2713,21 @@ mod tests {
                 .is_enforced(),
             "checking the parent must not discard the child document's delivered policy"
         );
+        runtime.open_document();
+        assert!(
+            runtime
+                .dom_host_mut()
+                .set_attribute(child_meta, "content", "script-src 'none'")
+        );
+        let policies = runtime.meta_content_security_policies_for_document(child_document);
+        assert_eq!(
+            policies.len(),
+            1,
+            "reopening the parent must not reprocess a child's meta"
+        );
+        assert!(content_security_policy_requires_trusted_types_for_script(
+            &policies
+        ));
     }
 
     #[test]
@@ -2782,7 +2808,7 @@ mod tests {
     }
 
     #[test]
-    fn document_open_does_not_reuse_replaced_document_meta_csp() {
+    fn document_open_preserves_the_same_documents_delivered_meta_csp() {
         let mut runtime = runtime_for_html(
             r#"<!doctype html>
             <meta http-equiv="Content-Security-Policy"
@@ -2791,11 +2817,13 @@ mod tests {
         );
         assert!(runtime.requires_trusted_types_for_script());
 
+        let document = runtime.document_handle();
         runtime.open_document();
+        assert_eq!(runtime.document_handle(), document);
 
         assert!(
-            !runtime.requires_trusted_types_for_script(),
-            "the replacement document must not inherit delivered meta policies"
+            runtime.requires_trusted_types_for_script(),
+            "opening the same Document must retain its installed policies"
         );
     }
 
