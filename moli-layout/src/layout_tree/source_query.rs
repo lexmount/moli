@@ -466,10 +466,6 @@ where
             }
             false
         };
-        let owner = self
-            .boxes
-            .get(principal.index())
-            .and_then(|b| b.geometry_source);
         let split_blocks = self
             .boxes
             .iter()
@@ -480,7 +476,7 @@ where
                         .geometry
                         .parent
                         .and_then(|parent| self.boxes.get(parent.index()))
-                        .is_some_and(|parent| parent.geometry_source != owner)
+                        .is_some_and(|parent| !has_inline_fragment(parent))
             })
             .flat_map(|layout_box| layout_box.geometry.fragments.iter().copied())
             .filter(|id| {

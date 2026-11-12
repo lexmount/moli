@@ -2560,12 +2560,16 @@ fn inline_with_block_child_reports_the_block_geometry() {
 
 #[test]
 fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
-    // <root><a><span><div 120x20/></span></a></root>
+    // <root><a><span><div 120x20/><inline-block/><abspos/></span></a></root>
+    // Only the block split out of the inlines is their geometry; atomic and
+    // out-of-flow boxes inside the nested inline are not.
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("a", vec![2]),
-        Node::element("span", vec![3]),
+        Node::element("span", vec![3, 4, 5]),
         Node::element("div", Vec::new()),
+        Node::element("inline-block", Vec::new()),
+        Node::element("abspos", Vec::new()),
     ]);
     let mut styles = Styles::default();
     styles
@@ -2580,13 +2584,30 @@ fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
     styles
         .0
         .insert(3, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+    styles
+        .0
+        .insert(4, fixed_size(LayoutDisplay::InlineBlock, 30.0, 10.0));
+    styles.0.insert(
+        5,
+        fixed_size(LayoutDisplay::Block, 40.0, 10.0).with_position(LayoutPosition::Absolute),
+    );
 
     let output = build(&source, &mut styles);
-    let block = output.client_rects_for_source(3)[0].bounding_rect();
+    let rect_of = |source| output.client_rects_for_source(source)[0].bounding_rect();
+    let (block, inline_block, abspos) = (rect_of(3), rect_of(4), rect_of(5));
     for inline in [1, 2] {
-        let rects = output.client_rects_for_source(inline);
-        assert_eq!(rects.len(), 1, "{inline}: {rects:?}");
-        assert_rect(rects[0].bounding_rect(), block);
+        let rects = output
+            .client_rects_for_source(inline)
+            .iter()
+            .map(|quad| quad.bounding_rect())
+            .collect::<Vec<_>>();
+        // The block, then the line fragment that holds the inline-block.
+        assert_eq!(rects.len(), 2, "{inline}: {rects:?}");
+        assert_rect(rects[0], block);
+        assert!(
+            !rects.contains(&inline_block) && !rects.contains(&abspos),
+            "{inline}: {rects:?}"
+        );
     }
 }
 
