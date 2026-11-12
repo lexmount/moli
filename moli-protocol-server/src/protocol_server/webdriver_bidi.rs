@@ -805,7 +805,6 @@ async fn handle_bidi_socket_message(
             ),
             event_sources: Vec::new(),
             post_response_event_sources: Vec::new(),
-            post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
             event_context: None,
         })
     } else {
@@ -837,14 +836,12 @@ async fn handle_bidi_socket_message(
                 ),
                 event_sources: Vec::new(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: None,
             }),
             (None, None) => BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
                 response,
                 event_sources: Vec::new(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: None,
             }),
         }
@@ -1055,21 +1052,6 @@ async fn handle_bidi_socket_message(
     {
         return false;
     }
-    if command_output
-        .post_response_background_navigation_drain
-        .waits_for_inflight_navigation()
-        && !drain_and_send_bidi_navigation_after_response(
-            socket,
-            scheduler,
-            receivers,
-            bidi,
-            pending_navigation_response,
-            command_output.event_context.as_deref(),
-        )
-        .await
-    {
-        return false;
-    }
     if close_connection || renderer_output_transport_terminal {
         let _ = socket.close().await;
         return false;
@@ -1236,85 +1218,7 @@ async fn complete_and_send_bidi_pending_runtime_command(
     {
         return false;
     }
-    if command_output
-        .post_response_background_navigation_drain
-        .waits_for_inflight_navigation()
-        && !drain_and_send_bidi_navigation_after_response(
-            socket,
-            scheduler,
-            receivers,
-            bidi,
-            pending_navigation_response,
-            command_output.event_context.as_deref(),
-        )
-        .await
-    {
-        return false;
-    }
     !renderer_output_transport_terminal
-}
-
-/// Completes the optional navigation tail after a BiDi command response is on
-/// the wire.
-///
-/// A renderer-output transport terminal cannot retroactively replace that
-/// response. We still deliver the concrete FIFO prefix admitted before the
-/// terminal, then return `false` so the caller closes the connection instead
-/// of issuing any later successful response from an incomplete output stream.
-async fn drain_and_send_bidi_navigation_after_response(
-    socket: &mut WebSocket,
-    scheduler: &mut CdpScheduler,
-    receivers: &mut CdpSchedulerEventReceivers,
-    bidi: &mut BidiConnectionState,
-    pending_navigation_response: &mut Option<BidiPendingNavigationResponse>,
-    event_context: Option<&str>,
-) -> bool {
-    let (background_navigation_sources, transport_is_live) =
-        match drain_bidi_background_navigation_before_command(scheduler, receivers).await {
-            Ok(sources) => (sources.into_sources(), true),
-            Err(failure) => {
-                let (sources, _terminal_error) = failure.into_parts();
-                (sources.into_sources(), false)
-            }
-        };
-    let pending_response = transport_is_live
-        .then(|| {
-            take_pending_navigation_response_from_sources(
-                pending_navigation_response,
-                &background_navigation_sources,
-            )
-        })
-        .flatten();
-    let mut background_navigation_events = subscribed_bidi_events_from_devtools_event_sources(
-        Some(&*scheduler),
-        bidi,
-        &background_navigation_sources,
-        event_context,
-    );
-    if transport_is_live
-        && !append_context_created_event_source_hook_events(
-            scheduler,
-            receivers,
-            bidi,
-            &mut background_navigation_events,
-        )
-        .await
-    {
-        let _ = send_bidi_json_events(socket, background_navigation_events).await;
-        return false;
-    }
-    if !send_bidi_json_events(socket, background_navigation_events).await {
-        return false;
-    }
-    if let Some(response) = pending_response
-        && socket
-            .send(Message::Text(response.to_string().into()))
-            .await
-            .is_err()
-    {
-        return false;
-    }
-    transport_is_live
 }
 
 use moli_protocol_webdriver_bidi::bidi_message_with_channel;
@@ -1567,7 +1471,6 @@ struct BidiDevToolsCommandOutput {
     response: serde_json::Value,
     event_sources: Vec<BidiDevToolsEventSource>,
     post_response_event_sources: Vec<BidiDevToolsEventSource>,
-    post_response_background_navigation_drain: BidiBackgroundNavigationDrain,
     event_context: Option<String>,
 }
 
@@ -1592,18 +1495,6 @@ struct BidiDevToolsCommandCompletion {
     observe_browsing_context_load: bool,
     script_may_create_targets: bool,
     previous_target_discovery: Option<bool>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BidiBackgroundNavigationDrain {
-    None,
-    ScriptCreatedTargetLoadSubscription,
-}
-
-impl BidiBackgroundNavigationDrain {
-    fn waits_for_inflight_navigation(self) -> bool {
-        matches!(self, Self::ScriptCreatedTargetLoadSubscription)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1667,7 +1558,6 @@ fn bidi_command_output_from_renderer_transport_failure(
         response: bidi_response_from_devtools_error(id, error),
         event_sources: preceding_sources.into_sources(),
         post_response_event_sources: Vec::new(),
-        post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
         event_context,
     }
 }
@@ -2193,20 +2083,41 @@ async fn start_bidi_automation_command(
         &dispatch.command,
         AutomationCommand::EvaluateScript(_) | AutomationCommand::CallFunction(_)
     );
-    let mut event_sources =
-        match drain_bidi_background_navigation_before_command(scheduler, receivers).await {
-            Ok(event_sources) => event_sources,
-            Err(failure) => {
-                let (event_sources, error) = failure.into_parts();
-                return BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
-                    response: bidi_response_from_devtools_error(dispatch.id, error),
-                    event_sources: event_sources.into_sources(),
-                    post_response_event_sources: Vec::new(),
-                    post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
-                    event_context,
-                });
-            }
-        };
+    // A context-targeted Runtime command needs that Page's adopted Document.
+    // Realm lookup instead searches available Pages, without inheriting the
+    // navigation of an unrelated or currently active Page.
+    let admission = if bidi_automation_command_uses_deferred_runtime_progress(&dispatch.command)
+        && dispatch.command.context().target_id.is_some()
+    {
+        scheduler
+            .drain_inflight_background_navigation_before_internal_command(
+                receivers,
+                &dispatch.command,
+                dispatch.command.context(),
+            )
+            .await
+            .map(BidiDevToolsEventSources::from_protocol_output)
+            .map_err(|failure| {
+                BidiRendererOutputTransportFailure::from_renderer(
+                    BidiDevToolsEventSources::default(),
+                    failure,
+                )
+            })
+    } else {
+        drain_ready_bidi_background_navigation(scheduler, receivers).await
+    };
+    let mut event_sources = match admission {
+        Ok(event_sources) => event_sources,
+        Err(failure) => {
+            let (event_sources, error) = failure.into_parts();
+            return BidiDevToolsCommandStart::Complete(BidiDevToolsCommandOutput {
+                response: bidi_response_from_devtools_error(dispatch.id, error),
+                event_sources: event_sources.into_sources(),
+                post_response_event_sources: Vec::new(),
+                event_context,
+            });
+        }
+    };
     event_sources
         .extend_protocol_output(scheduler.complete_ready_protocol_residences_after_command());
     if let Some(error) = validate_bidi_top_level_context_command(
@@ -2219,7 +2130,6 @@ async fn start_bidi_automation_command(
             response: bidi_response_from_devtools_error(dispatch.id, error),
             event_sources: event_sources.into_sources(),
             post_response_event_sources: Vec::new(),
-            post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
             event_context,
         });
     }
@@ -2337,19 +2247,10 @@ async fn complete_bidi_automation_command_execution(
     if let Some(previous_target_discovery) = previous_target_discovery {
         scheduler.replace_target_discovery_enabled(previous_target_discovery);
     }
-    let post_response_background_navigation_drain = if observe_browsing_context_load
-        && script_may_create_targets
-        && scheduler.has_inflight_background_navigation()
-    {
-        BidiBackgroundNavigationDrain::ScriptCreatedTargetLoadSubscription
-    } else {
-        BidiBackgroundNavigationDrain::None
-    };
     BidiDevToolsCommandOutput {
         response,
         event_sources: event_sources.into_sources(),
         post_response_event_sources: post_response_event_sources.into_sources(),
-        post_response_background_navigation_drain,
         event_context,
     }
 }
@@ -2371,20 +2272,19 @@ async fn execute_bidi_input_command(
     action_states: &mut BTreeMap<String, ClassicActionState>,
     dispatch: BidiInputCommandDispatch,
 ) -> BidiDevToolsCommandOutput {
-    let mut event_sources =
-        match drain_bidi_background_navigation_before_command(scheduler, receivers).await {
-            Ok(event_sources) => event_sources,
-            Err(failure) => {
-                let (event_sources, error) = failure.into_parts();
-                return BidiDevToolsCommandOutput {
-                    response: bidi_response_from_devtools_error(dispatch.id, error),
-                    event_sources: event_sources.into_sources(),
-                    post_response_event_sources: Vec::new(),
-                    post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
-                    event_context: Some(dispatch.context),
-                };
-            }
-        };
+    let mut event_sources = match drain_ready_bidi_background_navigation(scheduler, receivers).await
+    {
+        Ok(event_sources) => event_sources,
+        Err(failure) => {
+            let (event_sources, error) = failure.into_parts();
+            return BidiDevToolsCommandOutput {
+                response: bidi_response_from_devtools_error(dispatch.id, error),
+                event_sources: event_sources.into_sources(),
+                post_response_event_sources: Vec::new(),
+                event_context: Some(dispatch.context),
+            };
+        }
+    };
     event_sources
         .extend_protocol_output(scheduler.complete_ready_protocol_residences_after_command());
     if !bidi_context_exists(
@@ -2400,7 +2300,6 @@ async fn execute_bidi_input_command(
             ),
             event_sources: event_sources.into_sources(),
             post_response_event_sources: Vec::new(),
-            post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
             event_context: Some(dispatch.context),
         };
     }
@@ -2436,7 +2335,6 @@ async fn execute_bidi_input_command(
                 response: bidi_response_from_devtools_error(dispatch.id, error),
                 event_sources: event_sources.into_sources(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: Some(dispatch.context),
             };
         }
@@ -2459,8 +2357,6 @@ async fn execute_bidi_input_command(
                         response: bidi_response_from_classic_input_error(dispatch.id, error),
                         event_sources: event_sources.into_sources(),
                         post_response_event_sources: Vec::new(),
-                        post_response_background_navigation_drain:
-                            BidiBackgroundNavigationDrain::None,
                         event_context: Some(dispatch.context),
                     };
                 }
@@ -2469,8 +2365,6 @@ async fn execute_bidi_input_command(
                         response: bidi_response_from_devtools_error(dispatch.id, error),
                         event_sources: event_sources.into_sources(),
                         post_response_event_sources: Vec::new(),
-                        post_response_background_navigation_drain:
-                            BidiBackgroundNavigationDrain::None,
                         event_context: Some(dispatch.context),
                     };
                 }
@@ -2500,7 +2394,6 @@ async fn execute_bidi_input_command(
                 response: bidi_response_from_classic_input_error(dispatch.id, error),
                 event_sources: event_sources.into_sources(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: Some(dispatch.context),
             };
         }
@@ -2527,8 +2420,6 @@ async fn execute_bidi_input_command(
                         ),
                         event_sources: event_sources.into_sources(),
                         post_response_event_sources: Vec::new(),
-                        post_response_background_navigation_drain:
-                            BidiBackgroundNavigationDrain::None,
                         event_context: Some(dispatch.context),
                     };
                 }
@@ -2537,8 +2428,6 @@ async fn execute_bidi_input_command(
                         response: bidi_response_from_devtools_error(dispatch.id, error),
                         event_sources: event_sources.into_sources(),
                         post_response_event_sources: Vec::new(),
-                        post_response_background_navigation_drain:
-                            BidiBackgroundNavigationDrain::None,
                         event_context: Some(dispatch.context),
                     };
                 }
@@ -2564,7 +2453,6 @@ async fn execute_bidi_input_command(
         response: success_response(dispatch.id, json!({})),
         event_sources: event_sources.into_sources(),
         post_response_event_sources: post_response_event_sources.into_sources(),
-        post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
         event_context: Some(dispatch.context),
     }
 }
@@ -2587,7 +2475,6 @@ async fn execute_bidi_set_files_command(
                 ),
                 event_sources: event_sources.into_sources(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: Some(dispatch.context),
             };
         }
@@ -2599,7 +2486,6 @@ async fn execute_bidi_set_files_command(
                 response: bidi_response_from_devtools_error(dispatch.id, error),
                 event_sources: event_sources.into_sources(),
                 post_response_event_sources: Vec::new(),
-                post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
                 event_context: Some(dispatch.context),
             };
         }
@@ -2648,7 +2534,6 @@ async fn execute_bidi_set_files_command(
         response,
         event_sources: event_sources.into_sources(),
         post_response_event_sources: post_response_event_sources.into_sources(),
-        post_response_background_navigation_drain: BidiBackgroundNavigationDrain::None,
         event_context: Some(dispatch.context),
     }
 }
@@ -3167,32 +3052,6 @@ async fn complete_bidi_post_response_protocol_residences(
         scheduler.complete_ready_protocol_residences_after_command(),
     );
     event_sources.append(drain_ready_bidi_background_navigation(scheduler, receivers).await?);
-    Ok(event_sources)
-}
-
-async fn drain_bidi_background_navigation_before_command(
-    scheduler: &mut CdpScheduler,
-    receivers: &mut CdpSchedulerEventReceivers,
-) -> Result<BidiDevToolsEventSources, BidiRendererOutputTransportFailure> {
-    let mut event_sources = drain_ready_bidi_background_navigation(scheduler, receivers).await?;
-    while scheduler.has_inflight_background_navigation() {
-        let Some(input) = receivers.recv_interleaved_input().await else {
-            return Ok(event_sources);
-        };
-        match scheduler
-            .complete_interleaved_scheduler_input(receivers, input)
-            .await
-        {
-            Ok(output) => event_sources.extend_protocol_output(output),
-            Err(failure) => {
-                return Err(BidiRendererOutputTransportFailure::from_renderer(
-                    event_sources,
-                    failure,
-                ));
-            }
-        }
-        event_sources.append(drain_ready_bidi_background_navigation(scheduler, receivers).await?);
-    }
     Ok(event_sources)
 }
 

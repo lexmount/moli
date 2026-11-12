@@ -511,7 +511,7 @@ impl RuntimeWorkflow {
     async fn realms_inner(
         &mut self,
         route: CdpSessionRoute,
-        allow_missing_document: bool,
+        allow_unavailable_document: bool,
     ) -> Result<Vec<RuntimeExecutionContextEvent>, DevToolsError> {
         self.inventory_scope = None;
         let facts_route = route.clone();
@@ -533,7 +533,14 @@ impl RuntimeWorkflow {
         };
         match result {
             Ok(realms) => Ok(realms),
-            Err(error) if allow_missing_document && error.is::<crate::conn::NoDocumentLoaded>() => {
+            // A realm search may inspect several independent Pages. One
+            // unavailable Document must not prevent resolving another Page's
+            // exact realm; the selected inventory scope is still pinned.
+            Err(error)
+                if allow_unavailable_document
+                    && (error.is::<crate::conn::NoDocumentLoaded>()
+                        || error.is::<crate::conn::DocumentNavigationInProgress>()) =>
+            {
                 Ok(Vec::new())
             }
             Err(error) => Err(workflow_error(error)),
