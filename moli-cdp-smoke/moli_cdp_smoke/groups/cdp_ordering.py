@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -330,6 +331,91 @@ async def _frame_facts_during_pending_evaluation(
     return {"checks": checks}
 
 
+async def _navigation_during_pending_evaluation(
+    wire: _Wire, page: _Page, _is_moli: bool
+) -> dict[str, Any]:
+    await wire.call("Runtime.enable", session=page.session)
+    await wire.call("Target.setDiscoverTargets", {"discover": True})
+    opening = len(wire.messages)
+    result = await wire.call("Runtime.evaluate", {
+        "expression": "globalThis.__navigationChild = window.open('about:blank');"
+                      "!!globalThis.__navigationChild",
+        "userGesture": True, "returnByValue": True,
+    }, page.session)
+    assert_equal(result["result"].get("value"), True, "navigation fixture popup opened")
+    created = await wire.until(
+        lambda message: message.get("method") == "Target.targetCreated"
+            and message.get("params", {}).get("targetInfo", {}).get("type") == "page"
+            and message["params"]["targetInfo"].get("openerFrameId") == page.frame,
+        "exact popup target", after=opening)
+    child_target = created["params"]["targetInfo"]["targetId"]
+    child_session = (await wire.call("Target.attachToTarget", {
+        "targetId": child_target, "flatten": True,
+    }))["sessionId"]
+    await wire.call("Page.enable", session=child_session)
+    await wire.call("Page.setLifecycleEventsEnabled", {"enabled": True}, child_session)
+    await wire.call("Network.enable", session=child_session)
+    destination = page.url + "?navigation-owner-progress"
+    start = len(wire.messages)
+    pending = await wire.send("Runtime.evaluate", {
+        "expression": "(() => { console.log('owner-before-navigation');"
+                      "__navigationChild.location.href = " + json.dumps(destination) + ";"
+                      "console.log('owner-after-navigation');"
+                      "return new Promise(resolve => { globalThis.__navigationRelease = resolve; }); })()",
+        "awaitPromise": True, "returnByValue": True,
+    }, page.session)
+    assert_equal(await wire.evaluate(page.session,
+        "typeof globalThis.__navigationRelease === 'function'"), True,
+        "navigation source reached its unresolved Promise")
+    source_events = []
+    for marker in ["owner-before-navigation", "owner-after-navigation"]:
+        source_events.append(await wire.until(
+            lambda message: message.get("sessionId") == page.session
+                and message.get("method") == "Runtime.consoleAPICalled"
+                and message.get("params", {}).get("args", [{}])[0].get("value") == marker,
+            marker, after=start))
+    committed = await wire.until(
+        lambda message: message.get("sessionId") == child_session
+            and message.get("method") == "Page.frameNavigated"
+            and message.get("params", {}).get("frame", {}).get("url") == destination,
+        "child navigation while its source evaluation waits", after=start)
+    frame = committed["params"]["frame"]
+    metadata = await wire.until(
+        lambda message: message.get("sessionId") == child_session
+            and message.get("method") == "Network.responseReceived"
+            and message.get("params", {}).get("type") == "Document"
+            and message["params"].get("loaderId") == frame["loaderId"]
+            and message["params"].get("response", {}).get("url") == destination,
+        "exact navigation response metadata", after=start)
+    loaded = await wire.until(
+        lambda message: message.get("sessionId") == child_session
+            and message.get("method") == "Page.lifecycleEvent"
+            and message.get("params", {}).get("name") == "load"
+            and message["params"].get("loaderId") == frame["loaderId"]
+            and message["params"].get("frameId") == frame["id"],
+        "exact child navigation load", after=start)
+    assert_equal(wire.has_response(pending), False,
+                 "navigation must not wait for its source evaluation response")
+    before_index, after_index = [wire.messages.index(event) for event in source_events]
+    metadata_index, commit_index, load_index = [
+        wire.messages.index(event) for event in [metadata, committed, loaded]
+    ]
+    if before_index >= after_index or not metadata_index < commit_index < load_index:
+        raise SmokeError("source facts and navigation metadata/commit/load lost their causal order")
+    await wire.evaluate(page.session,
+        "__navigationRelease('navigation-complete'); __navigationRelease = null; 1")
+    reply = await wire.response(pending)
+    assert_equal(reply["result"]["result"].get("value"), "navigation-complete",
+                 "source evaluation preserves its real result")
+    for event in [*source_events, metadata, committed, loaded]:
+        assert_equal(sum(message == event for message in wire.messages[start:]), 1,
+                     "each source and navigation fact is delivered once")
+    await wire.call("Target.closeTarget", {"targetId": child_target})
+    return {"beforeIndex": before_index, "afterIndex": after_index,
+            "metadataIndex": metadata_index, "commitIndex": commit_index,
+            "loadIndex": load_index, "sourceReplyIndex": wire.index(pending)}
+
+
 async def _download_during_pending_evaluation(
     wire: _Wire, page: _Page, _is_moli: bool
 ) -> dict[str, Any]:
@@ -562,6 +648,7 @@ async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[
         ("isolated_world_notification_prefix", _world_prefix),
         ("deferred_reply_later_resolver", _deferred_reply),
         ("frame_facts_during_pending_evaluation", _frame_facts_during_pending_evaluation),
+        ("navigation_during_pending_evaluation", _navigation_during_pending_evaluation),
         ("download_during_pending_evaluation", _download_during_pending_evaluation),
         ("normal_pause_native_queries", _normal_pause),
         ("normal_pause_dom_agent_commands", _paused_dom_agent),
