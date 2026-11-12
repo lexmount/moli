@@ -1,6 +1,6 @@
 use super::super::selection::{
     SelectionRangeUpdateState, selection_clear, selection_composed_boundary_order,
-    selection_range_update_state, selection_sync_associated_range,
+    selection_range_update_states, selection_sync_associated_range,
 };
 use super::*;
 use crate::webidl;
@@ -138,11 +138,11 @@ pub(super) fn range_select_node_contents_callback<'s>(
         );
         return;
     }
-    let selection_update = selection_range_update_state(scope, args.this());
+    let selection_updates = selection_range_update_states(scope, args.this());
     let end_offset = range_node_length(scope, node).unwrap_or(0);
     set_range_boundary(scope, args.this(), RangeBoundarySide::Start, node, 0);
     set_range_boundary(scope, args.this(), RangeBoundarySide::End, node, end_offset);
-    range_sync_selection_to_current_range(scope, selection_update, args.this());
+    range_sync_selection_to_current_range(scope, selection_updates, args.this());
     rv.set_undefined();
 }
 
@@ -166,7 +166,7 @@ pub(super) fn range_collapse_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let selection_update = selection_range_update_state(scope, args.this());
+    let selection_updates = selection_range_update_states(scope, args.this());
     set_range_boundary(
         scope,
         args.this(),
@@ -181,7 +181,7 @@ pub(super) fn range_collapse_callback<'s>(
         target_container,
         target_offset,
     );
-    range_sync_selection_to_current_range(scope, selection_update, args.this());
+    range_sync_selection_to_current_range(scope, selection_updates, args.this());
     rv.set_undefined();
 }
 
@@ -206,7 +206,7 @@ pub(super) fn range_select_node_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let selection_update = selection_range_update_state(scope, args.this());
+    let selection_updates = selection_range_update_states(scope, args.this());
     set_range_boundary(scope, args.this(), RangeBoundarySide::Start, parent, index);
     set_range_boundary(
         scope,
@@ -215,7 +215,7 @@ pub(super) fn range_select_node_callback<'s>(
         parent,
         index + 1,
     );
-    range_sync_selection_to_current_range(scope, selection_update, args.this());
+    range_sync_selection_to_current_range(scope, selection_updates, args.this());
     rv.set_undefined();
 }
 
@@ -336,7 +336,7 @@ fn range_set_boundary_and_sync_selection<'s>(
     container: v8::Local<'s, v8::Object>,
     offset: u32,
 ) {
-    let selection_update = selection_range_update_state(scope, range);
+    let selection_updates = selection_range_update_states(scope, range);
     set_range_boundary(scope, range, side, container, offset);
     let other_side = match side {
         RangeBoundarySide::Start => RangeBoundarySide::End,
@@ -355,130 +355,128 @@ fn range_set_boundary_and_sync_selection<'s>(
     }
     match side {
         RangeBoundarySide::Start => {
-            range_sync_selection_after_set_start(scope, selection_update, range, container, offset)
+            range_sync_selection_after_set_start(scope, selection_updates, range, container, offset)
         }
         RangeBoundarySide::End => {
-            range_sync_selection_after_set_end(scope, selection_update, range, container, offset)
+            range_sync_selection_after_set_end(scope, selection_updates, range, container, offset)
         }
     }
 }
 
 fn range_sync_selection_after_set_start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    selection_update: Option<SelectionRangeUpdateState<'s>>,
+    selection_updates: Vec<SelectionRangeUpdateState<'s>>,
     range: v8::Local<'s, v8::Object>,
     new_start_node: v8::Local<'s, v8::Object>,
     new_start_offset: u32,
 ) {
-    let Some(selection_update) = selection_update else {
-        return;
-    };
-    let old_end_node = selection_update.old_composed_end_node;
-    let old_end_offset = selection_update.old_composed_end_offset;
-    let collapse_composed = selection_composed_boundary_order(
-        scope,
-        new_start_node,
-        new_start_offset,
-        old_end_node,
-        old_end_offset,
-    )
-    .is_none_or(|order| order == std::cmp::Ordering::Greater);
-    let (composed_start_node, composed_start_offset, composed_end_node, composed_end_offset) =
-        if collapse_composed {
-            (
-                new_start_node,
-                new_start_offset,
-                new_start_node,
-                new_start_offset,
-            )
-        } else {
-            (
-                new_start_node,
-                new_start_offset,
-                old_end_node,
-                old_end_offset,
-            )
-        };
-    selection_sync_associated_range(
-        scope,
-        selection_update,
-        range,
-        composed_start_node,
-        composed_start_offset,
-        composed_end_node,
-        composed_end_offset,
-    );
+    for selection_update in selection_updates {
+        let old_end_node = selection_update.old_composed_end_node;
+        let old_end_offset = selection_update.old_composed_end_offset;
+        let collapse_composed = selection_composed_boundary_order(
+            scope,
+            new_start_node,
+            new_start_offset,
+            old_end_node,
+            old_end_offset,
+        )
+        .is_none_or(|order| order == std::cmp::Ordering::Greater);
+        let (composed_start_node, composed_start_offset, composed_end_node, composed_end_offset) =
+            if collapse_composed {
+                (
+                    new_start_node,
+                    new_start_offset,
+                    new_start_node,
+                    new_start_offset,
+                )
+            } else {
+                (
+                    new_start_node,
+                    new_start_offset,
+                    old_end_node,
+                    old_end_offset,
+                )
+            };
+        selection_sync_associated_range(
+            scope,
+            selection_update,
+            range,
+            composed_start_node,
+            composed_start_offset,
+            composed_end_node,
+            composed_end_offset,
+        );
+    }
 }
 
 fn range_sync_selection_after_set_end<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    selection_update: Option<SelectionRangeUpdateState<'s>>,
+    selection_updates: Vec<SelectionRangeUpdateState<'s>>,
     range: v8::Local<'s, v8::Object>,
     new_end_node: v8::Local<'s, v8::Object>,
     new_end_offset: u32,
 ) {
-    let Some(selection_update) = selection_update else {
-        return;
-    };
-    let old_start_node = selection_update.old_composed_start_node;
-    let old_start_offset = selection_update.old_composed_start_offset;
-    let collapse_composed = selection_composed_boundary_order(
-        scope,
-        old_start_node,
-        old_start_offset,
-        new_end_node,
-        new_end_offset,
-    )
-    .is_none_or(|order| order == std::cmp::Ordering::Greater);
-    let (composed_start_node, composed_start_offset, composed_end_node, composed_end_offset) =
-        if collapse_composed {
-            (new_end_node, new_end_offset, new_end_node, new_end_offset)
-        } else {
-            (
-                old_start_node,
-                old_start_offset,
-                new_end_node,
-                new_end_offset,
-            )
-        };
-    selection_sync_associated_range(
-        scope,
-        selection_update,
-        range,
-        composed_start_node,
-        composed_start_offset,
-        composed_end_node,
-        composed_end_offset,
-    );
+    for selection_update in selection_updates {
+        let old_start_node = selection_update.old_composed_start_node;
+        let old_start_offset = selection_update.old_composed_start_offset;
+        let collapse_composed = selection_composed_boundary_order(
+            scope,
+            old_start_node,
+            old_start_offset,
+            new_end_node,
+            new_end_offset,
+        )
+        .is_none_or(|order| order == std::cmp::Ordering::Greater);
+        let (composed_start_node, composed_start_offset, composed_end_node, composed_end_offset) =
+            if collapse_composed {
+                (new_end_node, new_end_offset, new_end_node, new_end_offset)
+            } else {
+                (
+                    old_start_node,
+                    old_start_offset,
+                    new_end_node,
+                    new_end_offset,
+                )
+            };
+        selection_sync_associated_range(
+            scope,
+            selection_update,
+            range,
+            composed_start_node,
+            composed_start_offset,
+            composed_end_node,
+            composed_end_offset,
+        );
+    }
 }
 
 fn range_sync_selection_to_current_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    selection_update: Option<SelectionRangeUpdateState<'s>>,
+    selection_updates: Vec<SelectionRangeUpdateState<'s>>,
     range: v8::Local<'s, v8::Object>,
 ) {
-    let Some(selection_update) = selection_update else {
-        return;
-    };
-    let Some(start_node) = range_boundary_container_object(scope, range, RangeBoundarySide::Start)
-    else {
-        selection_clear(scope, selection_update.selection);
-        return;
-    };
-    let Some(end_node) = range_boundary_container_object(scope, range, RangeBoundarySide::End)
-    else {
-        selection_clear(scope, selection_update.selection);
-        return;
-    };
-    let start_offset = range_boundary_offset(scope, range, RangeBoundarySide::Start) as u32;
-    let end_offset = range_boundary_offset(scope, range, RangeBoundarySide::End) as u32;
-    selection_sync_associated_range(
-        scope,
-        selection_update,
-        range,
-        start_node,
-        start_offset,
-        end_node,
-        end_offset,
-    );
+    for selection_update in selection_updates {
+        let Some(start_node) =
+            range_boundary_container_object(scope, range, RangeBoundarySide::Start)
+        else {
+            selection_clear(scope, selection_update.selection);
+            continue;
+        };
+        let Some(end_node) = range_boundary_container_object(scope, range, RangeBoundarySide::End)
+        else {
+            selection_clear(scope, selection_update.selection);
+            continue;
+        };
+        let start_offset = range_boundary_offset(scope, range, RangeBoundarySide::Start) as u32;
+        let end_offset = range_boundary_offset(scope, range, RangeBoundarySide::End) as u32;
+        selection_sync_associated_range(
+            scope,
+            selection_update,
+            range,
+            start_node,
+            start_offset,
+            end_node,
+            end_offset,
+        );
+    }
 }
