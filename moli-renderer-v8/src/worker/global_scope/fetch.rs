@@ -2068,27 +2068,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    dispatch_worker_content_security_policy_report_only_violation_for_state(
+    let csp_error = super::content_security_policy::queue_worker_fetch_csp_violations(
         scope,
         &state,
         &document_url,
         &resolved_url,
         crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
     );
-    let csp_violation = {
-        let state_ref = state.borrow();
-        worker_content_security_policy_violation(
-            &state_ref,
-            &document_url,
-            &resolved_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
-        )
-    };
-    if let Some(violation) = csp_violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(
-            scope, &state, &violation,
-        );
-        let message = worker_content_security_policy_error_message(&violation, "fetch");
+    if let Some(message) = csp_error {
         record_worker_subresource_failure(
             &state.borrow(),
             document_url,
