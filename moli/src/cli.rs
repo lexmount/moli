@@ -437,6 +437,11 @@ fn parse_request_header_arg(raw: &str) -> Result<RequestHeaderArg, String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct ServeArgs {
+    /// Write final unpartitioned cookies on graceful shutdown to a Netscape file,
+    /// or - for stdout. Signal-driven termination does not export cookies.
+    #[arg(long, value_name = "FILE", overrides_with = "cookie_jar")]
+    pub cookie_jar: Option<String>,
+
     /// Enable debugger pauses. By default, debugger statements and breakpoints do not pause execution.
     #[arg(long)]
     pub debugger: bool,
@@ -624,6 +629,7 @@ pub struct CommonArgs {
     pub scrollbars: bool,
 
     /// Send Cookie header data or load a cookie file. Use - for stdin. May be repeated.
+    /// Use --cookie-jar to explicitly select an output, including overwriting an input file.
     /// In serve mode, literal data defaults to the first HTTP(S) top-level navigation host.
     #[arg(
         long = "cookie",
