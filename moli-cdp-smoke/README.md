@@ -1193,3 +1193,24 @@ defaults use Mock layout with optional resources and debugger pauses disabled.
 ## Relationship to the Node smoke
 
 The repository still keeps `scripts/playwright-cdp-smoke.mjs`. The Python/uv project is the forward maintenance path. The Node script remains temporarily as a reference implementation until the Python suite has proven equivalent coverage.
+
+`protocol-progress` runs in the default raw-CDP suite. It holds two independent
+navigation responses, queues commands on both Sessions, and releases only the
+second response. The second Session must dispatch its commands in order without
+waiting for the first Session. Shared- and isolated-BrowserContext prompt cases
+hold Page A modal while Page B emits unsolicited timer/console, iframe and
+network output. They issue no Page B command that could accidentally flush its
+journal. Each case records the complete wire trace and checks original command
+and Session identities.
+
+The group also checks a same-target, two-Session `_self` utility call: the
+original result must precede actual realm retirement, while navigation-start
+and request facts may already be visible. A script-created popup self-close
+checks one Target destruction and continued opener progress; its direct
+WebSocket may retire before the closing script's reply arrives.
+
+Run bounded stress with `--group protocol-progress --repeat 20 --jobs 4`;
+Chromium uses the same assertions with `--browser chromium`. A failed repetition
+fails the run. Worker Network routing can additionally be inspected with
+`MOLI_CDP_RUNTIME_TRACE=1` and `--group workers`: a known Worker Session must
+retain its own Target instead of entering the unowned global navigation gate.
