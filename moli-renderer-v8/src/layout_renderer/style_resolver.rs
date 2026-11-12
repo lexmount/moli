@@ -90,7 +90,7 @@ impl<'a> NativeLayoutStyleResolver<'a> {
     }
 }
 
-fn layout_style_read_scope<'a>(
+pub(super) fn layout_style_read_scope<'a>(
     runtime: &'a PageScriptHost,
     document: DomHandle,
     viewport: LayoutViewport,

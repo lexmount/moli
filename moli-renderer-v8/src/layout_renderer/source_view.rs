@@ -1,4 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutImageFallback,
@@ -14,6 +18,7 @@ use crate::{
         optional_positive_u16_attribute, select_control_data,
     },
     native_bridge::PageScriptHost,
+    style_engine::StyloStyleEnvironment,
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -21,31 +26,70 @@ pub(super) struct NativeLayoutSourceView<'a> {
     root: DomHandle,
     document: Option<DomHandle>,
     include_paint_resources: bool,
+    viewport: moli_layout::LayoutViewport,
+    environment_override: Option<StyloStyleEnvironment>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
+    // Pass-local only: painting and numeric SVG queries consume one shaping
+    // result. This view and its vector resources never survive freezing.
+    inline_svgs: RefCell<HashMap<DomHandle, Option<super::inline_svg::InlineSvgResource>>>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
     pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
-        Self::with_paint_resources(runtime, root, false)
+        let document = runtime
+            .dom_host()
+            .owner_document_handle(root)
+            .unwrap_or_else(|| runtime.document_handle());
+        Self::with_paint_resources(
+            runtime,
+            root,
+            false,
+            runtime.layout_viewport_for_document(document),
+            None,
+        )
     }
 
     pub(super) fn with_paint_resources(
         runtime: &'a PageScriptHost,
         root: DomHandle,
         include_paint_resources: bool,
+        viewport: moli_layout::LayoutViewport,
+        environment_override: Option<StyloStyleEnvironment>,
     ) -> Self {
         Self {
             runtime,
             root,
             document: runtime.dom_host().owner_document_handle(root),
             include_paint_resources,
+            viewport,
+            environment_override,
             text_selections: document_text_selections(runtime, root),
+            inline_svgs: RefCell::new(HashMap::new()),
         }
     }
 
     fn host(&self) -> &DomHost {
         self.runtime.dom_host()
+    }
+
+    fn inline_svg(
+        &self,
+        node: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+    ) -> Option<super::inline_svg::InlineSvgResource> {
+        if let Some(resource) = self.inline_svgs.borrow().get(&node) {
+            return resource.clone();
+        }
+        let resource = super::inline_svg::replaced_resource(
+            self.runtime,
+            node,
+            style,
+            self.viewport,
+            self.environment_override,
+        );
+        self.inline_svgs.borrow_mut().insert(node, resource.clone());
+        resource
     }
 }
 
@@ -279,7 +323,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                 })
             }
             Some(LayoutReplacedKind::Svg) => {
-                super::inline_svg::replaced_resource(self.host(), node, style)
+                self.inline_svg(node, style).map(|resource| resource.image)
             }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
@@ -292,6 +336,39 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             }
             _ => None,
         }
+    }
+
+    fn svg_text_layout(
+        &self,
+        node: Self::NodeId,
+        style: &moli_layout::ResolvedLayoutStyle,
+    ) -> Option<Arc<moli_layout::LayoutSvgText<Self::NodeId>>> {
+        let element = self.host().node(node)?.as_element()?;
+        if layout_element_semantics_for_source(self.host(), node, element).replaced
+            != Some(LayoutReplacedKind::Svg)
+        {
+            return None;
+        }
+        if !self.include_paint_resources {
+            // Most inline SVGs are icons. A geometry-only pass need not parse
+            // or retain a vector tree when no text-content element exists.
+            let mut descendants = self.host().child_handles(node).collect::<Vec<_>>();
+            let mut has_text = false;
+            while let Some(child) = descendants.pop() {
+                if self.host().node(child).is_some_and(|node| {
+                    node.namespace() == Some(LayoutNamespace::SVG_URI)
+                        && node.local_name() == Some("text")
+                }) {
+                    has_text = true;
+                    break;
+                }
+                descendants.extend(self.host().child_handles(child));
+            }
+            if !has_text {
+                return None;
+            }
+        }
+        self.inline_svg(node, style)?.text
     }
 
     fn css_image_resource(&self, resolved_url: &str) -> Option<LayoutImageResource> {

@@ -795,41 +795,6 @@ pub(super) fn dom_point_clone_data<'s>(
     ))
 }
 
-pub(in crate::context_bootstrap) fn build_svg_point_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    build_svg_point_object_with_values(scope, 0.0, 0.0)
-}
-
-pub(in crate::context_bootstrap) fn build_svg_point_object_with_values<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    x: f64,
-    y: f64,
-) -> v8::Local<'s, v8::Object> {
-    let object = build_dom_point_object(scope, x, y, 0.0, 1.0);
-    let restricted = v8::Boolean::new(scope, true);
-    set_private_value(
-        scope,
-        object,
-        DOM_POINT_RESTRICTED_NUMBER_SLOT,
-        restricted.into(),
-    );
-    object
-}
-
-pub(in crate::context_bootstrap) fn set_svg_point_read_only<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    point: v8::Local<'s, v8::Object>,
-    read_only: bool,
-) {
-    set_private_value(
-        scope,
-        point,
-        DOM_POINT_READ_ONLY_SLOT,
-        v8::Boolean::new(scope, read_only).into(),
-    );
-}
-
 fn build_dom_point_readonly_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,

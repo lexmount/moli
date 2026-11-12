@@ -2,9 +2,11 @@ use super::*;
 
 mod image_dimensions;
 mod image_repeat;
+mod inline_svg_styles;
 mod planar_transforms;
 mod print;
 mod print_isolation;
+mod svg_text_metrics;
 mod transform_precision;
 
 use base64::Engine as _;

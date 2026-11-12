@@ -55,13 +55,13 @@ fn svg_geometry_methods_use_registered_proxy_geometry_without_author_traps() {
                 const geometry = realm.SVGGeometryElement.prototype;
                 const point = geometry.getPointAtLength.call(nativeProxy, 5);
                 if (point.x !== 7 || point.y !== 3 ||
-                    Object.getPrototypeOf(point) !== realm.DOMPoint.prototype ||
+                    Object.getPrototypeOf(point) !== realm.SVGPoint.prototype ||
                     geometry.getTotalLength.call(nativeProxy) !== 40 ||
                     !geometry.isPointInFill.call(nativeProxy, {x: 5, y: 5})) {
                     throw Error('native proxy geometry or result realm');
                 }
                 const box = graphics.getBBox.call(nativeProxy);
-                if (Object.getPrototypeOf(box) !== realm.DOMRect.prototype) throw Error('box realm');
+                if (Object.getPrototypeOf(box) !== realm.SVGRect.prototype) throw Error('box realm');
                 graphics.getCTM.call(nativeProxy);
                 graphics.getScreenCTM.call(nativeProxy);
                 geometry.isPointInStroke.call(nativeProxy, {x: 5, y: 5});

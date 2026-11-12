@@ -7,6 +7,14 @@
 
 use std::sync::{Arc, LazyLock};
 
+mod inline;
+mod text;
+pub use inline::{
+    InlineSvgElement, InlineSvgInput, InlineSvgLayout, SvgStyleProperty, SvgStyleValue,
+    layout_inline_svg,
+};
+pub use text::{SvgTextResource, SvgTextSourceRange};
+
 /// Maximum encoded SVG body admitted to the static image decoder.
 ///
 /// SVG parsing expands XML, paths, text, and embedded data into a substantially
@@ -84,6 +92,7 @@ impl SvgFonts {
 static SVG_FONTS: LazyLock<SvgFonts> = LazyLock::new(|| {
     let mut database = usvg::fontdb::Database::new();
     database.load_system_fonts();
+    resolve_generic_font_families(&mut database, &mut fontique::Collection::default());
     SvgFonts::from_database(database)
 });
 
@@ -146,6 +155,46 @@ fn fontdb_style(style: usvg::FontStyle) -> usvg::fontdb::Style {
     }
 }
 
+fn resolve_generic_font_families(
+    database: &mut usvg::fontdb::Database,
+    collection: &mut fontique::Collection,
+) {
+    use fontique::GenericFamily;
+
+    // fontdb's static fontconfig parser can choose an alias whose first
+    // preference is not installed. Resolve generics through the same platform
+    // font collection used by HTML/Canvas text, then admit only loaded families.
+    // Otherwise usvg drops entire text nodes when the unresolved alias is used.
+    for generic in [
+        GenericFamily::Serif,
+        GenericFamily::SansSerif,
+        GenericFamily::Monospace,
+        GenericFamily::Cursive,
+        GenericFamily::Fantasy,
+    ] {
+        let families = collection.generic_families(generic).collect::<Vec<_>>();
+        let Some(name) = families.into_iter().find_map(|family| {
+            let name = collection.family_name(family)?;
+            database
+                .query(&usvg::fontdb::Query {
+                    families: &[usvg::fontdb::Family::Name(name)],
+                    ..Default::default()
+                })
+                .map(|_| name.to_owned())
+        }) else {
+            continue;
+        };
+        match generic {
+            GenericFamily::Serif => database.set_serif_family(name),
+            GenericFamily::SansSerif => database.set_sans_serif_family(name),
+            GenericFamily::Monospace => database.set_monospace_family(name),
+            GenericFamily::Cursive => database.set_cursive_family(name),
+            GenericFamily::Fantasy => database.set_fantasy_family(name),
+            _ => unreachable!("only SVG generic families are selected"),
+        }
+    }
+}
+
 /// Natural SVG sizing data and its CSS default concrete object size.
 ///
 /// Width and height stay optional because a `viewBox` supplies an intrinsic
@@ -183,6 +232,12 @@ pub struct SvgImage {
 }
 
 impl SvgImage {
+    /// Extracts canonical text geometry from the already-shaped paint tree.
+    /// No font database, glyph outlines, or source XML is retained by the result.
+    pub fn text_resources(&self) -> Vec<SvgTextResource> {
+        text::tree_text_resources(&self.tree)
+    }
+
     pub fn tree(&self) -> &usvg::Tree {
         &self.tree
     }
@@ -215,6 +270,12 @@ impl Eq for SvgImage {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SvgDecodeError {
+    #[error(
+        "inline SVG input contains {actual} bytes including styles, exceeding the {max}-byte budget"
+    )]
+    InlineInputBudgetExceeded { actual: usize, max: usize },
+    #[error("inline SVG source metadata does not match XML at element {element}")]
+    InlineSourceMismatch { element: usize },
     #[error("encoded SVG contains {actual} bytes, exceeding the {max}-byte input budget")]
     EncodedBufferBudgetExceeded { actual: usize, max: usize },
     #[error("SVG source is not valid UTF-8")]
@@ -293,12 +354,18 @@ fn decode_svg_image_with_fonts(
     fonts: &SvgFonts,
 ) -> Result<SvgImage, SvgDecodeError> {
     check_encoded_budget(bytes)?;
+    let tree = usvg::Tree::from_data(bytes, &svg_options(metadata, fonts)?)?;
+    Ok(SvgImage { tree, metadata })
+}
+
+fn svg_options(
+    metadata: SvgImageMetadata,
+    fonts: &SvgFonts,
+) -> Result<usvg::Options<'static>, SvgDecodeError> {
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
-    let options = usvg::Options {
+    Ok(usvg::Options {
         fontdb: fonts.database.clone(),
-        // usvg resolves a missing `font-family` name before consulting
-        // `font_resolver`, so the default must name an installed family.
         font_family: fonts.default_family.clone(),
         font_resolver: fonts.resolver(),
         default_size,
@@ -311,9 +378,7 @@ fn decode_svg_image_with_fonts(
             resolve_string: Box::new(|_, _| None),
         },
         ..Default::default()
-    };
-    let tree = usvg::Tree::from_data(bytes, &options)?;
-    Ok(SvgImage { tree, metadata })
+    })
 }
 
 fn concrete_object_size(width: Option<f32>, height: Option<f32>, ratio: Option<f32>) -> (f32, f32) {
@@ -432,6 +497,99 @@ fn rounded_dimension(value: f32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_generic_fonts_select_installed_families_in_platform_order() {
+        use fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, GenericFamily};
+        use usvg::fontdb::Family;
+
+        let font = include_bytes!("../../moli-layout/tests/fixtures/moli-ahem.ttf");
+        let mut database = usvg::fontdb::Database::new();
+        database.load_font_data(font.to_vec());
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        let blob = Blob::new(Arc::new(font.to_vec()));
+        let installed = collection.register_fonts(blob.clone(), None)[0].0;
+        let unavailable = collection.register_fonts(
+            blob,
+            Some(FontInfoOverride {
+                family_name: Some("Not present in the SVG database"),
+                ..Default::default()
+            }),
+        )[0]
+        .0;
+        for generic in [
+            GenericFamily::Serif,
+            GenericFamily::SansSerif,
+            GenericFamily::Monospace,
+            GenericFamily::Cursive,
+            GenericFamily::Fantasy,
+        ] {
+            collection.set_generic_families(generic, [unavailable, installed].into_iter());
+        }
+        let source = |family| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text id="label" x="10" y="50" font-family="{family}" font-size="20">ABC</text></svg>"#
+            )
+        };
+        let before = usvg::Tree::from_str(
+            &source("serif"),
+            &usvg::Options {
+                fontdb: Arc::new(database.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(before.node_by_id("label").is_none());
+
+        resolve_generic_font_families(&mut database, &mut collection);
+        let expected_family = collection.family_name(installed).unwrap();
+        for family in [
+            Family::Serif,
+            Family::SansSerif,
+            Family::Monospace,
+            Family::Cursive,
+            Family::Fantasy,
+        ] {
+            assert_eq!(database.family_name(&family), expected_family);
+        }
+        let options = usvg::Options {
+            fontdb: Arc::new(database),
+            ..Default::default()
+        };
+        for generic in ["serif", "sans-serif", "monospace", "cursive", "fantasy"] {
+            let tree = usvg::Tree::from_str(&source(generic), &options).unwrap();
+            let bounds = tree
+                .node_by_id("label")
+                .expect("shaped text")
+                .bounding_box();
+            assert!(
+                (bounds.width() - 36.0).abs() < 0.001,
+                "{generic}: {bounds:?}"
+            );
+            assert!(
+                (bounds.height() - 20.0).abs() < 0.001,
+                "{generic}: {bounds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn svg_generic_fonts_preserve_existing_mapping_without_a_platform_candidate() {
+        let mut database = usvg::fontdb::Database::new();
+        database.set_serif_family("Existing SVG family");
+        let mut collection = fontique::Collection::new(fontique::CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        resolve_generic_font_families(&mut database, &mut collection);
+        assert_eq!(
+            database.family_name(&usvg::fontdb::Family::Serif),
+            "Existing SVG family"
+        );
+    }
 
     #[test]
     fn metadata_preserves_natural_dimensions_and_applies_default_object_size() {

@@ -3040,11 +3040,14 @@ dependencies = [
 name = "moli-image"
 version = "0.1.0"
 dependencies = [
+ "fontique",
  "image",
  "jpeg-decoder",
  "jpeg-encoder",
+ "moli-svg",
  "png",
  "thiserror",
+ "unicode-segmentation",
  "usvg",
  "xmlparser",
 ]
@@ -3090,6 +3093,7 @@ dependencies = [
  "kurbo",
  "moli-css-parse",
  "moli-image",
+ "moli-svg",
  "moli-system-fonts",
  "moli-trace",
  "parley",
@@ -6383,7 +6387,7 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "git+https://github.com/lexmount/resvg?rev=02b16a3cc3ca4dd019293c45aacf89ca11875ed9#02b16a3cc3ca4dd019293c45aacf89ca11875ed9"
+source = "git+https://github.com/lexmount/resvg?rev=7c4979aaca418dab1c987536b1c33bc581ca9526#7c4979aaca418dab1c987536b1c33bc581ca9526"
 dependencies = [
  "base64 0.23.1",
  "data-url",

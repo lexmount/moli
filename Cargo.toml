@@ -130,7 +130,7 @@ stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "9177c83
 stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "9177c83a2c480b79b87fc546f0cf6371eaa306dc" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "moli" }
 # Resolve SVG relative font weights using the CSS inherited-weight ranges.
-usvg = { git = "https://github.com/lexmount/resvg", rev = "02b16a3cc3ca4dd019293c45aacf89ca11875ed9" }
+usvg = { git = "https://github.com/lexmount/resvg", rev = "7c4979aaca418dab1c987536b1c33bc581ca9526" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "0a337871fa44db7d48571b06668f92737eefa8c2" }
 
 [patch."https://github.com/DioxusLabs/taffy"]

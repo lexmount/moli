@@ -10,6 +10,7 @@ euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-css-parse = { path = "../moli-css-parse" }
 moli-image = { path = "../moli-image" }
+moli-svg = { path = "../moli-svg" }
 moli-system-fonts = { path = "../moli-system-fonts" }
 moli-trace = { path = "../moli-trace" }
 parley = "=0.11.0"

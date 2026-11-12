@@ -36,6 +36,7 @@ mod source;
 mod stacking;
 mod style;
 mod stylo_to_parley;
+mod svg_text;
 mod table;
 mod table_role;
 mod taffy_tree;
@@ -107,6 +108,7 @@ pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
     LayoutPosition, ResolvedLayoutStyle,
 };
+pub use svg_text::{LayoutSvgText, LayoutSvgTextElement};
 pub use text::{
     CanvasFont, DEFAULT_STANDARD_FONT_FAMILY, DocumentLayoutServices, FontFaceData,
     ShapedCanvasText, SystemFontPolicy, WebFontDeclaration, WebFontFace, WebFontRegistration,
