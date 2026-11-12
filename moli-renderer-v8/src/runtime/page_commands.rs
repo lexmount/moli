@@ -860,10 +860,14 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalString(
                 self.outer_html_for_node(reference, include_shadow_dom)?,
             )),
-            RendererPageCommand::RenderMarkdown { options } => Ok(RendererPageReply::OptionalString(
-                Some(self.render_markdown(options)),
-            )),
+            RendererPageCommand::RenderMarkdown { options } => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                Ok(RendererPageReply::OptionalString(Some(
+                    self.render_markdown(options),
+                )))
+            }
             RendererPageCommand::SerializeDocument { options } => {
+                self.vm_mut().run_pending_resize_observer_frame();
                 // Capture both from the live document in this handler turn.
                 // Browser admission metadata may precede a queued history update.
                 Ok(RendererPageReply::SerializedDocument {
@@ -878,12 +882,16 @@ impl PageVm {
                 self.vm_mut().publish_layout()?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::PrintToPdf(request) => self
-                .print_to_pdf(request)
-                .map(RendererPageReply::PrintToPdf),
-            RendererPageCommand::CaptureScreenshot(request) => self
-                .capture_screenshot(request)
-                .map(RendererPageReply::CaptureScreenshot),
+            RendererPageCommand::PrintToPdf(request) => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                self.print_to_pdf(request)
+                    .map(RendererPageReply::PrintToPdf)
+            }
+            RendererPageCommand::CaptureScreenshot(request) => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                self.capture_screenshot(request)
+                    .map(RendererPageReply::CaptureScreenshot)
+            }
             RendererPageCommand::CaptureScreencastFrame(request) => self
                 .capture_screencast_frame(request)
                 .map(RendererPageReply::CaptureScreencastFrame),

@@ -1302,6 +1302,24 @@ fn cli_dump_html_strips_shadow_adopted_stylesheets_in_top_and_child_documents() 
 }
 
 #[test]
+fn cli_dumps_include_content_written_by_resize_observers() -> Result<()> {
+    // Observations are delivered at the next animation frame; a dump taken
+    // right after load must still include what the callback wrote.
+    let html = "<div id=t style='width:30px;height:10px'></div><script>new ResizeObserver(() => t.setAttribute('data-observed', 'yes')).observe(t)</script>";
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+    for args in [&[][..], &["--layout"][..]] {
+        let output = run_fetch_cli_with_args(&url, args)?;
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(r#"data-observed="yes""#),
+            "{args:?}: {stdout}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<()> {
     let html = "<!doctype html><style>html,body{margin:0}main{height:1600px;background:blue}</style><main></main>";
     let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));

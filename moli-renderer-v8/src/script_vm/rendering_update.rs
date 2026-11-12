@@ -71,6 +71,17 @@ impl ScriptVm {
         })
     }
 
+    /// Runs a ResizeObserver delivery that is waiting for the next animation
+    /// frame now, once, so a snapshot of rendered output (a dump, screenshot
+    /// or PDF) includes what the observers write, as a browser's frame before
+    /// capture would. Pages without queued observations do nothing.
+    pub(crate) fn run_pending_resize_observer_frame(&mut self) {
+        let _ = self.with_current_main_world_scope(|scope, _| {
+            crate::context_bootstrap::deliver_resize_observer_frame(scope);
+            Ok(())
+        });
+    }
+
     pub(crate) fn discard_stale_rendering_update_task(
         &mut self,
         task_id: RendererPageRenderingUpdateTaskId,
