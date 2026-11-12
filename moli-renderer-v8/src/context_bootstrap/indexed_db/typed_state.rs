@@ -628,6 +628,30 @@ pub(crate) fn indexed_db_has_in_flight_sql_tasks_for_test(
 }
 
 #[cfg(test)]
+pub(crate) fn indexed_db_transaction_commit_submitted_for_test<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
+        return false;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    let table = table.borrow();
+    table.transactions.get(&id).is_some_and(|state| {
+        state.status.committing
+            && state.status.commit_scheduled
+            && !state.status.finished
+            && !state.status.aborted
+            && !state.operation_in_flight
+            && state.operations.is_empty()
+            && table
+                .sql_tasks
+                .values()
+                .any(|task| task.transaction == Some(id))
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn indexed_db_has_queued_task_kind_for_test(
     scope: &mut v8::PinScope<'_, '_>,
     kind: IndexedDbTaskKind,
