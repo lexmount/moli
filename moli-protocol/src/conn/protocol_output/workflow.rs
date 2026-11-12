@@ -92,6 +92,10 @@ impl PendingProtocolWorkflow {
             None,
             None,
         );
+        assert!(
+            self.source_cursor.is_none() || context.renderer_output_boundary.is_none(),
+            "renderer fact projection publishes navigation as independent owner work"
+        );
         let events = conn.finish_protocol_output_projection(context, self.target_id);
         if let Some(source) = self.source_cursor {
             conn.scheduler_state
@@ -118,14 +122,23 @@ impl CdpConnection {
                     target_id.clone(),
                 );
             }
-            // The insertion also releases independently transported Native
-            // observations. Its receipt must survive an empty wire suffix.
-            self.publish_renderer_inserted_protocol_output(
-                after,
-                dependencies.into_iter().collect(),
-                boundary,
-                target_id,
-            );
+            // Each navigation settles its exact Native commit independently
+            // of the renderer action that requested it. Retain this fence even
+            // without client events; it also owns the commit's transport lease.
+            self.publish_protocol_work(move |sequence| {
+                let native = boundary.cursor();
+                let mut predecessors = dependencies.into_iter().collect::<Vec<_>>();
+                predecessors.push(boundary);
+                let mut work =
+                    crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
+                        sequence,
+                        after,
+                        predecessors,
+                        target_id,
+                    );
+                work.bind_renderer_delivery_predecessor(native);
+                work
+            });
         } else {
             events.extend(after);
             if !dependencies.is_empty() && !events.is_empty() {
@@ -217,6 +230,17 @@ mod tests {
                 assert!(output.is_empty());
                 let work = conn.take_published_protocol_work();
                 assert_eq!(work.len(), if emit_events { 2 } else { 1 });
+                assert!(
+                    work.iter()
+                        .all(|work| work.renderer_output_source().is_none())
+                );
+                if emit_events {
+                    assert_eq!(work[0].renderer_delivery_predecessor(), None);
+                }
+                assert_eq!(
+                    work.last().unwrap().renderer_delivery_predecessor(),
+                    Some(cursors[1])
+                );
                 assert!(
                     work.iter()
                         .all(|work| !work.renderer_output_predecessor_is_projected(&conn))

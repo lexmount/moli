@@ -74,41 +74,6 @@ impl CdpConnection {
         });
     }
 
-    pub(crate) fn publish_renderer_inserted_protocol_output(
-        &mut self,
-        events: Vec<super::BackgroundProtocolEvent>,
-        mut predecessors: Vec<moli_core::RendererOutputFence>,
-        boundary: moli_core::RendererOutputFence,
-        target_id: Option<String>,
-    ) {
-        predecessors.push(boundary.clone());
-        self.publish_protocol_work(move |sequence| {
-            crate::domains::activity::ProtocolSchedulerWork::renderer_fenced_output(
-                sequence,
-                events,
-                predecessors,
-                target_id,
-            )
-            .with_renderer_insertion_boundary(boundary)
-        });
-    }
-
-    #[cfg(feature = "test-support")]
-    pub(crate) fn finish_renderer_output_projection_for_test_support(
-        &mut self,
-        context: super::CommandDispatchContext,
-        source: moli_core::RendererOutputCursor,
-    ) -> (
-        Vec<super::BackgroundProtocolEvent>,
-        Vec<super::CdpSchedulerEvent>,
-    ) {
-        let start = self.scheduler_state.protocol_work_publication_mark();
-        let events = self.finish_protocol_output_projection(context, None);
-        self.scheduler_state
-            .bind_renderer_output_source_since(start, source);
-        (events, self.take_scheduler_events())
-    }
-
     pub(crate) fn publish_output_after_renderer_delivery(
         &mut self,
         events: Vec<super::BackgroundProtocolEvent>,

@@ -1,9 +1,9 @@
-"""Renderer publication contracts calibrated against Chromium 145.0.7632.116.
+"""Renderer publication contracts calibrated against Chromium 156.0.8078.73.
 
 Use the actual WebSocket order, retaining replies received while waiting for
 another id. Timeouts only bound liveness; no sleep or retry proves ordering.
-The pending-evaluation frame and download cases are also calibrated against Chromium
-156.0.8078.73 (2026-11-12). The six mutation cases explicitly distinguish Moli's current owner-only entry
+The pending-evaluation frame, navigation and download cases use real owner work.
+The six mutation cases explicitly distinguish Moli's current owner-only entry
 from Chromium's ordinary-pause capability. They are not CDP-wide requirements.
 """
 
@@ -21,7 +21,7 @@ from ..assertions import SmokeError, assert_equal, record_contract
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_browser_version
 
 
-CHROMIUM_SOURCE = "Chromium 145.0.7632.116 raw CDP calibration, 2026-10-01"
+CHROMIUM_SOURCE = "Chromium 156.0.8078.73 raw CDP calibration, 2026-11-12"
 
 
 @dataclass
