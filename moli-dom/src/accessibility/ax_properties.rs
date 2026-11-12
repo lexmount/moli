@@ -75,7 +75,7 @@ pub(super) fn ax_name(
     node: &Node,
 ) -> Result<String, AxUnavailable> {
     match node.kind() {
-        NodeData::Document(_) => Ok(ax_document_name(document)),
+        NodeData::Document(_) => Ok(ax_document_name(document, node)),
         NodeData::Element(_) => Ok(normalize_ax_whitespace(
             &ax_node_name(
                 document,
@@ -510,15 +510,17 @@ fn normalize_ax_whitespace(value: &str) -> String {
     value.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn ax_document_name(document: &NativeDom) -> String {
+/// Name of the projected Document itself, which may be a child frame's
+/// Document sharing the arena with the page.
+fn ax_document_name(document: &NativeDom, node: &Node) -> String {
     let title = document
-        .document_head_handle()
+        .document_head_handle_for_document(node.id())
         .and_then(|head| first_direct_html_child(document, head, "title"))
         .and_then(|title| document.text_content(title))
         .map(|title| title.trim().to_owned())
         .filter(|title| !title.is_empty());
     title
-        .or_else(|| document.final_url().map(|url| url.to_string()))
+        .or_else(|| node.as_document().map(|own| own.url().to_string()))
         .unwrap_or_default()
 }
 
@@ -582,12 +584,12 @@ pub(super) fn ax_value(document: &NativeDom, node_id: NodeId, node: &Node) -> Op
 pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) -> Vec<Value> {
     let mut properties = Vec::new();
     match node.kind() {
-        NodeData::Document(_) => {
-            if let Some(url) = document.final_url() {
-                properties.push(ax_string_property("url", url.as_str()));
-            }
+        NodeData::Document(own) => {
+            properties.push(ax_string_property("url", own.url().as_str()));
             properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-            properties.push(ax_bool_property("focused", "booleanOrUndefined", true));
+            // Only the page's own Document holds focus, not every frame's.
+            let focused = node_id == document.document_node_id();
+            properties.push(ax_bool_property("focused", "booleanOrUndefined", focused));
         }
         NodeData::Element(element) => {
             if ax_role(node) == "status" {

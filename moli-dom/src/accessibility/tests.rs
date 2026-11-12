@@ -607,3 +607,57 @@ fn full_tree_does_not_read_styles_below_a_not_rendered_branch() {
     );
     styles.assert_read_once();
 }
+
+#[test]
+fn ax_child_document_root_uses_its_own_title_url_and_focus() {
+    let mut document = DomHost::from_dom(NativeDom::new_html(
+        url::Url::parse("https://example.test/top.html").expect("valid document URL"),
+    ));
+    let top = document.document_node_id();
+    let top_html = append_element(&mut document, top, "html");
+    let top_head = append_element(&mut document, top_html, "head");
+    let top_title = append_element(&mut document, top_head, "title");
+    append_text(&mut document, top_title, "Top title");
+    let child = document.create_detached_html_document_with_url(
+        url::Url::parse("https://example.test/sub/child.html").expect("valid child URL"),
+    );
+    let html = append_element(&mut document, child, "html");
+    let head = append_element(&mut document, html, "head");
+    let title = append_element(&mut document, head, "title");
+    append_text(&mut document, title, "Child title");
+    append_element(&mut document, html, "body");
+
+    let root = |nodes: Vec<Value>, node: NodeId| -> (String, Value) {
+        let root = node_by_id(&nodes, node).clone();
+        (
+            root["name"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            root["properties"].clone(),
+        )
+    };
+    let property = |properties: &Value, name: &str| {
+        properties
+            .as_array()
+            .and_then(|all| all.iter().find(|p| p["name"] == name))
+            .map(|p| p["value"]["value"].clone())
+    };
+    let (name, properties) = root(tree(&document), top);
+    assert_eq!(name, "Top title");
+    assert_eq!(property(&properties, "focused"), Some(json!(true)));
+    let child_nodes = request(
+        &document,
+        &mut FixtureStyles::visible(&document),
+        child,
+        AccessibilityRequest::Tree { max_depth: None },
+    )
+    .expect("child AX tree");
+    let (name, properties) = root(child_nodes, child);
+    assert_eq!(name, "Child title");
+    assert_eq!(
+        property(&properties, "url"),
+        Some(json!("https://example.test/sub/child.html"))
+    );
+    assert_eq!(property(&properties, "focused"), Some(json!(false)));
+}
