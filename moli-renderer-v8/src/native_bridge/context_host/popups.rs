@@ -49,7 +49,6 @@ use crate::{
     },
 };
 use anyhow::Result;
-use moli_crypto::sha256_hex;
 use moli_fetch::Request;
 use moli_storage_key::{MoliStorageKey, StoragePartitionRelation, site_for_url};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
@@ -1674,7 +1673,7 @@ impl JsContextHost {
             if opener_child_handle.is_none() {
                 return opener_scope;
             }
-            let storage_key = web_storage_key_for_child_about_blank_popup(&opener_scope);
+            let storage_key = popup_first_party_storage_key(&opener_scope);
             let area_key = web_storage_area_key_for_storage_key(&storage_key);
             return LightweightPopupStorageScope::new(
                 opener_scope.origin().to_owned(),
@@ -6207,24 +6206,12 @@ fn trackable_lightweight_popup_window_name(target_name: &str) -> Option<String> 
     Some(target_name.to_owned())
 }
 
-fn web_storage_key_for_child_about_blank_popup(
-    opener_scope: &LightweightPopupStorageScope,
-) -> MoliStorageKey {
-    let popup_top_level_site = format!(
-        "popup:{}",
-        sha256_hex(
-            opener_scope
-                .storage_key()
-                .serialized_storage_key()
-                .as_bytes()
-        )
-    );
-    MoliStorageKey::new(
-        opener_scope.origin().to_owned(),
-        popup_top_level_site,
-        None,
-        StoragePartitionRelation::ThirdParty,
-    )
+fn popup_first_party_storage_key(opener_scope: &LightweightPopupStorageScope) -> MoliStorageKey {
+    // The popup is a new top-level context. Its inherited tuple origin becomes
+    // its own site, without the iframe's embedding partition or ancestor bit.
+    let origin =
+        Url::parse(opener_scope.origin()).expect("a non-opaque popup creator has a URL origin");
+    MoliStorageKey::first_party_from_url(&origin, None)
 }
 
 fn lightweight_popup_initial_base_url(target_url: &Url, creator_base_url: Url) -> Url {
