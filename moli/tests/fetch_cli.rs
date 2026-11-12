@@ -1143,20 +1143,26 @@ fn cli_fetch_implicit_html_dump_is_quiet_by_default() -> Result<()> {
 
 #[test]
 fn cli_dump_html_with_frames_nests_and_strips_child_documents() -> Result<()> {
-    let html = r#"<!doctype html><p>Top</p><iframe srcdoc="<p>OUTER</p><iframe srcdoc='<p>INNER</p><script>var secret=1</script><style>p{color:red}</style>'></iframe>"></iframe>"#;
+    // INNER and the shadow tree exist only in the live child Documents, never
+    // in the original srcdoc attributes.
+    let html = r#"<!doctype html><p>Top</p><iframe srcdoc="<p>OUTER</p><div id=h></div><script>h.attachShadow({mode:'open'}).innerHTML='<b>SHADOW'+'TEXT</b>'</script><iframe srcdoc='<p id=x></p><script>x.textContent=&quot;IN&quot;+&quot;NER&quot;;var secret=1</script><style>p{color:red}</style>'></iframe>"></iframe>"#;
     let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
     let output = run_fetch_cli_with_args(&url, &["--with-frames"])?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // The inner Document is serialized inside the outer frame's srcdoc, so it
     // is escaped twice.
-    assert!(stdout.contains("&amp;lt;p&amp;gt;INNER"), "{stdout}");
+    assert!(stdout.contains("&amp;gt;INNER&amp;lt;"), "{stdout}");
+    assert!(
+        stdout.contains("&lt;template shadowrootmode=&quot;open&quot;&gt;&lt;b&gt;SHADOWTEXT"),
+        "{stdout}"
+    );
     assert!(stdout.contains("var secret=1"), "{stdout}");
 
     let output = run_fetch_cli_with_args(&url, &["--with-frames", "--strip-mode", "full"])?;
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("&amp;lt;p&amp;gt;INNER"), "{stdout}");
+    assert!(stdout.contains("&amp;gt;INNER&amp;lt;"), "{stdout}");
     assert!(!stdout.contains("secret"), "{stdout}");
     assert!(!stdout.contains("color:red"), "{stdout}");
     Ok(())

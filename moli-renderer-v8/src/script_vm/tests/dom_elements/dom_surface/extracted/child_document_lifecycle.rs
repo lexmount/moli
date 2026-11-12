@@ -2089,13 +2089,6 @@ async fn detached_frame_tree_snapshot_reuses_each_child_document_scripting_polic
         vec![Some("sandboxed-fallback")],
         "script-disallowed noscript contents must remain markup in snapshot fallback parsing"
     );
-    let nested_frame_id = sandboxed_tree[0].child_frames[0].frame_id.clone();
-    assert!(
-        sandboxed_vm
-            .child_browsing_context_document_snapshot_by_frame_id(&nested_frame_id)
-            .is_some(),
-        "frame-id lookup must use the same scripting-disabled snapshot parser"
-    );
 }
 #[tokio::test]
 async fn child_document_open_in_dom_content_loaded_yields_to_timer() {

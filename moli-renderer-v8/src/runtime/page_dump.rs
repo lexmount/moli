@@ -110,22 +110,21 @@ impl PageVm {
     }
 
     fn inline_child_frame_markups_into_dump_dom(
-        &mut self,
+        &self,
         dom: &mut NativeDom,
         child_frames: Vec<(String, NativeNodeId, NativeNodeId)>,
     ) {
         // Snapshot order lists a parent frame before its descendants. Walk it
         // backwards so a nested owner's `srcdoc` is already in the copy when
         // its parent Document is serialized.
-        for (frame_id, owner_node_id, child_document) in child_frames.into_iter().rev() {
+        for (frame_id, owner_node_id, _) in child_frames.into_iter().rev() {
             let Some(snapshot) = self
-                .vm_mut()
-                .child_browsing_context_document_snapshot_by_frame_id(&frame_id)
+                .vm()
+                .child_browsing_context_document_snapshot_from_copy(&frame_id, dom)
             else {
                 continue;
             };
-            let markup = dom.inner_html(child_document).unwrap_or(snapshot.markup);
-            let _ = dom.set_attribute(owner_node_id, "srcdoc", &markup);
+            let _ = dom.set_attribute(owner_node_id, "srcdoc", &snapshot.markup);
             let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
         }
     }
