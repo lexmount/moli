@@ -3,6 +3,51 @@
 const assert = require("node:assert/strict");
 const CDP = require("chrome-remote-interface");
 
+async function verifyTracing(client) {
+  assert.equal(typeof client.Tracing.dataCollected, "function");
+  assert.equal(typeof client.Tracing.tracingComplete, "function");
+  const results = [];
+  for (const transferMode of ["ReportEvents", "ReturnAsStream"]) {
+    const traceEvents = [];
+    const removeData = client.Tracing.dataCollected(({value}) => traceEvents.push(...value));
+    try {
+      const completed = client.Tracing.tracingComplete();
+      await client.Tracing.start({categories: "__metadata", transferMode});
+      const syncId = `protocol-schema-${transferMode}`;
+      await client.Tracing.recordClockSyncMarker({syncId});
+      await client.Tracing.end();
+      const complete = await completed;
+      assert.equal(complete.dataLossOccurred, false);
+      if (transferMode === "ReturnAsStream") {
+        assert.equal(traceEvents.length, 0);
+        assert.equal(typeof complete.stream, "string");
+        const chunks = [];
+        try {
+          let eof = false;
+          while (!eof) {
+            const part = await client.IO.read({handle: complete.stream});
+            chunks.push(Buffer.from(part.data, part.base64Encoded ? "base64" : "utf8"));
+            eof = part.eof;
+          }
+        } finally {
+          await client.IO.close({handle: complete.stream});
+        }
+        traceEvents.push(...JSON.parse(Buffer.concat(chunks).toString("utf8")).traceEvents);
+      } else {
+        assert.equal(complete.stream, undefined);
+      }
+      assert(traceEvents.some((event) => event.name === "clock_sync" && event.args?.sync_id === syncId));
+      results.push({
+        name: `protocol_schema_generated_client_tracing_${transferMode}`, ok: true,
+        transferMode, traceEventCount: traceEvents.length,
+      });
+    } finally {
+      removeData();
+    }
+  }
+  return results;
+}
+
 async function main() {
   const endpoint = new URL(process.argv[2]);
   const fixture = process.argv[3];
@@ -60,11 +105,12 @@ async function main() {
     }, sessionId);
     assert.equal(exceptionDetails, undefined);
     assert.equal(result.value, url);
+    const tracingResults = await verifyTracing(client);
     process.stdout.write(JSON.stringify({ok: true, results: [{
       name: "protocol_schema_generated_client_navigation", ok: true,
       client: "chrome-remote-interface", schema: "/json/protocol",
       events: ["Target.attachedToTarget", "Network.requestWillBeSent", "Page.loadEventFired"],
-    }]}));
+    }, ...tracingResults]}));
   } finally {
     for (const remove of unsubscribe) remove();
     if (targetId) await client.Target.closeTarget({targetId});

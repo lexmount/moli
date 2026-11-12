@@ -111,6 +111,7 @@ const IMPLEMENTED_BROWSER_EVENTS: &[(&str, &[&str])] = &[
             "targetInfoChanged",
         ],
     ),
+    ("Tracing", &["dataCollected", "tracingComplete"]),
     (
         "WebMCP",
         &["toolInvoked", "toolResponded", "toolsAdded", "toolsRemoved"],
@@ -289,6 +290,18 @@ mod tests {
                     .unwrap()
                     .iter()
                     .any(|p| p["name"] == parameter)
+            );
+        }
+    }
+
+    #[test]
+    fn advertised_tracing_events_cover_both_transfer_modes() {
+        let advertised: Value = serde_json::from_str(advertised_protocol_json()).unwrap();
+        let upstream: Value = serde_json::from_str(CDP_PROTOCOL_JSON).unwrap();
+        for event in ["dataCollected", "tracingComplete"] {
+            assert_eq!(
+                definition(domain(&advertised, "Tracing"), "events", event),
+                definition(domain(&upstream, "Tracing"), "events", event),
             );
         }
     }
