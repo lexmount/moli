@@ -805,7 +805,9 @@ fn network_intercept_url_pattern(
     let url_pattern = match type_name {
         "string" => {
             let pattern = required_object_string(pattern, "pattern")?;
-            validate_network_intercept_string_pattern(pattern)?.to_string()
+            let mut parsed = validate_network_intercept_string_pattern(pattern)?;
+            parsed.set_fragment(None);
+            parsed.to_string()
         }
         "pattern" => network_intercept_pattern_object(pattern)?,
         _ => {
