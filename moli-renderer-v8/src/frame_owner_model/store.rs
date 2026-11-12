@@ -2848,11 +2848,14 @@ impl FrameOwnerStore {
         let Some(token) = binding.load_delay_token() else {
             return true;
         };
-        self.release_document_load_delay(
-            binding.owner(),
-            token,
-            DocumentLoadDelayReason::StyleLoadEvent,
-        )
+        let owner = binding.owner();
+        self.release_document_load_delay(owner, token, DocumentLoadDelayReason::StyleLoadEvent)
+            // A stopped Document already dropped every load-delay token.
+            || self
+                .documents
+                .get(&owner.document_id)
+                .filter(|document| document.local_window_id == owner.local_window_id)
+                .is_some_and(|document| document.lifecycle_progress.load_was_stopped())
     }
 
     pub(crate) fn accept_current_main_stylesheet_subresource_load_delay(
