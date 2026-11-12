@@ -4,7 +4,6 @@ use url::Url;
 use crate::document_runtime::DocumentPolicyContainer;
 
 mod detached;
-mod document_lookup;
 mod frame_tree;
 mod ids;
 mod markup;

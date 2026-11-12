@@ -97,6 +97,7 @@ mod frame_document_ready_routes;
 mod hash_changes;
 mod host_environment;
 mod host_loads;
+mod html_serialization;
 mod image_decodes;
 mod image_loads;
 mod image_resources;
