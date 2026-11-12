@@ -878,6 +878,10 @@ impl PageVm {
             RendererPageCommand::LayoutMetrics => {
                 Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()?))
             }
+            RendererPageCommand::RunPendingResizeObserverFrame => {
+                self.vm_mut().run_pending_resize_observer_frame();
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::PublishLayout => {
                 self.vm_mut().publish_layout()?;
                 Ok(RendererPageReply::Unit)

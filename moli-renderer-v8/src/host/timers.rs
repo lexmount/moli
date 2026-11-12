@@ -1337,7 +1337,7 @@ fn run_window_timer_callback(
                 })
         }
         ScheduledTimerCallback::ResizeObserverFrame { .. } => {
-            crate::context_bootstrap::deliver_resize_observer_frame(scope);
+            crate::context_bootstrap::run_resize_observer_frame_task(scope);
             Ok(HostTimeoutRunResult::Consumed)
         }
         ScheduledTimerCallback::ResourceTimingBufferFull {

@@ -105,6 +105,11 @@ impl ReadinessPlan {
                 .context("failed while waiting for script to become truthy")?;
         }
 
+        // Observations made before readiness are delivered at the next frame;
+        // run that one delivery now so `--eval` and every dump see its output.
+        page.run_pending_resize_observer_frame_async()
+            .await
+            .context("failed to deliver pending ResizeObserver observations")?;
         Ok(())
     }
 }

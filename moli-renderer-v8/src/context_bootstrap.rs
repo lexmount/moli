@@ -151,7 +151,7 @@ mod range_live;
 mod range_surface;
 mod resize_observer_runtime;
 pub(crate) use resize_observer_runtime::{
-    deliver_resize_observer_frame, queue_resize_observer_checks,
+    deliver_resize_observer_frame, queue_resize_observer_checks, run_resize_observer_frame_task,
 };
 mod runtime_state;
 mod selection;

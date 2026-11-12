@@ -1740,6 +1740,26 @@ impl Page {
             .await
     }
 
+    /// Runs a ResizeObserver delivery that is waiting for the next frame,
+    /// once, so readiness output includes what observers write. CLI `fetch`
+    /// calls it after readiness; CDP clients drive frames themselves.
+    pub async fn run_pending_resize_observer_frame_async(&self) -> Result<()> {
+        // Like the dump commands, this does not refresh page state or follow
+        // a navigation the page has queued.
+        let pending =
+            self.start_page_command(RendererPageCommand::RunPendingResizeObserverFrame)?;
+        let completion = pending.wait().await?;
+        let (completion, _renderer_output_predecessor) =
+            completion.into_output().into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        expect_page_reply!(
+            reply,
+            "run pending ResizeObserver frame",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub fn start_layout_metrics(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::LayoutMetrics)
     }

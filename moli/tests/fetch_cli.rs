@@ -1316,6 +1316,32 @@ fn cli_dumps_include_content_written_by_resize_observers() -> Result<()> {
             "{args:?}: {stdout}"
         );
     }
+    // `--eval` and the semantic tree read the page after readiness too.
+    let text = "<div id=t style='width:30px;height:10px'></div><p id=o></p><script>new ResizeObserver(() => { o.textContent = 'ROTEXT' }).observe(t)</script>";
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(text));
+    for wait in ["domcontentloaded", "load", "done"] {
+        for layout in [&[][..], &["--layout"][..]] {
+            let mut args = vec![
+                "moli",
+                "fetch",
+                "--log-level",
+                "error",
+                "--wait-until",
+                wait,
+            ];
+            args.extend_from_slice(layout);
+            args.extend_from_slice(&["--eval", "o.textContent", &url]);
+            let output = run_moli(args)?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                stdout.contains("ROTEXT"),
+                "--eval {wait} {layout:?}: {stdout}"
+            );
+        }
+    }
+    let output = run_fetch_cli_with_dump_and_args(&url, "semantic_tree_text", &[])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ROTEXT"), "semantic_tree_text: {stdout}");
     Ok(())
 }
 

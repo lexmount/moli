@@ -13,6 +13,9 @@ use webidl::WebIdlDictionarySerialize;
 
 const RESIZE_OBSERVER_QUEUE_SLOT: &str = "__moliResizeObserverQueue";
 const RESIZE_OBSERVER_REGISTRY_SLOT: &str = "__moliResizeObservers";
+/// Set while this Window's frame delivery task is queued, so at most one runs
+/// per frame however often observations are queued or flushed early.
+const RESIZE_OBSERVER_FRAME_SCHEDULED_SLOT: &str = "__moliResizeObserverFrameScheduled";
 
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
@@ -270,6 +273,21 @@ pub(super) fn resize_observer_take_records_callback<'s>(
 /// gather all observations first, then call each observer's callback with a
 /// microtask checkpoint after it, so a callback's promise reactions (for
 /// example a `disconnect()`) run before the next observer is notified.
+/// The Window's frame delivery task.
+pub(crate) fn run_resize_observer_frame_task(scope: &mut v8::PinScope<'_, '_>) {
+    let global = scope.get_current_context().global(scope);
+    let cleared = v8::Boolean::new(scope, false);
+    set_private_value(
+        scope,
+        global,
+        RESIZE_OBSERVER_FRAME_SCHEDULED_SLOT,
+        cleared.into(),
+    );
+    deliver_resize_observer_frame(scope);
+}
+
+/// Delivers queued observations once. Also called ahead of the frame task
+/// (before dumps and captures); the queued task then finds less or nothing.
 pub(crate) fn deliver_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
     let mut deliveries = Vec::new();
     while let Some(observer) = pop_first_object_from_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT)
@@ -758,16 +776,18 @@ fn queue_resize_observer_delivery<'s>(
         return;
     }
     set_resize_observer_scheduled(scope, observer, true);
-    let frame_already_scheduled = global_queue_array(scope, RESIZE_OBSERVER_QUEUE_SLOT)
-        .is_some_and(|queue| queue.length() > 0);
     push_object_to_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT, observer);
-    if !frame_already_scheduled {
-        schedule_resize_observer_frame(scope);
-    }
+    schedule_resize_observer_frame(scope);
 }
 
 /// Deliver at this Window's next animation frame, at most once per frame.
 fn schedule_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
+    let global = scope.get_current_context().global(scope);
+    if get_private_value(scope, global, RESIZE_OBSERVER_FRAME_SCHEDULED_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -777,7 +797,15 @@ fn schedule_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
     // extra milliseconds order this delivery after all of them, as in the
     // rendering update. A resize made inside a rAF callback is usually
     // delivered one frame later.
-    unsafe { &mut *host_ptr }.queue_resize_observer_frame(scope, delay_ms.saturating_add(2));
+    if unsafe { &mut *host_ptr }.queue_resize_observer_frame(scope, delay_ms.saturating_add(2)) {
+        let scheduled = v8::Boolean::new(scope, true);
+        set_private_value(
+            scope,
+            global,
+            RESIZE_OBSERVER_FRAME_SCHEDULED_SLOT,
+            scheduled.into(),
+        );
+    }
 }
 
 pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {
