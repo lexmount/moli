@@ -1258,6 +1258,50 @@ fn cli_dump_html_inlines_and_strips_frames_inside_shadow_roots() -> Result<()> {
 }
 
 #[test]
+fn cli_dump_html_strips_shadow_adopted_stylesheets_in_top_and_child_documents() -> Result<()> {
+    let fixture = r#"<div id=h><template shadowrootmode="open" shadowrootadoptedstylesheets="data:text/css,b%7Bcolor:red%7D"><b>KEEP</b></template></div>"#;
+    for nested in [false, true] {
+        let (html, document) = if nested {
+            (
+                format!(
+                    "<iframe id=outer srcdoc=\"{}\"></iframe>",
+                    fixture.replace('"', "&quot;")
+                ),
+                "document.getElementById('outer')?.contentDocument",
+            )
+        } else {
+            (fixture.to_owned(), "document")
+        };
+        let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+        let ready = format!(
+            "() => {{ const target = {document}?.getElementById('h')?.shadowRoot?.querySelector('b'); return target && target.ownerDocument.defaultView.getComputedStyle(target).color === 'rgb(255, 0, 0)'; }}"
+        );
+        for strip in [None, Some("js"), Some("css"), Some("full")] {
+            let mut args = vec!["--wait-script", &ready];
+            if nested {
+                args.push("--with-frames");
+            }
+            if let Some(strip) = strip {
+                args.extend(["--strip-mode", strip]);
+            }
+            let output = run_fetch_cli_with_args(&url, &args)?;
+            assert!(output.status.success(), "{}", clean_output(&output.stderr));
+            let stdout = clean_output(&output.stdout);
+            let includes_css = !matches!(strip, Some("css" | "full"));
+            assert_eq!(
+                stdout.contains("shadowrootadoptedstylesheets="),
+                includes_css,
+                "nested={nested}, strip={strip:?}: {stdout}"
+            );
+            assert_eq!(stdout.contains("data:text/css,"), includes_css, "{stdout}");
+            assert!(stdout.contains("KEEP"), "{stdout}");
+            assert!(stdout.contains("shadowrootmode="), "{stdout}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<()> {
     let html = "<!doctype html><style>html,body{margin:0}main{height:1600px;background:blue}</style><main></main>";
     let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));

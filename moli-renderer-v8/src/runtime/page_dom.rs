@@ -3533,7 +3533,7 @@ impl PageVm {
         // Include shadow roots as `<template shadowrootmode>`, like the
         // post-processed dump and child frames.
         self.vm()
-            .document_markup_from_copy(dom.document_node_id(), dom)
+            .document_markup_from_copy(dom.document_node_id(), dom, true)
             .unwrap_or_else(|| dom.serialize_document())
     }
 
