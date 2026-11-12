@@ -24,10 +24,17 @@ use crate::renderer::{
     RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution, RendererDomNodeReference,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
     RendererDomSearchResultsResolution, RendererDomSnapshotCaptureOptions,
-    RendererDomSnapshotCapturePayload, RendererLayoutMetrics, RendererPageCommand,
-    RendererPageDumpOptions, RendererPageReply, RendererPageState, RendererRuntimeRemoteObject,
-    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
+    RendererDomSnapshotCapturePayload, RendererHtmlSerializeOptions, RendererLayoutMetrics,
+    RendererMarkdownOptions, RendererPageCommand, RendererPageReply, RendererPageState,
+    RendererRuntimeRemoteObject, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
 };
+
+/// URL and HTML captured in the same synchronous renderer command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerializedHtmlDocument {
+    pub url: String,
+    pub html: String,
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1713,7 +1720,14 @@ impl Page {
     }
 
     pub fn start_serialize_html(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SerializeDocument)
+        self.start_serialize_html_with_options(RendererHtmlSerializeOptions::default())
+    }
+
+    pub fn start_serialize_html_with_options(
+        &self,
+        options: RendererHtmlSerializeOptions,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SerializeDocument { options })
     }
 
     /// Publishes current layout for subsequent geometry reads without painting.
@@ -1819,54 +1833,60 @@ impl Page {
         )
     }
 
-    pub fn start_render_page_dump(
+    pub fn start_render_markdown(
         &self,
-        options: RendererPageDumpOptions,
+        options: RendererMarkdownOptions,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RenderPageDump { options })
+        self.start_page_command(RendererPageCommand::RenderMarkdown { options })
     }
 
-    pub fn finish_render_page_dump(&mut self, completion: CompletedPageCommand) -> Result<String> {
+    pub fn finish_render_markdown(&mut self, completion: CompletedPageCommand) -> Result<String> {
         let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
-            "render page dump page command",
+            "render Markdown page command",
             "a string reply",
             RendererPageReply::OptionalString(Some(rendered)) => Ok(rendered),
         )
     }
 
-    pub async fn render_page_dump_async(
+    pub async fn render_markdown_async(
         &mut self,
-        options: RendererPageDumpOptions,
+        options: RendererMarkdownOptions,
     ) -> Result<String> {
-        let pending = self.start_render_page_dump(options)?;
+        let pending = self.start_render_markdown(options)?;
         let completion = pending.wait().await?;
-        self.finish_render_page_dump(completion)
+        self.finish_render_markdown(completion)
+    }
+
+    pub fn finish_serialized_document(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<SerializedHtmlDocument> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "serialize HTML page command", "a serialized document reply",
+            RendererPageReply::SerializedDocument { url, html } => Ok(SerializedHtmlDocument { url, html }),
+        )
     }
 
     pub fn finish_serialize_html(&mut self, completion: CompletedPageCommand) -> Result<String> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "serialize HTML page command",
-            "a serialized document reply",
-            RendererPageReply::SerializedDocument { html, .. } => Ok(html),
-        )
+        self.finish_serialized_document(completion)
+            .map(|document| document.html)
     }
 
-    pub async fn serialize_html_async(&self) -> Result<String> {
-        let pending = self.start_serialize_html()?;
+    pub async fn serialize_html_async(&mut self) -> Result<String> {
+        self.serialize_document_async(RendererHtmlSerializeOptions::default())
+            .await
+            .map(|document| document.html)
+    }
+
+    pub async fn serialize_document_async(
+        &mut self,
+        options: RendererHtmlSerializeOptions,
+    ) -> Result<SerializedHtmlDocument> {
+        let pending = self.start_serialize_html_with_options(options)?;
         let completion = pending.wait().await?;
-        let (completion, _renderer_output_predecessor) =
-            completion.into_output().into_completion_and_predecessor();
-        let (reply, _, _) = completion.into_parts();
-        expect_page_reply!(
-            reply,
-            "serialize HTML page command",
-            "a serialized document reply",
-            RendererPageReply::SerializedDocument { html, .. } => Ok(html),
-        )
+        self.finish_serialized_document(completion)
     }
 
     pub fn start_resolve_runtime_object_for_backend_node_id_in_inspector_session(

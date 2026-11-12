@@ -72,7 +72,7 @@ async fn child_browsing_context_window_graph_uses_stable_live_proxies() -> Resul
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-window-graph"))
         .await?;
 
@@ -172,7 +172,7 @@ async fn child_browsing_context_window_wrapper_owns_runtime_backing() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-runtime-backing"))
         .await?;
 
@@ -887,7 +887,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch_with_wait_until(
             &server.url("/compat/window-child-browsing-context-attribute-navigation-history"),
             RenderedDomWaitUntil::NetworkIdle,
@@ -1121,7 +1121,7 @@ async fn child_browsing_context_navigation_state_stays_window_local() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-navigation-state"))
         .await?;
 
@@ -1355,7 +1355,7 @@ async fn child_browsing_context_navigation_push_state_stays_window_local() -> Re
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-navigation-push-state"))
         .await?;
 
@@ -2105,7 +2105,7 @@ async fn child_browsing_context_navigation_noop_result_surface_matches_chromium(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-navigation-noop-result-surface"))
         .await?;
 
@@ -2168,7 +2168,7 @@ async fn child_browsing_context_navigation_traverse_to_noop_result_surface_match
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/window-child-browsing-context-navigation-traverse-to-noop-result-surface",
         ))
@@ -2329,7 +2329,7 @@ async fn child_browsing_context_navigation_result_surface_exists_in_child_script
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page =
+    let mut page =
         browser
             .fetch(&server.url(
                 "/compat/window-child-browsing-context-navigation-result-surface-in-child-script",
@@ -2846,7 +2846,7 @@ async fn child_browsing_context_reload_result_surface_exists_in_child_script() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(
             &server
                 .url("/compat/window-child-browsing-context-reload-result-surface-in-child-script"),
@@ -3783,7 +3783,7 @@ async fn child_browsing_context_current_entry_same_document_uses_child_owner() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url(
             "/compat/window-child-browsing-context-current-entry-same-document-uses-child-owner",
         ))
@@ -3905,7 +3905,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-fragment-navigation-history"))
         .await?;
 
@@ -4022,7 +4022,7 @@ async fn child_browsing_context_initial_navigation_keeps_joint_history_length_st
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-initial-joint-history-timing"))
         .await?;
 
@@ -4566,7 +4566,7 @@ async fn document_has_focus_reports_top_level_true_and_child_false_initially() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/document-has-focus-top-level-true-child-false"))
         .await?;
 
@@ -4866,7 +4866,7 @@ async fn child_browsing_context_external_scripts_use_subresource_cookie_context(
         .url("/compat/window-child-browsing-context-external-script-cookie-parent")
         .replace("127.0.0.1", "localhost");
 
-    let page = browser.fetch(&parent_url).await?;
+    let mut page = browser.fetch(&parent_url).await?;
 
     assert!(
         page.serialize_html_async()
@@ -5527,7 +5527,7 @@ async fn child_browsing_context_iframe_host_load_events_fire_for_live_context_up
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-iframe-load"))
         .await?;
 
@@ -5617,7 +5617,7 @@ async fn child_browsing_context_redirect_updates_window_document_and_navigation_
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-redirect-coherence"))
         .await?;
     let final_url = server.url("/compat/window-child-browsing-context-redirect-child-final");
@@ -5689,7 +5689,7 @@ async fn child_browsing_context_delayed_document_load_does_not_block_parent_runt
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-delayed-async-navigation"))
         .await?;
 
@@ -5952,7 +5952,7 @@ async fn child_browsing_context_delayed_external_script_does_not_block_parent_ru
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-delayed-external-script"))
         .await?;
 

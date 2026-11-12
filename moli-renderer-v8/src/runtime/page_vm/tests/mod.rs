@@ -133,6 +133,7 @@ mod grid_item_paint_order;
 mod grid_resolved_track_values;
 mod hash_change_delivery;
 mod history_traversal;
+mod html_dump;
 mod image_load_event;
 mod image_root_coordinates;
 mod indexed_db;

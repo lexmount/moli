@@ -259,7 +259,7 @@ pub(crate) fn complete_finite(
                     crate::conn::NoDocumentLoaded,
                 ));
             };
-            let html = match page.finish_serialize_html(completion) {
+            let document = match page.finish_serialized_document(completion) {
                 Ok(html) => html,
                 Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -268,8 +268,9 @@ pub(crate) fn complete_finite(
                     ));
                 }
             };
-            let url = page.final_url().as_str().to_owned();
-            CommandOutputPlan::result(json!({ "data": build_mhtml_snapshot(&url, &html) }))
+            CommandOutputPlan::result(
+                json!({ "data": build_mhtml_snapshot(&document.url, &document.html) }),
+            )
         }
         CompletedPageCommandKind::GetLayoutMetrics { completed } => {
             let completion = match *completed {

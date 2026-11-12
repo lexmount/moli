@@ -510,7 +510,7 @@ async fn http_error_navigation_wait_can_finish_the_current_document() -> Result<
     let browser = Browser::new(AppConfig::default())?;
     let url = server.url("/net/upstream/xhr/404");
 
-    let page = executable_page(
+    let mut page = executable_page(
         browser
             .fetch_document_with_lifecycle_decider(
                 Request::get(&url)?,

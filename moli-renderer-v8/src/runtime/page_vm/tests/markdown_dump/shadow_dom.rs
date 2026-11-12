@@ -8,7 +8,7 @@ async fn markdown_keeps_code_after_custom_element_upgrade() {
         page.vm_mut().eval(r#"
             document.body.innerHTML = '<h1>Files</h1><mdn-code-example id="example"><pre><code class="language-js">const file = "note.txt";\nconsole.log(file);</code></pre></mdn-code-example>';
         "#).unwrap();
-        let before = page.render_page_dump(options(false));
+        let before = page.render_markdown(options(false));
         assert!(before.contains("```js\nconst file = \"note.txt\";\nconsole.log(file);\n```"), "{before}");
         page.vm_mut().eval(r#"
             customElements.define('mdn-code-example', class extends HTMLElement {
@@ -21,22 +21,19 @@ async fn markdown_keeps_code_after_custom_element_upgrade() {
         let snapshot = "JSON.stringify([document.body.innerHTML, document.getElementById('example').shadowRoot.innerHTML])";
         let live = page.vm_mut().eval(snapshot).unwrap();
         for strip_css in [false, true] {
-            for with_base in [false, true] {
-                for with_frames in [false, true] {
-                    let mut dump = options(strip_css);
-                    dump.with_base = with_base;
-                    dump.with_frames = with_frames;
-                    assert_eq!(page.render_page_dump(dump), before, "strip_css={strip_css}, with_base={with_base}, with_frames={with_frames}");
+
+                    let dump = options(strip_css);
+
+                    assert_eq!(page.render_markdown(dump), before, "strip_css={strip_css}");
                     assert_eq!(page.vm_mut().eval(snapshot).unwrap(), live, "export must preserve the live light and shadow trees");
-                }
-            }
+
         }
         page.vm_mut().eval(r#"
             document.body.innerHTML = '<p>Plain document after shadow removal</p>';
         "#).unwrap();
         for strip_css in [false, true] {
             assert_eq!(
-                page.render_page_dump(options(strip_css)),
+                page.render_markdown(options(strip_css)),
                 "Plain document after shadow removal"
             );
         }
@@ -63,7 +60,7 @@ async fn markdown_uses_slot_order_and_fallback_without_duplicate_light_content()
         let snapshot = "JSON.stringify([document.body.innerHTML, document.getElementById('host').shadowRoot.innerHTML])";
         let live = page.vm_mut().eval(snapshot).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             let mut previous = 0;
             for text in ["Before", "Shadow heading", "Named content", "Default content", "Empty slot fallback", "Second slot fallback", "After"] {
                 assert_eq!(output.matches(text).count(), 1, "{text}: {output}");
@@ -94,7 +91,7 @@ async fn markdown_reads_nested_closed_shadow_roots_and_resolves_resource_urls() 
             }
         "#).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert!(output.contains("```js\nconsole.log(\"nested\");\n```"), "{output}");
             assert_eq!(output.matches("console.log").count(), 1, "{output}");
             assert!(output.contains("[Reference](https://example.test/reference)"), "{output}");
@@ -118,20 +115,20 @@ async fn markdown_uses_shadow_styles_and_live_host_visibility() {
         "#).unwrap();
         assert_eq!(page.vm_mut().eval("getComputedStyle(document.getElementById('host').shadowRoot.querySelector('.hidden')).display").unwrap(), "none");
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert!(output.contains("Visible source"), "{output}");
             assert!(!output.contains("Hidden shadow text"), "{output}");
         }
         page.vm_mut().eval("document.getElementById('host').style.display = 'none'").unwrap();
         for strip_css in [false, true] {
-            assert_eq!(page.render_page_dump(options(strip_css)), "Outside");
+            assert_eq!(page.render_markdown(options(strip_css)), "Outside");
         }
         page.vm_mut().eval(r#"
             document.getElementById('host').style.display = 'block';
             document.getElementById('host').shadowRoot.querySelector('.hidden').style.display = 'block';
         "#).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert!(output.contains("Visible source"), "{output}");
             assert!(output.contains("Hidden shadow text"), "{output}");
         }
@@ -152,13 +149,13 @@ async fn markdown_tracks_manual_slot_reassignment() {
                 root.getElementById('first').assign(document.getElementById('source'));
             }
         "#).unwrap();
-        let first = page.render_page_dump(options(false));
+        let first = page.render_markdown(options(false));
         assert_eq!(first.matches("Assigned source").count(), 1, "{first}");
         assert!(first.contains("Second fallback"), "{first}");
         assert!(!first.contains("First fallback") && !first.contains("Unassigned text"), "{first}");
         page.vm_mut().eval("document.getElementById('host').shadowRoot.getElementById('second').assign(document.getElementById('source'))").unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert_eq!(output.matches("Assigned source").count(), 1, "{output}");
             assert!(output.contains("First fallback"), "{output}");
             assert!(!output.contains("Second fallback") && !output.contains("Unassigned text"), "{output}");
@@ -180,24 +177,21 @@ async fn markdown_reads_shadow_slots_and_live_updates_without_mutating_the_dom()
         let snapshot = "JSON.stringify([document.body.innerHTML, markdownShadow.innerHTML, Array.from(markdownShadow.querySelectorAll('slot'), slot => slot.assignedNodes().map(node => node.textContent))])";
         let before = page.vm_mut().eval(snapshot).unwrap();
         let dom_version = page.vm().document_runtime.dom_host().dom_version();
-        for with_frames in [false, true] {
-            for with_base in [false, true] {
+
                 for strip_css in [false, true] {
-                    let mut config = options(strip_css);
-                    config.with_frames = with_frames;
-                    config.with_base = with_base;
-                    assert_eq!(page.render_page_dump(config), "## Title\n\nBody\n\nFallback");
+                    let config = options(strip_css);
+
+                    assert_eq!(page.render_markdown(config), "## Title\n\nBody\n\nFallback");
                     assert_eq!(page.vm().document_runtime.dom_host().dom_version(), dom_version);
                     assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
                 }
-            }
-        }
+
         page.vm_mut().eval(r#"
             document.querySelector('[slot=title]').slot = 'unused';
             document.querySelector('p').textContent = 'Updated body';
             markdownShadow.querySelector('[name=empty]').textContent = 'Updated fallback';
         "#).unwrap();
-        assert_eq!(page.render_page_dump(options(false)), "## Default title\n\nUpdated body\n\nUpdated fallback");
+        assert_eq!(page.render_markdown(options(false)), "## Default title\n\nUpdated body\n\nUpdated fallback");
     }).await;
 }
 
@@ -212,14 +206,14 @@ async fn markdown_shadow_visibility_follows_slots_and_shadow_hosts() {
             markdownShadow.innerHTML = `<section style="display:none"><slot name=restored></slot><slot></slot></section>`;
         "#).unwrap();
         for strip_css in [false, true] {
-            assert_eq!(page.render_page_dump(options(strip_css)), "Outside");
+            assert_eq!(page.render_markdown(options(strip_css)), "Outside");
         }
         page.vm_mut().eval("markdownShadow.querySelector('section').style = 'visibility:hidden'").unwrap();
         for strip_css in [false, true] {
-            assert_eq!(page.render_page_dump(options(strip_css)), "Restored\n\nOutside");
+            assert_eq!(page.render_markdown(options(strip_css)), "Restored\n\nOutside");
         }
         page.vm_mut().eval("document.querySelector('#host').style = 'display:none'").unwrap();
-        assert_eq!(page.render_page_dump(options(false)), "Outside");
+        assert_eq!(page.render_markdown(options(false)), "Outside");
     }).await;
 }
 
@@ -235,11 +229,11 @@ async fn markdown_manual_slots_preserve_order_nested_roots_and_fallback() {
             document.querySelector('#nested').attachShadow({mode:'open'}).innerHTML = '<p>Nested</p>';
             markdownShadow.querySelector('slot').assign(document.querySelector('#second'), document.querySelector('#nested'), document.querySelector('#first'));
         "#).unwrap();
-        assert_eq!(page.render_page_dump(options(false)), "Second\n\nNested\n\nFirst");
+        assert_eq!(page.render_markdown(options(false)), "Second\n\nNested\n\nFirst");
         page.vm_mut().eval("markdownShadow.querySelector('slot').assign(document.querySelector('#first'), document.querySelector('#second'))").unwrap();
-        assert_eq!(page.render_page_dump(options(true)), "First\n\nSecond");
+        assert_eq!(page.render_markdown(options(true)), "First\n\nSecond");
         page.vm_mut().eval("markdownShadow.querySelector('slot').assign()").unwrap();
-        assert_eq!(page.render_page_dump(options(false)), "Fallback");
+        assert_eq!(page.render_markdown(options(false)), "Fallback");
     }).await;
 }
 
@@ -257,7 +251,7 @@ async fn markdown_shadow_strip_options_preserve_live_controls_and_attributes() {
         let snapshot = "JSON.stringify([markdownShadow.innerHTML, markdownShadow.querySelector('textarea').value])";
         let before = page.vm_mut().eval(snapshot).unwrap();
         for strip_css in [false, true] {
-            let output = page.render_page_dump(options(strip_css));
+            let output = page.render_markdown(options(strip_css));
             assert!(output.contains("Navigation"), "{output}");
             assert!(output.contains("[Docs](https://example.test/article/docs)"), "{output}");
             assert!(output.contains("Edited"), "{output}");
@@ -265,7 +259,7 @@ async fn markdown_shadow_strip_options_preserve_live_controls_and_attributes() {
             let mut config = options(strip_css);
             config.strip.ui = true;
             config.strip.js = true;
-            assert_eq!(page.render_page_dump(config), "[Docs](https://example.test/article/docs)");
+            assert_eq!(page.render_markdown(config), "[Docs](https://example.test/article/docs)");
             assert_eq!(page.vm_mut().eval(snapshot).unwrap(), before);
         }
     }).await;

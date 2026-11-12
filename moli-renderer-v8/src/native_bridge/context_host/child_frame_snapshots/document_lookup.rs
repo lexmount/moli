@@ -1,57 +1,50 @@
 use super::super::PageScriptHost;
-use super::ChildBrowsingContextDocumentSnapshot;
-use crate::dom::native::{NativeDom, Node};
+use crate::dom::native::{
+    HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlSerializationError,
+    HtmlSerializationPolicy,
+};
+use std::borrow::Cow;
 
-impl PageScriptHost {
-    /// Serializes a loaded child frame's Document from `dom`, an export copy
-    /// of the live DOM, with the child Document's shadow roots and scripting
-    /// flag, as the live child snapshot does.
-    pub(crate) fn child_browsing_context_document_snapshot_from_copy(
+impl HtmlEmbeddedDocumentProvider for PageScriptHost {
+    fn embedded_document(
         &self,
-        frame_id: &str,
-        dom: &NativeDom,
-        include_shadow_style_sheets: bool,
-    ) -> Option<ChildBrowsingContextDocumentSnapshot> {
-        let handle = self.child_browsing_context_owner_node_id_by_frame_id(frame_id)?;
-        let document_handle = self.child_browsing_context_document_handle(handle)?;
-        let url = self.child_browsing_context_current_url(handle)?;
-        let markup =
-            self.document_markup_from_copy(document_handle, dom, include_shadow_style_sheets)?;
-        Some(ChildBrowsingContextDocumentSnapshot {
-            url: url.as_str().to_owned(),
-            markup,
+        owner: crate::document_runtime::DomHandle,
+    ) -> Option<HtmlEmbeddedDocument<'_>> {
+        let document = self.child_browsing_context_document_handle(owner)?;
+        if !self.child_browsing_context_host_is_active(owner) {
+            return None;
+        }
+        let current = self.frame_owner_current_child_snapshot(owner)?;
+        if document != current.document_handle
+            || !self
+                .dom_host()
+                .node(current.document_handle)
+                .is_some_and(crate::dom::native::Node::is_document)
+        {
+            return None;
+        }
+        Some(HtmlEmbeddedDocument {
+            document: current.document_handle,
+            url: Cow::Owned(current.document_url.into()),
         })
     }
+}
 
-    /// Serializes `document_handle` (the page or a child frame Document) from
-    /// `dom`, an export copy of the live DOM, including that Document's
-    /// shadow roots and with its scripting flag.
-    pub(crate) fn document_markup_from_copy(
+impl PageScriptHost {
+    pub(crate) fn document_markup_for_export(
         &self,
-        document_handle: crate::document_runtime::DomHandle,
-        dom: &NativeDom,
-        include_shadow_style_sheets: bool,
-    ) -> Option<String> {
-        let explicit_shadow_roots = self
-            .dom_host()
-            .snapshot_shadow_root_bindings()
-            .into_iter()
-            .filter_map(|binding| {
-                (self
-                    .dom_host()
-                    .node(binding.host)
-                    .and_then(Node::owner_document)
-                    == Some(document_handle))
-                .then_some(binding.root)
-            })
-            .collect::<Vec<_>>();
-        let scripting_enabled_for_node = |node| self.node_document_scripting_enabled(node);
-        self.dom_host().get_html_from_copy(
-            dom,
-            document_handle,
-            &scripting_enabled_for_node,
-            &explicit_shadow_roots,
-            include_shadow_style_sheets,
+        document: crate::document_runtime::DomHandle,
+        policy: Option<&dyn HtmlSerializationPolicy>,
+        with_frames: bool,
+        max_bytes: Option<usize>,
+    ) -> Result<String, HtmlSerializationError> {
+        let scripting = |node| self.node_document_scripting_enabled(node);
+        self.dom_host().get_html_for_export(
+            document,
+            &scripting,
+            policy,
+            with_frames.then_some(self as &dyn HtmlEmbeddedDocumentProvider),
+            max_bytes,
         )
     }
 }

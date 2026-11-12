@@ -17,7 +17,7 @@ async fn child_browsing_context_initial_history_seed_keeps_current_entry_index_z
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/history-initial-child-entry-seed-parent"))
         .await?;
 
@@ -66,7 +66,7 @@ async fn window_length_tracks_live_child_browsing_context_lifecycle() -> Result<
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-length"))
         .await?;
 
@@ -192,7 +192,7 @@ async fn iframe_srcdoc_navigation_preserves_initial_empty_document_until_commit(
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-snapshot"))
         .await?;
 
@@ -302,7 +302,7 @@ async fn iframe_named_target_navigation_is_not_synchronous() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-target-name"))
         .await?;
 
@@ -373,7 +373,7 @@ async fn parse_time_named_iframe_target_navigation_sees_parser_created_child_con
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-parse-time-target"))
         .await?;
 
@@ -393,7 +393,7 @@ async fn iframe_form_targets_track_live_child_browsing_context_store() -> Result
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/window-child-browsing-context-form-targets"))
         .await?;
 

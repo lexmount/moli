@@ -13,25 +13,24 @@ async fn scriptless_document_keeps_main_world_lazy_until_evaluate() {
         crate::RendererDocumentOptions::default(),
     ).await.expect("scriptless page must reach load without a main world");
     assert!(download.is_none());
-    for format in [
-        crate::RendererPageDumpFormat::Html,
-        crate::RendererPageDumpFormat::Markdown,
+    for command in [
+        RendererPageCommand::SerializeDocument {
+            options: crate::RendererHtmlSerializeOptions::default(),
+        },
+        RendererPageCommand::RenderMarkdown {
+            options: crate::RendererMarkdownOptions::default(),
+        },
     ] {
         let (dump, _) = page
-            .run_async_command(RendererPageCommand::RenderPageDump {
-                options: crate::RendererPageDumpOptions {
-                    format,
-                    strip: Default::default(),
-                    with_base: false,
-                    with_frames: false,
-                },
-            })
+            .run_async_command(command)
             .await
             .expect("native export should not create a script realm");
-        let RendererPageReply::OptionalString(Some(dump)) = dump else {
-            panic!("missing dump")
+        let text = match dump {
+            RendererPageReply::SerializedDocument { html, .. } => html,
+            RendererPageReply::OptionalString(Some(text)) => text,
+            _ => panic!("missing native export"),
         };
-        assert!(dump.contains("Native content"), "{dump}");
+        assert!(text.contains("Native content"), "{text}");
     }
     let before = runtime_heap_usage_for_test(&page).await;
     assert_eq!(

@@ -433,31 +433,18 @@ impl ScriptVm {
             .detached_child_browsing_context_document_snapshots_for_dom_snapshot(top_frame_id)
     }
 
-    pub(crate) fn child_browsing_context_document_snapshot_from_copy(
-        &self,
-        frame_id: &str,
-        dom: &crate::dom::native::NativeDom,
-        include_shadow_style_sheets: bool,
-    ) -> Option<crate::native_bridge::ChildBrowsingContextDocumentSnapshot> {
-        self._context_host
-            .borrow()
-            .child_browsing_context_document_snapshot_from_copy(
-                frame_id,
-                dom,
-                include_shadow_style_sheets,
-            )
-    }
-
-    pub(crate) fn document_markup_from_copy(
+    pub(crate) fn document_markup_for_export(
         &self,
         document: crate::dom::NodeId,
-        dom: &crate::dom::native::NativeDom,
-        include_shadow_style_sheets: bool,
-    ) -> Option<String> {
-        self._context_host.borrow().document_markup_from_copy(
+        policy: Option<&dyn crate::dom::native::HtmlSerializationPolicy>,
+        with_frames: bool,
+        max_bytes: Option<usize>,
+    ) -> Result<String, crate::dom::native::HtmlSerializationError> {
+        self._context_host.borrow().document_markup_for_export(
             document,
-            dom,
-            include_shadow_style_sheets,
+            policy,
+            with_frames,
+            max_bytes,
         )
     }
 

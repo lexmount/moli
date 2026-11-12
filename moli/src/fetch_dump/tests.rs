@@ -531,6 +531,74 @@ async fn render_page_dump_async_includes_network_trace_config_summary() -> Resul
 }
 
 #[tokio::test]
+async fn html_serialization_refreshes_page_state_and_preserves_reply_url_pairing() -> Result<()> {
+    use moli_core::page::RendererHtmlSerializeOptions;
+    let (_browser, mut page, http_server) =
+        load_page("<!doctype html><p id=target>before</p>").await?;
+    let mut pending_updates = Vec::new();
+    for case in 0..4 {
+        let expected = page
+            .final_url()
+            .join(&format!("/serialized-{case}?paired=1"))?;
+        let old_url = page.final_url().clone();
+        let command = json!({ "id": 720 + case, "method": "Runtime.evaluate", "params": {
+            "expression": format!("history.replaceState(null, '', {}); document.getElementById('target').textContent = 'case-{case}'; 'done'", serde_json::to_string(expected.as_str())?),
+            "returnByValue": true
+        }});
+        let pending = page.start_runtime_protocol_message(serde_json::to_string(&command)?)?;
+        // The renderer has changed, but the caller has not applied its PageState.
+        pending_updates.push(pending.wait().await?);
+        assert_eq!(page.final_url(), &old_url);
+        let html = match case {
+            0 => page.serialize_html_async().await?,
+            1 => {
+                let document = page
+                    .serialize_document_async(RendererHtmlSerializeOptions {
+                        with_base: true,
+                        ..Default::default()
+                    })
+                    .await?;
+                assert_eq!(document.url, expected.as_str());
+                document.html
+            }
+            2 => {
+                let pending = page.start_serialize_html()?;
+                let document = page.finish_serialized_document(pending.wait().await?)?;
+                assert_eq!(document.url, expected.as_str());
+                document.html
+            }
+            _ => {
+                let output = render_page_dump_with_options_async(
+                    &mut page,
+                    DumpFormat::Json,
+                    StripOptions {
+                        css: true,
+                        ..Default::default()
+                    },
+                    true,
+                    false,
+                    true,
+                    None,
+                )
+                .await?;
+                let payload: Value = serde_json::from_str(&output)?;
+                assert_eq!(payload["final_url"], expected.as_str());
+                assert_eq!(
+                    payload["network"]["main_document"]["url"],
+                    expected.as_str()
+                );
+                payload["html"].as_str().unwrap().to_owned()
+            }
+        };
+        assert!(html.contains(&format!("case-{case}")), "{html}");
+        assert_eq!(page.final_url(), &expected);
+    }
+    drop(pending_updates);
+    http_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn html_dump_profiles_preserve_golden_markup_and_the_live_source() -> Result<()> {
     let (_browser, mut page, http_server) = load_page("<!doctype html><html><head><style>p{color:red}</style></head><body><nav>MENU</nav><p style=\"color:red\" onclick=\"void 0\">KEEP &amp; text</p><script>window.secret=1</script><x-card></x-card></body></html>").await?;
     let setup = page.evaluate_runtime_expression_by_value_async(r#"

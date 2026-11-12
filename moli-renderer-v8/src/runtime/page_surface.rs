@@ -5300,10 +5300,12 @@ pub enum RendererPageCommand {
         reference: RendererDomNodeReference,
         include_shadow_dom: bool,
     },
-    RenderPageDump {
-        options: RendererPageDumpOptions,
+    RenderMarkdown {
+        options: RendererMarkdownOptions,
     },
-    SerializeDocument,
+    SerializeDocument {
+        options: RendererHtmlSerializeOptions,
+    },
     LayoutMetrics,
     PublishLayout,
     PrintToPdf(RendererPrintToPdfRequest),
@@ -5938,8 +5940,8 @@ impl RendererPageCommand {
             }
             Self::OuterHtmlForDocument { .. } => Some("OuterHtmlForDocument"),
             Self::OuterHtmlForNode { .. } => Some("OuterHtmlForNode"),
-            Self::RenderPageDump { .. } => Some("RenderPageDump"),
-            Self::SerializeDocument => Some("SerializeDocument"),
+            Self::RenderMarkdown { .. } => Some("RenderMarkdown"),
+            Self::SerializeDocument { .. } => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),
             Self::PrintToPdf(_) => Some("PrintToPdf"),
@@ -6165,25 +6167,25 @@ pub struct RendererDocumentChildNodeSnapshotEvents {
     pub events: Vec<RendererDocumentChildNodeSnapshotEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RendererPageDumpFormat {
-    Html,
-    Markdown,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RendererPageDumpStripOptions {
+pub struct RendererContentStripOptions {
     pub js: bool,
     pub ui: bool,
     pub css: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RendererPageDumpOptions {
-    pub format: RendererPageDumpFormat,
-    pub strip: RendererPageDumpStripOptions,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RendererHtmlSerializeOptions {
+    pub strip: RendererContentStripOptions,
     pub with_base: bool,
     pub with_frames: bool,
+    /// No default truncation. Limits count final, nested-escaped output bytes.
+    pub max_output_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RendererMarkdownOptions {
+    pub strip: RendererContentStripOptions,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

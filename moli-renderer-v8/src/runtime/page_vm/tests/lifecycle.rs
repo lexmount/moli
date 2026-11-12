@@ -3978,7 +3978,9 @@ fn serialize_html_reads_current_document_after_document_open() {
         .vm()
         .current_main_document_task_owner()
         .expect("initial document owner");
-    let before_html = page_vm.serialize_html();
+    let before_html = page_vm
+        .serialize_html(crate::RendererHtmlSerializeOptions::default())
+        .unwrap();
     assert!(before_html.contains(">before<"));
 
     page_vm
@@ -3994,7 +3996,9 @@ document.close();"#,
         .vm()
         .current_main_document_task_owner()
         .expect("replacement document owner");
-    let after_html = page_vm.serialize_html();
+    let after_html = page_vm
+        .serialize_html(crate::RendererHtmlSerializeOptions::default())
+        .unwrap();
 
     assert_ne!(before_owner.document_id, after_owner.document_id);
     assert!(

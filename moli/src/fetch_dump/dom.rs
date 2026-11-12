@@ -1,7 +1,7 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
-    Page, RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
+    Page, RendererContentStripOptions, RendererHtmlSerializeOptions, RendererMarkdownOptions,
     SubresourceResponseWaitCriteria,
 };
 use serde_json::{Map, Value, json};
@@ -32,44 +32,31 @@ pub(super) async fn render_json(
             network_trace_options,
         )
     });
-    let html = render_html(page, strip, with_base, with_frames).await?;
-    let network = if let Some(activity) = activity {
-        let main_document_html = if html_dump_needs_dom_postprocess(strip, with_base, with_frames) {
-            page.serialize_html_async().await?
-        } else {
-            html.clone()
-        };
-        Some(render_network_trace(page, &main_document_html, activity))
-    } else {
-        None
-    };
+    let options = html_serialize_options(strip, with_base, with_frames);
+    let document = page.serialize_document_async(options).await?;
+    // Keep the metadata of this HTML reply even if obtaining an unfiltered
+    // trace body below observes a later Document.
     let title = page.document_title();
-    render_json_payload(
-        page.final_url().as_str(),
+    let mut payload = response_metadata(
+        &document.url,
         page.status(),
         Some(&title),
         page.headers(),
         page.navigation_redirect_chain(),
-        &html,
-        network,
-    )
-}
-
-pub(super) fn render_json_payload(
-    final_url: &str,
-    status: u16,
-    title: Option<&str>,
-    headers: &[(String, Vec<u8>)],
-    redirect_chain: &[moli_core::page::NavigationRedirect],
-    html: &str,
-    network: Option<Value>,
-) -> Result<String> {
-    // Keep --dump json as a stable machine interface for scrapling-style callers.
-    let mut payload = response_metadata(final_url, status, title, headers, redirect_chain);
-    payload.insert("html".to_owned(), json!(html));
-    if let Some(network) = network {
-        payload.insert("network".to_owned(), network);
+    );
+    if let Some(activity) = activity {
+        let raw_html = if options != RendererHtmlSerializeOptions::default() {
+            Some(page.serialize_html_async().await?)
+        } else {
+            None
+        };
+        let body = raw_html.as_deref().unwrap_or(&document.html);
+        payload.insert(
+            "network".to_owned(),
+            render_network_trace(page, body, activity),
+        );
     }
+    payload.insert("html".to_owned(), Value::String(document.html));
     Ok(serde_json::to_string_pretty(&Value::Object(payload))?)
 }
 
@@ -139,43 +126,37 @@ pub(super) async fn render_html(
     with_base: bool,
     with_frames: bool,
 ) -> Result<String> {
-    if !html_dump_needs_dom_postprocess(strip, with_base, with_frames) {
-        return page.serialize_html_async().await;
-    }
-
-    page.render_page_dump_async(RendererPageDumpOptions {
-        format: RendererPageDumpFormat::Html,
-        strip: renderer_strip_options(strip),
-        with_base,
-        with_frames,
-    })
-    .await
+    page.serialize_document_async(html_serialize_options(strip, with_base, with_frames))
+        .await
+        .map(|document| document.html)
 }
 
-fn html_dump_needs_dom_postprocess(
+fn html_serialize_options(
     strip: StripOptions,
     with_base: bool,
     with_frames: bool,
-) -> bool {
-    strip.js || strip.ui || strip.css || with_base || with_frames
+) -> RendererHtmlSerializeOptions {
+    RendererHtmlSerializeOptions {
+        strip: renderer_strip_options(strip),
+        with_base,
+        with_frames,
+        ..Default::default()
+    }
 }
 
 pub(super) async fn render_markdown(
     page: &mut Page,
     strip: StripOptions,
-    with_frames: bool,
+    _with_frames: bool,
 ) -> Result<String> {
-    page.render_page_dump_async(RendererPageDumpOptions {
-        format: RendererPageDumpFormat::Markdown,
+    page.render_markdown_async(RendererMarkdownOptions {
         strip: renderer_strip_options(strip),
-        with_base: false,
-        with_frames,
     })
     .await
 }
 
-fn renderer_strip_options(strip: StripOptions) -> RendererPageDumpStripOptions {
-    RendererPageDumpStripOptions {
+fn renderer_strip_options(strip: StripOptions) -> RendererContentStripOptions {
+    RendererContentStripOptions {
         js: strip.js,
         ui: strip.ui,
         css: strip.css,
