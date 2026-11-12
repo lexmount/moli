@@ -1,7 +1,6 @@
 use crate::{
     ConnectOptions,
     handshake::{HandshakeResponse, parse_handshake_response, validate_handshake_response},
-    headers::request_header_entries,
     proxy::websocket_proxy_route,
     request::PreparedWebSocketRequest,
 };
@@ -37,7 +36,7 @@ pub(crate) async fn open_websocket_connection(
         .map_err(|error| error.to_string())?;
     let resolve_entries = host_resolve.normalized_entries();
     let mut native = CurlWebSocketRequest::new(request.url.to_string());
-    native.headers = request_header_entries(&request.headers);
+    native.headers = request.headers;
     native.proxy = proxy_route.proxy().map(|proxy| proxy.curl_url().to_owned());
     native.resolve_entries = resolve_entries.clone();
     // WebSocket opening handshakes use credentials=include, including across

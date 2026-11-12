@@ -351,40 +351,71 @@ fn websocket_request_preparation_applies_context_protocols_and_cookie() {
 
     assert_eq!(request.url.as_str(), "ws://example.com/socket");
     assert_eq!(
-        request
-            .headers
-            .get(http::header::ORIGIN)
-            .and_then(|value| value.to_str().ok()),
-        Some("https://example.com")
+        request.headers.to_byte_strings(),
+        [
+            ("X-Moli-Trace", "socket"),
+            ("Origin", "https://example.com"),
+            ("User-Agent", "Moli-WebSocket-Test/1.0"),
+            ("Sec-WebSocket-Protocol", "chat, superchat"),
+            ("Cookie", "sid=server"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
     );
+}
+
+#[test]
+fn websocket_request_preparation_preserves_explicit_fields_and_ignores_invalid_names() {
+    let mut context = test_websocket_context();
+    context.extra_headers = moli_header_field::HeaderFields::from_bytes(vec![
+        ("X-First".to_owned(), vec![0xe9, 0xff]),
+        ("Bad Name".to_owned(), b"ignored\r\nvalue".to_vec()),
+        ("x-first".to_owned(), b"second".to_vec()),
+        (
+            "sEc-WeBsOcKeT-pRoToCoL".to_owned(),
+            b"ignored\r\nvalue".to_vec(),
+        ),
+        ("ORIGIN".to_owned(), b"null".to_vec()),
+    ]);
+    let request =
+        prepare_websocket_request("ws://example.com/socket", &["chat".to_owned()], &context)
+            .expect("invalid names and protocol-control fields are ignored");
     assert_eq!(
-        request
-            .headers
-            .get(http::header::SEC_WEBSOCKET_PROTOCOL)
-            .and_then(|value| value.to_str().ok()),
-        Some("chat, superchat")
+        request.headers,
+        moli_header_field::HeaderFields::from_bytes(vec![
+            ("X-First".to_owned(), vec![0xe9, 0xff]),
+            ("x-first".to_owned(), b"second".to_vec()),
+            ("ORIGIN".to_owned(), b"null".to_vec()),
+            ("User-Agent".to_owned(), b"Moli-WebSocket-Test/1.0".to_vec()),
+            ("Sec-WebSocket-Protocol".to_owned(), b"chat".to_vec()),
+        ])
     );
-    assert_eq!(
-        request
-            .headers
-            .get(http::header::SEC_WEBSOCKET_VERSION)
-            .and_then(|value| value.to_str().ok()),
-        None
-    );
-    assert_eq!(
-        request
-            .headers
-            .get(http::header::COOKIE)
-            .and_then(|value| value.to_str().ok()),
-        Some("sid=server")
-    );
-    assert_eq!(
-        request
-            .headers
-            .get("x-moli-trace")
-            .and_then(|value| value.to_str().ok()),
-        Some("socket")
-    );
+}
+
+#[test]
+fn websocket_request_preparation_rejects_invalid_field_values() {
+    for value in [b"line\r\nInjected: yes".as_slice(), b"a\0b", b"a\x1fb"] {
+        let mut context = test_websocket_context();
+        context.extra_headers =
+            moli_header_field::HeaderFields::from_bytes(vec![("X-Raw".to_owned(), value.to_vec())]);
+        assert!(prepare_websocket_request("ws://example.com/socket", &[], &context).is_err());
+    }
+    let invalid = "invalid\nvalue".to_owned();
+    for context in [
+        ConnectOptions {
+            origin: invalid.clone(),
+            ..test_websocket_context()
+        },
+        ConnectOptions {
+            user_agent: invalid.clone(),
+            ..test_websocket_context()
+        },
+        ConnectOptions {
+            cookie_header: Some(invalid),
+            ..test_websocket_context()
+        },
+    ] {
+        assert!(prepare_websocket_request("ws://example.com/socket", &[], &context).is_err());
+    }
 }
 
 #[test]
@@ -395,10 +426,7 @@ fn websocket_request_preparation_converts_url_userinfo_to_basic_auth() {
         .expect("websocket request should build");
 
     assert_eq!(
-        request
-            .headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok()),
+        header_value(&request.headers.to_byte_strings(), "Authorization").as_deref(),
         Some("Basic Zm9vOmJhcg==")
     );
 }
@@ -412,10 +440,7 @@ fn websocket_request_preparation_decodes_percent_encoded_userinfo_for_basic_auth
             .expect("websocket request should build");
 
     assert_eq!(
-        request
-            .headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok()),
+        header_value(&request.headers.to_byte_strings(), "Authorization").as_deref(),
         Some("Basic Zm9vIGJhcjpwQHNz")
     );
 }
@@ -439,8 +464,7 @@ fn websocket_basic_auth_preserves_plus_and_forgiving_percent_decoding() {
             &context,
         )
         .expect("websocket request should build");
-        let header = request.headers[http::header::AUTHORIZATION]
-            .to_str()
+        let header = header_value(&request.headers.to_byte_strings(), "Authorization")
             .expect("ASCII Basic authorization");
         let decoded = STANDARD
             .decode(header.strip_prefix("Basic ").expect("Basic authorization"))
@@ -1561,7 +1585,10 @@ async fn websocket_native_handshake_generates_keys_and_reports_actual_headers() 
             "sec-websocket-key",
         ] {
             assert!(
-                !prepared.headers.contains_key(header),
+                !prepared
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(header)),
                 "{header} belongs to native handshake generation"
             );
         }

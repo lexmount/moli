@@ -328,16 +328,16 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
 }
 
 #[tokio::test]
-async fn native_handshake_sends_browser_header_casing_on_http1() {
-    assert_browser_header_casing(false).await;
+async fn native_handshake_preserves_header_spelling_on_http1() {
+    assert_handshake_header_spelling(false).await;
 }
 
 #[tokio::test]
-async fn native_tls_handshake_sends_browser_header_casing_on_http1() {
-    assert_browser_header_casing(true).await;
+async fn native_tls_handshake_preserves_header_spelling_on_http1() {
+    assert_handshake_header_spelling(true).await;
 }
 
-async fn assert_browser_header_casing(secure: bool) {
+async fn assert_handshake_header_spelling(secure: bool) {
     let tls = secure.then(TlsWebSocketFixture::new);
     for overridden in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -347,18 +347,21 @@ async fn assert_browser_header_casing(secure: bool) {
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             if let Some(acceptor) = acceptor {
-                serve_browser_header_casing(acceptor.accept(stream).await.unwrap(), captured_tx)
-                    .await;
+                serve_handshake_header_spelling(
+                    acceptor.accept(stream).await.unwrap(),
+                    captured_tx,
+                    !overridden,
+                )
+                .await;
             } else {
-                serve_browser_header_casing(stream, captured_tx).await;
+                serve_handshake_header_spelling(stream, captured_tx, !overridden).await;
             }
         });
         let mut context = test_websocket_context();
         context.cookie_header = Some("sid=server".to_owned());
-        context.extra_headers =
-            vec![("aUtHoRiZaTiOn".to_owned(), "Basic dGVzdA==".to_owned())].into();
         if overridden {
             context.extra_headers.extend([
+                ("aUtHoRiZaTiOn".to_owned(), b"Basic dGVzdA==".to_vec()),
                 ("oRiGiN".to_owned(), b"null".to_vec()),
                 ("uSeR-aGeNt".to_owned(), b"Embedding/1.0".to_vec()),
                 ("CoOkIe".to_owned(), b"sid=override".to_vec()),
@@ -372,7 +375,7 @@ async fn assert_browser_header_casing(secure: bool) {
         let socket_id = 120 + u64::from(overridden);
         let handle = spawn_standalone_connection(
             socket_id,
-            format!("{scheme}://localhost:{port}/headers"),
+            format!("{scheme}://user:pass@localhost:{port}/headers"),
             vec!["chat".to_owned()],
             context,
             tx,
@@ -390,7 +393,7 @@ async fn assert_browser_header_casing(secure: bool) {
             .collect::<Vec<_>>();
         for (expected_name, expected_value) in [
             (
-                "Origin",
+                if overridden { "oRiGiN" } else { "Origin" },
                 if overridden {
                     "null"
                 } else {
@@ -398,7 +401,11 @@ async fn assert_browser_header_casing(secure: bool) {
                 },
             ),
             (
-                "User-Agent",
+                if overridden {
+                    "uSeR-aGeNt"
+                } else {
+                    "User-Agent"
+                },
                 if overridden {
                     "Embedding/1.0"
                 } else {
@@ -406,14 +413,25 @@ async fn assert_browser_header_casing(secure: bool) {
                 },
             ),
             (
-                "Cookie",
+                if overridden { "CoOkIe" } else { "Cookie" },
                 if overridden {
                     "sid=override"
                 } else {
                     "sid=server"
                 },
             ),
-            ("Authorization", "Basic dGVzdA=="),
+            (
+                if overridden {
+                    "aUtHoRiZaTiOn"
+                } else {
+                    "Authorization"
+                },
+                if overridden {
+                    "Basic dGVzdA=="
+                } else {
+                    "Basic dXNlcjpwYXNz"
+                },
+            ),
             ("Sec-WebSocket-Protocol", "chat"),
         ] {
             let fields = headers
@@ -442,8 +460,11 @@ async fn assert_browser_header_casing(secure: bool) {
     }
 }
 
-async fn serve_browser_header_casing<S>(mut stream: S, captured: oneshot::Sender<String>)
-where
+async fn serve_handshake_header_spelling<S>(
+    mut stream: S,
+    captured: oneshot::Sender<String>,
+    require_canonical_origin: bool,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     use tokio::io::AsyncReadExt;
@@ -464,7 +485,7 @@ where
     let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
     let canonical_origin = raw.contains("\r\nOrigin: ");
     captured.send(raw).unwrap();
-    if !canonical_origin {
+    if require_canonical_origin && !canonical_origin {
         stream
             .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await
@@ -518,7 +539,7 @@ async fn native_handshake_preserves_opaque_header_bytes_and_duplicates() {
         let captured: Vec<_> = headers
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case(b"x-raw"))
-            .map(|(_, value)| value.to_vec())
+            .map(|(name, value)| (String::from_utf8(name.to_vec()).unwrap(), value.to_vec()))
             .collect();
         captured_tx.send(captured).unwrap();
         let (_, key) = headers
@@ -539,11 +560,12 @@ async fn native_handshake_preserves_opaque_header_bytes_and_duplicates() {
         let _ = socket.flush().await;
     });
     let expected = vec![vec![0xe9, 0xff], vec![0xc3, 0xa9]];
-    let mut context = test_websocket_context();
-    context.extra_headers = HeaderFields::from_bytes(vec![
+    let expected_fields = vec![
         ("X-Raw".to_owned(), expected[0].clone()),
         ("x-raw".to_owned(), expected[1].clone()),
-    ]);
+    ];
+    let mut context = test_websocket_context();
+    context.extra_headers = HeaderFields::from_bytes(expected_fields.clone());
     let (tx, mut rx) = mpsc::channel(8);
     let handle = spawn_standalone_connection(101, url, Vec::new(), context, tx);
     let event = timeout(Duration::from_secs(3), rx.recv())
@@ -566,7 +588,7 @@ async fn native_handshake_preserves_opaque_header_bytes_and_duplicates() {
             .collect();
         assert_eq!(values, expected);
     }
-    assert_eq!(captured_rx.await.unwrap(), expected);
+    assert_eq!(captured_rx.await.unwrap(), expected_fields);
     handle.close(Some(1000), String::new()).unwrap();
     assert_closing(&mut rx, 101).await;
     assert_close(&mut rx, 101, 1000, "", true).await;
