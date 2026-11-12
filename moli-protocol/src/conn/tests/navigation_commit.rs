@@ -1113,3 +1113,219 @@ async fn cancelled_replacement_observer_keeps_adopted_page_runnable() {
         })
         .await;
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LateRequestPolicy {
+    EnableFetch,
+    DisableFetch,
+    BlockUrls,
+}
+
+#[tokio::test]
+async fn prepared_document_request_policy_reaches_native_before_commit_projection() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for replace_existing in [false, true] {
+                for policy in [
+                    LateRequestPolicy::EnableFetch,
+                    LateRequestPolicy::DisableFetch,
+                    LateRequestPolicy::BlockUrls,
+                ] {
+                    verify_unprojected_request_policy(replace_existing, policy).await;
+                }
+            }
+        })
+        .await;
+}
+
+async fn verify_unprojected_request_policy(replace_existing: bool, policy: LateRequestPolicy) {
+    use moli_core::page::{ScriptNetworkOutputItem, SubresourceNetworkOutcome};
+    use moli_core::{
+        RendererOutputItem, RendererOutputTransportMessage, RendererOwnerAction,
+        RendererProtocolObservation,
+    };
+
+    let CommitFixture {
+        mut ctx,
+        token,
+        navigation,
+        prepared,
+        mut completions,
+    } = commit_fixture(replace_existing).await;
+    // Like the websocket regression, exercise the policy of an enabled
+    // Network handler; disabled handlers retain but do not apply blocked URLs.
+    ctx.process_async(json!({"id": 190, "sessionId": "SID-1", "method": "Network.enable"}))
+        .await;
+    ctx.expect_result(190, json!({}), Some("SID-1"));
+    let enable = |conn: &mut CdpConnection| {
+        conn.start_enable_fetch_for_owner(
+            &navigation.owner,
+            false,
+            vec![crate::conn::FetchInterceptionPattern {
+                url_pattern: "*/policy-probe".into(),
+                resource_type_filter: Some(crate::conn::FetchResourceTypeFilter::Fetch),
+                request_stage: crate::conn::FetchRequestStage::Request,
+            }],
+        )
+    };
+    if policy == LateRequestPolicy::DisableFetch
+        && let Some(update) = ctx.with_fixture(enable).unwrap()
+    {
+        update.wait().await.unwrap().into_unit_reply().unwrap();
+    }
+    // Hold real native output rather than racing the actor that projects it.
+    let mut output = ctx.take_renderer_transport_for_owned_state_test();
+    ctx.with_fixture(|conn| {
+        conn.start_background_prepared_navigation_commit(token, navigation.clone(), prepared)
+    });
+    let BackgroundNavigationCompletion::PreparedDocument(completion) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), completions.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    else {
+        panic!("native commit expected")
+    };
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.runtime_session_owner_slot_for_owner(&navigation.owner)
+                .unwrap()
+                .page_slot()
+                .prepared_document_output_binding()
+                .is_none(),
+            "the commit publication must remain outside protocol state"
+        )
+    });
+
+    let loaded = completion.navigation.as_ref().unwrap();
+    let artifacts = &loaded.page_creation_artifacts;
+    let document = moli_core::RendererDocumentLifecycleIdentity {
+        frame: artifacts.lifecycle_snapshot.frame,
+        document: artifacts.active_document,
+        epoch: artifacts.active_epoch,
+    };
+    let native = match &loaded.page {
+        crate::conn::CommittedNavigationPage::Created(page) => {
+            page.document_command_target(document).unwrap()
+        }
+        crate::conn::CommittedNavigationPage::Replaced(_) => ctx.with_fixture(|conn| {
+            conn.loaded_page_mut_for_owner(&navigation.owner)
+                .unwrap()
+                .document_command_target(document)
+                .unwrap()
+        }),
+    };
+    // Suppress external I/O in the negative controls. Interception runs before
+    // offline rejection, while a matching blocked URL has its own error.
+    native
+        .start(moli_core::RendererPageCommand::SetNetworkOffline(true))
+        .unwrap()
+        .wait()
+        .await
+        .unwrap()
+        .into_unit_reply()
+        .unwrap();
+    let update = ctx
+        .with_fixture(|conn| match policy {
+            LateRequestPolicy::EnableFetch => enable(conn),
+            LateRequestPolicy::DisableFetch => {
+                let (_, update) = conn
+                    .start_disable_fetch_for_session_owner(navigation.owner.session_id())
+                    .unwrap();
+                update.transpose()
+            }
+            LateRequestPolicy::BlockUrls => conn.start_set_blocked_url_patterns_for_session_owner(
+                navigation.owner.session_id(),
+                vec!["*/policy-probe".into()],
+            ),
+        })
+        .unwrap();
+    if let Some(update) = update {
+        update.wait().await.unwrap().into_unit_reply().unwrap();
+    }
+    let evaluation = native
+        .start(moli_core::RendererPageCommand::EvaluateExpression {
+            expression: "fetch('/policy-probe').catch(()=>{}); 'scheduled'".into(),
+            await_promise: false,
+        })
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let fence = evaluation
+        .renderer_output_predecessor()
+        .expect("native evaluation publication");
+    let mut pauses = Vec::new();
+    let mut failures = Vec::new();
+    // Inspect exactly the output preceding this evaluation reply. A missing
+    // pause is an immediate assertion failure, not an event-wait timeout.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let message = output.recv().await.expect("native output remains live");
+            let RendererOutputTransportMessage::Publication(publication) = message else {
+                continue;
+            };
+            for record in publication.records() {
+                match record.item() {
+                    RendererOutputItem::OwnerAction(
+                        RendererOwnerAction::SubresourceFetchPause { info, .. },
+                    ) if info.url.path() == "/policy-probe" => pauses.push(info.internal_id),
+                    RendererOutputItem::Observation(RendererProtocolObservation::Network {
+                        item: ScriptNetworkOutputItem::SubresourceNetworkRecord(record),
+                        ..
+                    }) if record.url().path() == "/policy-probe" => {
+                        if let SubresourceNetworkOutcome::Failure { error_text } = record.outcome()
+                        {
+                            failures.push(error_text.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if publication.cursor() == fence.cursor() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the native reply's output fence must be delivered");
+    let context = format!("replace_existing={replace_existing}, policy={policy:?}");
+    match policy {
+        LateRequestPolicy::EnableFetch => {
+            assert_eq!(
+                pauses.len(),
+                1,
+                "{context}: the policy must intercept before commit projection; failures={failures:?}"
+            );
+            assert!(failures.is_empty(), "{context}: {failures:?}");
+            native
+                .start(
+                    moli_core::RendererPageCommand::FailPendingSubresourceFetch {
+                        internal_id: pauses[0],
+                        error_text: "test cleanup".into(),
+                    },
+                )
+                .unwrap()
+                .wait()
+                .await
+                .unwrap()
+                .into_unit_reply()
+                .unwrap();
+        }
+        LateRequestPolicy::DisableFetch | LateRequestPolicy::BlockUrls => {
+            assert!(
+                pauses.is_empty(),
+                "{context}: the policy must not leave interception enabled"
+            );
+            let expected = match policy {
+                LateRequestPolicy::DisableFetch => "Network emulation offline",
+                _ => "net::ERR_BLOCKED_BY_CLIENT",
+            };
+            assert_eq!(
+                failures,
+                [expected],
+                "{context}: the effective native policy must match the ACK"
+            );
+        }
+    }
+}

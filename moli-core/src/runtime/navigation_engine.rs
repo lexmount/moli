@@ -588,6 +588,20 @@ impl Default for NavigationEngine {
 }
 
 impl NavigationEngine {
+    /// Updates an admitted Page without waiting for its Document's commit
+    /// publication or Page-handle adoption on the protocol lane.
+    pub fn start_page_request_policy_update(
+        &self,
+        renderer_owner: moli_renderer_v8::RendererOwnerLocalHostId,
+        page_id: moli_renderer_v8::PageId,
+        update: crate::page::RendererPageRequestPolicyUpdate,
+    ) -> Result<PendingPageCommand> {
+        self.js_runtime
+            .renderer_owner_handle()
+            .start_page_request_policy_update(renderer_owner, page_id, update)
+            .map(PendingPageCommand::from_renderer)
+    }
+
     /// Captures a weak command target for one native Document, including the
     /// interval before the navigation result installs its Page handle.
     pub fn document_command_target(

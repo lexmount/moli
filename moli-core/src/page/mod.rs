@@ -43,6 +43,7 @@ pub use command_dispatch::{
     CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
     PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
 };
+pub use moli_renderer_v8::RendererPageRequestPolicyUpdate;
 
 #[cfg(all(test, debug_assertions))]
 use crate::network::ResourceRequestClient;

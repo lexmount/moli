@@ -1091,7 +1091,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },
@@ -1129,7 +1129,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },
@@ -1164,7 +1164,7 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &owner.target_id,
-                moli_core::RendererPageCommand::SetFetchSubresourceInterception {
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
                     enabled: subresource_enabled,
                     resource_type: subresource_resource_type,
                 },
@@ -1249,34 +1249,18 @@ impl CdpConnection {
         if !update_required {
             return None;
         }
-        let source = self
-            .runtime_session_owner_slot_for_owner(owner)?
-            .page_slot()
-            .prepared_document_output_binding()
-            .map(|(page, binding)| (page, binding.renderer_document_identity()));
-        if let Some((renderer_page, document)) = source {
-            let target: Result<_> = (|| {
-                let attachment = self
-                    .target_page_output_attachment_for_renderer_page(owner, renderer_page)
-                    .ok_or(crate::conn::NoDocumentLoaded)?;
-                self.capture_document_output_command_target(
-                    owner,
-                    attachment.page_owner(),
-                    renderer_page,
-                    document,
-                )
-            })();
-            return Some(target.and_then(|target| {
-                target.start(
-                    moli_core::RendererPageCommand::SetFetchSubresourceInterception {
-                        enabled,
-                        resource_type,
-                    },
-                )
-            }));
-        }
-        self.loaded_page_mut_for_owner(owner)
-            .map(|page| page.start_set_fetch_subresource_interception(enabled, resource_type))
+        let target = self.target_session_owner_mut_for_owner(owner)?;
+        target
+            .browser_context
+            .start_page_policy_update(
+                &target.target_id,
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
+                    enabled,
+                    resource_type,
+                },
+                |page| page.start_set_fetch_subresource_interception(enabled, resource_type),
+            )
+            .transpose()
     }
 
     pub(crate) fn take_pending_fetch_state_for_owner(
