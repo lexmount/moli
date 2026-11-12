@@ -164,6 +164,7 @@ pub(in crate::worker) fn install_worker_global_scope<'s>(
         crate::worker::thread::WorkerGlobalKind::Service { .. }
     ) {
         install_service_worker_extendable_event_constructors(scope, global)?;
+        install_service_worker_fetch_event_constructor(scope, global)?;
     }
     crate::context_bootstrap::initialize_worker_performance_realm_state(scope, global)?;
     let subtle_crypto_available = secure_context;
