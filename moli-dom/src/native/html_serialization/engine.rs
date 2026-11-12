@@ -36,7 +36,7 @@ impl HtmlSerializedShadowRoot {
     }
 }
 
-trait HtmlShadowRootProvider {
+pub(in crate::native) trait HtmlShadowRootProvider {
     fn serialized_shadow_root_for_host(
         &self,
         host: NativeNodeId,
@@ -56,21 +56,19 @@ where
 }
 
 #[derive(Clone, Copy)]
-struct HtmlSerializationOptions<'a> {
-    target: HtmlSerializationTarget,
+pub(in crate::native) struct HtmlSerializationOptions<'a> {
+    pub target: HtmlSerializationTarget,
     // This is node-scoped: one traversal can enter inert template contents
     // whose owner Document has different scripting state from the outer tree.
-    scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
-    shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
-    policy: Option<&'a dyn HtmlSerializationPolicy>,
-    filtering: bool,
-    insertion: Option<HtmlSerializationInsertion<'a>>,
-    embedded_documents: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
-    sole_embedded_owner: Option<NativeNodeId>,
+    pub scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
+    pub shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
+    pub policy: Option<&'a dyn HtmlSerializationPolicy>,
+    pub embedded_documents: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
+    pub max_bytes: Option<usize>,
 }
 
 impl<'a> HtmlSerializationOptions<'a> {
-    const fn new(
+    pub(in crate::native) const fn new(
         target: HtmlSerializationTarget,
         scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
     ) -> Self {
@@ -79,19 +77,9 @@ impl<'a> HtmlSerializationOptions<'a> {
             scripting_enabled_for_node,
             shadow_root_provider: None,
             policy: None,
-            filtering: false,
-            insertion: None,
             embedded_documents: None,
-            sole_embedded_owner: None,
+            max_bytes: None,
         }
-    }
-
-    const fn with_shadow_root_provider(
-        mut self,
-        shadow_root_provider: &'a dyn HtmlShadowRootProvider,
-    ) -> Self {
-        self.shadow_root_provider = Some(shadow_root_provider);
-        self
     }
 }
 
@@ -347,7 +335,13 @@ struct EmbeddedAttributes<'a> {
 
 struct HtmlSerializer<'dom, 'sink, S, const EMBEDDED: bool, const POLICY: bool> {
     dom: &'dom NativeDom,
-    options: HtmlSerializationOptions<'dom>,
+    scripting_enabled_for_node: &'dom dyn Fn(NativeNodeId) -> bool,
+    shadow_root_provider: Option<&'dom dyn HtmlShadowRootProvider>,
+    policy: Option<&'dom dyn HtmlSerializationPolicy>,
+    filtering: bool,
+    insertion: Option<HtmlSerializationInsertion<'dom>>,
+    embedded_documents: Option<&'dom dyn HtmlEmbeddedDocumentProvider>,
+    sole_embedded_owner: Option<NativeNodeId>,
     out: HtmlEscapingWriter<'sink, S, EMBEDDED>,
     stack: Vec<HtmlSerializationFrame<'dom>>,
     embedded_attributes: Vec<EmbeddedAttributes<'dom>>,
@@ -367,7 +361,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             match frame {
                 HtmlSerializationFrame::Node(node) => self.node(node)?,
                 HtmlSerializationFrame::Children(node) => {
-                    let insertion = self.options.insertion.filter(|i| POLICY && i.node == node);
+                    let insertion = self.insertion.filter(|i| POLICY && i.node == node);
                     if let Some(insertion) = insertion
                         && insertion.point == HtmlInsertionPoint::LastChild
                     {
@@ -420,7 +414,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
         let Some(node) = self.dom.node(id) else {
             return Ok(());
         };
-        if let Some(insertion) = self.options.insertion
+        if let Some(insertion) = self.insertion
             && POLICY
             && insertion.node == id
             && insertion.point == HtmlInsertionPoint::BeforeNode
@@ -428,9 +422,8 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             self.out.push_str(insertion.markup);
         }
         if self
-            .options
             .policy
-            .is_some_and(|p| POLICY && self.options.filtering && !p.include_node(node))
+            .is_some_and(|p| POLICY && self.filtering && !p.include_node(node))
         {
             return Ok(());
         }
@@ -452,7 +445,6 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             }
             NodeData::Element(element) => {
                 let overrides = self
-                    .options
                     .policy
                     .filter(|_| POLICY)
                     .map_or(&[][..], |p| p.attribute_overrides(id));
@@ -470,14 +462,9 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 // Filtering happens before lookup; excluded ancestors never
                 // consult frame/shadow providers or build derived child output.
                 if let Some(embedded) = self
-                    .options
                     .embedded_documents
                     .filter(|_| EMBEDDED)
-                    .filter(|_| {
-                        self.options
-                            .sole_embedded_owner
-                            .is_none_or(|owner| owner == id)
-                    })
+                    .filter(|_| self.sole_embedded_owner.is_none_or(|owner| owner == id))
                     .and_then(|p| p.embedded_document(id))
                 {
                     self.embedded_attributes.push(EmbeddedAttributes {
@@ -489,10 +476,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     });
                     self.stack.push(HtmlSerializationFrame::EmbeddedAttributes);
                 } else {
-                    let filter = self
-                        .options
-                        .policy
-                        .filter(|_| POLICY && self.options.filtering);
+                    let filter = self.policy.filter(|_| POLICY && self.filtering);
                     if overrides.is_empty() && filter.is_none() {
                         for attribute in element.attributes() {
                             if self.out.limit_exceeded() {
@@ -518,11 +502,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 }
             }
             NodeData::Text(text) => {
-                if text_data_serializes_literally(
-                    self.dom,
-                    id,
-                    self.options.scripting_enabled_for_node,
-                ) {
+                if text_data_serializes_literally(self.dom, id, self.scripting_enabled_for_node) {
                     self.out.push_str(text.data());
                 } else {
                     self.out.text(text.data());
@@ -531,11 +511,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             NodeData::CDataSection(cdata) => serialize_cdata_section(
                 cdata.data(),
                 &mut self.out,
-                text_data_serializes_literally(
-                    self.dom,
-                    id,
-                    self.options.scripting_enabled_for_node,
-                ),
+                text_data_serializes_literally(self.dom, id, self.scripting_enabled_for_node),
                 self.dom.node_document_is_html_document(id).unwrap_or(false),
             ),
             NodeData::Comment(comment) => {
@@ -574,7 +550,6 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
 
     fn shadow_root(&mut self, host: NativeNodeId) {
         if let Some(root) = self
-            .options
             .shadow_root_provider
             .and_then(|p| p.serialized_shadow_root_for_host(host))
         {
@@ -594,14 +569,10 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             .and_then(Node::as_element)
             .expect("visited owner");
         let overrides = self
-            .options
             .policy
             .filter(|_| POLICY)
             .map_or(&[][..], |p| p.attribute_overrides(state.owner));
-        let filter = self
-            .options
-            .policy
-            .filter(|_| POLICY && self.options.filtering);
+        let filter = self.policy.filter(|_| POLICY && self.filtering);
         let attributes =
             EffectiveAttributes::new(state.owner, element.attributes(), overrides, filter);
         loop {
@@ -722,7 +693,16 @@ fn serialize_html_in_mode<
     };
     let mut serializer = HtmlSerializer::<S, EMBEDDED, POLICY> {
         dom,
-        options,
+        scripting_enabled_for_node: options.scripting_enabled_for_node,
+        shadow_root_provider: options.shadow_root_provider,
+        policy: options.policy,
+        filtering: POLICY && options.policy.is_some_and(|p| p.has_filters()),
+        insertion: options
+            .policy
+            .filter(|_| POLICY)
+            .and_then(|p| p.insertion()),
+        embedded_documents: options.embedded_documents,
+        sole_embedded_owner: options.embedded_documents.and_then(|p| p.sole_owner()),
         out: HtmlEscapingWriter {
             sink: out,
             attribute_depth: 0,
@@ -845,29 +825,12 @@ pub(super) fn serialize_html(
     .then_some(html)
 }
 
-pub(in crate::native) fn serialize_html_with_shadow_root_provider<F>(
+pub(in crate::native) fn serialize_html_with_options(
     dom: &NativeDom,
     node_id: NativeNodeId,
-    target: HtmlSerializationTarget,
-    scripting_enabled_for_node: &dyn Fn(NativeNodeId) -> bool,
-    shadow_root_provider: Option<&F>,
-    policy: Option<&dyn HtmlSerializationPolicy>,
-    embedded_documents: Option<&dyn HtmlEmbeddedDocumentProvider>,
-    max_bytes: Option<usize>,
-) -> Result<Option<String>, HtmlSerializationError>
-where
-    F: Fn(NativeNodeId) -> Option<HtmlSerializedShadowRoot>,
-{
-    let mut options = HtmlSerializationOptions::new(target, scripting_enabled_for_node);
-    if let Some(provider) = shadow_root_provider {
-        options = options.with_shadow_root_provider(provider);
-    }
-    options.policy = policy;
-    options.filtering = policy.is_some_and(|p| p.has_filters());
-    options.insertion = policy.and_then(|p| p.insertion());
-    options.embedded_documents = embedded_documents;
-    options.sole_embedded_owner = embedded_documents.and_then(|p| p.sole_owner());
-    if let Some(limit) = max_bytes {
+    options: HtmlSerializationOptions<'_>,
+) -> Result<Option<String>, HtmlSerializationError> {
+    if let Some(limit) = options.max_bytes {
         let mut out = BoundedHtmlSerialization::new(limit);
         if !serialize_html_into_sink(dom, node_id, options, &mut out)? {
             return Ok(None);
