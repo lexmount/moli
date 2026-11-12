@@ -354,6 +354,48 @@ async fn serve_cookie_fifo_input_does_not_block_browser_close() {
     std::fs::remove_file(pipe).unwrap();
 }
 
+fn seed_profile_cookie(path: &std::path::Path) {
+    let partition = moli_core::runtime::storage_partition::StoragePartitionState::open(Some(path))
+        .expect("open seed profile");
+    let cookies = moli_cookie_cache::read_cookie_file(SEED_COOKIE.as_bytes()).unwrap();
+    assert_eq!(partition.import_cookies(cookies).unwrap(), 1);
+    partition.shutdown().expect("persist seed profile");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_exports_cold_profile_on_immediate_close() {
+    let profile = unique_temp_file("serve-cold-cookie-profile");
+    seed_profile_cookie(&profile);
+    for existing_empty_file in [false, true] {
+        let output = unique_temp_file("serve-cold-cookie-export");
+        if existing_empty_file {
+            std::fs::write(&output, "").unwrap();
+        }
+        let mut serving = spawn_serving_child_with_args(&[
+            OsStr::new("--profile-dir"),
+            profile.as_os_str(),
+            OsStr::new("--cookie-file"),
+            output.as_os_str(),
+            OsStr::new("--cookie-jar"),
+            output.as_os_str(),
+        ]);
+        // No target, navigation, or Cookie API access may initialize this child's jar.
+        let mut socket =
+            connect_browser((std::net::Ipv4Addr::LOCALHOST, serving.port).into()).await;
+        assert!(
+            close_browser_and_wait_exit(&mut socket, &mut serving)
+                .await
+                .success()
+        );
+        let stderr = serving.take_stderr();
+        assert!(!stderr.contains("failed to snapshot cookies"), "{stderr}");
+        let contents = std::fs::read_to_string(&output).expect("cold profile export");
+        assert_eq!(cookie_file_entries(&contents), ["sid=seed"], "{contents}");
+        std::fs::remove_file(output).unwrap();
+    }
+    std::fs::remove_dir_all(profile).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn serve_without_export_keeps_cookie_database_lazy() {
     let profile = unique_temp_file("serve-no-cookie-export");
