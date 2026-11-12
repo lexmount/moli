@@ -95,14 +95,25 @@ fn document_create_event_preserves_legacy_interfaces_and_native_dispatch() {
 fn document_create_event_uses_intrinsics_and_registered_native_receivers() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://document-create-event-native.test/");
+    // Touch-event factory exposure is frozen when the Window is created.
+    vm.set_navigator_overrides_and_sync_surface(&moli_page_types::NavigatorOverrides {
+        max_touch_points: Some(1),
+        ..Default::default()
+    })
+    .unwrap();
     vm.eval("document.body.innerHTML='<iframe></iframe>'; globalThis.child=document.querySelector('iframe').contentWindow;")
         .unwrap();
     let context_ptr = &vm.current_main_world().unwrap().context as *const _;
     vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
         let global = scope.get_current_context().global(scope);
+        let child = crate::util::v8str(scope, "child");
+        let child =
+            v8::Local::<v8::Object>::try_from(global.get(scope, child.into()).unwrap()).unwrap();
         let key = crate::util::v8str(scope, "document");
         let document =
-            v8::Local::<v8::Object>::try_from(global.get(scope, key.into()).unwrap()).unwrap();
+            v8::Local::<v8::Object>::try_from(child.get(scope, key.into()).unwrap()).unwrap();
+        let realm = child.get_creation_context(scope).unwrap();
+        let scope = &mut v8::ContextScope::new(scope, realm);
         let handler = crate::util::new_null_prototype_object(scope);
         let proxy = v8::Proxy::new(scope, document, handler).unwrap();
         moli_webapi_declare::register_web_api_proxy(scope, proxy).unwrap();
@@ -116,15 +127,15 @@ fn document_create_event_uses_intrinsics_and_registered_native_receivers() {
     .unwrap();
     assert_eq!(vm.eval(r#"(() => {
         const names=['DragEvent','HashChangeEvent','TouchEvent'];
-        const originals=names.map(name=>window[name]);
+        const originals=names.map(name=>child[name]);
         let constructorCalls=0;
         try {
-            for (const name of names) window[name]=function(){constructorCalls++;throw 42;};
+            for (const name of names) child[name]=function(){constructorCalls++;throw 42;};
             for (const realm of [window,child]) {
                 const create=realm.Document.prototype.createEvent;
                 for (const [index,name] of names.entries()) {
                     const event=create.call(nativeDocument,name);
-                    if (Object.getPrototypeOf(event)!==originals[index].prototype || event.type!=='' || event.isTrusted) throw Error('intrinsic creation');
+                    if (Object.getPrototypeOf(event)!==originals[index].prototype || event.type!=='' || event.isTrusted) throw Error('intrinsic creation: '+name);
                     event.initEvent('native',false,false);
                     if (!new EventTarget().dispatchEvent(event)) throw Error('native dispatch');
                 }
@@ -139,7 +150,7 @@ fn document_create_event_uses_intrinsics_and_registered_native_receivers() {
             }
             return constructorCalls===0;
         } finally {
-            names.forEach((name,index)=>window[name]=originals[index]);
+            names.forEach((name,index)=>child[name]=originals[index]);
         }
     })()"#).unwrap(), "true");
 }

@@ -227,6 +227,7 @@ mod stream_objects;
 mod streams;
 mod style_font_template;
 pub(crate) mod svg_runtime;
+pub(crate) mod touch_feature_detection;
 mod touch_runtime;
 mod trusted_types;
 mod url_form;
@@ -353,7 +354,7 @@ pub(crate) use self::geometry_clone::{
     build_geometry_quad_from_cloned_points, geometry_clone_payload_from_object,
     geometry_quad_clone_points,
 };
-use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
+use self::geometry_runtime::optional_dom_point_init_arg;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,

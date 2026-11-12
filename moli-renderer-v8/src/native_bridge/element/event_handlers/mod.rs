@@ -16,8 +16,9 @@ pub(super) use body_window::{
 pub(crate) use generic::{
     GlobalEventHandlerOwner, compile_node_content_attribute_for_dispatch,
     event_handler_content_attribute_name, install_global_event_handler_template_bindings,
-    is_global_event_handler_attribute, node_event_handler_getter_function,
-    node_event_handler_setter_function, node_event_handler_value_from_wrapper,
+    install_touch_event_handler_realm_bindings, is_global_event_handler_attribute,
+    node_event_handler_getter_function, node_event_handler_setter_function,
+    node_event_handler_value_from_wrapper,
 };
 pub(crate) use shared::{EventAttributeHandlerScope, compile_event_attribute_handler_for_owner};
 

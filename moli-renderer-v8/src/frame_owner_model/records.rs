@@ -592,6 +592,9 @@ pub(crate) struct LocalWindowRecord {
     pub(crate) inherited_opaque_origin:
         Option<std::sync::Arc<crate::structured_clone::RuntimeMessageOpaqueOrigin>>,
     pub(crate) lifecycle: LocalWindowLifecycleState,
+    /// The first realm freezes conditional touch bindings for all worlds of
+    /// this Window. Live emulation updates do not rewrite installed bindings.
+    pub(crate) touch_feature_detection: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

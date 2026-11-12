@@ -3,6 +3,8 @@ use crate::automation::{
     DevToolsDevicePixelRatioSetting, DevToolsSetViewportCommand, DevToolsViewportSetting,
 };
 
+mod touch_feature_detection;
+
 async fn setup() -> TestContext {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
