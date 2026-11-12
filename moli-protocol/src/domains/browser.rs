@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use anyhow::Context;
 use chromiumoxide_cdp::cdp::browser_protocol::browser::{
-    CancelDownloadParams, SetWindowBoundsParams,
+    CancelDownloadParams, GetWindowBoundsParams, SetWindowBoundsParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -162,6 +162,9 @@ pub(crate) fn try_start_browser_command_dispatch(
         BrowserAction::GetWindowForTarget => {
             BrowserCommandTaskStep::Complete(get_window_for_target(conn, cmd))
         }
+        BrowserAction::GetWindowBounds => {
+            BrowserCommandTaskStep::Complete(get_window_bounds(conn, cmd))
+        }
         BrowserAction::SetWindowBounds => {
             BrowserCommandTaskStep::Complete(set_window_bounds(conn, cmd))
         }
@@ -309,19 +312,8 @@ fn optional_i64_to_u32(value: Option<i64>) -> Result<Option<u32>, ()> {
     value.map(u32::try_from).transpose().map_err(|_| ())
 }
 
-fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
-    let params: SetWindowBoundsParams = match cmd.get_params() {
-        Ok(Some(params)) => params,
-        _ => {
-            return CommandOutputPlan::error(-32602, "InvalidParams");
-        }
-    };
-
-    let Ok(window_id) = u32::try_from(*params.window_id.inner()) else {
-        return CommandOutputPlan::error(-32602, "InvalidParams");
-    };
-    let window_is_live = conn
-        .browser_window_ids
+fn window_is_live(conn: &CdpConnection, window_id: u32) -> bool {
+    conn.browser_window_ids
         .iter()
         .any(|((context_id, local_id), id)| {
             *id == window_id
@@ -336,8 +328,40 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
                     || (*local_id == 0
                         && context_id == conn.default_browser_context_id()
                         && conn.default_placeholder_is_logically_active(conn.default_target_id())))
-        });
-    if !window_is_live {
+        })
+}
+
+fn get_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params: GetWindowBoundsParams = match cmd.get_params() {
+        Ok(Some(params)) => params,
+        _ => {
+            return CommandOutputPlan::error(-32602, "InvalidParams");
+        }
+    };
+    let Ok(window_id) = u32::try_from(*params.window_id.inner()) else {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    };
+    if !window_is_live(conn, window_id) {
+        return CommandOutputPlan::error(-32000, "Browser window not found");
+    }
+    let Some(bounds) = conn.browser_window_bounds.get(&window_id) else {
+        return CommandOutputPlan::error(-32000, "Browser window not found");
+    };
+    CommandOutputPlan::result(json!({ "bounds": bounds_json(bounds) }))
+}
+
+fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params: SetWindowBoundsParams = match cmd.get_params() {
+        Ok(Some(params)) => params,
+        _ => {
+            return CommandOutputPlan::error(-32602, "InvalidParams");
+        }
+    };
+
+    let Ok(window_id) = u32::try_from(*params.window_id.inner()) else {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    };
+    if !window_is_live(conn, window_id) {
         return CommandOutputPlan::error(-32000, "Browser window not found");
     }
     let Some(window_bounds) = conn.browser_window_bounds.get_mut(&window_id) else {
@@ -368,10 +392,11 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    window_bounds.left = left;
-    window_bounds.top = top;
-    window_bounds.width = width;
-    window_bounds.height = height;
+    // Omitted fields keep their current value, as in Chromium.
+    window_bounds.left = left.or(window_bounds.left);
+    window_bounds.top = top.or(window_bounds.top);
+    window_bounds.width = width.or(window_bounds.width);
+    window_bounds.height = height.or(window_bounds.height);
     if let Some(window_state) = params.bounds.window_state {
         window_bounds.window_state = window_state.as_ref().to_owned();
     }

@@ -90,6 +90,42 @@ async fn rust_cdp_capability_browser_window_bounds_round_trip() {
     assert_eq!(updated["result"]["bounds"]["top"], 22);
     assert_eq!(updated["result"]["bounds"]["width"], 800);
     assert_eq!(updated["result"]["bounds"]["height"], 600);
+
+    ctx.process_async(json!({
+        "id": 101_008,
+        "method": "Browser.setWindowBounds",
+        "sessionId": attached.session_id,
+        "params": { "windowId": window_id, "bounds": { "width": 700 } }
+    }))
+    .await;
+    ctx.expect_result(101_008, json!({}), Some(&attached.session_id));
+
+    ctx.process_async(json!({
+        "id": 101_009,
+        "method": "Browser.getWindowBounds",
+        "sessionId": attached.session_id,
+        "params": { "windowId": window_id }
+    }))
+    .await;
+    ctx.expect_result(
+        101_009,
+        json!({
+            "bounds": {
+                "left": 11, "top": 22, "width": 700, "height": 600, "windowState": "normal"
+            }
+        }),
+        Some(&attached.session_id),
+    );
+
+    ctx.process_async(json!({
+        "id": 101_010,
+        "method": "Browser.getWindowBounds",
+        "sessionId": attached.session_id,
+        "params": { "windowId": 999_999 }
+    }))
+    .await;
+    let missing = take_response_by_id(&mut ctx, 101_010);
+    assert_eq!(missing["error"]["code"], -32000, "{missing}");
 }
 
 // Capability source: docs/WEB_CAPABILITIES.md download ability.
