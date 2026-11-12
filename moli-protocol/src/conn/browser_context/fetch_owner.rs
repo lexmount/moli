@@ -870,6 +870,18 @@ impl CdpConnection {
             .then_some(request_id)
     }
 
+    pub(crate) fn paused_subresource_fetch_response_request_id_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        internal_id: u64,
+    ) -> Option<String> {
+        let request_id =
+            self.in_flight_subresource_fetch_request_id_for_owner(owner, internal_id)?;
+        self.target_session_owner_mut_for_owner(owner)?
+            .subresource_response_is_paused(&request_id)
+            .then_some(request_id)
+    }
+
     pub(crate) fn register_pending_subresource_fetch_request_for_session_owner(
         &mut self,
         session_id: Option<&str>,

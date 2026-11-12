@@ -1421,3 +1421,106 @@ async fn websocket_bidi_storage_cookie_commands_execute_through_devtools_runtime
     let _ = socket.close(None).await;
     protocol_server.abort();
 }
+
+#[tokio::test]
+async fn websocket_bidi_completed_synchronous_xhr_never_reports_a_response_pause() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let observed = hits.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/api",
+                    get(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async { "network" }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
+        .await
+        .unwrap();
+    assert_eq!(
+        send_bidi_command(&mut socket, 1, "session.new", json!({})).await["type"],
+        "success"
+    );
+    let create = send_bidi_command(
+        &mut socket,
+        2,
+        "browsingContext.create",
+        json!({"type":"tab"}),
+    )
+    .await;
+    let context = create["result"]["context"].as_str().unwrap().to_owned();
+    assert_eq!(
+        send_bidi_command(
+            &mut socket,
+            3,
+            "browsingContext.navigate",
+            json!({"context":context,"url":format!("http://{addr}/"),"wait":"complete"})
+        )
+        .await["type"],
+        "success"
+    );
+    assert_eq!(send_bidi_command(&mut socket,4,"session.subscribe",json!({
+        "events":["network.responseStarted","network.responseCompleted","network.fetchError"],"contexts":[context]
+    })).await["type"],"success");
+    let intercept = send_bidi_command_response(
+        &mut socket,
+        5,
+        "network.addIntercept",
+        json!({"phases":["responseStarted"],"contexts":[context]}),
+    )
+    .await;
+    assert_eq!(intercept["type"], "success", "{intercept}");
+    // Renderer-owned URLs deliberately bypass Fetch interception. Their
+    // complete response records still must not be labelled as resumable.
+    let url = "data:text/plain,local-body";
+    socket.send(WsMessage::Text(json!({"id":6,"method":"script.evaluate","params":{
+        "target":{"context":context},"awaitPromise":false,
+        "expression":format!("(() => {{const xhr=new XMLHttpRequest();xhr.open('GET',{url:?},false);xhr.send();return xhr.responseText;}})()")
+    }}).to_string().into())).await.unwrap();
+    let mut messages = recv_until_id(&mut socket, 6).await;
+    if !messages.iter().any(|message| {
+        message["method"] == "network.responseCompleted"
+            && message["params"]["request"]["url"] == url
+    }) {
+        messages.extend(
+            recv_until_match(&mut socket, |message| {
+                message["method"] == "network.responseCompleted"
+                    && message["params"]["request"]["url"] == url
+            })
+            .await,
+        );
+    }
+    let reply = messages.iter().find(|message| message["id"] == 6).unwrap();
+    assert_eq!(reply["result"]["result"]["value"], "local-body", "{reply}");
+    for method in ["network.responseStarted", "network.responseCompleted"] {
+        let event = messages
+            .iter()
+            .find(|message| {
+                message["method"] == method && message["params"]["request"]["url"] == url
+            })
+            .expect("synchronous XHR lifecycle event");
+        assert_eq!(event["params"]["isBlocked"], false, "{event}");
+        assert!(event["params"].get("intercepts").is_none(), "{event}");
+    }
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    fixture.abort();
+}
