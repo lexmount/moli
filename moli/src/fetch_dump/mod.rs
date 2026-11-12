@@ -193,7 +193,7 @@ async fn render_page_dump_with_trace_config_async(
             .await
         }
         DumpFormat::Html => dom::render_html(page, strip, with_base, with_frames).await,
-        DumpFormat::Markdown => dom::render_markdown(page, strip, with_frames).await,
+        DumpFormat::Markdown => dom::render_markdown(page, strip).await,
         DumpFormat::Screenshot | DumpFormat::ScreenshotFull | DumpFormat::Pdf => {
             bail!("binary dump formats are only supported by the fetch CLI output path")
         }
