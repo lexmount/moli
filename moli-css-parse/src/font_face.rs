@@ -1,4 +1,5 @@
 use cssparser::{Parser, Token};
+use style::values::computed::font::{FontFamilyList, FontFamilyNameSyntax, SingleFontFamily};
 
 use crate::unquote_css_string;
 
@@ -103,6 +104,7 @@ pub fn font_family_name_key(name: &str) -> String {
 pub struct CssFontShorthand {
     pub family_css: String,
     pub families: Vec<CssFontFamily>,
+    pub named_families: Vec<String>,
     pub size: String,
     pub style: String,
     pub weight: String,
@@ -114,9 +116,12 @@ pub struct CssFontShorthand {
 pub fn parse_font_shorthand(value: &str) -> Option<CssFontShorthand> {
     use style::{
         parser::Parse,
-        properties::{PropertyId, parse_property_declaration_list},
+        properties::{
+            LonghandId, PropertyDeclaration, PropertyDeclarationId, PropertyId,
+            parse_property_declaration_list,
+        },
         stylesheets::CssRuleType,
-        values::computed::font::SingleFontFamily,
+        values::specified::FontFamily,
     };
     use style_traits::CssStringWriter;
     if crate::escape_top_level_semicolons(value) != value
@@ -139,6 +144,13 @@ pub fn parse_font_shorthand(value: &str) -> Option<CssFontShorthand> {
         if is_css_wide_keyword(&size) || size.contains("var(") {
             return None;
         }
+        let named_families =
+            match block.get(PropertyDeclarationId::Longhand(LonghandId::FontFamily)) {
+                Some((PropertyDeclaration::FontFamily(FontFamily::Values(families)), _)) => {
+                    font_face_family_names(families)
+                }
+                _ => Vec::new(),
+            };
         let families = Parser::new(&family_css)
             .parse_comma_separated(|p| {
                 SingleFontFamily::parse(context, p).map(|family| match family {
@@ -152,6 +164,7 @@ pub fn parse_font_shorthand(value: &str) -> Option<CssFontShorthand> {
         Some(CssFontShorthand {
             family_css,
             families,
+            named_families,
             size,
             style: property("font-style")?,
             weight: property("font-weight")?,
@@ -224,6 +237,32 @@ pub fn font_load_query_family(query: &str) -> Option<String> {
     Some(unquote_css_string(family))
 }
 
+fn font_face_family_names(families: &FontFamilyList) -> Vec<String> {
+    // Servo represents `math` as a FamilyName rather than a native generic.
+    // Only identifier syntax can be a keyword; quoted names stay literal.
+    families
+        .iter()
+        .filter_map(|family| match family {
+            SingleFontFamily::FamilyName(name)
+                if name.syntax == FontFamilyNameSyntax::Quoted
+                    || !matches!(
+                        name.name.to_ascii_lowercase().as_str(),
+                        "serif"
+                            | "sans-serif"
+                            | "monospace"
+                            | "cursive"
+                            | "fantasy"
+                            | "system-ui"
+                            | "math"
+                    ) =>
+            {
+                Some(name.name.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn is_css_wide_keyword(value: &str) -> bool {
     matches!(
         value.to_ascii_lowercase().as_str(),
@@ -233,6 +272,40 @@ fn is_css_wide_keyword(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn font_shorthand_distinguishes_quoted_and_escaped_generic_family_names() {
+        for name in [
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "system-ui",
+            "math",
+            "SANS-SERIF",
+        ] {
+            let query = format!(r#"16px {name}, "{name}""#);
+            assert_eq!(
+                super::parse_font_shorthand(&query).unwrap().named_families,
+                [name],
+                "{query}",
+            );
+            let escaped = format!(r"\{:x} {}", name.as_bytes()[0], &name[1..]);
+            let query = format!(r#"italic 16px {escaped}, "{escaped}""#);
+            assert_eq!(
+                super::parse_font_shorthand(&query).unwrap().named_families,
+                [name],
+                "{query}",
+            );
+        }
+        assert_eq!(
+            super::parse_font_shorthand("16px ui-serif, fangsong, Literal Family")
+                .unwrap()
+                .named_families,
+            ["ui-serif", "fangsong", "Literal Family"],
+        );
+    }
+
     #[test]
     fn font_name_keys_follow_chromium_case_folding_without_expansion_or_normalization() {
         use super::font_family_name_key;
