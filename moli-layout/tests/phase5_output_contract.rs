@@ -2405,6 +2405,12 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
         model.margin.bounding_rect(),
         LayoutRect::new(0.0, 0.0, 120.0, 80.0),
     );
+    let quads = output.content_quads_for_source(0);
+    assert_eq!(quads.len(), 1);
+    assert_rect(
+        quads[0].bounding_rect(),
+        LayoutRect::new(3.0, 3.0, 114.0, 74.0),
+    );
 
     let queries = LayoutQueryBatch::new(vec![
         LayoutQuery::DocumentMetrics,

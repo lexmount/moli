@@ -415,9 +415,10 @@ where
                 )
             })
             .filter_map(|fragment| {
+                // Chromium's content quads are border-box quads.
                 let rect = fragment
                     .box_model
-                    .map(|model| model.content)
+                    .map(|model| model.border)
                     .unwrap_or(fragment.rect);
                 self.coordinate_space(fragment.coordinate_space)
                     .map(|space| space.local_to_viewport.map_rect(rect))
