@@ -153,6 +153,7 @@ SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/invalid-chunked-encoding.py",
     "/service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
     "/service-workers/service-worker/resources/redirect.py",
+    "/service-workers/service-worker/resources/scope1/redirect.py",
     "/service-workers/service-worker/resources/update-worker.py",
     "/service-workers/service-worker/resources/update-worker-from-file.py",
     "/service-workers/service-worker/resources/update-during-installation-worker.py",
