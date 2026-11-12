@@ -26,10 +26,19 @@ impl PageVm {
                 .to_owned();
             inject_base_href(&mut dom, &href);
         }
-        if options.with_frames {
-            self.inline_child_frame_markups_into_dump_dom(&mut dom);
+        let child_frames = if options.with_frames {
+            self.vm().live_child_document_handles_in_snapshot_order()
+        } else {
+            Vec::new()
+        };
+        // Child Documents live in the same DOM copy, so strip them before
+        // their markup is folded into the owners' `srcdoc` attributes.
+        let top_document = dom.document_node_id();
+        apply_strip_options(&mut dom, top_document, options.strip);
+        for (_, _, child_document) in &child_frames {
+            apply_strip_options(&mut dom, *child_document, options.strip);
         }
-        apply_strip_options(&mut dom, options.strip);
+        self.inline_child_frame_markups_into_dump_dom(&mut dom, child_frames);
 
         dom.serialize_document()
     }
@@ -100,22 +109,23 @@ impl PageVm {
         render_markdown_view(dom, styles, base_url.as_ref(), strip)
     }
 
-    fn inline_child_frame_markups_into_dump_dom(&mut self, dom: &mut NativeDom) {
-        let child_frames = self
-            .vm()
-            .live_child_document_handles_in_snapshot_order()
-            .into_iter()
-            .map(|(frame_id, owner_node_id, _)| (frame_id, owner_node_id))
-            .collect::<Vec<_>>();
-
-        for (frame_id, owner_node_id) in child_frames {
+    fn inline_child_frame_markups_into_dump_dom(
+        &mut self,
+        dom: &mut NativeDom,
+        child_frames: Vec<(String, NativeNodeId, NativeNodeId)>,
+    ) {
+        // Snapshot order lists a parent frame before its descendants. Walk it
+        // backwards so a nested owner's `srcdoc` is already in the copy when
+        // its parent Document is serialized.
+        for (frame_id, owner_node_id, child_document) in child_frames.into_iter().rev() {
             let Some(snapshot) = self
                 .vm_mut()
                 .child_browsing_context_document_snapshot_by_frame_id(&frame_id)
             else {
                 continue;
             };
-            let _ = dom.set_attribute(owner_node_id, "srcdoc", &snapshot.markup);
+            let markup = dom.inner_html(child_document).unwrap_or(snapshot.markup);
+            let _ = dom.set_attribute(owner_node_id, "srcdoc", &markup);
             let _ = dom.set_attribute(owner_node_id, "data-moli-frame-url", &snapshot.url);
         }
     }
@@ -165,13 +175,17 @@ fn ensure_head_node(dom: &mut NativeDom) -> NativeNodeId {
     head
 }
 
-fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions) {
+fn apply_strip_options(
+    dom: &mut NativeDom,
+    root: NativeNodeId,
+    strip: RendererPageDumpStripOptions,
+) {
     if !strip.js && !strip.ui && !strip.css {
         return;
     }
 
     let mut node_ids = Vec::new();
-    collect_node_ids(dom, dom.document_node_id(), &mut node_ids);
+    collect_node_ids(dom, root, &mut node_ids);
 
     for node_id in &node_ids {
         if strip.css {
