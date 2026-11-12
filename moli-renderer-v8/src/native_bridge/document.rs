@@ -1052,36 +1052,18 @@ fn current_script_handle_for_document(
         // its node document or tree while its currentScript value stays set.
         return runtime.child_current_script_handle_for_document(document_handle);
     }
-    if let Some(script) = runtime.current_inline_script_handle()
-        && current_script_belongs_to_document(runtime, script, document_handle)
-    {
-        return current_script_is_visible_for_document(runtime, script, document_handle)
-            .then_some(script);
+    if document_handle != runtime.dom_host().document_handle() {
+        return None;
     }
+    // The executing Document owns currentScript, even if the script is adopted
+    // into another Document before its execution finishes.
+    let dom = runtime.dom_host();
     runtime
-        .current_script_handle()
-        .filter(|script| current_script_is_visible_for_document(runtime, *script, document_handle))
-}
-
-fn current_script_is_visible_for_document(
-    runtime: &PageScriptHost,
-    script: DomHandle,
-    document_handle: DomHandle,
-) -> bool {
-    let dom = runtime.dom_host();
-    current_script_belongs_to_document(runtime, script, document_handle)
-        && (!dom.is_connected(script) || dom.containing_shadow_root(script).is_none())
-}
-
-fn current_script_belongs_to_document(
-    runtime: &PageScriptHost,
-    script: DomHandle,
-    document_handle: DomHandle,
-) -> bool {
-    let dom = runtime.dom_host();
-    dom.node(script)
-        .and_then(Node::owner_document)
-        .is_some_and(|owner_document| owner_document == document_handle)
+        .current_inline_script_handle()
+        .or_else(|| runtime.current_script_handle())
+        .filter(|script| {
+            !dom.is_connected(*script) || dom.containing_shadow_root(*script).is_none()
+        })
 }
 
 fn document_hidden_getter_function<'s>(

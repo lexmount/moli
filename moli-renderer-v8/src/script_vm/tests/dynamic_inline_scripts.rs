@@ -6,6 +6,39 @@ const DYNAMIC_INLINE_ERRORS: &str = include_str!(concat!(
 ));
 
 #[test]
+fn current_script_stays_with_its_execution_document_after_adoption() {
+    let mut vm = new_parsed_test_vm(
+        "https://inline-adoption.test/page.html",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+            globalThis.adoptionResults = [];
+            globalThis.outer = document.createElement('script');
+            outer.textContent = `
+              globalThis.inner = document.createElement('script');
+              inner.textContent = \`
+                adoptionResults.push(document.currentScript === inner);
+                globalThis.destination = document.implementation.createHTMLDocument();
+                destination.body.appendChild(inner);
+                adoptionResults.push(inner.ownerDocument === destination);
+                adoptionResults.push(document.currentScript === inner);
+                adoptionResults.push(destination.currentScript === null);
+              \`;
+              document.body.appendChild(inner);
+              adoptionResults.push(document.currentScript === outer);
+            `;
+            document.body.appendChild(outer);
+            adoptionResults.push(document.currentScript === null);
+            JSON.stringify(adoptionResults)
+            "#,
+        )
+        .unwrap();
+    assert_eq!(result, "[true,true,true,true,true,true]");
+}
+
+#[test]
 fn main_dynamic_inline_script_errors_are_synchronous_and_restore_current_script() {
     for borrow_child_insertion in [false, true] {
         let mut vm = new_parsed_test_vm(
