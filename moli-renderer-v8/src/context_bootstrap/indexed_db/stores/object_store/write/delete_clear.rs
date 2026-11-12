@@ -1,5 +1,8 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::indexed_db_transaction_mode;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_transaction_mode, indexed_db_transaction_status,
+};
+
 use moli_indexeddb::TransactionMode;
 
 #[derive(webidl::WebIdlArgs)]
@@ -29,8 +32,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
     }
     let Some(transaction) =
         indexed_db_object_store_transaction(scope, store).filter(|transaction| {
-            object_bool_property(scope, *transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-                .unwrap_or(false)
+            indexed_db_transaction_status(scope, *transaction).is_some_and(|state| state.active)
         })
     else {
         let error = dom_exception_value(

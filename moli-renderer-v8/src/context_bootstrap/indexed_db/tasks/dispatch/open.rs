@@ -1,8 +1,10 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    associate_indexed_db_upgrade_open, dispatch_version_change_event_with_result,
-    finish_transaction_abort,
+    IndexedDbRequestReadyState, IndexedDbRequestValue, associate_indexed_db_upgrade_open,
+    dispatch_version_change_event_with_result, finish_transaction_abort,
+    indexed_db_transaction_status,
     schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
+    set_indexed_db_request_ready_state, set_request_value,
 };
 
 mod abort;
@@ -22,21 +24,20 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         return;
     };
 
-    set_indexed_db_slot_value(
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_RESULT_SLOT,
+        IndexedDbRequestValue::Result,
         database.into(),
     );
-    set_indexed_db_slot_value(
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_TRANSACTION_SLOT,
+        IndexedDbRequestValue::Transaction,
         transaction.into(),
     );
 
-    let done = v8str(scope, "done").into();
-    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
+    set_indexed_db_request_ready_state(scope, request, IndexedDbRequestReadyState::Done);
     associate_indexed_db_upgrade_open(scope, transaction, request);
     let cancel =
         crate::context_bootstrap::indexed_db::typed_state::factory::upgrade_event_cancellation(
@@ -57,8 +58,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         return;
     }
     if outcome.did_listeners_throw
-        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-            .unwrap_or(false)
+        && indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active)
     {
         let error = dom_exception_value(
             scope,

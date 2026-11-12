@@ -270,11 +270,11 @@ fn runtime(scope: &mut v8::PinScope<'_, '_>, backend: &Backend) {
         "moli.IndexedDb.runtime.factory",
         factory.into(),
     );
-    define_non_enumerable_bool_property(
+    set_private_value(
         scope,
         state,
         "moli.IndexedDb.runtime.factoryInitialized",
-        true,
+        v8::Boolean::new(scope, true).into(),
     );
     assert!(indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).is_some());
     let context = scope.get_current_context();
@@ -309,7 +309,6 @@ fn transaction<'s>(
         scope,
         database,
         backend.connection.handle(),
-        backend.storage_scope.clone(),
         backend.client.clone(),
     );
     attach_indexed_db_sql_connection(scope, database, backend.connection.clone()).unwrap();
@@ -347,7 +346,7 @@ fn request_for_store<'s>(
     let storage_scope = indexed_db_typed_storage_scope(scope, transaction);
     let request = v8::Object::new(scope);
     register_indexed_db_wrapper(scope, request, IndexedDbWrapperKind::Request, storage_scope);
-    register_indexed_db_request_lifecycle(scope, request, store.into(), transaction.into(), false);
+    register_indexed_db_request_lifecycle(scope, request, store.into(), transaction.into());
     request
 }
 
@@ -572,7 +571,7 @@ fn transport_writes_enforce_real_bucket_quota_and_restore_generated_keys() {
         requests.push(request);
     }
     assert_eq!(drain_sql(scope, &backend), 2);
-    let error = object_hidden_value(scope, requests[0], INDEXED_DB_PENDING_ERROR_SLOT)
+    let error = request_value(scope, requests[0], IndexedDbRequestValue::PendingError)
         .unwrap()
         .to_object(scope)
         .unwrap();
@@ -630,9 +629,9 @@ fn rejected_deferred_commit_waits_for_a_native_rollback_receipt() {
     {
         let state = table.borrow();
         let transaction = &state.transactions[&transaction_id];
-        assert!(transaction.aborted);
+        assert!(transaction.status.aborted);
         assert!(
-            !transaction.finished,
+            !transaction.status.finished,
             "a dispatch rejection is not a native rollback receipt"
         );
         assert!(
@@ -653,7 +652,7 @@ fn rejected_deferred_commit_waits_for_a_native_rollback_receipt() {
     observed.recv_timeout(Duration::from_secs(10)).unwrap();
     let rollback = *table.borrow().sql_tasks.keys().next().unwrap();
     assert!(flush_indexed_db_task_by_id(scope, rollback));
-    assert!(table.borrow().transactions[&transaction_id].finished);
+    assert!(table.borrow().transactions[&transaction_id].status.finished);
     assert!(
         table
             .borrow()
@@ -693,9 +692,9 @@ fn rejected_sql_request_after_native_close_settles_request_before_transaction_ab
     );
     let table = ensure_indexed_db_runtime_state_table(scope);
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
-    assert!(table.borrow().transactions[&id].finished);
+    assert!(table.borrow().transactions[&id].status.finished);
     assert!(table.borrow().transactions[&id].sql_rollback.is_none());
-    assert!(object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
+    assert!(request_value(scope, request, IndexedDbRequestValue::PendingError).is_some());
     let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
     let kinds = (0..queue.length())
         .filter_map(|index| {
@@ -743,8 +742,8 @@ fn inline_write_closed_after_prepare_settles_abort_after_request_error() {
     assert!(flush_indexed_db_task_by_id(scope, task));
     drain_sql(scope, &backend);
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
-    assert!(table.borrow().transactions[&id].finished);
-    assert!(table.borrow().transactions[&id].aborted);
+    assert!(table.borrow().transactions[&id].status.finished);
+    assert!(table.borrow().transactions[&id].status.aborted);
     assert!(table.borrow().transactions[&id].sql_rollback.is_none());
     let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
     let kinds = (0..queue.length())
@@ -769,7 +768,7 @@ fn schedule<'s>(
     kind: IndexedDbTransactionOperation,
 ) {
     let transaction = indexed_db_request_transaction_object(scope, request).unwrap();
-    let source = object_hidden_value(scope, request, INDEXED_DB_REQUEST_SOURCE_SLOT)
+    let source = request_value(scope, request, IndexedDbRequestValue::Source)
         .unwrap()
         .to_object(scope)
         .unwrap();
@@ -780,13 +779,13 @@ fn result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(value) = object_hidden_value(scope, request, INDEXED_DB_PENDING_RESULT_SLOT) {
+    if let Some(value) = request_value(scope, request, IndexedDbRequestValue::PendingResult) {
         return value;
     }
-    let error = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT);
+    let error = request_value(scope, request, IndexedDbRequestValue::PendingError);
     let description = error.map(|error| error.to_rust_string_lossy(scope));
-    let ready = object_string_property(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT);
-    let final_value = object_hidden_value(scope, request, INDEXED_DB_REQUEST_RESULT_SLOT)
+    let ready = indexed_db_request_ready_state(scope, request);
+    let final_value = request_value(scope, request, IndexedDbRequestValue::Result)
         .map(|value| value.to_rust_string_lossy(scope));
     panic!(
         "missing SQL request result; pending error: {description:?}, ready: {ready:?}, final result: {final_value:?}"
@@ -837,8 +836,8 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
     );
     // Materialization is separate from the subsequent request success event.
     assert_eq!(
-        object_string_property(scope, get, INDEXED_DB_REQUEST_READY_STATE_SLOT).as_deref(),
-        Some("pending")
+        indexed_db_request_ready_state(scope, get),
+        Some(IndexedDbRequestReadyState::Pending)
     );
 
     let get_key = request(scope, &backend);
@@ -893,7 +892,7 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         );
     }
     let index_key = request(scope, &backend);
-    let store = object_hidden_value(scope, index_key, INDEXED_DB_REQUEST_SOURCE_SLOT)
+    let store = request_value(scope, index_key, IndexedDbRequestValue::Source)
         .unwrap()
         .to_object(scope)
         .unwrap();
@@ -916,10 +915,10 @@ fn sql_read_results_materialize_without_a_legacy_manager_or_record_scan() {
         },
     )
     .unwrap();
-    set_private_value(
+    set_request_value(
         scope,
         index_key,
-        INDEXED_DB_REQUEST_SOURCE_SLOT,
+        IndexedDbRequestValue::Source,
         index.into(),
     );
     schedule(
@@ -1114,8 +1113,8 @@ fn malformed_sql_wire_is_a_request_error_instead_of_successful_undefined() {
         },
     );
     finish_sql(scope, &backend);
-    assert!(object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
-    assert!(object_hidden_value(scope, request, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(request_value(scope, request, IndexedDbRequestValue::PendingError).is_some());
+    assert!(request_value(scope, request, IndexedDbRequestValue::PendingResult).is_none());
 }
 
 #[test]
@@ -1213,7 +1212,7 @@ fn inline_sql_writes_keep_their_round_trips_in_fifo_and_index_the_snapshot() {
     assert_eq!(table.borrow().sql_tasks.len(), 1);
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
     assert_eq!(table.borrow().transactions[&id].operations.len(), 2);
-    assert!(object_hidden_value(scope, first, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(request_value(scope, first, IndexedDbRequestValue::PendingResult).is_none());
     drop(gate);
     assert_eq!(
         drain_sql(scope, &backend),
@@ -1298,8 +1297,8 @@ fn sql_unique_failure_and_owner_decode_failure_roll_back_generated_keys_before_n
     assert_eq!(drain_sql(scope, &backend), 8);
     assert_eq!(result(scope, requests[0]).number_value(scope), Some(1.0));
     for request in &requests[1..3] {
-        assert!(object_hidden_value(scope, *request, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
-        assert!(object_hidden_value(scope, *request, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+        assert!(request_value(scope, *request, IndexedDbRequestValue::PendingError).is_some());
+        assert!(request_value(scope, *request, IndexedDbRequestValue::PendingResult).is_none());
     }
     assert_eq!(result(scope, requests[3]).number_value(scope), Some(2.0));
     assert!(matches!(
@@ -1390,6 +1389,7 @@ fn sql_operations_wait_for_start_and_keep_their_snapshot() {
         .transactions
         .get_mut(&id)
         .unwrap()
+        .status
         .started = true;
     crate::context_bootstrap::indexed_db::pump_transaction_operations(scope, transaction);
     assert_eq!(drain_sql(scope, &backend), 2);
@@ -1431,8 +1431,8 @@ fn request_preparation_errors_wait_for_start_and_preceding_inline_writes() {
                 query: Default::default(),
             },
         );
-        assert!(object_hidden_value(scope, first, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
-        assert!(object_hidden_value(scope, second, INDEXED_DB_PENDING_ERROR_SLOT).is_none());
+        assert!(request_value(scope, first, IndexedDbRequestValue::PendingResult).is_none());
+        assert!(request_value(scope, second, IndexedDbRequestValue::PendingError).is_none());
 
         if !started {
             let table = ensure_indexed_db_runtime_state_table(scope);
@@ -1443,12 +1443,13 @@ fn request_preparation_errors_wait_for_start_and_preceding_inline_writes() {
                 .transactions
                 .get_mut(&id)
                 .unwrap()
+                .status
                 .started = true;
             crate::context_bootstrap::indexed_db::pump_transaction_operations(scope, transaction);
         }
         assert_eq!(drain_sql(scope, &backend), 2);
         assert_eq!(result(scope, first).number_value(scope), Some(1.0));
-        assert!(object_hidden_value(scope, second, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
+        assert!(request_value(scope, second, IndexedDbRequestValue::PendingError).is_some());
         let queue = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::TaskQueue).unwrap();
         let kinds = (0..queue.length())
             .filter_map(|index| {
@@ -1503,7 +1504,7 @@ fn sql_inline_cancellation_rolls_back_before_the_next_write() {
     backend.barrier();
 
     assert_eq!(drain_sql(scope, &backend), 4);
-    assert!(object_hidden_value(scope, invalid, INDEXED_DB_PENDING_ERROR_SLOT).is_some());
+    assert!(request_value(scope, invalid, IndexedDbRequestValue::PendingError).is_some());
     assert_eq!(result(scope, valid).number_value(scope), Some(1.0));
 
     assert!(matches!(
@@ -1541,7 +1542,7 @@ fn discarded_inline_prepare_aborts_native_transaction() {
     assert!(discard_indexed_db_task_by_id(scope, task));
     backend.barrier();
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
-    assert!(table.borrow().transactions[&id].aborted);
+    assert!(table.borrow().transactions[&id].status.aborted);
     assert!(table.borrow().transactions[&id].sql_rollback.is_none());
     assert!(table.borrow().transactions[&id].sql_client.is_none());
     assert!(table.borrow().sql_tasks.is_empty());
@@ -1766,7 +1767,7 @@ fn terminated_index_extraction_aborts_sql_and_does_not_start_the_next_operation(
     eval(scope, "delete Array.prototype[0]");
     backend.barrier();
     let id = indexed_db_typed_state_id(scope, transaction).unwrap();
-    assert!(table.borrow().transactions[&id].aborted);
+    assert!(table.borrow().transactions[&id].status.aborted);
     assert!(table.borrow().transactions[&id].operations.is_empty());
     assert!(!table.borrow().transactions[&id].operation_in_flight);
     assert!(table.borrow().sql_tasks.is_empty());
@@ -1841,8 +1842,8 @@ fn sql_collection_batches_keep_one_operation_in_flight_until_the_whole_result_is
         },
     );
     flush_one(scope, &backend);
-    assert!(object_hidden_value(scope, all, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
-    assert!(object_hidden_value(scope, deletion, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(request_value(scope, all, IndexedDbRequestValue::PendingResult).is_none());
+    assert!(request_value(scope, deletion, IndexedDbRequestValue::PendingResult).is_none());
     assert!(matches!(
         backend.execute(backend.count()),
         CommandResult::Count(2)
@@ -1852,7 +1853,7 @@ fn sql_collection_batches_keep_one_operation_in_flight_until_the_whole_result_is
     assert_eq!(array.length(), 2);
     let second = array.get_index(scope, 1).unwrap();
     assert_eq!(second.to_rust_string_lossy(scope), "small");
-    assert!(object_hidden_value(scope, deletion, INDEXED_DB_PENDING_RESULT_SLOT).is_none());
+    assert!(request_value(scope, deletion, IndexedDbRequestValue::PendingResult).is_none());
     assert_eq!(drain_sql(scope, &backend), 1);
     assert!(matches!(
         backend.execute(backend.count()),

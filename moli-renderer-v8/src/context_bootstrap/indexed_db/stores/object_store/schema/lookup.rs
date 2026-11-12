@@ -1,8 +1,8 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    INDEXED_DB_TRANSACTION_ABORTED_SLOT, INDEXED_DB_TRANSACTION_FINISHED_SLOT,
-    indexed_db_object_store_is_deleted,
+    indexed_db_object_store_is_deleted, indexed_db_transaction_status,
 };
+
 use crate::webidl;
 
 #[derive(webidl::WebIdlArgs)]
@@ -23,10 +23,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_index_callback<
     let index_name = moli_indexeddb::IndexedDbName::from_utf16(parsed.index_name.0);
     let store = args.this();
     let finished = indexed_db_object_store_transaction(scope, store).is_none_or(|transaction| {
-        object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
-            || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-                .unwrap_or(false)
+        indexed_db_transaction_status(scope, transaction)
+            .is_some_and(|state| state.finished || state.aborted)
     });
     if indexed_db_object_store_is_deleted(scope, store) || finished {
         let error = dom_exception_value(

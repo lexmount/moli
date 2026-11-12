@@ -166,12 +166,12 @@ pub(super) fn cancel_sql_transaction(
 ) {
     if let Some(transaction) = table.transactions.get_mut(&id) {
         transaction.release_sql_resources();
-        if transaction.finished && !transaction.aborted {
+        if transaction.status.finished && !transaction.status.aborted {
             return;
         }
-        transaction.aborted = true;
-        transaction.finished = true;
-        transaction.active = false;
+        transaction.status.aborted = true;
+        transaction.status.finished = true;
+        transaction.status.active = false;
         transaction.operations.clear();
         transaction.operation_in_flight = false;
     }
@@ -192,7 +192,7 @@ pub(in crate::context_bootstrap::indexed_db) fn ensure_sql_transaction_rollback<
     let transaction = table.transactions.get_mut(&id).ok_or_else(|| {
         IndexedDbError::TransactionInactive("SQL transaction was released".into())
     })?;
-    if transaction.finished || transaction.aborted {
+    if transaction.status.finished || transaction.status.aborted {
         return Err(IndexedDbError::TransactionInactive(
             "SQL transaction is no longer running".into(),
         ));
@@ -248,7 +248,7 @@ fn capture_cancellation<'s>(
                 && table
                     .transactions
                     .get(&id)
-                    .is_some_and(|state| state.committing)
+                    .is_some_and(|state| state.status.committing)
             {
                 return;
             }
@@ -404,11 +404,8 @@ pub(in crate::context_bootstrap::indexed_db) fn abort_sql_dispatch<'s>(
     let Some(transaction) = source_transaction(scope, source) else {
         return;
     };
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
-        if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+    if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished) {
+        if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.aborted)
             && !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
         {
             let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
@@ -583,11 +580,9 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
         && let Some(transaction) = source_transaction(scope, source)
         && let Some(handle) = indexed_db_native_transaction_handle(scope, transaction)
         && completion.active_transaction != Some(handle)
-        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+        && !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.aborted)
         && let Err(error) = &completion.result
-        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
+        && !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished)
     {
         // A lost native transaction is not a recoverable request SAVEPOINT
         // failure. Its receipt proves the old SQL owner is gone, so no owner
@@ -598,18 +593,10 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
         };
         let error = request_error_object(scope, &error);
         disarm_sql_transaction_rollback(scope, transaction);
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_ABORTED_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        );
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-            v8::Boolean::new(scope, false).into(),
-        );
+        let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+            state.aborted = true;
+            state.active = false;
+        });
         // Preserve request-list order: settle this in-flight request before
         // draining later queued requests and queuing the transaction abort.
         let request_error =
@@ -625,8 +612,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_indexed_db_sql_task<'s>(
     }
     if !indexed_db_typed_wrapper_is(scope, source, IndexedDbWrapperKind::Transaction)
         && let Some(transaction) = source_transaction(scope, source)
-        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+        && indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.aborted)
     {
         let error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
         store_request_error(scope, source, error);
@@ -670,7 +656,8 @@ pub(in crate::context_bootstrap::indexed_db) fn abort_in_flight_sql_requests<'s>
             let pending = request_id
                 .and_then(|id| table.requests.get(&id))
                 .is_some_and(|state| {
-                    state.ready_state == "pending" && !state.error_pending_dispatch
+                    state.ready_state == IndexedDbRequestReadyState::Pending
+                        && !state.error_pending_dispatch
                 });
             (payload, pending)
         };

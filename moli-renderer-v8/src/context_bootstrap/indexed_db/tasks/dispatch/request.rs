@@ -1,4 +1,7 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    indexed_db_transaction_status, update_indexed_db_transaction_status,
+};
 
 mod abort;
 mod error;
@@ -12,19 +15,10 @@ fn set_transaction_active_for_request_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
-            .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+    if indexed_db_transaction_status(scope, transaction)
+        .is_some_and(|state| state.finished || state.committing || state.aborted)
     {
         return;
     }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
+    let _ = update_indexed_db_transaction_status(scope, transaction, |state| state.active = true);
 }

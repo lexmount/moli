@@ -1,10 +1,12 @@
 use super::*;
 use crate::context_bootstrap::indexed_db::{
-    indexed_db_transaction_mode,
+    indexed_db_transaction_mode, indexed_db_transaction_status,
     typed_state::sql::{
         ensure_sql_transaction_rollback, indexed_db_request_sql_client, submit_indexed_db_sql_task,
     },
+    update_indexed_db_transaction_status,
 };
+
 use moli_indexeddb::sqlite::service::{Command, CommandResult};
 
 mod fail;
@@ -20,18 +22,11 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
     if crate::context_bootstrap::indexed_db::finish_canceled_transaction(scope, transaction) {
         return;
     }
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
+    let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+        state.start_scheduled = false
+    });
+    if indexed_db_transaction_status(scope, transaction)
+        .is_some_and(|state| state.started || state.aborted || state.finished)
     {
         return;
     }
@@ -63,20 +58,17 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
             version: None,
             admission: Some(request),
         };
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        );
+        let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+            state.start_scheduled = true
+        });
         let submitted = submit_indexed_db_sql_task(
             scope,
             transaction,
             &client,
             command,
             move |scope, transaction, reply| {
-                if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-                    .unwrap_or(false)
+                if indexed_db_transaction_status(scope, transaction)
+                    .is_some_and(|state| state.aborted)
                 {
                     return;
                 }

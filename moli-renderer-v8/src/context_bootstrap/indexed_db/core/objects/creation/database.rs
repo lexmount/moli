@@ -83,9 +83,9 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         database,
         IndexedDbWrapperKind::Database,
         owner,
-        Some(storage_scope.clone()),
+        Some(storage_scope),
     );
-    register_indexed_db_database_lifecycle(scope, database, handle, storage_scope, client);
+    register_indexed_db_database_lifecycle(scope, database, handle, client);
     if let Err(error) = refresh_database_surface(scope, database) {
         crate::context_bootstrap::indexed_db::discard_indexed_db_database_lifecycle(
             scope, database,

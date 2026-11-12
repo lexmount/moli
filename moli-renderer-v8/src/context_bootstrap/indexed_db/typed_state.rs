@@ -9,7 +9,13 @@ pub(super) use mirror::IndexedDbObjectStoreMetadata;
 #[cfg(test)]
 use mirror::IndexedDbObjectStoreMetadataData;
 use mirror::{StoreMap, edit_shared, missing_mirror, store_by_id};
+const INDEXED_DB_TYPED_STATE_ID_SLOT: &str = "moli.IndexedDb.typedStateId";
+const INDEXED_DB_TYPED_TASK_ID_SLOT: &str = "moli.IndexedDb.typedTaskId";
+
+mod access;
+pub(super) use access::*;
 mod collection;
+pub(super) use collection::{IndexedDbRequestValue, request_value, set_request_value};
 mod cursor;
 use collection::*;
 pub(super) use collection::{INDEX_OBJECT_STORE, OBJECT_STORE_DATABASE, OBJECT_STORE_TRANSACTION};
@@ -307,11 +313,38 @@ impl IndexedDbObjectTaskPayload {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct IndexedDbTransactionStatus {
+    pub(super) active: bool,
+    pub(super) committing: bool,
+    pub(super) finished: bool,
+    pub(super) aborted: bool,
+    pub(super) started: bool,
+    pub(super) start_scheduled: bool,
+    pub(super) abort_dispatched: bool,
+    pub(super) pending: u32,
+    pub(super) commit_scheduled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IndexedDbRequestReadyState {
+    Pending,
+    Done,
+}
+
+impl IndexedDbRequestReadyState {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Done => "done",
+        }
+    }
+}
+
 struct IndexedDbRequestLifecycleState {
     delete_old_version: Option<u64>,
-    ready_state: String,
-    blocked_dispatched: bool,
-    pending_cursor_position: Option<f64>,
+    ready_state: IndexedDbRequestReadyState,
+    pending_cursor_position: Option<usize>,
     error_pending_dispatch: bool,
     pending_cursor_page: Option<Rc<cursor::SqlCursorPage>>,
     connection_request: Option<moli_indexeddb::ConnectionRequestLease>,
@@ -325,17 +358,9 @@ struct IndexedDbTransactionLifecycleState {
     sql_client: Option<moli_indexeddb::sqlite::service::DatabaseClient>,
     sql_rollback: Option<sql::SqlTransactionRollback>,
     start_request: Option<moli_indexeddb::TransactionRequestLease<StoreId>>,
-    active: bool,
-    committing: bool,
-    finished: bool,
-    aborted: bool,
-    started: bool,
-    start_scheduled: bool,
+    status: IndexedDbTransactionStatus,
     cancellation_scheduled: bool,
-    abort_dispatched: bool,
-    pending: u32,
     pending_errors: u32,
-    commit_scheduled: bool,
     deactivation_scheduled: bool,
     operation_in_flight: bool,
     operations: std::collections::VecDeque<IndexedDbPendingTransactionOperation>,
@@ -363,17 +388,13 @@ impl IndexedDbTransactionLifecycleState {
             sql_client: None,
             sql_rollback: None,
             start_request: None,
-            active: true,
-            committing: false,
-            finished: false,
-            aborted: false,
-            started,
-            start_scheduled: false,
+            status: IndexedDbTransactionStatus {
+                active: true,
+                started,
+                ..Default::default()
+            },
             cancellation_scheduled: false,
-            abort_dispatched: false,
-            pending: 0,
             pending_errors: 0,
-            commit_scheduled: false,
             deactivation_scheduled: false,
             operation_in_flight: false,
             operations: Default::default(),
@@ -402,7 +423,6 @@ struct IndexedDbDatabaseLifecycleState {
     backend: IndexedDbDatabaseBackend,
     forced_close_scheduled: bool,
     handle: DatabaseHandle,
-    storage_scope: IndexedDbStorageScope,
     closed: bool,
     mirror: std::rc::Weak<RefCell<IndexedDbDatabaseMirror>>,
     upgrade_transaction: Option<RealmValueHandle>,
@@ -422,14 +442,12 @@ impl IndexedDbDatabaseLifecycleState {
         wrapper: v8::Local<'_, v8::Object>,
         backend: IndexedDbDatabaseBackend,
         handle: DatabaseHandle,
-        storage_scope: IndexedDbStorageScope,
     ) -> Self {
         Self {
             wrapper: v8::Weak::new(scope, wrapper),
             backend,
             forced_close_scheduled: false,
             handle,
-            storage_scope,
             closed: false,
             mirror: std::rc::Weak::new(),
             upgrade_transaction: None,
@@ -651,7 +669,7 @@ pub(crate) fn retain_indexed_db_state_in_retired_realm(scope: &mut v8::PinScope<
         state.open_tasks.clear();
         state.object_tasks.clear();
         for transaction in state.transactions.values_mut() {
-            transaction.active = false;
+            transaction.status.active = false;
             for value in [
                 &mut transaction.database,
                 &mut transaction.upgrade_open_request,
@@ -719,34 +737,32 @@ pub(super) fn register_indexed_db_request_lifecycle<'s>(
     request: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Value>,
     transaction: v8::Local<'s, v8::Value>,
-    blocked_dispatched: bool,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, request) else {
         return;
     };
-    // The private edges are traced from this request, including when a result
-    // or source points back to it. No native Global roots that cycle.
-    for (slot, value) in [
-        (INDEXED_DB_REQUEST_SOURCE_SLOT, source),
-        (INDEXED_DB_REQUEST_TRANSACTION_SLOT, transaction),
-        (INDEXED_DB_REQUEST_RESULT_SLOT, v8::undefined(scope).into()),
-        (INDEXED_DB_REQUEST_ERROR_SLOT, v8::null(scope).into()),
-    ] {
-        set_private_value(scope, request, slot, value);
-    }
     let table = indexed_db_runtime_state_table_for_object(scope, request);
     table.borrow_mut().requests.insert(
         id,
         IndexedDbRequestLifecycleState {
             delete_old_version: None,
-            ready_state: "pending".to_owned(),
-            blocked_dispatched,
+            ready_state: IndexedDbRequestReadyState::Pending,
             pending_cursor_position: None,
             error_pending_dispatch: false,
             pending_cursor_page: None,
             connection_request: None,
         },
     );
+    // The private edges are traced from this request, including when a result
+    // or source points back to it. No native Global roots that cycle.
+    for (field, value) in [
+        (IndexedDbRequestValue::Source, source),
+        (IndexedDbRequestValue::Transaction, transaction),
+        (IndexedDbRequestValue::Result, v8::undefined(scope).into()),
+        (IndexedDbRequestValue::Error, v8::null(scope).into()),
+    ] {
+        set_request_value(scope, request, field, value);
+    }
     track_collectible_wrapper(scope, request, id, &table, ());
 }
 
@@ -852,15 +868,7 @@ pub(super) fn indexed_db_transaction_is_committing<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> bool {
-    let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
-        return false;
-    };
-    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
-    table
-        .borrow()
-        .transactions
-        .get(&id)
-        .is_some_and(|state| state.committing)
+    indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.committing)
 }
 
 pub(super) fn request_indexed_db_transaction_commit<'s>(
@@ -875,13 +883,17 @@ pub(super) fn request_indexed_db_transaction_commit<'s>(
         .transactions
         .get_mut(&id)
         .ok_or_else(|| IndexedDbError::InvalidState("Transaction was released".into()))?;
-    if !state.active || state.finished || state.aborted || state.committing {
+    if !state.status.active
+        || state.status.finished
+        || state.status.aborted
+        || state.status.committing
+    {
         return Err(IndexedDbError::InvalidState(
             "The transaction is not active".into(),
         ));
     }
-    state.committing = true;
-    state.active = false;
+    state.status.committing = true;
+    state.status.active = false;
     Ok(())
 }
 
@@ -897,12 +909,12 @@ pub(super) fn indexed_db_transaction_can_commit<'s>(
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow().transactions.get(&id).is_some_and(|state| {
-        state.started
-            && !state.finished
-            && !state.aborted
+        state.status.started
+            && !state.status.finished
+            && !state.status.aborted
             && !state.operation_in_flight
             && state.operations.is_empty()
-            && (state.committing || (!state.active && state.pending == 0))
+            && (state.status.committing || (!state.status.active && state.status.pending == 0))
     })
 }
 
@@ -915,8 +927,8 @@ pub(super) fn mark_indexed_db_transaction_committing<'s>(
     };
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
-        state.committing = true;
-        state.active = false;
+        state.status.committing = true;
+        state.status.active = false;
     }
 }
 
@@ -978,8 +990,8 @@ pub(super) fn mark_indexed_db_transaction_started<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     if let Some(state) = table.borrow_mut().transactions.get_mut(&id) {
         state.handle = Some(handle);
-        state.started = true;
-        state.start_scheduled = false;
+        state.status.started = true;
+        state.status.start_scheduled = false;
     }
 }
 
@@ -998,7 +1010,7 @@ pub(in crate::context_bootstrap::indexed_db) fn schedule_indexed_db_transaction_
         let Some(state) = table.transactions.get_mut(&id) else {
             return;
         };
-        if state.finished || state.deactivation_scheduled {
+        if state.status.finished || state.deactivation_scheduled {
             return;
         }
         state.deactivation_scheduled = true;
@@ -1023,13 +1035,13 @@ pub(crate) fn deactivate_indexed_db_transaction_after_microtask_checkpoint<'s>(
             return;
         };
         state.deactivation_scheduled = false;
-        if state.finished {
+        if state.status.finished {
             return;
         }
-        state.active = false;
-        if state.pending == 0 {
-            state.committing = true;
-            state.started
+        state.status.active = false;
+        if state.status.pending == 0 {
+            state.status.committing = true;
+            state.status.started
         } else {
             false
         }
@@ -1080,7 +1092,7 @@ pub(super) fn push_indexed_db_transaction_operation<'s>(
     let transaction = table.transactions.get_mut(&id).ok_or_else(|| {
         IndexedDbError::TransactionInactive("IndexedDB transaction was released".into())
     })?;
-    if transaction.finished || transaction.aborted {
+    if transaction.status.finished || transaction.status.aborted {
         return Err(IndexedDbError::TransactionInactive(
             "IndexedDB transaction is no longer running".into(),
         ));
@@ -1101,9 +1113,9 @@ pub(super) fn pop_indexed_db_transaction_operation<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let mut table = table.borrow_mut();
     let transaction = table.transactions.get_mut(&id)?;
-    if !transaction.started
-        || transaction.finished
-        || transaction.aborted
+    if !transaction.status.started
+        || transaction.status.finished
+        || transaction.status.aborted
         || transaction.operation_in_flight
     {
         return None;
@@ -1268,10 +1280,8 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
     handle: DatabaseHandle,
-    storage_scope: IndexedDbStorageScope,
     client: moli_indexeddb::sqlite::service::DatabaseClient,
 ) {
-    debug_assert!(storage_scope.has_explicit_partition_boundary());
     let Some(id) = indexed_db_typed_state_id(scope, database) else {
         return;
     };
@@ -1280,8 +1290,7 @@ pub(super) fn register_indexed_db_database_lifecycle<'s>(
         connection: None,
         forced_close: None,
     };
-    let mut state =
-        IndexedDbDatabaseLifecycleState::new(scope, database, backend, handle, storage_scope);
+    let mut state = IndexedDbDatabaseLifecycleState::new(scope, database, backend, handle);
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     let mirror = Rc::new(RefCell::new(IndexedDbDatabaseMirror::default()));
     state.mirror = Rc::downgrade(&mirror);
@@ -2125,275 +2134,30 @@ fn indexed_db_typed_task_state<'s>(
     table.borrow().task(id).cloned()
 }
 
-pub(super) fn indexed_db_typed_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let id = indexed_db_typed_state_id(scope, object)?;
-    let table = indexed_db_runtime_state_table_for_object(scope, object);
-    if table.borrow().requests.contains_key(&id) && is_request_value_slot(key) {
-        return request_value(scope, object, key);
-    }
-    let table = table.borrow();
-    if let Some(request) = table.requests.get(&id) {
-        return indexed_db_typed_request_slot_value(scope, request, key);
-    }
-    if let Some(transaction) = table.transactions.get(&id) {
-        return indexed_db_typed_transaction_slot_value(scope, transaction, key);
-    }
-    if let Some(database) = table.databases.get(&id) {
-        return indexed_db_typed_database_slot_value(scope, database, key);
-    }
-    None
-}
-
-pub(super) fn set_indexed_db_typed_slot_value(
+// Wrapper/task IDs are private V8 bridge identities, not lifecycle state.
+fn indexed_db_typed_id(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    let Some(id) = indexed_db_typed_state_id(scope, object) else {
-        return false;
-    };
-    let table = indexed_db_runtime_state_table_for_object(scope, object);
-    if table.borrow().requests.contains_key(&id) && is_request_value_slot(key) {
-        set_private_value(scope, object, key, value);
-        return true;
-    }
-    let mut table = table.borrow_mut();
-    if let Some(request) = table.requests.get_mut(&id) {
-        return set_indexed_db_typed_request_slot_value(scope, request, key, value);
-    }
-    if let Some(transaction) = table.transactions.get_mut(&id) {
-        return set_indexed_db_typed_transaction_slot_value(scope, transaction, key, value);
-    }
-    if let Some(database) = table.databases.get_mut(&id) {
-        return set_indexed_db_typed_database_slot_value(scope, database, key, value);
-    }
-    false
-}
-
-fn indexed_db_typed_request_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    request: &IndexedDbRequestLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_REQUEST_READY_STATE_SLOT => {
-            v8_string(scope, &request.ready_state).map(Into::into)
-        }
-        INDEXED_DB_REQUEST_BLOCKED_DISPATCHED_SLOT => {
-            Some(v8::Boolean::new(scope, request.blocked_dispatched).into())
-        }
-        INDEXED_DB_PENDING_CURSOR_POSITION_SLOT => request
-            .pending_cursor_position
-            .map(|position| v8::Number::new(scope, position).into()),
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_request_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: &mut IndexedDbRequestLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_REQUEST_READY_STATE_SLOT => {
-            request.ready_state = value
-                .to_string(scope)
-                .map(|value| value.to_rust_string_lossy(scope))
-                .unwrap_or_default();
-            true
-        }
-        INDEXED_DB_REQUEST_BLOCKED_DISPATCHED_SLOT => {
-            request.blocked_dispatched = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_PENDING_CURSOR_POSITION_SLOT => {
-            request.pending_cursor_position = value.number_value(scope);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_transaction_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    transaction: &IndexedDbTransactionLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_TRANSACTION_HANDLE_SLOT => transaction
-            .handle
-            .map(|handle| v8::Number::new(scope, handle.into_raw() as f64).into()),
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.active).into())
-        }
-        INDEXED_DB_TRANSACTION_COMMITTING_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.committing).into())
-        }
-        INDEXED_DB_TRANSACTION_FINISHED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.finished).into())
-        }
-        INDEXED_DB_TRANSACTION_ABORTED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.aborted).into())
-        }
-        INDEXED_DB_TRANSACTION_STARTED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.started).into())
-        }
-        INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.start_scheduled).into())
-        }
-        INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.abort_dispatched).into())
-        }
-        INDEXED_DB_TRANSACTION_PENDING_SLOT => {
-            Some(v8::Number::new(scope, transaction.pending as f64).into())
-        }
-        INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT => {
-            Some(v8::Boolean::new(scope, transaction.commit_scheduled).into())
-        }
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_transaction_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    transaction: &mut IndexedDbTransactionLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_TRANSACTION_HANDLE_SLOT => {
-            transaction.handle = value
-                .number_value(scope)
-                .map(|value| TransactionHandle::from_raw(value as u64));
-            true
-        }
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT => {
-            transaction.active = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_COMMITTING_SLOT => {
-            transaction.committing = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_FINISHED_SLOT => {
-            transaction.finished = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_ABORTED_SLOT => {
-            transaction.aborted = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_STARTED_SLOT => {
-            transaction.started = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_START_SCHEDULED_SLOT => {
-            transaction.start_scheduled = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT => {
-            transaction.abort_dispatched = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_TRANSACTION_PENDING_SLOT => {
-            transaction.pending = value.number_value(scope).unwrap_or(0.0).max(0.0).floor() as u32;
-            true
-        }
-        INDEXED_DB_TRANSACTION_COMMIT_SCHEDULED_SLOT => {
-            transaction.commit_scheduled = value.boolean_value(scope);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn indexed_db_typed_database_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    database: &IndexedDbDatabaseLifecycleState,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    match key {
-        INDEXED_DB_DATABASE_HANDLE_SLOT => {
-            Some(v8::Number::new(scope, database.handle.into_raw() as f64).into())
-        }
-        INDEXED_DB_DATABASE_STORAGE_KEY_SLOT => {
-            v8_string(scope, database.storage_scope.storage_key()).map(Into::into)
-        }
-        INDEXED_DB_DATABASE_CLOSED_SLOT => Some(v8::Boolean::new(scope, database.closed).into()),
-        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => database
-            .upgrade_transaction
-            .as_ref()
-            .map(|value| value.to_local(scope)),
-        _ => None,
-    }
-}
-
-fn set_indexed_db_typed_database_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    database: &mut IndexedDbDatabaseLifecycleState,
-    key: &str,
-    value: v8::Local<'_, v8::Value>,
-) -> bool {
-    match key {
-        INDEXED_DB_DATABASE_HANDLE_SLOT => {
-            database.handle =
-                DatabaseHandle::from_raw(value.number_value(scope).unwrap_or(0.0) as u64);
-            true
-        }
-        INDEXED_DB_DATABASE_STORAGE_KEY_SLOT => {
-            database.storage_scope.storage_key = value
-                .to_string(scope)
-                .map(|value| value.to_rust_string_lossy(scope))
-                .unwrap_or_default();
-            true
-        }
-        INDEXED_DB_DATABASE_CLOSED_SLOT => {
-            database.closed = value.boolean_value(scope);
-            true
-        }
-        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT => {
-            database.upgrade_transaction = if value.is_null_or_undefined() {
-                if let Some(mirror) = database.mirror.upgrade() {
-                    mirror.borrow_mut().upgrade_metadata = None;
-                }
-                None
-            } else {
-                Some(RealmValueHandle::new(scope, value))
-            };
-            true
-        }
-        _ => false,
-    }
+    key: &'static str,
+) -> Option<u64> {
+    let key = private_key(scope, key)?;
+    let value = v8::Local::<v8::BigInt>::try_from(object.get_private(scope, key)?).ok()?;
+    let (raw, lossless) = value.u64_value();
+    (lossless && raw != 0).then_some(raw)
 }
 
 fn indexed_db_typed_state_id(
     scope: &mut v8::PinScope<'_, '_>,
     wrapper: v8::Local<'_, v8::Object>,
 ) -> Option<IndexedDbObjectId> {
-    indexed_db_private_value(scope, wrapper, INDEXED_DB_TYPED_STATE_ID_SLOT)
-        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
-        .and_then(|value| {
-            let (raw, lossless) = value.u64_value();
-            (lossless && raw != 0).then_some(IndexedDbObjectId(raw))
-        })
+    indexed_db_typed_id(scope, wrapper, INDEXED_DB_TYPED_STATE_ID_SLOT).map(IndexedDbObjectId)
 }
 
 pub(super) fn indexed_db_typed_task_id(
     scope: &mut v8::PinScope<'_, '_>,
     task: v8::Local<'_, v8::Object>,
 ) -> Option<IndexedDbTaskId> {
-    indexed_db_private_value(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT)
-        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
-        .and_then(|value| {
-            let (raw, lossless) = value.u64_value();
-            (lossless && raw != 0).then_some(IndexedDbTaskId(raw))
-        })
+    indexed_db_typed_id(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT).map(IndexedDbTaskId)
 }
 
 fn set_indexed_db_typed_state_id<'s>(
@@ -2402,7 +2166,7 @@ fn set_indexed_db_typed_state_id<'s>(
     id: IndexedDbObjectId,
 ) {
     let id = v8::BigInt::new_from_u64(scope, id.0);
-    set_indexed_db_slot_value(scope, wrapper, INDEXED_DB_TYPED_STATE_ID_SLOT, id.into());
+    set_private_value(scope, wrapper, INDEXED_DB_TYPED_STATE_ID_SLOT, id.into());
 }
 
 fn set_indexed_db_typed_task_id<'s>(
@@ -2411,7 +2175,7 @@ fn set_indexed_db_typed_task_id<'s>(
     id: IndexedDbTaskId,
 ) {
     let id = v8::BigInt::new_from_u64(scope, id.0);
-    set_indexed_db_slot_value(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT, id.into());
+    set_private_value(scope, task, INDEXED_DB_TYPED_TASK_ID_SLOT, id.into());
 }
 
 pub(super) fn set_indexed_db_transaction_start_request(
@@ -2500,7 +2264,7 @@ pub(super) fn indexed_db_database_has_unfinished_transactions(
 ) -> bool {
     let table = indexed_db_runtime_state_table_for_object(scope, database);
     table.borrow().transactions.values().any(|state| {
-        !state.finished
+        !state.status.finished
             && state
                 .database
                 .as_ref()
@@ -2536,7 +2300,7 @@ pub(super) fn mark_indexed_db_transaction_cancellation_scheduled(
     let Some(state) = table.transactions.get_mut(&id) else {
         return false;
     };
-    if state.finished || state.cancellation_scheduled {
+    if state.status.finished || state.cancellation_scheduled {
         return false;
     }
     state.cancellation_scheduled = true;

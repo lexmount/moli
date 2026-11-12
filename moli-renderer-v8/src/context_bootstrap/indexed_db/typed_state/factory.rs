@@ -636,18 +636,9 @@ fn materialize<'s>(
             IndexedDbError::InvalidState("unable to create upgrade transaction".into())
         })?;
         sql::configure_sql_upgrade(scope, transaction, rollback)?;
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_STARTED_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        );
-        set_indexed_db_slot_value(
-            scope,
-            database,
-            INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
-            transaction.into(),
-        );
+        let _ =
+            update_indexed_db_transaction_status(scope, transaction, |state| state.started = true);
+        set_indexed_db_database_upgrade_transaction(scope, database, Some(transaction));
         save_indexed_db_upgrade_metadata(scope, database, old_version);
         retain_request_lease(scope, request, payload);
         enqueue_open_task(
@@ -741,15 +732,15 @@ pub(in crate::context_bootstrap::indexed_db) fn upgrade_event_cancellation<'s>(
         if let Some(connection) = connection {
             if let (Some(table), Some(id)) = (table.upgrade(), id)
                 && let Some(state) = table.borrow_mut().transactions.get_mut(&id)
-                && !state.finished
+                && !state.status.finished
             {
                 // An explicit COMMIT accepted before the interruption keeps
                 // its queued native work, just like an ordinary request event.
-                if state.committing {
+                if state.status.committing {
                     return;
                 }
-                state.active = false;
-                state.aborted = true;
+                state.status.active = false;
+                state.status.aborted = true;
                 state.cancellation_scheduled = true;
             }
             let _ = connection.retire();
@@ -763,11 +754,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_forced_upgrade<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     database: v8::Local<'s, v8::Object>,
 ) {
-    let Some(transaction) = object_property_as_object(
-        scope,
-        database,
-        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
-    ) else {
+    let Some(transaction) = indexed_db_database_upgrade_transaction(scope, database) else {
         return;
     };
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
@@ -776,8 +763,8 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_forced_upgrade<'s>(
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     let interrupted = table.borrow().transactions.get(&id).is_some_and(|state| {
         state.sql_client.is_some()
-            && !state.finished
-            && state.aborted
+            && !state.status.finished
+            && state.status.aborted
             && state.cancellation_scheduled
     });
     if interrupted {
@@ -785,10 +772,8 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_forced_upgrade<'s>(
         let error =
             dom_exception_value(scope, "The upgrade callback was interrupted.", "AbortError");
         finish_transaction_abort_after_rollback(scope, transaction, error);
-    } else if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+    } else if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished)
+        && !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.aborted)
     {
         let error = dom_exception_value(
             scope,

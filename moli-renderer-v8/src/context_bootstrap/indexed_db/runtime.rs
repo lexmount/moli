@@ -191,7 +191,7 @@ pub(in crate::context_bootstrap::indexed_db) fn replace_indexed_db_runtime_array
     next: v8::Local<'_, v8::Array>,
 ) {
     if let Some(state) = ensure_indexed_db_runtime_state_object(scope) {
-        define_non_enumerable_value_property(scope, state, array.field(), next.into());
+        set_private_value(scope, state, array.field(), next.into());
     }
 }
 
@@ -236,26 +236,35 @@ fn ensure_runtime_factory_field<'s>(
         } else {
             let factory = build_indexed_db_factory_object(scope)?;
             set_private_value(scope, state, INDEXED_DB_FACTORY_FIELD, factory.into());
-            define_non_enumerable_bool_property(
+            set_private_value(
                 scope,
                 state,
                 INDEXED_DB_FACTORY_INITIALIZED_FIELD,
-                true,
+                v8::Boolean::new(scope, true).into(),
             );
             factory
         };
-    if object_bool_property(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD).unwrap_or(false) {
+    if get_private_value(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD)
+        .is_some_and(|value| value.is_true())
+    {
         return Some(factory);
     };
 
     let factory_proto = global_constructor_prototype(scope, "IDBFactory")?;
-    if object_bool_property(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD).unwrap_or(false) {
+    if get_private_value(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD)
+        .is_some_and(|value| value.is_true())
+    {
         return Some(factory);
     }
     factory
         .set_prototype(scope, factory_proto.into())?
         .then_some(())?;
-    define_non_enumerable_bool_property(scope, state, INDEXED_DB_FACTORY_INITIALIZED_FIELD, true);
+    set_private_value(
+        scope,
+        state,
+        INDEXED_DB_FACTORY_INITIALIZED_FIELD,
+        v8::Boolean::new(scope, true).into(),
+    );
     Some(factory)
 }
 

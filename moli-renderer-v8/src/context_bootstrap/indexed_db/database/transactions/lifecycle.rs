@@ -1,15 +1,18 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::typed_state::sql::{
-    SQL_ABORT_REQUEST, abort_in_flight_sql_requests, disarm_sql_transaction_rollback,
-    indexed_db_request_sql_client,
-};
 use crate::context_bootstrap::indexed_db::{
     TRANSACTION_ERROR_SLOT, complete_indexed_db_transaction_operation,
     indexed_db_database_sql_connection, indexed_db_transaction_database,
     indexed_db_transaction_is_committing, indexed_db_transaction_mode,
-    indexed_db_transaction_start_request, mark_indexed_db_transaction_cancellation_scheduled,
-    request_indexed_db_transaction_commit, restore_indexed_db_upgrade_metadata,
+    indexed_db_transaction_start_request, indexed_db_transaction_status,
+    mark_indexed_db_transaction_cancellation_scheduled, request_indexed_db_transaction_commit,
+    restore_indexed_db_upgrade_metadata,
+    typed_state::sql::{
+        SQL_ABORT_REQUEST, abort_in_flight_sql_requests, disarm_sql_transaction_rollback,
+        indexed_db_request_sql_client,
+    },
+    update_indexed_db_transaction_status,
 };
+
 use crate::util::{get_private_value, set_private_value};
 use moli_indexeddb::TransactionMode;
 
@@ -22,9 +25,7 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
     }) {
         return false;
     }
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.finished) {
         let error = dom_exception_value(
             scope,
             "The database connection was forcibly closed.",
@@ -33,14 +34,13 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_canceled_transaction<'s>(
         if indexed_db_request_sql_client(scope, transaction).is_some() {
             // Started SQL admissions are canceled only after worker rollback.
             // This also completes an abort whose final submission raced close.
-            let error =
-                if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-                    .unwrap_or(false)
-                {
-                    get_private_value(scope, transaction, TRANSACTION_ERROR_SLOT).unwrap_or(error)
-                } else {
-                    error
-                };
+            let error = if indexed_db_transaction_status(scope, transaction)
+                .is_some_and(|state| state.aborted)
+            {
+                get_private_value(scope, transaction, TRANSACTION_ERROR_SLOT).unwrap_or(error)
+            } else {
+                error
+            };
             disarm_sql_transaction_rollback(scope, transaction);
             finish_transaction_abort_after_rollback(scope, transaction, error);
         } else {
@@ -55,10 +55,8 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
     transaction: v8::Local<'s, v8::Object>,
     error: v8::Local<'s, v8::Value>,
 ) {
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+    if indexed_db_transaction_status(scope, transaction)
+        .is_some_and(|state| state.finished || state.aborted)
     {
         return;
     }
@@ -68,18 +66,10 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort<'s>(
             submit_sql_transaction_abort,
         };
         set_private_value(scope, transaction, TRANSACTION_ERROR_SLOT, error);
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-            v8::Boolean::new(scope, false).into(),
-        );
-        set_indexed_db_slot_value(
-            scope,
-            transaction,
-            INDEXED_DB_TRANSACTION_ABORTED_SLOT,
-            v8::Boolean::new(scope, true).into(),
-        );
+        let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+            state.active = false;
+            state.aborted = true;
+        });
         // Version/schema getters change as part of abort(), while request and
         // transaction events must still wait for native rollback confirmation.
         restore_indexed_db_upgrade_metadata(scope, transaction);
@@ -157,24 +147,11 @@ pub(in crate::context_bootstrap::indexed_db) fn finish_transaction_abort_after_r
 ) {
     restore_indexed_db_upgrade_metadata(scope, transaction);
     set_private_value(scope, transaction, TRANSACTION_ERROR_SLOT, error);
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ACTIVE_SLOT,
-        v8::Boolean::new(scope, false).into(),
-    );
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_FINISHED_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
-    set_indexed_db_slot_value(
-        scope,
-        transaction,
-        INDEXED_DB_TRANSACTION_ABORTED_SLOT,
-        v8::Boolean::new(scope, true).into(),
-    );
+    let _ = update_indexed_db_transaction_status(scope, transaction, |state| {
+        state.active = false;
+        state.finished = true;
+        state.aborted = true;
+    });
     // The transaction's abort reason may be null (explicit abort), while
     // every unfinished request receives its own AbortError outcome.
     let request_error = dom_exception_value(scope, "The transaction was aborted.", "AbortError");
@@ -205,10 +182,8 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_transaction_abort_callback<'
     let Some(transaction) = idb_transaction_receiver(scope, &args) else {
         return;
     };
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-        .unwrap_or(false)
-        || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-            .unwrap_or(false)
+    if indexed_db_transaction_status(scope, transaction)
+        .is_some_and(|state| state.finished || state.aborted)
         || indexed_db_transaction_is_committing(scope, transaction)
     {
         let error = dom_exception_value(

@@ -1,5 +1,8 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::{KeyConversionError, indexed_db_transaction_mode};
+use crate::context_bootstrap::indexed_db::{
+    KeyConversionError, indexed_db_transaction_mode, indexed_db_transaction_status,
+};
+
 use moli_indexeddb::TransactionMode;
 
 pub(super) fn object_store_write_callback<'s>(
@@ -33,9 +36,7 @@ pub(super) fn object_store_write_callback<'s>(
         }
     };
     // Key conversion can invoke getters too, including one that aborts the transaction.
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
+    if !indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.active) {
         throw_inactive(scope);
         return;
     }
@@ -43,8 +44,7 @@ pub(super) fn object_store_write_callback<'s>(
     else {
         return;
     };
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
-        .unwrap_or(false)
+    if indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.started)
         && transaction_handle_from_value(scope, transaction.into()).is_none()
     {
         throw_inactive(scope);

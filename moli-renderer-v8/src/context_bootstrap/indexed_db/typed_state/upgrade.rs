@@ -251,11 +251,7 @@ pub(in crate::context_bootstrap::indexed_db) fn sync_indexed_db_store_handles<'s
             .as_ref()
             .and_then(|stores| store_by_id(stores, store_id).cloned())
     });
-    let transaction = object_property_as_object(
-        scope,
-        database,
-        INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
-    );
+    let transaction = indexed_db_database_upgrade_transaction(scope, database);
     for table in indexed_db_handle_tables(scope, database) {
         for store in table
             .borrow()

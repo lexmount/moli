@@ -1,6 +1,8 @@
 use super::super::open::finish_aborted_upgrade_open;
 use super::*;
-use crate::context_bootstrap::indexed_db::take_indexed_db_upgrade_open;
+use crate::context_bootstrap::indexed_db::{
+    set_indexed_db_database_upgrade_transaction, take_indexed_db_upgrade_open,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -14,12 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_abort_task<'s>
         // The failed upgrade connection is unusable during abort listeners,
         // while the open request must retain its transaction until afterwards.
         close_indexed_db_database_connection(scope, database);
-        set_indexed_db_slot_value(
-            scope,
-            database,
-            INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
-            v8::null(scope).into(),
-        );
+        set_indexed_db_database_upgrade_transaction(scope, database, None);
     }
     crate::context_bootstrap::indexed_db::clear_indexed_db_upgrade_transaction(scope, transaction);
     let _ = dispatch_idb_named_event(scope, transaction, "abort", |_, _| {});

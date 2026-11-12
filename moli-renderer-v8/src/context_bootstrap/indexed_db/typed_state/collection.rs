@@ -44,31 +44,66 @@ impl IndexedDbRuntimeStateTable {
     }
 }
 
-pub(super) fn is_request_value_slot(key: &str) -> bool {
-    matches!(
-        key,
-        INDEXED_DB_REQUEST_SOURCE_SLOT
-            | INDEXED_DB_REQUEST_TRANSACTION_SLOT
-            | INDEXED_DB_REQUEST_RESULT_SLOT
-            | INDEXED_DB_REQUEST_ERROR_SLOT
-            | INDEXED_DB_PENDING_RESULT_SLOT
-            | INDEXED_DB_PENDING_ERROR_SLOT
-            | INDEXED_DB_PENDING_CURSOR_SLOT
-    )
+// These edges belong to the request in the V8 heap, so result/source cycles
+// remain collectible. Scalar lifecycle state never passes through these keys.
+#[derive(Clone, Copy)]
+pub(in crate::context_bootstrap::indexed_db) enum IndexedDbRequestValue {
+    Source,
+    Transaction,
+    Result,
+    Error,
+    PendingResult,
+    PendingError,
+    PendingCursor,
 }
 
-pub(super) fn request_value<'s>(
+impl IndexedDbRequestValue {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Source => "moli.IndexedDb.requestSource",
+            Self::Transaction => "moli.IndexedDb.requestTransaction",
+            Self::Result => "moli.IndexedDb.requestResult",
+            Self::Error => "moli.IndexedDb.requestError",
+            Self::PendingResult => "moli.IndexedDb.pendingResult",
+            Self::PendingError => "moli.IndexedDb.pendingError",
+            Self::PendingCursor => "moli.IndexedDb.pendingCursor",
+        }
+    }
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn request_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'_, v8::Object>,
-    slot: &str,
+    field: IndexedDbRequestValue,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let key = private_key(scope, slot)?;
+    let id = indexed_db_typed_state_id(scope, request)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    if !table.borrow().requests.contains_key(&id) {
+        return None;
+    }
+    let key = private_key(scope, field.key())?;
     // An explicitly stored undefined is a valid request result. An absent
-    // pending slot means there is no delivery waiting for this request.
+    // pending value means there is no delivery waiting for this request.
     if request.has_private(scope, key) != Some(true) {
         return None;
     }
     request.get_private(scope, key)
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn set_request_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    request: v8::Local<'_, v8::Object>,
+    field: IndexedDbRequestValue,
+    value: v8::Local<'_, v8::Value>,
+) {
+    let Some(id) = indexed_db_typed_state_id(scope, request) else {
+        return;
+    };
+    let table = indexed_db_runtime_state_table_for_object(scope, request);
+    let registered = table.borrow().requests.contains_key(&id);
+    if registered {
+        set_private_value(scope, request, field.key(), value);
+    }
 }
 
 pub(super) fn clear_pending_request_values(
@@ -76,11 +111,11 @@ pub(super) fn clear_pending_request_values(
     request: v8::Local<'_, v8::Object>,
 ) {
     for slot in [
-        INDEXED_DB_PENDING_RESULT_SLOT,
-        INDEXED_DB_PENDING_ERROR_SLOT,
-        INDEXED_DB_PENDING_CURSOR_SLOT,
+        IndexedDbRequestValue::PendingResult,
+        IndexedDbRequestValue::PendingError,
+        IndexedDbRequestValue::PendingCursor,
     ] {
-        if let Some(key) = private_key(scope, slot) {
+        if let Some(key) = private_key(scope, slot.key()) {
             let _ = request.delete_private(scope, key);
         }
     }

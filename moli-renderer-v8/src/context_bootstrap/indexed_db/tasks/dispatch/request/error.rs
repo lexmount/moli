@@ -1,7 +1,9 @@
 use super::*;
-use crate::context_bootstrap::indexed_db::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 use crate::context_bootstrap::indexed_db::{
-    dispatch_idb_named_event_with_result, finish_transaction_abort,
+    IndexedDbRequestReadyState, IndexedDbRequestValue, dispatch_idb_named_event_with_result,
+    finish_transaction_abort, indexed_db_transaction_status, request_value,
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
+    set_indexed_db_request_ready_state, set_request_value,
 };
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
@@ -20,9 +22,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     }
     let transaction = indexed_db_request_transaction_object(scope, request);
     if let Some(transaction) = transaction
-        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_COMMITTING_SLOT)
-            .unwrap_or(false)
-        && let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT)
+        && indexed_db_transaction_status(scope, transaction).is_some_and(|state| state.committing)
+        && let Some(error) = request_value(scope, request, IndexedDbRequestValue::PendingError)
     {
         // A failed operation cannot be rescued by canceling its error event
         // after the transaction has already entered explicit commit.
@@ -40,17 +41,17 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
     if let Some(transaction) = transaction {
         set_transaction_active_for_request_event(scope, transaction);
     }
-    if let Some(error) = object_hidden_value(scope, request, INDEXED_DB_PENDING_ERROR_SLOT) {
-        set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT, error);
+    if let Some(error) = request_value(scope, request, IndexedDbRequestValue::PendingError) {
+        set_request_value(scope, request, IndexedDbRequestValue::Error, error);
     }
-    set_indexed_db_slot_value(
+    set_request_value(
         scope,
         request,
-        INDEXED_DB_REQUEST_RESULT_SLOT,
+        IndexedDbRequestValue::Result,
         v8::undefined(scope).into(),
     );
-    let done = v8str(scope, "done").into();
-    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
+
+    set_indexed_db_request_ready_state(scope, request, IndexedDbRequestReadyState::Done);
     let cancel =
         crate::context_bootstrap::indexed_db::typed_state::sql::indexed_db_request_sql_client(
             scope, request,
@@ -68,10 +69,8 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
         return;
     }
     if let Some(transaction) = transaction
-        && !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
-            .unwrap_or(false)
-        && object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-            .unwrap_or(false)
+        && indexed_db_transaction_status(scope, transaction)
+            .is_some_and(|state| !state.finished && state.active)
         && (outcome.did_listeners_throw || outcome.uncanceled)
     {
         let error = if outcome.did_listeners_throw {
@@ -81,7 +80,7 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_request_error_task<'s>(
                 "AbortError",
             )
         } else {
-            object_hidden_value(scope, request, INDEXED_DB_REQUEST_ERROR_SLOT)
+            request_value(scope, request, IndexedDbRequestValue::Error)
                 .expect("a failed request retains its native error")
         };
         finish_transaction_abort(scope, transaction, error);
