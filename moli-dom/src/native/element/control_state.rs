@@ -6,7 +6,7 @@ use crate::forms::{
 use crate::native::NativeNodeId;
 use indexmap::IndexSet;
 use moli_html_input_type::InputType;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedFile {
@@ -38,7 +38,7 @@ pub struct ScriptElementState {
     force_async: bool,
     already_started: bool,
     parser_inserted_for_prepare: bool,
-    script_text_internal_slot: String,
+    script_text_internal_slot: Option<Arc<str>>,
     children_changed_by_api: bool,
 }
 
@@ -48,7 +48,7 @@ impl ScriptElementState {
             force_async: true,
             already_started: false,
             parser_inserted_for_prepare: false,
-            script_text_internal_slot: String::new(),
+            script_text_internal_slot: None,
             children_changed_by_api: false,
         }
     }
@@ -66,7 +66,9 @@ impl ScriptElementState {
     }
 
     pub fn script_text_internal_slot(&self) -> &str {
-        &self.script_text_internal_slot
+        self.script_text_internal_slot
+            .as_deref()
+            .unwrap_or_default()
     }
 
     pub fn children_changed_by_api(&self) -> bool {
@@ -98,11 +100,18 @@ impl ScriptElementState {
     }
 
     pub fn set_script_text_internal_slot(&mut self, source: &str) -> bool {
-        if self.script_text_internal_slot == source {
+        if self.script_text_internal_slot() == source {
             return false;
         }
-        self.script_text_internal_slot.clear();
-        self.script_text_internal_slot.push_str(source);
+        self.script_text_internal_slot = (!source.is_empty()).then(|| Arc::from(source));
+        true
+    }
+
+    fn set_shared_script_text_internal_slot(&mut self, source: Arc<str>) -> bool {
+        if self.script_text_internal_slot() == source.as_ref() {
+            return false;
+        }
+        self.script_text_internal_slot = (!source.is_empty()).then_some(source);
         true
     }
 
@@ -114,11 +123,11 @@ impl ScriptElementState {
         true
     }
 
-    pub fn finish_parsing_children(&mut self, source: &str) -> bool {
+    pub fn finish_parsing_children(&mut self, source: Arc<str>) -> bool {
         if self.children_changed_by_api {
             return false;
         }
-        self.set_script_text_internal_slot(source)
+        self.set_shared_script_text_internal_slot(source)
     }
 
     pub fn note_parser_created(&mut self) -> bool {
@@ -647,7 +656,7 @@ impl ElementControlState {
             .is_some_and(ScriptElementState::note_children_changed_by_api)
     }
 
-    pub fn finish_parsing_script_children(&mut self, source: &str) -> bool {
+    pub fn finish_parsing_script_children(&mut self, source: Arc<str>) -> bool {
         self.script
             .as_deref_mut()
             .is_some_and(|script| script.finish_parsing_children(source))

@@ -2533,6 +2533,8 @@ mod tests {
 
     #[test]
     fn parser_style_children_finish_at_close_and_eof() {
+        let padding = format!("/*{}*/ ", "x".repeat(8 * 1024));
+        let expected = format!("{padding}p {{ color: blue; }}");
         for (opening, closing) in [
             ("<html><head><style id='sheet'>", "</style>"),
             ("<html><body><svg><style id='sheet'>", "</style></svg>"),
@@ -2541,7 +2543,7 @@ mod tests {
             let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
                 Url::parse("https://example.test/page").unwrap(),
             );
-            stream.pump_parser_step(&format!("{opening}p {{ col"));
+            stream.pump_parser_step(&format!("{opening}{padding}p {{ col"));
             let document = stream.snapshot_parser_stream_document().into_document();
             let style =
                 document.elements_by_tag_name(document.document_node_id(), "style", false)[0];
@@ -2565,10 +2567,11 @@ mod tests {
                     .unwrap()
                     .style_children_parsing()
             );
-            assert_eq!(
-                document.text_content(style).as_deref(),
-                Some("p { color: blue; }")
-            );
+            let host = DomHost::from_dom(document);
+            let first = host.shared_text_content(style).unwrap();
+            let second = host.shared_text_content(style).unwrap();
+            assert_eq!(first.as_ref(), expected);
+            assert!(std::sync::Arc::ptr_eq(&first, &second));
         }
     }
 
