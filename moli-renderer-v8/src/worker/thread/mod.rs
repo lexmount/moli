@@ -108,10 +108,11 @@ use super::module_runtime::{
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
     WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
     WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
-    evaluate_module_worker_bootstrap_source, install_classic_worker_dynamic_module_runtime,
+    complete_worker_module_graph_fetch, evaluate_module_worker_bootstrap_source,
+    install_classic_worker_dynamic_module_runtime, register_worker_module_graph_fetches,
     resume_worker_dynamic_module_evaluation, resume_worker_dynamic_module_fetch,
-    run_next_worker_dynamic_module_import, worker_dynamic_module_import_waits_for_fetch,
-    worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
+    run_next_worker_dynamic_module_import, worker_has_pending_dynamic_module_imports,
+    worker_has_runnable_dynamic_module_imports,
 };
 
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
@@ -757,10 +758,14 @@ fn start_worker_module_graph_fetch(
 }
 
 fn start_worker_module_graph_fetch_batch(
+    scope: &mut v8::PinScope<'_, '_>,
     requests: WorkerModuleGraphFetchBatch,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
+    let Some(requests) = register_worker_module_graph_fetches(scope, requests) else {
+        return;
+    };
     for request in requests.iter().cloned() {
         start_worker_module_graph_fetch(
             request,
@@ -842,6 +847,7 @@ fn flush_one_worker_indexed_db_task(
 }
 
 fn handle_worker_dynamic_module_import_advance(
+    scope: &mut v8::PinScope<'_, '_>,
     advance: WorkerDynamicModuleImportAdvance,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
@@ -851,7 +857,7 @@ fn handle_worker_dynamic_module_import_advance(
         | WorkerDynamicModuleImportAdvance::WaitingFetches
         | WorkerDynamicModuleImportAdvance::WaitingEvaluation { .. } => {}
         WorkerDynamicModuleImportAdvance::NeedFetches(requests) => {
-            start_worker_module_graph_fetch_batch(requests, state, module_graph_fetch_tx);
+            start_worker_module_graph_fetch_batch(scope, requests, state, module_graph_fetch_tx);
         }
     }
 }
@@ -868,7 +874,7 @@ fn drain_worker_dynamic_module_imports(
         let Some(advance) = run_next_worker_dynamic_module_import(scope) else {
             break;
         };
-        handle_worker_dynamic_module_import_advance(advance, state, module_graph_fetch_tx);
+        handle_worker_dynamic_module_import_advance(scope, advance, state, module_graph_fetch_tx);
     }
 }
 
@@ -1808,7 +1814,12 @@ async fn worker_main(
             }
             WorkerBootstrapStart::Pending(pending) => {
                 if let Some(requests) = pending.pending_requests().cloned() {
-                    start_worker_module_graph_fetch_batch(requests, &state, &module_graph_fetch_tx);
+                    start_worker_module_graph_fetch_batch(
+                        scope,
+                        requests,
+                        &state,
+                        &module_graph_fetch_tx,
+                    );
                 }
                 pending_module_bootstrap = Some(pending);
             }
@@ -3066,91 +3077,87 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
-                if worker_dynamic_module_import_waits_for_fetch(scope, completion.fetch_id()) {
+                if complete_worker_module_graph_fetch(scope, &completion) {
                     for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
-                    if let Some(advance) = resume_worker_dynamic_module_fetch(scope, *completion) {
+                    while let Some(advance) = resume_worker_dynamic_module_fetch(scope, &completion)
+                    {
                         handle_worker_dynamic_module_import_advance(
+                            scope,
                             advance,
                             &state,
                             &module_graph_fetch_tx,
                         );
-                        drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
-                    }
-                } else if pending_module_bootstrap.is_some() {
-                    for violation in completion.csp_violations() {
-                        let loader = state.borrow().loader.clone();
-                        dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
                     let bootstrap_fetch_matches = pending_module_bootstrap
                         .as_ref()
                         .and_then(|bootstrap| bootstrap.pending_requests())
                         .is_some_and(|requests| requests.contains_fetch_id(completion.fetch_id()));
-                    let module_script_resource = if bootstrap_fetch_matches {
-                        completion
+                    if bootstrap_fetch_matches {
+                        let module_script_resource = completion
                             .result()
                             .ok()
-                            .and_then(|source| source.resource().cloned())
-                    } else {
-                        None
-                    };
-                    let resume = pending_module_bootstrap
-                        .as_mut()
-                        .expect("checked pending module bootstrap")
-                        .resume(scope, *completion);
-                    if let Some(resource) = module_script_resource {
-                        report_service_worker_module_script_resource(&state, resource);
+                            .and_then(|source| source.resource().cloned());
+                        let resume = pending_module_bootstrap
+                            .as_mut()
+                            .expect("checked pending module bootstrap")
+                            .resume(scope, &completion);
+                        if let Some(resource) = module_script_resource {
+                            report_service_worker_module_script_resource(&state, resource);
+                        }
+                        match resume {
+                            WorkerModuleBootstrapResume::Complete => {
+                                pending_module_bootstrap = None;
+                                bootstrap_completion
+                                    .mark_success(worker_bootstrap_success(scope, global, &state));
+                                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                                drain_worker_dynamic_module_imports(
+                                    scope,
+                                    &state,
+                                    &module_graph_fetch_tx,
+                                );
+                                forward_worker_script_loaded(&runtime_inspector, &parent_tx);
+                            }
+                            WorkerModuleBootstrapResume::NeedFetches(requests) => {
+                                start_worker_module_graph_fetch_batch(
+                                    scope,
+                                    requests,
+                                    &state,
+                                    &module_graph_fetch_tx,
+                                );
+                            }
+                            WorkerModuleBootstrapResume::WaitingFetches => {}
+                            WorkerModuleBootstrapResume::WaitingEvaluation => {}
+                            WorkerModuleBootstrapResume::Failed(error) => {
+                                let (report, exception, parent_event_kind) = *error;
+                                let exception =
+                                    exception.as_ref().map(|value| v8::Local::new(scope, value));
+                                let global = ctx.global(scope);
+                                bootstrap_completion.mark_failure(
+                                    &report,
+                                    &script_url,
+                                    parent_event_kind,
+                                    WorkerErrorPhase::Bootstrap,
+                                    WorkerErrorSource::Runtime,
+                                );
+                                dispatch_worker_exception_with_phase(
+                                    scope,
+                                    global,
+                                    report,
+                                    exception,
+                                    parent_event_kind,
+                                    WorkerErrorPhase::Bootstrap,
+                                    &parent_tx,
+                                    &script_url,
+                                );
+                                forward_worker_script_loaded(&runtime_inspector, &parent_tx);
+                                break;
+                            }
+                        }
                     }
-                    match resume {
-                        WorkerModuleBootstrapResume::Complete => {
-                            pending_module_bootstrap = None;
-                            bootstrap_completion
-                                .mark_success(worker_bootstrap_success(scope, global, &state));
-                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-                            drain_worker_dynamic_module_imports(
-                                scope,
-                                &state,
-                                &module_graph_fetch_tx,
-                            );
-                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                        }
-                        WorkerModuleBootstrapResume::NeedFetches(requests) => {
-                            start_worker_module_graph_fetch_batch(
-                                requests,
-                                &state,
-                                &module_graph_fetch_tx,
-                            );
-                        }
-                        WorkerModuleBootstrapResume::WaitingFetches => {}
-                        WorkerModuleBootstrapResume::WaitingEvaluation => {}
-                        WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
-                            let exception =
-                                exception.as_ref().map(|value| v8::Local::new(scope, value));
-                            let global = ctx.global(scope);
-                            bootstrap_completion.mark_failure(
-                                &report,
-                                &script_url,
-                                parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
-                            );
-                            dispatch_worker_exception_with_phase(
-                                scope,
-                                global,
-                                report,
-                                exception,
-                                parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                &parent_tx,
-                                &script_url,
-                            );
-                            forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
-                        }
-                    }
+                    drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
                 } else {
                     let result_summary = completion
                         .result()
@@ -3203,6 +3210,7 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::NeedFetches(requests) => {
                             start_worker_module_graph_fetch_batch(
+                                scope,
                                 requests,
                                 &state,
                                 &module_graph_fetch_tx,
