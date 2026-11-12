@@ -188,19 +188,9 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    // A synchronous send blocks the renderer's single owner-loop thread
-    // inside the request call: a Fetch.requestPaused pause for it would sit
-    // unpublished in the turn's owner-action journal (flushed only after the
-    // JS task returns), and a later ContinuePendingSubresourceFetch page
-    // command would have to be dispatched by that same blocked thread —
-    // pausing would deadlock the renderer. Chromium pauses synchronous XHR
-    // in a separate network service, which moli's in-thread fetch cannot
-    // mirror. Failing the request here would fabricate a NetworkError for
-    // hosts the client never asked to block (for example a substring
-    // pattern without a resourceType whose marker only appears in the
-    // request path), so only asynchronous sends are intercepted below;
-    // synchronous ones fall through to their ordinary network path,
-    // including its offline-emulation check.
+    // Pause publication and continuation currently require the owner loop.
+    // Async sends use that channel; the synchronous network path checks exact
+    // interception URLs before dispatch and before following redirects.
     if async_request && host.should_intercept_subresource(SubresourceResourceType::Xhr) {
         let internal_id = record_intercepted_xhr(scope, host, xhr, prepared);
         set_xhr_state_number(scope, xhr, XHR_ACTIVE_INTERNAL_ID_SLOT, internal_id as f64);
@@ -329,6 +319,17 @@ fn send_synchronous_network_xhr(
     .with_use_cors_preflight(prepared.use_cors_preflight)
     .with_network_partition_key(prepared.network_partition_key.clone())
     .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+
+    let request = match loader.prepare_synchronous_xhr_request(
+        request,
+        host.should_intercept_subresource(SubresourceResourceType::Xhr),
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            record_synchronous_xhr_failure(scope, host, xhr, prepared, error.to_string());
+            return;
+        }
+    };
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),

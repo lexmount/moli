@@ -418,20 +418,6 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         && fetch_subresource_interception_resource_type.is_none_or(|expected| {
             expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Xhr)
         });
-    if intercept_request_stage && !async_request {
-        record_worker_subresource_failure(
-            &state.borrow(),
-            prepared.document_url,
-            prepared.resolved_url,
-            prepared.method,
-            prepared.request_headers,
-            request_body_text(&prepared.send_body),
-            SubresourceResourceType::Xhr,
-            "Synchronous XMLHttpRequest interception is not supported".to_owned(),
-        );
-        throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
-        return true;
-    }
 
     if !async_request {
         send_synchronous_worker_xhr(scope, &state, xhr, prepared, loader);
@@ -552,7 +538,19 @@ fn send_synchronous_worker_xhr(
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
         prepared.request_headers.clone(),
-    ) {
+    )
+    .and_then(|request| {
+        let state = state.borrow();
+        let class_intercepted = state.fetch_subresource_interception_enabled
+            && state
+                .fetch_subresource_interception_resource_type
+                .is_none_or(|expected| {
+                    expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Xhr)
+                });
+        loader
+            .request_client()
+            .prepare_synchronous_xhr_request(request, class_intercepted)
+    }) {
         Ok(request) => {
             let mut request = request
                 .with_page_network_policy()
