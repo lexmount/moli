@@ -176,7 +176,7 @@ use crate::{
     frame_owner_model::FrameDocumentLoadDeliveryTask, runtime::ServiceWorkerControlState,
     service_worker_runtime::ServiceWorkerClientId,
 };
-pub(crate) use bridge_install::JsContextHostBridgeRef;
+pub(crate) use bridge_install::PageScriptHostBridgeRef;
 pub(crate) use child_documents::{
     ChildDocumentFetch, ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity,
 };
@@ -821,7 +821,7 @@ impl PendingImageLoadEvent {
 
 /// The complete PageVm-stamped route set is created at the stable Page source
 /// boundary and installed atomically before a live Window can use Web APIs.
-pub(crate) type JsContextHostPageTaskCapabilities =
+pub(crate) type PageScriptHostTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
 /// Native DOM and Web API host shared by the Window realms of a page's
@@ -1108,7 +1108,7 @@ pub(crate) struct PageScriptHost {
     pub(crate) pending_network_body_sources:
         HashMap<NetworkBodySourceId, crate::network_host::PendingNetworkBodySourceState>,
     pub(crate) pending_network_body_clones: HashMap<NetworkBodySourceId, Vec<NetworkBodySourceId>>,
-    page_task_capabilities: OnceCell<JsContextHostPageTaskCapabilities>,
+    page_task_capabilities: OnceCell<PageScriptHostTaskCapabilities>,
     resource_completion_tx: RendererResourceCompletionSender,
     next_worker_id: u64,
     workers: HashMap<DedicatedWorkerId, WorkerConnectionState>,

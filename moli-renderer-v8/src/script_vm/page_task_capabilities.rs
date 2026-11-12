@@ -3,7 +3,7 @@ use super::ScriptVm;
 impl ScriptVm {
     pub(crate) fn install_page_task_capabilities(
         &mut self,
-        capabilities: crate::native_bridge::JsContextHostPageTaskCapabilities,
+        capabilities: crate::native_bridge::PageScriptHostTaskCapabilities,
     ) {
         self._context_host
             .borrow()

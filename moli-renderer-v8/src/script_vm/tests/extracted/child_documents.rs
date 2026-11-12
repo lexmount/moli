@@ -3049,7 +3049,7 @@ async fn child_default_bridge_ref_is_released_on_child_context_teardown() {
     assert_eq!(
         vm._context_host.borrow().bridge_ref_count_for_test(),
         initial_bridge_ref_count,
-        "child context teardown must drop its JsContextHostBridgeRef instead of retaining it until ScriptVm drop"
+        "child context teardown must drop its PageScriptHostBridgeRef instead of retaining it until ScriptVm drop"
     );
 }
 #[tokio::test]

@@ -773,7 +773,7 @@ impl PageScriptHost {
 
     pub(crate) fn install_page_task_capabilities(
         &self,
-        capabilities: super::JsContextHostPageTaskCapabilities,
+        capabilities: super::PageScriptHostTaskCapabilities,
     ) {
         assert!(
             self.page_task_capabilities.set(capabilities).is_ok(),

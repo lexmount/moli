@@ -2,13 +2,13 @@ use super::*;
 use anyhow::Result;
 use std::{cell::RefCell, ffi::c_void, ptr::NonNull, rc::Rc};
 
-pub(crate) struct JsContextHostBridgeRef {
+pub(crate) struct PageScriptHostBridgeRef {
     ptr: NonNull<RefCell<PageScriptHost>>,
     #[cfg(test)]
     bridge_ref_count: Rc<std::cell::Cell<usize>>,
 }
 
-impl JsContextHostBridgeRef {
+impl PageScriptHostBridgeRef {
     #[cfg(not(test))]
     fn new(ptr: *const RefCell<PageScriptHost>) -> Self {
         Self {
@@ -35,7 +35,7 @@ impl JsContextHostBridgeRef {
     }
 }
 
-impl Drop for JsContextHostBridgeRef {
+impl Drop for PageScriptHostBridgeRef {
     fn drop(&mut self) {
         // SAFETY: this token is created only from the matching Rc::into_raw in
         // `install_into_bridge`, is not Clone, and is dropped exactly once by
@@ -76,15 +76,15 @@ impl PageScriptHost {
         host_rc: &Rc<RefCell<PageScriptHost>>,
         scope: &mut v8::PinScope<'s, '_>,
         global: v8::Local<'s, v8::Object>,
-    ) -> Result<JsContextHostBridgeRef> {
+    ) -> Result<PageScriptHostBridgeRef> {
         let host_ptr: *mut PageScriptHost = (*host_rc).as_ptr();
         #[cfg(test)]
         let bridge_ref_count = unsafe { &*host_ptr }.bridge_ref_count.clone();
         #[cfg(not(test))]
-        let bridge_ref = JsContextHostBridgeRef::new(Rc::into_raw(host_rc.clone()));
+        let bridge_ref = PageScriptHostBridgeRef::new(Rc::into_raw(host_rc.clone()));
         #[cfg(test)]
         let bridge_ref =
-            JsContextHostBridgeRef::new(Rc::into_raw(host_rc.clone()), bridge_ref_count);
+            PageScriptHostBridgeRef::new(Rc::into_raw(host_rc.clone()), bridge_ref_count);
         // The actual PageScriptHost pointer for runtime_ptr_from_object compatibility.
         let bridge = unsafe { &mut (*host_ptr).bridge };
         bridge.install_global(scope, global, host_ptr, bridge_ref.as_external_ptr())?;
