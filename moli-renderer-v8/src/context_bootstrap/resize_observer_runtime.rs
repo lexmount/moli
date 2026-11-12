@@ -426,16 +426,9 @@ fn build_resize_observer_entries<'s>(
 
     let mut entries = Vec::new();
     for entry in pending {
-        let measured = entry
+        let (metrics, dpr) = entry
             .handle
-            .and_then(|handle| geometry.get(&handle).copied());
-        if entry.handle.is_some() && measured.is_none() {
-            // No layout exists to measure. Keep the last reported size
-            // unknown instead of recording a size the page never had.
-            continue;
-        }
-        // A measured element without a box reports 0x0, like Chromium.
-        let (metrics, dpr) = measured
+            .and_then(|handle| geometry.get(&handle).copied())
             .and_then(|(metrics, dpr)| metrics.map(|metrics| (metrics, dpr)))
             .unwrap_or((moli_layout::LayoutResizeObserverMetrics::default(), 1.0));
         let rect = (
