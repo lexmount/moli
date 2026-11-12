@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<!--
+		This file can be used to generate roughly similar images to the ones in test_lines.rs.
+		Keep in mind that the green/red selection boxes have correct height only
+		when ascent + descent is smaller than line height. Otherwise you have to select the text.
+	-->
+	<style lang="css">
+		@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&family=Noto+Kufi+Arabic:wght@100..900&display=swap');
+		body {
+			/* Configuration */
+			--font-size: 16; /* px */
+			line-height: 19.0px;
+
+			/* Compute everything else */
+			--max-advance: round(calc(12.5 * var(--font-size)));
+			font-size: calc(1px * var(--font-size));
+			font-family: "Roboto", "Noto Kufi Arabic";
+			color: #000;
+			background: #222;
+			margin: 50px;
+		}
+		#layout {
+			width: calc(1px * var(--max-advance));
+			background: #fff;
+			border: 20px solid #a6c8ff;
+		}
+		#box_a, #box_b {
+			display: inline-block;
+			width: 50px;
+			height: 5px;
+			background: #000;
+		}
+		#box_b { height: 3px; }
+		.u { text-decoration: underline; }
+		.s { text-decoration: line-through; }
+		.r { background: #f00; }
+		.g { background: #0f0; }
+	</style>
+</head>
+<body>
+	<div id="layout">
+		<span class="g">Some</span> text here. Let's make<br>
+		it <span class="r">a bit lo</span>ng<div id="box_a"></div>er so that<br>
+		<div id="box_b"></div> <span class="g">we ha</span>ve more lines.<br>
+		And <span class="r">also some</span> latin text for<br>
+		<span class="g">this sp</span>ot right here.<br>
+		This <span class="r">is <span class="u">und</span></span><span class="u">erline</span> and<br>
+		<span class="s">strikethr<span class="g">ough</span></span> text and some<br>
+		extra <span class="r">more</span> text<br>
+		and so<span class="g">me ex</span>tra more text<br>
+		and <span class="r">some</span> extra more text<br>
+		and so<span class="g">me ex</span>tra more text<br>
+		and <span class="r">some</span> extra more text<br>
+		and so<span class="g">me ex</span>tra more text<br>
+		and <span class="r">some</span> extra more text<br>
+	</div>
+</body>
+</html>

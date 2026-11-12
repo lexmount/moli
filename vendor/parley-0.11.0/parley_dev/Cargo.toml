@@ -1,0 +1,15 @@
+[package]
+name = "parley_dev"
+description = "Crate that exposes utilities for developing Parley"
+keywords = ["text", "layout"]
+categories = ["gui", "graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

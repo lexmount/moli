@@ -1,0 +1,17 @@
+[package]
+name = "parley_data_gen"
+keywords = ["text", "layout"]
+categories = ["gui", "graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+icu_properties = { workspace = true, features = ["compiled_data"] }
+packtab = { workspace = true }
+parley_data = { workspace = true, default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Parley ↔ Chrome line-breaking harness</title>
+  <link data-trunk rel="rust" />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 1rem;
+      line-height: 1.4;
+    }
+
+    #status {
+      font-weight: bold;
+      margin: 0.5rem 0;
+    }
+
+    button {
+      font: 14px system-ui, sans-serif;
+      padding: 0.3rem 0.7rem;
+      cursor: pointer;
+    }
+
+    h2 {
+      margin: 1.2rem 0 0.2rem;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Browser line-breaking data collection. Please ensure you are using a Chromium based browser.</h1>
+  <div id="status">Starting…</div>
+  <div id="results"></div>
+</body>
+
+</html>

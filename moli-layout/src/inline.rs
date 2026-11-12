@@ -663,10 +663,14 @@ pub(crate) fn build_inline_fragments(
                 .map(|metrics| inline_strut_metrics(metrics, true));
             let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
             let descent = font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
-            let rect = PaintRect::new(
+            let (left, width) = encompass_text_inline_bounds(
                 metrics.inline_min_coord + cluster_offset,
-                metrics.baseline - ascent + vertical_offset,
                 cluster.advance().max(0.0),
+            );
+            let rect = PaintRect::new(
+                left,
+                metrics.baseline - ascent + vertical_offset,
+                width,
                 (ascent + descent).max(0.0),
             );
             if let Some(style) = layout.styles().get(style_index)
@@ -2273,7 +2277,8 @@ impl InlineBuildInput {
                 object.role.parley_bidi(),
             );
         }
-        let layout = builder.build(&self.text);
+        let mut layout = builder.build(&self.text);
+        layout.set_text_item_quantization(1.0 / 64.0, &inline_text_item_ends(&self.units));
         let font_metrics = styles
             .iter()
             .zip(style_samples)
@@ -2328,6 +2333,36 @@ impl InlineBuildInput {
             fragments: InlineFragments::default(),
         }
     }
+}
+
+/// CSS inline allocation belongs to a normalized text node, not to each
+/// character or to the font fallback runs that happen to shape it.
+fn inline_text_item_ends(units: &[InlineTextUnit]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut previous = None;
+    for unit in units {
+        let key = (unit.style_box, unit.control);
+        if previous == Some(key) && ends.last() == Some(&unit.output_range.start) {
+            *ends.last_mut().expect("a continuing item has an end") = unit.output_range.end;
+        } else {
+            ends.push(unit.output_range.end);
+        }
+        previous = Some(key);
+    }
+    ends
+}
+
+fn encompass_text_inline_bounds(left: f32, width: f32) -> (f32, f32) {
+    let scale = crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL;
+    let start = (left * scale).floor() / scale;
+    // Blink's encompassing conversion preserves coincident endpoints. A
+    // zero-width control must not become a visible 1/64 px fragment.
+    let end = if left + width == left {
+        start
+    } else {
+        ((left + width) * scale).ceil() / scale
+    };
+    (start, end - start)
 }
 
 fn measure_inline_strut(
@@ -2982,6 +3017,7 @@ fn bidi_controls(bidi: InlineUnicodeBidi, direction: InlineDirection) -> Vec<(ch
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod text_item_advance;
 
     #[test]
     fn carriage_returns_separate_space_styles_at_atomic_and_float_objects() {
@@ -3635,6 +3671,15 @@ mod tests {
                         .flat_map(|line| line.runs())
                         .any(|run| !run.is_rtl())
                 );
+                for line in layout.lines() {
+                    for (cluster, offset) in line.positioned_visual_clusters() {
+                        assert_eq!(
+                            offset,
+                            cluster.visual_offset().unwrap(),
+                            "raw cluster position: {direction:?}, {alignment:?}"
+                        );
+                    }
+                }
                 let mut utf16_offset = 0;
                 let source_map = text
                     .char_indices()
@@ -3673,8 +3718,8 @@ mod tests {
                 for fragment in fragments.text {
                     let line = layout.lines().nth(fragment.line_index).unwrap();
                     // Parley's independent, slower position API is the
-                    // reference for CSSOM text geometry, including ligatures
-                    // and graphemes spanning multiple source characters.
+                    // reference before CSSOM's encompassing subpixel conversion,
+                    // including ligatures and graphemes spanning source characters.
                     let bounds = line
                         .runs()
                         .flat_map(|run| run.visual_clusters())
@@ -3691,8 +3736,19 @@ mod tests {
                     let (left, right) = bounds
                         .reduce(|(left, right), (x, end)| (left.min(x), right.max(end)))
                         .unwrap();
-                    assert_eq!(fragment.rect.x, left, "{direction:?}, {alignment:?}");
-                    assert!((fragment.rect.right() - right).abs() < 0.001);
+                    let scale = crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL;
+                    let css_left = (left * scale).floor() / scale;
+                    let css_right = if right == left {
+                        css_left
+                    } else {
+                        (right * scale).ceil() / scale
+                    };
+                    assert_eq!(fragment.rect.x, css_left, "{direction:?}, {alignment:?}");
+                    assert_eq!(
+                        fragment.rect.right(),
+                        css_right,
+                        "{direction:?}, {alignment:?}"
+                    );
                 }
             }
         }

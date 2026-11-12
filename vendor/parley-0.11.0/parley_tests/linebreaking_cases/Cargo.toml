@@ -1,0 +1,15 @@
+[package]
+name = "parley_linebreaking_cases"
+description = "Seeded random line-breaking test cases"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+
+[lints]
+workspace = true
