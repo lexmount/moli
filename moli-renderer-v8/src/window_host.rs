@@ -786,23 +786,7 @@ pub(super) fn window_request_animation_frame_callback<'s>(
         return;
     };
 
-    let global = scope.get_current_context().global(scope);
-    let now = current_animation_frame_time_ms(scope);
-    let target_timestamp =
-        get_private_value(scope, global, WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT)
-            .and_then(|value| value.number_value(scope))
-            .filter(|timestamp| *timestamp > now)
-            .unwrap_or_else(|| {
-                let timestamp = now + WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS as f64;
-                set_private_value(
-                    scope,
-                    global,
-                    WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT,
-                    v8::Number::new(scope, timestamp).into(),
-                );
-                timestamp
-            });
-    let delay_ms = (target_timestamp - now).ceil().clamp(0.0, u32::MAX as f64) as u32;
+    let (target_timestamp, delay_ms) = next_animation_frame(scope);
     let runtime = unsafe { &mut *host_ptr };
     let timeout_id = runtime.queue_window_animation_frame_callback(
         scope,
@@ -1960,6 +1944,29 @@ fn parse_timer_delay_ms<'s>(
     prefix: &'static str,
 ) -> u32 {
     webidl::timer_milliseconds_arg(scope, args, 1, prefix)
+}
+
+/// The current Window's next animation frame: its shared timestamp and the
+/// delay until it. Callbacks requested before that frame runs join it.
+pub(crate) fn next_animation_frame(scope: &mut v8::PinScope<'_, '_>) -> (f64, u32) {
+    let global = scope.get_current_context().global(scope);
+    let now = current_animation_frame_time_ms(scope);
+    let target_timestamp =
+        get_private_value(scope, global, WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT)
+            .and_then(|value| value.number_value(scope))
+            .filter(|timestamp| *timestamp > now)
+            .unwrap_or_else(|| {
+                let timestamp = now + WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS as f64;
+                set_private_value(
+                    scope,
+                    global,
+                    WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT,
+                    v8::Number::new(scope, timestamp).into(),
+                );
+                timestamp
+            });
+    let delay_ms = (target_timestamp - now).ceil().clamp(0.0, u32::MAX as f64) as u32;
+    (target_timestamp, delay_ms)
 }
 
 pub(crate) fn finish_animation_frame_callback_batch(

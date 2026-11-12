@@ -266,22 +266,71 @@ pub(super) fn resize_observer_take_records_callback<'s>(
     rv.set(entries.into());
 }
 
-fn resize_observer_flush_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(observer) = pop_first_object_from_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT)
-    else {
-        return;
-    };
-    set_resize_observer_scheduled(scope, observer, false);
-    let Some(pending_targets) = resize_observer_pending_targets(scope, observer) else {
-        return;
-    };
-    if pending_targets.length() == 0 {
-        return;
+/// One rendering-update delivery for every queued observer of this Window:
+/// gather all observations first, then call each observer's callback with a
+/// microtask checkpoint after it, so a callback's promise reactions (for
+/// example a `disconnect()`) run before the next observer is notified.
+pub(crate) fn deliver_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
+    let mut deliveries = Vec::new();
+    while let Some(observer) = pop_first_object_from_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT)
+    {
+        set_resize_observer_scheduled(scope, observer, false);
+        if let Some(entries) = gather_resize_observer_entries(scope, observer) {
+            deliveries.push((observer, entries));
+        }
     }
+    for (observer, entries) in deliveries {
+        if resize_observer_targets(scope, observer).is_none_or(|targets| targets.length() == 0) {
+            // Disconnected by an earlier callback or its microtasks.
+            continue;
+        }
+        broadcast_resize_observer_entries(scope, observer, entries);
+        crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    }
+}
+
+fn gather_resize_observer_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    let pending_targets = resize_observer_pending_targets(scope, observer)?;
+    if pending_targets.length() == 0 {
+        return None;
+    }
+    let callback_residence = resize_observer_callback_residence(scope, observer)?;
+    let common = CommonRuntimeState::from_scope(scope)?;
+    let Some(callback) = common.callbacks.prepare(
+        scope,
+        observer,
+        CallbackRegistrationKind::ResizeObserver,
+        callback_residence,
+    ) else {
+        let pending_targets = v8::Array::new(scope, 0);
+        set_resize_observer_pending_targets(scope, observer, pending_targets);
+        return None;
+    };
+    let callback_context = callback.relevant_context(scope);
+    let result = {
+        let scope = &mut v8::ContextScope::new(scope, callback_context);
+        build_resize_observer_entries(scope, pending_targets)
+    };
+    let pending = v8::Array::new(scope, 0);
+    set_resize_observer_pending_targets(scope, observer, pending);
+    match result {
+        Ok(entries) if entries.length() > 0 => Some(entries),
+        Ok(_) => None,
+        Err(error) => {
+            throw_resize_observer_layout_error(scope, error);
+            None
+        }
+    }
+}
+
+fn broadcast_resize_observer_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+    entries: v8::Local<'s, v8::Array>,
+) {
     let Some(callback_residence) = resize_observer_callback_residence(scope, observer) else {
         return;
     };
@@ -294,29 +343,8 @@ fn resize_observer_flush_callback<'s>(
         CallbackRegistrationKind::ResizeObserver,
         callback_residence,
     ) else {
-        let pending_targets = v8::Array::new(scope, 0);
-        set_resize_observer_pending_targets(scope, observer, pending_targets);
         return;
     };
-    let callback_context = callback.relevant_context(scope);
-    let result = {
-        let scope = &mut v8::ContextScope::new(scope, callback_context);
-        build_resize_observer_entries(scope, pending_targets)
-    };
-    let entries = match result {
-        Ok(entries) => entries,
-        Err(error) => {
-            let pending_targets = v8::Array::new(scope, 0);
-            set_resize_observer_pending_targets(scope, observer, pending_targets);
-            throw_resize_observer_layout_error(scope, error);
-            return;
-        }
-    };
-    let pending_targets = v8::Array::new(scope, 0);
-    set_resize_observer_pending_targets(scope, observer, pending_targets);
-    if entries.length() == 0 {
-        return;
-    }
     let observer_value: v8::Local<'_, v8::Value> = observer.into();
     callback.invoke_and_report(
         scope,
@@ -730,8 +758,21 @@ fn queue_resize_observer_delivery<'s>(
         return;
     }
     set_resize_observer_scheduled(scope, observer, true);
+    let frame_already_scheduled = global_queue_array(scope, RESIZE_OBSERVER_QUEUE_SLOT)
+        .is_some_and(|queue| queue.length() > 0);
     push_object_to_global_queue(scope, RESIZE_OBSERVER_QUEUE_SLOT, observer);
-    schedule_scope_callback(scope, resize_observer_flush_callback, None);
+    if !frame_already_scheduled {
+        schedule_resize_observer_frame(scope);
+    }
+}
+
+/// Deliver at this Window's next animation frame, at most once per frame.
+fn schedule_resize_observer_frame(scope: &mut v8::PinScope<'_, '_>) {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let (_, delay_ms) = crate::window_host::next_animation_frame(scope);
+    unsafe { &mut *host_ptr }.queue_resize_observer_frame(scope, delay_ms);
 }
 
 pub(crate) fn queue_resize_observer_checks(scope: &mut v8::PinScope<'_, '_>) {

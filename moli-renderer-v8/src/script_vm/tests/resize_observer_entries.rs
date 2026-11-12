@@ -55,8 +55,9 @@ async fn resize_observer_entries_preserve_webidl_snapshots_and_callback_realms()
     }
 }
 
-#[test]
-fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
+#[tokio::test]
+async fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_html_test_vm("https://resize-published-axis.test/");
     vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     vm.eval(r#"
@@ -76,6 +77,9 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     "#,
     )
     .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54]]"
@@ -83,6 +87,9 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 
     vm.eval("target.style.writingMode='horizontal-tb'").unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54]]",
@@ -94,6 +101,9 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     // Publishing a snapshot is not itself a legacy RO scheduling operation.
     // This mutation schedules its existing check without requesting layout.
     vm.eval("target.setAttribute('data-resample','yes')")
+        .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
         .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
@@ -109,8 +119,9 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     );
 }
 
-#[test]
-fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
+#[tokio::test]
+async fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_html_test_vm("https://resize-css-box-kind.test/");
     vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
     vm.eval(r#"
@@ -131,6 +142,9 @@ fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
     "#,
     )
     .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         r#"[["inline",0,0,0,0,0,0],["atomic",50,100,100,50,104,54]]"#,
@@ -139,8 +153,9 @@ fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 }
 
-#[test]
-fn ondemand_ro_measures_child_frame_targets_from_the_page_snapshot() {
+#[tokio::test]
+async fn ondemand_ro_measures_child_frame_targets_from_the_page_snapshot() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_parsed_test_vm(
         "https://resize-child-frame.test/",
         "<!doctype html><div id=box style='width:120px;height:20px'></div><iframe id=frame></iframe>",
@@ -159,6 +174,9 @@ fn ondemand_ro_measures_child_frame_targets_from_the_page_snapshot() {
          .observe(child.document.getElementById('target'));'observed'",
     )
     .unwrap();
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .unwrap();
     assert_eq!(vm.eval("widths.join()").unwrap(), "80");
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
