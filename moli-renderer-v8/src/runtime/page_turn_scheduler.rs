@@ -65,13 +65,6 @@ struct PageTaskArbitrationState {
     fairness_cursor: Option<RendererPageTaskSourceKind>,
 }
 
-impl PageTaskArbitrationState {
-    fn break_consecutive_run(&mut self) {
-        self.last_selected_source = None;
-        self.consecutive_from_source = 0;
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PageTurnClass {
     Ordinary,
@@ -305,9 +298,6 @@ impl<Entry> PageTurnScheduler<Entry> {
         } else {
             self.turn_class_arbitration.last_selected_class = Some(selected);
             self.turn_class_arbitration.consecutive_from_class = 1;
-        }
-        if matches!(selected, PageTurnClass::DocumentLifecycle) {
-            self.arbitration.break_consecutive_run();
         }
         selected
     }
@@ -1373,7 +1363,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_turn_breaks_an_ordinary_source_consecutive_run() {
+    fn lifecycle_turn_keeps_an_ordinary_source_consecutive_run() {
         let mut scheduler = PageTurnScheduler::new(());
         let base = Instant::now();
         let descriptors = || {
@@ -1401,12 +1391,14 @@ mod tests {
             ),
             Some(PageTurnClass::DocumentLifecycle)
         );
+        // A lifecycle turn must not reset the run; otherwise a source that
+        // keeps winning between forced lifecycle turns is never rotated out.
         assert_eq!(
             scheduler
                 .select_ready_descriptor(descriptors())
                 .expect("ordinary arbitration should resume after lifecycle")
                 .source_kind(),
-            RendererPageTaskSourceKind::DynamicImportOwnerAction
+            RendererPageTaskSourceKind::ModulepreloadStart
         );
     }
 

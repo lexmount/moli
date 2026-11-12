@@ -242,7 +242,7 @@ pub async fn run_cli_with_config<W: Write>(
             finalize_fetch_browser(browser, args.cookie_jar.as_deref(), stdout, result)
                 .map_err(|error| with_fetch_context(error, &args.url))?;
         }
-        Commands::Serve(_) => {
+        Commands::Serve(args) => {
             let additional_cookies = cookie_header_from_args(&config)?;
             config
                 .browser
@@ -260,12 +260,23 @@ pub async fn run_cli_with_config<W: Write>(
             let storage_partition =
                 Arc::new(StoragePartitionState::open(config.browser.profile_dir())?);
             storage_partition.import_cookies(load_cookie_state_cookies(&config)?)?;
+            if args.cookie_jar.is_some() {
+                // serve() drains cookie producers and closes the databases.
+                // Load the jar while SQLite is open so the final export can
+                // snapshot its in-memory state after that drain, even if the
+                // session never visits a page or calls a Cookie API.
+                storage_partition
+                    .cookies()
+                    .context("failed to prepare cookie jar export")?;
+            }
             let server = ProtocolServer::new_with_storage_partition_and_runtime_config(
                 config.server.clone(),
-                storage_partition,
+                Arc::clone(&storage_partition),
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            server.serve().await.context("protocol server failed")?;
+            let result = server.serve().await;
+            finalize_serve_cookies(&storage_partition, args.cookie_jar.as_deref(), stdout);
+            result.context("protocol server failed")?;
         }
         Commands::Import(args) => {
             let summary =
@@ -520,6 +531,38 @@ fn finalize_fetch_browser<W: Write>(
     // export failure does not replace the transfer's result.
     drop(browser);
     result
+}
+
+/// Exports to an explicit output without inferring outputs from cookie inputs.
+/// As in fetch, export failures do not replace the serve result.
+fn finalize_serve_cookies(
+    storage_partition: &StoragePartitionState,
+    cookie_jar: Option<&str>,
+    stdout: &mut impl Write,
+) {
+    let Some(path) = cookie_jar else {
+        return;
+    };
+    let cookies = match storage_partition.cookies() {
+        Ok(cookies) => cookies,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to snapshot cookies for cookie file");
+            return;
+        }
+    };
+    let saved = if path == "-" {
+        cookie_cache::write_cookie_file(stdout, cookies)
+    } else {
+        cookie_cache::save_cookie_file(path, cookies)
+    };
+    match saved {
+        Ok(report) if report.skipped_partitioned > 0 => tracing::warn!(
+            skipped = report.skipped_partitioned,
+            "omitted partitioned cookies from Netscape cookie jar"
+        ),
+        Err(error) => tracing::warn!(error = %error, "failed to save cookie jar"),
+        Ok(_) => {}
+    }
 }
 
 #[cfg(test)]

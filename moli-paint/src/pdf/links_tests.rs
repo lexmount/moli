@@ -196,6 +196,43 @@ fn disjoint_link_lines_do_not_exhaust_the_deduplication_budget() {
 }
 
 #[test]
+fn dense_link_columns_print_without_exhausting_the_deduplication_budget() {
+    let mut snapshot = snapshot();
+    for column in 0..1_600 {
+        link(
+            &mut snapshot,
+            PaintRect::new(10.0 + column as f32 / 8.0, 20.0, 0.0625, 10.0),
+            None,
+        );
+    }
+    // Keep checking duplicates after the dense run of non-containing regions.
+    link(
+        &mut snapshot,
+        PaintRect::new(10.0 + 1_599.0 / 8.0, 20.0, 0.0625, 10.0),
+        None,
+    );
+    let doc = document(&snapshot, &options());
+    let annots = annotations(&doc, 1);
+    assert_eq!(annots.len(), 1_600);
+    for annot in annots {
+        let rect = bounds(annot);
+        assert!((rect[2] - rect[0] - 0.0625).abs() < 0.01);
+        assert_eq!(
+            annot
+                .get(b"A")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"URI")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            b"https://example.com/doc#target"
+        );
+    }
+}
+
+#[test]
 fn pagination_clips_links_and_remaps_internal_destinations_to_selected_pages() {
     let mut snapshot = snapshot();
     link(
