@@ -85,14 +85,15 @@ pub use snapshot::{
     PaintBrush, PaintColor, PaintCompositeMode, PaintConicGradient, PaintCornerRadii,
     PaintCornerRadius, PaintDiagnostic, PaintDiagnosticSeverity, PaintEdgeSizes, PaintFillRule,
     PaintFilter, PaintFontId, PaintFontResource, PaintFragment, PaintGlyph, PaintGlyphRun,
-    PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
-    PaintGradientInterpolation, PaintGradientStop, PaintImage, PaintImageId, PaintImageResource,
-    PaintImageSampling, PaintLineCap, PaintLineJoin, PaintLinearGradient, PaintLink,
-    PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
-    PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
-    PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
-    PaintTextShadow, PaintTextStroke, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
-    pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
+    PaintGradientAlphaSpace, PaintGradientColorSpace, PaintGradientExtend,
+    PaintGradientHueDirection, PaintGradientInterpolation, PaintGradientStop, PaintImage,
+    PaintImageId, PaintImageResource, PaintImageSampling, PaintLineCap, PaintLineJoin,
+    PaintLinearGradient, PaintLink, PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint,
+    PaintRadialGradient, PaintRect, PaintShape, PaintSize, PaintSnapshot, PaintStroke,
+    PaintSvgImage, PaintSvgImageId, PaintSvgImageResource, PaintTextDecoration,
+    PaintTextDecorationStyle, PaintTextSemantics, PaintTextShadow, PaintTextStroke,
+    PaintTransform2D, PaintViewport, pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero,
+    pixel_snap_paint_rect,
 };
 pub use source::{
     ChildBoxPolicy, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
@@ -107,10 +108,10 @@ pub use style::{
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DEFAULT_STANDARD_FONT_FAMILY, DocumentLayoutServices, FontFaceData, SystemFontPolicy,
-    WebFontDeclaration, WebFontFace, WebFontRegistration, WebFontRegistrationError,
-    WebFontRegistrationOutcome, WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange,
-    validate_web_font_bytes,
+    CanvasFont, DEFAULT_STANDARD_FONT_FAMILY, DocumentLayoutServices, FontFaceData,
+    ShapedCanvasText, SystemFontPolicy, WebFontDeclaration, WebFontFace, WebFontRegistration,
+    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontRegistrationScope, WebFontStyle,
+    WebFontUnicodeRange, validate_web_font_bytes,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

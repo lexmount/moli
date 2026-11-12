@@ -26,8 +26,10 @@ use thiserror::Error;
 
 use crate::stylo_to_parley::TextBrush;
 
+mod canvas;
 mod font_preferences;
 mod font_source;
+pub use canvas::{CanvasFont, ShapedCanvasText};
 pub use font_preferences::DEFAULT_STANDARD_FONT_FAMILY;
 pub use font_source::FontFaceData;
 

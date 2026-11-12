@@ -799,7 +799,7 @@ fn synthetic_bold_fill_and_stroke_share_css_pixel_geometry_across_upem_and_sizes
                         ],
                     },
                     width: 2.0,
-                    color: RED,
+                    brush: PaintBrush::Solid(RED),
                     join: moli_layout::PaintLineJoin::Miter,
                     start_cap: moli_layout::PaintLineCap::Butt,
                     end_cap: moli_layout::PaintLineCap::Butt,

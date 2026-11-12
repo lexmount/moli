@@ -189,6 +189,7 @@ fn linear_gradient(
         stops,
         extend: gradient_extend(repeating),
         interpolation,
+        transform: LayoutTransform2D::IDENTITY,
     }))
 }
 

@@ -15,8 +15,8 @@ use crate::webidl;
 use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
-    blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
-    fill_style_rgba, measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
+    blit_image_data, byte_len, data_image_rgba8_pixels, extract_image_data, fill_style_rgba,
+    normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
     PaintBrush, PaintColor, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape, PaintSnapshot,
@@ -24,6 +24,14 @@ use moli_layout::{
 };
 use moli_webapi_declare::WebApiObject;
 use std::str::FromStr;
+
+mod gradient;
+mod text;
+
+pub(crate) use gradient::{
+    canvas_context_create_linear_gradient_callback, canvas_context_create_radial_gradient_callback,
+    canvas_gradient_add_color_stop_callback,
+};
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
@@ -144,7 +152,7 @@ struct CanvasContextFillTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -157,7 +165,7 @@ struct CanvasContextStrokeTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -165,15 +173,6 @@ struct CanvasContextStrokeTextArgs {
 struct CanvasContextMeasureTextArgs {
     #[webidl(required)]
     text: String,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "CanvasGradient.addColorStop")]
-struct CanvasGradientAddColorStopArgs {
-    #[webidl(required)]
-    offset: f64,
-    #[webidl(required)]
-    _color: String,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -393,13 +392,11 @@ pub(crate) fn canvas_context_fill_style_getter_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "fillStyle getter") {
         return;
     }
-    let value = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| "#000000".to_owned());
-    if let Some(value) = v8_string(scope, &value) {
-        rv.set(value.into());
-    } else {
-        rv.set(v8::String::empty(scope).into());
-    }
+    rv.set(context_style_value(
+        scope,
+        args.this(),
+        CANVAS_CONTEXT_FILL_STYLE_SLOT,
+    ));
 }
 
 pub(crate) fn canvas_context_fill_style_setter_callback<'s>(
@@ -408,6 +405,15 @@ pub(crate) fn canvas_context_fill_style_setter_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !require_canvas_context_receiver(scope, args.this(), "fillStyle setter") {
+        return;
+    }
+    if gradient::is_gradient(scope, args.get(0)) {
+        set_private_value(
+            scope,
+            args.this(),
+            CANVAS_CONTEXT_FILL_STYLE_SLOT,
+            args.get(0),
+        );
         return;
     }
     let Some(raw) = canvas_context_dom_string_value(
@@ -463,7 +469,9 @@ pub(crate) fn canvas_context_font_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    set_context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT, &font);
+    if let Some(font) = text::resolve_font_css(scope, args.this(), &font) {
+        set_context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT, &font);
+    }
     rv.set_undefined();
 }
 
@@ -810,7 +818,12 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
     let fragment = PaintFragment::Fill {
         fill_rule: moli_layout::PaintFillRule::NonZero,
         shape: PaintShape::Path(rectangle.paint_path()),
-        brush: PaintBrush::Solid(context_fill_color(scope, context)),
+        brush: context_style_brush(
+            scope,
+            context,
+            CANVAS_CONTEXT_FILL_STYLE_SLOT,
+            PaintTransform2D::IDENTITY,
+        ),
         transform,
     };
     rasterize_canvas_fragment(scope, canvas, fragment);
@@ -1179,16 +1192,29 @@ pub(crate) fn canvas_context_fill_callback<'s>(
     let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
+    let brush = context_style_brush(
+        scope,
+        args.this(),
+        CANVAS_CONTEXT_FILL_STYLE_SLOT,
+        PaintTransform2D::IDENTITY,
+    );
     let path_state = canvas_path_state(scope, args.this());
     let fragment = with_path_state(&path_state, |state| {
         if state.is_empty() || state.inverse_transform().is_none() {
             return None;
         }
+        let (path, transform) = if matches!(brush, PaintBrush::Solid(_)) {
+            (state.paint_path(), PaintTransform2D::IDENTITY)
+        } else {
+            // Paths capture their coordinates as they are constructed; the
+            // gradient uses the current user space at the time of painting.
+            (state.stroke_path()?, state.transform())
+        };
         Some(PaintFragment::Fill {
             fill_rule: moli_layout::PaintFillRule::NonZero,
-            shape: PaintShape::Path(state.paint_path()),
-            brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
-            transform: PaintTransform2D::IDENTITY,
+            shape: PaintShape::Path(path),
+            brush,
+            transform,
         })
     });
     if let Some(fragment) = fragment {
@@ -1449,13 +1475,11 @@ pub(crate) fn canvas_context_stroke_style_getter_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "strokeStyle getter") {
         return;
     }
-    let value = context_string_slot(scope, args.this(), CANVAS_CONTEXT_STROKE_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
-    rv.set(
-        v8_string(scope, &value)
-            .unwrap_or_else(|| v8::String::empty(scope))
-            .into(),
-    );
+    rv.set(context_style_value(
+        scope,
+        args.this(),
+        CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+    ));
 }
 
 pub(crate) fn canvas_context_stroke_style_setter_callback<'s>(
@@ -1464,6 +1488,15 @@ pub(crate) fn canvas_context_stroke_style_setter_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !require_canvas_context_receiver(scope, args.this(), "strokeStyle setter") {
+        return;
+    }
+    if gradient::is_gradient(scope, args.get(0)) {
+        set_private_value(
+            scope,
+            args.this(),
+            CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+            args.get(0),
+        );
         return;
     }
     let Some(raw) = canvas_context_dom_string_value(
@@ -1531,16 +1564,33 @@ fn with_path_state<T>(
     update(&mut state.borrow_mut())
 }
 
-fn context_fill_color<'s>(
+fn context_style_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
-) -> PaintColor {
-    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
-    color_with_global_alpha(
-        fill_style_rgba(&fill_style),
-        context_global_alpha(scope, context),
-    )
+    slot: &'static str,
+) -> v8::Local<'s, v8::Value> {
+    get_private_value(scope, context, slot).unwrap_or_else(|| {
+        v8_string(scope, DEFAULT_FILL_STYLE)
+            .expect("default style")
+            .into()
+    })
+}
+
+fn context_style_brush<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    slot: &'static str,
+    transform: PaintTransform2D,
+) -> PaintBrush {
+    let value = context_style_value(scope, context, slot);
+    let alpha = context_global_alpha(scope, context);
+    if let Some(brush) = gradient::brush(scope, value, alpha, transform) {
+        return brush;
+    }
+    let color = v8::Local::<v8::String>::try_from(value)
+        .map(|value| value.to_rust_string_lossy(scope))
+        .unwrap_or_else(|_| DEFAULT_FILL_STYLE.to_owned());
+    PaintBrush::Solid(color_with_global_alpha(fill_style_rgba(&color), alpha))
 }
 
 fn context_global_alpha<'s>(
@@ -1567,8 +1617,6 @@ fn context_stroke<'s>(
     path: moli_layout::PaintPath,
     transform: PaintTransform2D,
 ) -> PaintStroke {
-    let stroke_style = context_string_slot(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
     let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
         Some("round") => PaintLineJoin::Round,
         Some("bevel") => PaintLineJoin::Bevel,
@@ -1581,9 +1629,11 @@ fn context_stroke<'s>(
     };
     PaintStroke {
         path,
-        color: color_with_global_alpha(
-            fill_style_rgba(&stroke_style),
-            context_global_alpha(scope, context),
+        brush: context_style_brush(
+            scope,
+            context,
+            CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+            PaintTransform2D::IDENTITY,
         ),
         width: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_WIDTH_SLOT)
             .unwrap_or(DEFAULT_LINE_WIDTH) as f32,
@@ -1620,6 +1670,14 @@ fn rasterize_canvas_fragment<'s>(
     canvas: v8::Local<'s, v8::Object>,
     fragment: PaintFragment,
 ) {
+    rasterize_canvas_scene(scope, canvas, |snapshot| snapshot.push_fragment(fragment));
+}
+
+fn rasterize_canvas_scene<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    prepare: impl FnOnce(&mut PaintSnapshot),
+) {
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
         if width == 0 || height == 0 {
             return;
@@ -1628,7 +1686,7 @@ fn rasterize_canvas_fragment<'s>(
             PaintViewport::new(width, height, 1.0),
             PaintColor::new(0.0, 0.0, 0.0, 0.0),
         );
-        snapshot.push_fragment(fragment);
+        prepare(&mut snapshot);
         if let Ok(raster) = moli_paint::raster_snapshot(&snapshot)
             && raster.width == width
             && raster.height == height
@@ -1683,13 +1741,27 @@ pub(crate) fn canvas_context_fill_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_canvas_context_receiver(scope, args.this(), "fillText") {
+        return;
+    }
     let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextFillTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
+    text::draw_text(
+        scope,
+        args.this(),
+        canvas,
+        text::TextDraw {
+            text: &parsed.text,
+            x: parsed.x,
+            y: parsed.y,
+            max_width: parsed.max_width,
+            paint: text::TextPaint::Fill,
+        },
+    );
 }
 
 pub(crate) fn canvas_context_stroke_text_callback<'s>(
@@ -1697,31 +1769,27 @@ pub(crate) fn canvas_context_stroke_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_canvas_context_receiver(scope, args.this(), "strokeText") {
+        return;
+    }
     let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextStrokeTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
-}
-
-fn draw_canvas_context_text<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-    canvas: v8::Local<'s, v8::Object>,
-    text: &str,
-    x: f64,
-    y: f64,
-) {
-    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
-    let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
-        .unwrap_or_else(|| DEFAULT_FONT.to_owned());
-    let color = fill_style_rgba(&fill_style);
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        draw_text(pixels, width, height, text, x, y, &font, color);
-    });
+    text::draw_text(
+        scope,
+        args.this(),
+        canvas,
+        text::TextDraw {
+            text: &parsed.text,
+            x: parsed.x,
+            y: parsed.y,
+            max_width: parsed.max_width,
+            paint: text::TextPaint::Stroke,
+        },
+    );
 }
 
 pub(crate) fn canvas_context_draw_image_callback<'s>(
@@ -1872,55 +1940,6 @@ pub(crate) fn canvas_context_get_line_dash_callback<'s>(
     rv.set(v8::Array::new_with_elements(scope, &values).into());
 }
 
-pub(crate) fn canvas_context_create_linear_gradient_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let prefix = "CanvasRenderingContext2D.createLinearGradient";
-    let Some(x0) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
-        return;
-    };
-    let Some(y0) = canvas_required_unrestricted_double_arg(scope, &args, 1, prefix) else {
-        return;
-    };
-    let Some(x1) = canvas_required_unrestricted_double_arg(scope, &args, 2, prefix) else {
-        return;
-    };
-    let Some(y1) = canvas_required_unrestricted_double_arg(scope, &args, 3, prefix) else {
-        return;
-    };
-    if !x0.is_finite() || !y0.is_finite() || !x1.is_finite() || !y1.is_finite() {
-        webidl::throw_dom_exception(
-            scope,
-            "NotSupportedError",
-            "Canvas gradient coordinates must be finite.",
-        );
-        return;
-    }
-
-    let gradient = v8::Object::new(scope);
-    if let Some(prototype) = global_constructor_prototype(scope, "CanvasGradient") {
-        let _ = gradient.set_prototype(scope, prototype.into());
-    }
-    rv.set(gradient.into());
-}
-
-pub(crate) fn canvas_gradient_add_color_stop_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(parsed) = webidl::parse_args::<CanvasGradientAddColorStopArgs>(scope, &args) else {
-        return;
-    };
-    if !(0.0..=1.0).contains(&parsed.offset) {
-        webidl::throw_index_size_error(scope);
-        return;
-    }
-    rv.set_undefined();
-}
-
 pub(crate) fn canvas_context_measure_text_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1932,10 +1951,8 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextMeasureTextArgs>(scope, &args) else {
         return;
     };
-    let font = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT)
-        .unwrap_or_else(|| DEFAULT_FONT.to_owned());
     let declaration = CanvasTextMetricsDeclaration {
-        width: measure_text_width(&parsed.text, &font),
+        width: text::shape_text(scope, args.this(), &parsed.text).width,
     };
     let relevant_context = canvas_context_relevant_context(scope, args.this())
         .unwrap_or_else(|| scope.get_current_context());
