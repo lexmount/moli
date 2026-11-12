@@ -1169,6 +1169,39 @@ fn cli_dump_html_with_frames_nests_and_strips_child_documents() -> Result<()> {
 }
 
 #[test]
+fn cli_dump_html_includes_and_strips_shadow_roots() -> Result<()> {
+    let shadow = "<div id=h></div><script>h.attachShadow({mode:'open'}).innerHTML='<style>b{color:red}</style><b>SHADOW</b>'</script>";
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(shadow));
+    let output = run_fetch_cli_with_args(&url, &[])?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(r#"<div id="h"><template shadowrootmode="open"><style>b{color:red}</style><b>SHADOW</b></template></div>"#),
+        "{stdout}"
+    );
+    let output = run_fetch_cli_with_args(&url, &["--strip-mode", "full"])?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(r#"<template shadowrootmode="open"><b>SHADOW</b></template>"#),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("color:red"), "{stdout}");
+
+    let framed = format!(
+        "<iframe srcdoc=\"{}\"></iframe>",
+        shadow.replace('"', "&quot;")
+    );
+    let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(framed));
+    let output = run_fetch_cli_with_args(&url, &["--with-frames", "--strip-mode", "full"])?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("SHADOW"), "{stdout}");
+    assert!(!stdout.contains("color:red"), "{stdout}");
+    Ok(())
+}
+
+#[test]
 fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<()> {
     let html = "<!doctype html><style>html,body{margin:0}main{height:1600px;background:blue}</style><main></main>";
     let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
