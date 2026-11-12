@@ -1413,6 +1413,87 @@ fetch('/api')
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn aborted_cookie_xhr_before_response_reports_one_extra_info() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            r#"<!doctype html><script>
+const xhr = new XMLHttpRequest();
+xhr.open('GET', '/slow');
+xhr.send();
+setTimeout(() => xhr.abort(), 100);
+</script>"#,
+        )
+    }
+    async fn slow() -> impl IntoResponse {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        "late"
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/slow", get(slow)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let slow_url = format!("http://{addr}/slow");
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    {
+        let mut jar = bc.cookie_store_for_test().lock().unwrap();
+        jar.store_response_headers(
+            &Url::parse(&slow_url).unwrap(),
+            &[("set-cookie".to_owned(), b"sid=1; Path=/slow".to_vec())],
+        );
+    }
+    ctx.with_fixture(|conn| conn.install_browser_context_fixture_for_test(bc));
+    ctx.process_async(json!({ "id": 501, "method": "Network.enable", "sessionId": "SID-1" }))
+        .await;
+    ctx.expect_result(501, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 502,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": format!("http://{addr}/page") }
+    }))
+    .await;
+    wait_until_messages(&mut ctx, Some("SID-1"), "aborted XHR fails", |messages| {
+        messages
+            .iter()
+            .any(|message| message["method"] == json!("Network.loadingFailed"))
+    })
+    .await;
+
+    let messages = ctx.take_all();
+    let request_id = messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.requestWillBeSent")
+                && message["params"]["request"]["url"] == json!(slow_url)
+        })
+        .expect("XHR request")["params"]["requestId"]
+        .clone();
+    let extra_infos = messages
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("Network.requestWillBeSentExtraInfo")
+                && message["params"]["requestId"] == request_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(extra_infos.len(), 1, "{extra_infos:?}");
+    assert_eq!(extra_infos[0]["params"]["headers"]["Cookie"], "sid=1");
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn page_xhr_applies_extra_http_headers() {
     async fn page() -> impl IntoResponse {
         (

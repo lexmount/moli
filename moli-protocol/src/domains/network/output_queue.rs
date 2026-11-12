@@ -2691,6 +2691,7 @@ impl TargetNetworkOutputQueue {
                     *subresource_index,
                     response.handle(),
                     response.network_request_headers(),
+                    response.redirect_chain().is_empty(),
                     None,
                 );
                 if self.append_subresource_response_started(*subresource_index, response) {
@@ -2706,6 +2707,15 @@ impl TargetNetworkOutputQueue {
                 *subresource_index += 1;
             }
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                // A request that fails before any response still reports its
+                // staged headers and cookie report once.
+                self.append_missing_subresource_request_extra_info(
+                    *subresource_index,
+                    body.handle(),
+                    None,
+                    true,
+                    None,
+                );
                 if self.append_subresource_body_finished(*subresource_index, body) {
                     *subresource_index += 1;
                 }
@@ -2816,10 +2826,15 @@ impl TargetNetworkOutputQueue {
         handle: SubresourceNetworkRequestHandle,
         record: &SubresourceNetworkRecord,
     ) {
+        let redirected = matches!(
+            record.outcome(),
+            SubresourceNetworkOutcome::Success { redirect_chain, .. } if !redirect_chain.is_empty()
+        );
         self.append_missing_subresource_request_extra_info(
             index,
             handle,
             record.network_request_headers(),
+            !redirected,
             record.request_cookie_report(),
         );
         match record.outcome() {
@@ -2939,6 +2954,9 @@ impl TargetNetworkOutputQueue {
         index: usize,
         handle: SubresourceNetworkRequestHandle,
         network_request_headers: Option<&[(String, String)]>,
+        // The observed wire headers belong to the final hop; this ExtraInfo
+        // describes the first request, so they are used only without redirects.
+        network_headers_are_first_hop: bool,
         request_cookie_report: Option<&StoredCookieQueryReport>,
     ) {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
@@ -2951,6 +2969,7 @@ impl TargetNetworkOutputQueue {
             return;
         }
         let request_headers = network_request_headers
+            .filter(|_| network_headers_are_first_hop)
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
         // The staged request's cookie report is reported here, with the wire
