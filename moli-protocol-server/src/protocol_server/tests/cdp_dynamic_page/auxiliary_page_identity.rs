@@ -2037,5 +2037,36 @@ async fn noopener_window_open_reuses_existing_named_window_and_frame() {
             .len(),
         targets.len()
     );
+
+    // A noopener open naming the opener itself navigates the opener, even
+    // when a popup with the same name exists.
+    evaluate_window_name_probe(&mut opener, 7, "window.p2=open('/shared','shared2');true").await;
+    wait_for_value(&mut opener, "p2.location.pathname", json!("/shared")).await;
+    let targets = wait_for_target_list(addr, "the shared2 popup is created", |targets| {
+        targets.len() == before + 2
+    })
+    .await;
+    assert_eq!(
+        evaluate_window_name_probe(
+            &mut opener,
+            8,
+            "window.name='shared2';open('#self2','shared2','noopener')===null"
+        )
+        .await,
+        true
+    );
+    wait_for_value(&mut opener, "location.hash", json!("#self2")).await;
+    assert_eq!(
+        evaluate_window_name_probe(&mut opener, 9, "p2.location.hash").await,
+        ""
+    );
+    assert_eq!(
+        fetch_server_json(addr, "/json/list")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        targets.len()
+    );
     abort_test_cdp_server(server).await;
 }
