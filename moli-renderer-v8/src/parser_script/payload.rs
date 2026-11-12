@@ -268,6 +268,7 @@ impl ParserClassicScriptSourceResult {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn from_identity_result(
         identity: ParserClassicScriptSourceIdentity,
         result: Result<String, String>,

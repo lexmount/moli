@@ -34,6 +34,7 @@ impl ScriptVm {
         report: &V8ExceptionReport,
         muted_errors: bool,
     ) -> Result<()> {
+        let muted_errors = muted_errors || report.muted_errors;
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let context_host = self._context_host.clone();
         self.renderer_document_isolate

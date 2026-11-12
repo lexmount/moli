@@ -104,7 +104,7 @@ globalThis.__childClassicWaitValue = 91;
                 };
                 let root_document = page_vm.document_lifecycle.identity().document;
                 assert!(
-                    completion.network_result.is_some(),
+                    completion.outcome.network_result.is_some(),
                     "loader-backed child classic completion must retain its Network fact"
                 );
                 let expected_network_frame_id = completion.network_attribution.frame_id.clone();

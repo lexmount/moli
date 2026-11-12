@@ -19,10 +19,16 @@ async fn stale_child_classic_completion_preserves_network_without_document_activ
                 load_id: 7,
                 handle: child_handle,
                 script_handle: crate::dom::native::NativeNodeId::new(402),
-                result: Ok("globalThis.__staleChildClassicRan = true".to_owned()),
-                network_result: Some(Arc::new(Err(
-                    "stale child classic request failed".to_owned()
-                ))),
+                outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                    source_result: Ok("globalThis.__staleChildClassicRan = true".to_owned()),
+                    source_bytes: None,
+                    fetch_timing: None,
+                    network_result: Some(Arc::new(Err(
+                        "stale child classic request failed".to_owned()
+                    ))),
+                    muted_errors: false,
+                },
                 network_attribution: ChildClassicScriptNetworkAttribution {
                     timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type(
                         "script",
@@ -120,8 +126,14 @@ async fn child_classic_completion_queue_runs_exactly_one_terminal_per_owner_turn
             load_id,
             handle: child_handle,
             script_handle: crate::dom::native::NativeNodeId::new(script_handle),
-            result: Ok(format!("globalThis.__staleChildClassic{load_id} = true")),
-            network_result: None,
+            outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                source_result: Ok(format!("globalThis.__staleChildClassic{load_id} = true")),
+                source_bytes: None,
+                fetch_timing: None,
+                network_result: None,
+                muted_errors: false,
+            },
             network_attribution: ChildClassicScriptNetworkAttribution {
                 timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type("script"),
                 request_mode: moli_fetch::RequestMode::NoCors,

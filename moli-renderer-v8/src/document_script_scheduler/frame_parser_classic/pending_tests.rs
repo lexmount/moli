@@ -827,8 +827,14 @@ fn child_pending_external_load_completion_carries_owner_and_record() {
         load_id: 21,
         handle: child_handle,
         script_handle,
-        result: Ok("globalThis.__complete = true".to_owned()),
-        network_result: None,
+        outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+            response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+            source_result: Ok("globalThis.__complete = true".to_owned()),
+            source_bytes: None,
+            fetch_timing: None,
+            network_result: None,
+            muted_errors: false,
+        },
         network_attribution: ChildClassicScriptNetworkAttribution {
             timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type("script"),
             request_mode: moli_fetch::RequestMode::NoCors,

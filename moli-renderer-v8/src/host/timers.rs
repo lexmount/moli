@@ -1553,6 +1553,7 @@ fn run_window_timer_source(
         0,
         Some(source.provenance.module_base_url()),
         &source.script_fetch_metadata,
+        false,
     );
     let Some(script) = v8::Script::compile(&scope, source_value, Some(&origin)) else {
         let exception = scope.exception();
@@ -1595,6 +1596,8 @@ pub(crate) fn report_window_timer_exception<'s>(
     callback: Option<v8::Local<'s, v8::Function>>,
     report: &V8ExceptionReport,
 ) {
+    let exposed = report.for_error_event();
+    let report = exposed.as_ref();
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -1651,7 +1654,11 @@ fn timer_callback_error_event_from_report<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
     let message_value = v8_string(scope, &report.summary)?;
-    let error_value = v8::Exception::error(scope, message_value);
+    let error_value = report
+        .exception
+        .as_ref()
+        .map(|exception| v8::Local::new(scope, exception))
+        .unwrap_or_else(|| v8::null(scope).into());
 
     let filename = v8_string(scope, report.source.as_deref().unwrap_or(""))
         .map(Into::into)

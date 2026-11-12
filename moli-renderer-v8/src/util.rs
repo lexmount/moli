@@ -412,10 +412,17 @@ pub(super) fn create_script_origin_with_base_url_and_fetch_metadata<'s>(
     line_offset: i32,
     base_url: Option<&Url>,
     metadata: &crate::module_runtime::ModuleFetchMetadata,
+    muted_errors: bool,
 ) -> v8::ScriptOrigin<'s> {
     let name = v8::String::new(scope, resource_name).expect("v8 string allocation");
     let host_defined_options = base_url.and_then(|base_url| {
-        script_host_defined_options_with_fetch_metadata(scope, base_url, metadata, false, None)
+        script_host_defined_options_with_fetch_metadata(
+            scope,
+            base_url,
+            metadata,
+            muted_errors,
+            None,
+        )
     });
     v8::ScriptOrigin::new(
         scope,
@@ -425,7 +432,7 @@ pub(super) fn create_script_origin_with_base_url_and_fetch_metadata<'s>(
         false,
         -1,
         None,
-        false,
+        muted_errors,
         false,
         false,
         host_defined_options,

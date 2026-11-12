@@ -876,6 +876,8 @@ pub(crate) fn report_event_callback_exception<'s>(
     child_handle: Option<DomHandle>,
     report: &V8ExceptionReport,
 ) {
+    let exposed = report.for_error_event();
+    let report = exposed.as_ref();
     let child_handle = child_handle.or_else(|| {
         relevant_identity.and_then(|identity| match identity.dispatch_scope() {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),

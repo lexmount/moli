@@ -3350,12 +3350,18 @@ document.body.appendChild(replacementFrame);
                                 load_id: 31,
                                 handle: old_child_handle,
                                 script_handle: NodeId::new(32),
-                                result: Ok(
-                                    "parent.__oldNamespaceChildClassicRan = true".to_owned(),
-                                ),
-                                network_result: Some(Arc::new(Err(
-                                    "retired child classic failed".to_owned(),
-                                ))),
+                                outcome: crate::planning::PreparedScriptSourceLoadOutcome {
+                                    response_provenance: crate::planning::ClassicScriptResponseProvenance::Network,
+                                    source_result: Ok(
+                                        "parent.__oldNamespaceChildClassicRan = true".to_owned(),
+                                    ),
+                                    source_bytes: None,
+                                    fetch_timing: None,
+                                    network_result: Some(Arc::new(Err(
+                                        "retired child classic failed".to_owned(),
+                                    ))),
+                                    muted_errors: false,
+                                },
                                 network_attribution: ChildClassicScriptNetworkAttribution {
                 timing: crate::context_bootstrap::FetchResourceTiming::for_initiator_type("script"),
                 request_mode: moli_fetch::RequestMode::NoCors,

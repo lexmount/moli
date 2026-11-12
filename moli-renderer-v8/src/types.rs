@@ -1552,8 +1552,7 @@ pub(super) struct ChildClassicScriptLoadCompletion {
     pub(super) load_id: u64,
     pub(super) handle: NativeNodeId,
     pub(super) script_handle: NativeNodeId,
-    pub(super) result: std::result::Result<String, String>,
-    pub(super) network_result: Option<SharedNavigationResponseResult>,
+    pub(super) outcome: crate::planning::PreparedScriptSourceLoadOutcome,
     pub(super) network_attribution: ChildClassicScriptNetworkAttribution,
 }
 

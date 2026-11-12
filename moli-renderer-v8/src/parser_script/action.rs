@@ -1,8 +1,8 @@
 use crate::document_runtime::DomHandle;
 use crate::parser_script::payload::{
     ParserClassicScriptMetadata, ParserClassicScriptSourceFailure,
-    ParserClassicScriptSourceIdentity, ParserClassicScriptSourceResult,
-    ParserExecutableClassicScript, ParserPreparedClassicScript, ParserReadyClassicScript,
+    ParserClassicScriptSourceIdentity, ParserExecutableClassicScript, ParserPreparedClassicScript,
+    ParserReadyClassicScript,
 };
 use crate::types::SharedNavigationResponseResult;
 use url::Url;
@@ -382,13 +382,6 @@ impl ParserPendingClassicScriptSourceLoadCompletionRecord {
 
     pub(crate) fn source_identity(&self) -> ParserClassicScriptSourceIdentity {
         self.source_identity
-    }
-
-    pub(crate) fn into_source_result(
-        self,
-        result: Result<String, String>,
-    ) -> ParserClassicScriptSourceResult {
-        ParserClassicScriptSourceResult::from_identity_result(self.source_identity, result)
     }
 }
 

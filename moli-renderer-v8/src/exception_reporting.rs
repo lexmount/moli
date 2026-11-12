@@ -14,7 +14,7 @@ const VALUE_DEBUG_OBJECT_SUMMARY_MAX_BYTES: usize = 240 * 4;
 
 #[derive(Clone)]
 pub(super) struct V8ExceptionReport {
-    /// Script-origin taint supplied by V8, retained until web-facing reporting.
+    /// HTML script taint from native host-defined options, retained until reporting.
     pub(super) muted_errors: bool,
     pub(super) summary: String,
     pub(super) source: Option<String>,
@@ -32,6 +32,25 @@ pub(super) enum CallbackExceptionLogLevel {
 }
 
 impl V8ExceptionReport {
+    /// HTML error events conceal the details of opaque classic scripts.
+    /// Keep the original report intact for internal diagnostics.
+    pub(super) fn for_error_event(&self) -> Cow<'_, Self> {
+        if !self.muted_errors {
+            return Cow::Borrowed(self);
+        }
+        Cow::Owned(Self {
+            muted_errors: true,
+            summary: "Script error.".to_owned(),
+            source: None,
+            line: None,
+            column: None,
+            source_line: None,
+            stack: None,
+            callback_context: None,
+            exception: None,
+        })
+    }
+
     pub(super) fn formatted_error(&self, callback_kind: &str, callback_name: &str) -> String {
         let location = match (&self.source, self.line, self.column) {
             (Some(source), Some(line), Some(column)) => format!("{source}:{line}:{column}"),
@@ -161,7 +180,15 @@ pub(super) fn build_exception_report_without_stack<'s>(
         .map(|line| line.to_rust_string_lossy(scope))
         .filter(|line| !line.is_empty());
     V8ExceptionReport {
-        muted_errors: message.is_some_and(|message| message.is_opaque()),
+        // Inspector evaluations can have V8's opaque bit without being an
+        // opaque fetched classic script. Only our native fetch provenance
+        // determines HTML's muted-errors flag; source names are diagnostic.
+        muted_errors: message
+            .and_then(|message| message.get_host_defined_options(scope))
+            .and_then(|options| {
+                crate::util::script_muted_errors_from_host_defined_options(scope, options)
+            })
+            .unwrap_or(false),
         summary,
         source,
         line,
@@ -829,6 +856,66 @@ mod tests {
         DiagnosticLogLevel, LOG_STACK_MAX_BYTES, VALUE_DEBUG_SUMMARY_MAX_BYTES, bounded_log_field,
         safe_split_at, stack_log_field, truncated_to_byte_limit, v8_message_log_level,
     };
+
+    #[test]
+    fn exception_muting_uses_owned_script_provenance_instead_of_v8_opaque_bit() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Context::new(scope, Default::default());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let base_url = url::Url::parse("https://opaque-script.test/script.js").unwrap();
+
+        for (v8_opaque, owned_muted, expected_muted) in [
+            (true, None, false),
+            (true, Some(false), false),
+            (true, Some(true), true),
+            (false, Some(true), true),
+        ] {
+            for source in ["throw new Error('secret')", "throw 'secret'"] {
+                let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+                let scope = &mut try_catch.init();
+                let options = owned_muted.and_then(|muted| {
+                    crate::util::script_host_defined_options_with_fetch_metadata(
+                        scope,
+                        &base_url,
+                        &crate::module_runtime::ModuleFetchMetadata::default(),
+                        muted,
+                        None,
+                    )
+                });
+                let name =
+                    v8::String::new(scope, "https://diagnostic-label.test/script.js").unwrap();
+                let origin = v8::ScriptOrigin::new(
+                    scope,
+                    name.into(),
+                    0,
+                    0,
+                    false,
+                    -1,
+                    None,
+                    v8_opaque,
+                    false,
+                    false,
+                    options,
+                );
+                let source = v8::String::new(scope, source).unwrap();
+                let script = v8::Script::compile(scope, source, Some(&origin)).unwrap();
+                assert!(crate::script_execution::execute_compiled_script(scope, script).is_none());
+                let message = scope.message().unwrap();
+                assert_eq!(message.is_opaque(), v8_opaque);
+                let exception = scope.exception();
+                let report =
+                    super::build_exception_report_without_stack(scope, exception, Some(message));
+                assert_eq!(report.muted_errors, expected_muted);
+                assert!(report.summary.contains("secret"));
+                assert!(report.exception.is_some());
+                let exposed = report.for_error_event();
+                assert_eq!(exposed.exception.is_none(), expected_muted);
+            }
+        }
+    }
 
     #[test]
     fn bounded_log_field_borrows_values_within_the_limit() {
