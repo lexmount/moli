@@ -347,9 +347,7 @@ fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
 /// resolves the candidate because script can also remove it or move focus
 /// between publication and execution.
 pub(crate) fn post_parse_autofocus_is_pending(runtime: &JsContextHost) -> bool {
-    !runtime.autofocus_processed()
-        && runtime.active_element_handle().is_none()
-        && !runtime.autofocus_candidates().is_empty()
+    !runtime.autofocus_processed() && !runtime.autofocus_candidates().is_empty()
 }
 
 pub(crate) fn process_post_parse_autofocus(
@@ -357,7 +355,11 @@ pub(crate) fn process_post_parse_autofocus(
     runtime_ptr: *mut JsContextHost,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    if runtime.autofocus_processed() || runtime.active_element_handle().is_some() {
+    if runtime.autofocus_processed() {
+        return false;
+    }
+    if runtime.active_element_handle().is_some() {
+        unsafe { &mut *runtime_ptr }.mark_autofocus_processed();
         return false;
     }
     let Some(candidate) = first_autofocus_candidate(runtime) else {
