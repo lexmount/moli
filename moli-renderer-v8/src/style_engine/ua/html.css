@@ -253,7 +253,7 @@ h6 {
 }
 
 base, basefont, datalist, head, link, meta, noembed, noframes, param, rp,
-script, style, template, title, source {
+script, style, template, title {
   display: none;
 }
 

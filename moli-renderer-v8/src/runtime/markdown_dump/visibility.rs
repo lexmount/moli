@@ -238,20 +238,8 @@ impl<'a, D: MarkdownSource> MarkdownDom<'a, D> {
                     Dom::node_kind(dom, node),
                     NodeKind::Element("tr" | "thead" | "tbody" | "tfoot")
                 );
-            // The UA sheet hides <source>, but its media element still uses it.
-            let media_source = matches!(Dom::node_kind(dom, node), NodeKind::Element("source"))
-                && dom.parent_node(node).is_some_and(|parent| {
-                    matches!(
-                        Dom::node_kind(dom, parent),
-                        NodeKind::Element("video" | "audio")
-                    )
-                });
             if collapsed_table_part
-                || (values.display == "none"
-                    && !in_source
-                    && !media_source
-                    && !disclosure_root
-                    && !disclosure_path)
+                || (values.display == "none" && !in_source && !disclosure_root && !disclosure_path)
                 || (parent_is_disclosure_path && !disclosure_root && !disclosure_path)
                 || dom.parent_node(node).is_some_and(|parent| {
                     suppressed.contains(&parent) || hidden_contents.contains(&parent)

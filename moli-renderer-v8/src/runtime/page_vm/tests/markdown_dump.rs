@@ -583,6 +583,7 @@ async fn markdown_live_structure_and_visibility_have_exact_outputs() {
             ("<label>Volume <input type=range value=''></label> <input type=color value=''>", "Volume"),
             ("<input type=range value='abc'> <input type=color value='invalid'>", "50 #000000"),
             ("<label>Volume <input type=range value=150></label> <input type=color value='#FF0000'>", "Volume 100 #ff0000"),
+            ("<video style='display:none'><source src='/hidden.webm'></video><p>Body <source src='/stray.webm'>text</p><picture><source srcset='/p.webp'><img src='/p.png' alt='Pic'></picture>", "Body text\n\n![Pic](https://example.test/p.png)"),
             ("<video controls><source src='/a.webm'><source src='/a.mp4'>Sorry, no video.</video><audio controls><source src='/b.ogg'></audio>", "[Video](https://example.test/a.webm) [Video](https://example.test/a.mp4)\n\n[Audio](https://example.test/b.ogg)"),
             ("<div style='display:flex;flex-direction:column'><span>A</span><span>B</span></div>", "A\n\nB"),
             ("<p><span style='display:block'>A</span><span style='display:block'>B</span></p>", "A\n\nB"),
