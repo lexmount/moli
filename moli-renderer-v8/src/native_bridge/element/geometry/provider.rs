@@ -59,8 +59,8 @@ pub(crate) fn observable_geometry_batch(
     published_geometry_batch(runtime, document, batch)
 }
 
-/// Style and observer sampling never initializes layout as a side effect.
-pub(crate) fn published_geometry_batch(
+/// Style sampling never initializes layout as a side effect.
+fn published_geometry_batch(
     runtime: &PageScriptHost,
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,

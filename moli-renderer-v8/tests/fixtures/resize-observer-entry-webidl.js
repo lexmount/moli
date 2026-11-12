@@ -12,6 +12,9 @@
     const target = targetRealm.document.body.appendChild(targetRealm.document.createElement('div'));
     target.style.cssText = 'width:31px;height:17px;padding:2px;border:1px solid';
     target.getBoundingClientRect();
+    // The native fixture publishes layout explicitly so a target in a newly
+    // created frame is part of the measured tree; browsers lay out anyway.
+    await __resizeEntryChecks.publishLayout?.();
     let observer;
     try {
       const delivery = await new Promise(resolve => {

@@ -279,21 +279,13 @@ impl PageScriptHost {
     /// Every consumer shares the same recursive tree. Missing nodes or newly
     /// navigated frames in an existing tree must not refresh the whole page.
     pub(crate) fn ensure_initial_layout(&self) -> Result<(), LayoutError> {
-        self.ensure_initial_layout_for_document(self.document_handle())
-    }
-
-    /// Publishes a first layout for `document` (the page or a child frame's
-    /// Document) when none exists yet; an existing snapshot is left as is.
-    pub(crate) fn ensure_initial_layout_for_document(
-        &self,
-        document: DomHandle,
-    ) -> Result<(), LayoutError> {
         if !self.layout_policy.uses_real_layout() {
             return Ok(());
         }
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
+        let document = self.document_handle();
         if self
             .document_layout_state
             .borrow()
