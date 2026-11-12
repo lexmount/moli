@@ -805,15 +805,11 @@ pub(super) fn complete_worker_module_graph_fetch(
     let Some(request) = graph.borrow_mut().take_fetch(completion.fetch_id()) else {
         return false;
     };
-    match &completion.result {
-        Ok(source) => {
-            // The module map owns compile results even after the importing
-            // graph has failed. Waiters observe the cached native exception.
-            let _ = cache_worker_module_fetched_source(scope, &graph, &request, source);
-        }
-        Err(message) => graph
-            .borrow_mut()
-            .mark_source_fetch_failed(&request.key, message.clone()),
+    if let Ok(source) = &completion.result {
+        // The module map owns compile results even after the importing graph
+        // has failed. Load errors only reject this completion's waiters, so a
+        // later import can fetch again instead of inheriting a transient error.
+        let _ = cache_worker_module_fetched_source(scope, &graph, &request, source);
     }
     true
 }
@@ -1102,11 +1098,6 @@ fn advance_worker_dynamic_module_import(
         .map_err(|message| format!("{message} for dynamic import `{}`", job.specifier))?;
     if let Some(error) = graph.borrow().compile_error(&module_key) {
         return Err(error.into());
-    }
-    if let Some(error) = graph.borrow().source_fetch_failure(&module_key) {
-        return Err(WorkerDynamicModuleImportError::type_error(format!(
-            "Failed to dynamically import module worker dependency `{module_url}`: {error}"
-        )));
     }
     let existing_root_entry = graph.borrow().entry_for_key(&module_key);
     if job.phase == ModuleImportPhase::Source && existing_root_entry.is_some() {
@@ -1804,7 +1795,6 @@ fn worker_module_browser_request_metadata(
 struct WorkerModuleGraph {
     credentials_mode: RequestCredentialsMode,
     root_referrer_policy: Option<String>,
-    failed_source_fetches: HashMap<WorkerModuleKey, String>,
     failed_compiles: HashMap<WorkerModuleKey, WorkerBootstrapError>,
     // Fetch ownership survives failure of any individual importing graph.
     pending_fetches: HashMap<WorkerModuleKey, WorkerModuleGraphFetchRequest>,
@@ -1926,7 +1916,6 @@ impl WorkerModuleGraph {
         Self {
             credentials_mode,
             root_referrer_policy,
-            failed_source_fetches: HashMap::new(),
             failed_compiles: HashMap::new(),
             pending_fetches: HashMap::new(),
             records: Vec::new(),
@@ -1957,10 +1946,6 @@ impl WorkerModuleGraph {
 
     fn entry_for_key(&self, key: &WorkerModuleKey) -> Option<usize> {
         self.entries_by_key.get(key).copied()
-    }
-
-    fn source_fetch_failure(&self, key: &WorkerModuleKey) -> Option<String> {
-        self.failed_source_fetches.get(key).cloned()
     }
 
     fn pending_fetch_id(&self, key: &WorkerModuleKey) -> Option<WorkerModuleGraphFetchId> {
@@ -1998,10 +1983,6 @@ impl WorkerModuleGraph {
 
     fn compile_error(&self, key: &WorkerModuleKey) -> Option<Box<WorkerBootstrapError>> {
         self.failed_compiles.get(key).cloned().map(Box::new)
-    }
-
-    fn mark_source_fetch_failed(&mut self, key: &WorkerModuleKey, message: String) {
-        self.failed_source_fetches.insert(key.clone(), message);
     }
 
     fn insert(
@@ -2375,14 +2356,6 @@ fn resolve_worker_module_dependency(
         })?;
     if let Some(error) = graph.borrow().compile_error(&dependency_key) {
         return Err(error);
-    }
-    if let Some(message) = graph.borrow().source_fetch_failure(&dependency_key) {
-        return Err(Box::new(worker_bootstrap_error(
-            scope,
-            dependency_url.as_str(),
-            &message,
-            WorkerParentErrorEventKind::Event,
-        )));
     }
     let (dependency_key, dependency_source) =
         match load_worker_static_module_dependency(dependency_url, dependency_key.module_type)

@@ -103,8 +103,9 @@ impl ModuleSourceServer {
     }
 
     async fn write_bytes(mut stream: TcpStream, status: &str, mime: &str, body: &[u8]) {
+        // Test module-map reuse and retry independently of the HTTP cache.
         let head = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
             body.len()
         );
         stream.write_all(head.as_bytes()).await.unwrap();
@@ -130,6 +131,122 @@ impl Drop for ModuleSourceServer {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+#[tokio::test]
+async fn worker_module_dependency_load_failure_can_retry_from_another_graph() {
+    ensure_v8();
+    let mut server = ModuleSourceServer::start().await;
+    let mut handle = server.worker(
+        r#"
+        const results = [];
+        for (const url of ['./a.mjs', './b.mjs']) {
+            try { results.push((await import(url)).value); }
+            catch (error) { results.push(error.name); }
+        }
+        postMessage(results);
+        "#
+        .into(),
+        WorkerScriptKind::Module,
+    );
+    let graph = "export { value } from './dep.mjs';";
+    server
+        .respond("/worker/a.mjs", "200 OK", "text/javascript", graph)
+        .await;
+    server
+        .respond(
+            "/worker/dep.mjs",
+            "503 Service Unavailable",
+            "text/plain",
+            "temporary failure",
+        )
+        .await;
+    server
+        .respond("/worker/b.mjs", "200 OK", "text/javascript", graph)
+        .await;
+    let observed = tokio::select! {
+        observed = recv_post_json(&mut handle) => observed,
+        retry = server.request("/worker/dep.mjs") => {
+            ModuleSourceServer::write(retry, "200 OK", "text/javascript", "export const value = 42;").await;
+            recv_post_json(&mut handle).await
+        }
+    };
+    assert_eq!(observed, r#"["TypeError",42]"#);
+    handle.terminate_and_join();
+    server.assert_no_more_requests();
+}
+
+#[tokio::test]
+async fn worker_module_dependency_load_failure_reaches_all_waiters_then_retries() {
+    ensure_v8();
+    let mut server = ModuleSourceServer::start().await;
+    let mut handle = server.worker(
+        r#"
+        const failures = await Promise.all(['./a.mjs', './b.mjs'].map(url =>
+            import(url).then(() => 'unexpected', error => error.name)));
+        postMessage(failures);
+        try { postMessage((await import('./c.mjs')).value); }
+        catch (error) { postMessage(error.name); }
+        "#
+        .into(),
+        WorkerScriptKind::Module,
+    );
+    let (a, b) = server.request_pair("/worker/a.mjs", "/worker/b.mjs").await;
+    for (stream, marker) in [(a, "a"), (b, "b")] {
+        ModuleSourceServer::write(
+            stream,
+            "200 OK",
+            "text/javascript",
+            &format!("export {{ value }} from './dep.mjs'; import './ready-{marker}.mjs';"),
+        )
+        .await;
+    }
+    let mut dependency = None;
+    let mut markers = Vec::new();
+    for _ in 0..3 {
+        let (path, stream) = server.next_request().await;
+        match path.as_str() {
+            "/worker/dep.mjs" => assert!(dependency.replace(stream).is_none()),
+            "/worker/ready-a.mjs" | "/worker/ready-b.mjs" => {
+                markers.push(path);
+                ModuleSourceServer::write(stream, "200 OK", "text/javascript", "").await;
+            }
+            _ => panic!("unexpected module request: {path}"),
+        }
+    }
+    markers.sort();
+    assert_eq!(markers, ["/worker/ready-a.mjs", "/worker/ready-b.mjs"]);
+    // Both jobs have registered their dependency waiter before starting the
+    // marker fetches, so this failure must reach both without another request.
+    ModuleSourceServer::write(
+        dependency.unwrap(),
+        "503 Service Unavailable",
+        "text/plain",
+        "temporary failure",
+    )
+    .await;
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"["TypeError","TypeError"]"#
+    );
+    server
+        .respond(
+            "/worker/c.mjs",
+            "200 OK",
+            "text/javascript",
+            "export { value } from './dep.mjs';",
+        )
+        .await;
+    let observed = tokio::select! {
+        observed = recv_post_json(&mut handle) => observed,
+        retry = server.request("/worker/dep.mjs") => {
+            ModuleSourceServer::write(retry, "200 OK", "text/javascript", "export const value = 42;").await;
+            recv_post_json(&mut handle).await
+        }
+    };
+    assert_eq!(observed, "42");
+    handle.terminate_and_join();
+    server.assert_no_more_requests();
 }
 
 #[tokio::test]
@@ -362,7 +479,7 @@ async fn worker_imports_do_not_expand_an_unrelated_failed_graph() {
 }
 
 #[tokio::test]
-async fn worker_source_and_evaluation_imports_share_root_fetch_failures() {
+async fn worker_source_and_evaluation_imports_retry_load_failures_but_cache_parse_errors() {
     ensure_v8();
     for (status, body) in [("404 Not Found", "missing"), ("200 OK", "invalid wasm")] {
         for source_first in [true, false] {
@@ -372,20 +489,34 @@ async fn worker_source_and_evaluation_imports_share_root_fetch_failures() {
             } else {
                 "[import('./worker.wasm'), import.source('./worker.wasm')]"
             };
-            let mut handle = server.worker(format!(r#"
+            let mut handle = server.worker(
+                format!(
+                    r#"
                 (async () => {{
                     const results = await Promise.allSettled({imports});
-                    const again = await import.source('./worker.wasm').then(() => 'unexpected', e => e.name);
-                    postMessage([results.map(r => [r.status, r.reason.name]), again]);
+                    postMessage(results.map(r => [r.status, r.reason.name]));
+                    const again = await import.source('./worker.wasm').then(
+                        module => module instanceof WebAssembly.Module, error => error.name);
+                    postMessage(again);
                 }})().catch(e => postMessage({{error: e.name}}));
-            "#), WorkerScriptKind::Module);
+            "#
+                ),
+                WorkerScriptKind::Module,
+            );
             server
                 .respond("/worker/worker.wasm", status, "application/wasm", body)
                 .await;
             assert_eq!(
                 recv_post_json(&mut handle).await,
-                r#"[[["rejected","TypeError"],["rejected","TypeError"]],"TypeError"]"#
+                r#"[["rejected","TypeError"],["rejected","TypeError"]]"#
             );
+            let expected_retry = if status == "404 Not Found" {
+                server.wasm().await;
+                "true"
+            } else {
+                r#""TypeError""#
+            };
+            assert_eq!(recv_post_json(&mut handle).await, expected_retry);
             handle.terminate_and_join();
             server.assert_no_more_requests();
         }
