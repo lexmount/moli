@@ -587,9 +587,12 @@ pub(super) fn ax_properties(document: &NativeDom, node_id: NodeId, node: &Node) 
         NodeData::Document(own) => {
             properties.push(ax_string_property("url", own.url().as_str()));
             properties.push(ax_bool_property("focusable", "booleanOrUndefined", true));
-            // Only the page's own Document holds focus, not every frame's.
-            let focused = node_id == document.document_node_id();
-            properties.push(ax_bool_property("focused", "booleanOrUndefined", focused));
+            // Moli has no AX focus tracking yet; report the page's Document
+            // as focused and omit the property elsewhere, as Chromium does
+            // for unfocused roots.
+            if node_id == document.document_node_id() {
+                properties.push(ax_bool_property("focused", "booleanOrUndefined", true));
+            }
         }
         NodeData::Element(element) => {
             if ax_role(node) == "status" {

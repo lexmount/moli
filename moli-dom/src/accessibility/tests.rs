@@ -659,5 +659,5 @@ fn ax_child_document_root_uses_its_own_title_url_and_focus() {
         property(&properties, "url"),
         Some(json!("https://example.test/sub/child.html"))
     );
-    assert_eq!(property(&properties, "focused"), Some(json!(false)));
+    assert_eq!(property(&properties, "focused"), None);
 }
