@@ -2,6 +2,55 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn response_handle_projection_agrees_for_envelopes_and_borrowed_results() {
+    let bodies = [
+        json!({"result":{"value":{"objectId":"user"},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}),
+        json!({"result":[{"value":{"type":"object","objectId":"property","value":{"objectId":"user"}}}],"internalProperties":[{"value":{"type":"object","objectId":"internal"}}]}),
+        json!({"result":{"type":"object","deepSerializedValue":{"type":"object","value":[["k",{"type":"object","objectId":"deep"}]]}}}),
+        json!({"result":{"value":{"objectId":"extension"}}}),
+    ];
+    for body in bodies {
+        let envelope = json!({"id":1,"result":body});
+        let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
+        for depth in 0..20 {
+            let expected = raw.response_remote_object_ids(depth).unwrap();
+            assert_eq!(
+                response_remote_object_ids_in_value(&envelope, depth),
+                expected
+            );
+            assert_eq!(response_result_remote_object_ids(&body, depth), expected);
+        }
+        assert!(!raw.is_materialized());
+    }
+}
+
+#[test]
+fn response_cursor_handles_escaped_strings_and_untyped_extension_values() {
+    for wire in [
+        r#"{"id":1,"result":{"result":{"t\u0079pe":"obj\u0065ct","value":{"objectId":"user","text":"\"\\[{]}"},"object\u0049d":"real\"\\\n"},"\ud800":{"objectId":"extension"}}}"#,
+        r#"{"id":1,"result":{"result":{"value":{"text":"é𝄞\\\"{[}]","promiseObjectId":"extension"},"type":42,"errorObjectId":"error"}}}"#,
+        r#"{"id":1,"objectId":"envelope-extension","result":{"result":{"value":[{"objectId":"untyped"}],"type":{"objectId":"type-extension"}}}}"#,
+        r#"{"id":1,"result":{"result":{"value":1e400,"type":"object","objectId":"actual"},"extension":[true,null,-0.0,1e400,{"objectId":"future"}]}}"#,
+    ] {
+        let raw = InspectorJson::from_slice(wire.as_bytes()).unwrap();
+        // This numeric fixture intentionally cannot be represented as a Value.
+        if !wire.contains("1e400") && !wire.contains(r"\ud800") {
+            let parsed = serde_json::from_str::<Value>(wire).unwrap();
+            for depth in 0..20 {
+                assert_eq!(
+                    raw.response_remote_object_ids(depth).unwrap(),
+                    response_remote_object_ids_in_value(&parsed, depth)
+                );
+            }
+        }
+        let ids = raw.response_remote_object_ids(1000).unwrap();
+        assert!(!ids.iter().any(|id| id == "user"));
+        assert!(!raw.is_materialized());
+        assert_eq!(raw.to_string(), wire);
+    }
+}
+
+#[test]
 fn response_handles_skip_user_values_and_preserve_exception_and_property_handles() {
     for body in [
         r#"{"result":{"value":{"objectId":"user","nested":[{"errorObjectId":"user-error"}]},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception","value":{"objectId":"user-exception"}}}}"#,

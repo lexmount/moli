@@ -18,6 +18,18 @@ use std::{
 
 mod remote_objects;
 
+/// Borrow a parsed response envelope, using the same protocol boundaries as raw
+/// response projection. In particular, RemoteObject.value is opaque user data.
+pub fn response_remote_object_ids_in_value(value: &Value, max_depth: usize) -> Vec<String> {
+    remote_objects::collect_envelope(value, max_depth)
+}
+
+/// Borrow a success result body after its envelope has already been removed.
+/// The depth budget still includes that envelope, so both entry points agree.
+pub fn response_result_remote_object_ids(value: &Value, max_depth: usize) -> Vec<String> {
+    remote_objects::collect_result(value, max_depth)
+}
+
 #[derive(Clone)]
 pub enum InspectorJson {
     Parsed(Value),
