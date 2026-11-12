@@ -91,7 +91,16 @@ impl PendingStreamingPhaseOneContinuation {
         let mut runtime = *runtime;
         let mut input_finished = false;
         let mut observed_input = deferred_main_resource_failure.is_some();
-        if deferred_main_resource_failure.is_none() {
+        if deferred_main_resource_failure.is_none()
+            && runtime.page_vm().document_loading_was_stopped()
+        {
+            // Page.stopLoading stops the parser: input received after the stop
+            // is discarded, and `input` is dropped with this closed
+            // continuation, which cancels the rest of the body.
+            runtime.close_streaming_html_input();
+            observed_input = true;
+            input_finished = true;
+        } else if deferred_main_resource_failure.is_none() {
             while let Some(event) = input.try_next()? {
                 observed_input = true;
                 match event {
