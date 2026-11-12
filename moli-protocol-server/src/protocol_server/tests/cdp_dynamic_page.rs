@@ -4790,6 +4790,7 @@ async fn stop_loading_aborts_a_provisional_navigation() {
     let target_id = create_dynamic_target(&mut browser, 1).await;
     let mut page = connect_dynamic_page(addr, &target_id).await;
     send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    send_cdp_command(&mut page, 1, "Network.enable", None, json!({})).await;
     navigate_dynamic_page_and_wait_for_load(&mut page, 2, &format!("http://{fixture_addr}/home"))
         .await;
 
@@ -4810,18 +4811,36 @@ async fn stop_loading_aborts_a_provisional_navigation() {
         .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    let (mut navigated, mut stopped, mut stopped_loading) = (false, false, false);
+    let (mut navigated, mut stopped, mut stopped_loading, mut failed) =
+        (false, false, false, false);
     let messages = recv_until_match(&mut page, |message| {
         navigated |= message["id"] == json!(3);
         stopped |= message["id"] == json!(4);
         stopped_loading |= message["method"] == "Page.frameStoppedLoading";
-        navigated && stopped && stopped_loading
+        failed |= message["method"] == "Network.loadingFailed";
+        navigated && stopped && stopped_loading && failed
     })
     .await;
-    assert_eq!(
-        response_by_id(&messages, 3)["result"]["errorText"],
-        "net::ERR_ABORTED"
-    );
+    let navigate = response_by_id(&messages, 3);
+    assert_eq!(navigate["result"]["errorText"], "net::ERR_ABORTED");
+    let slow_request_id = messages
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["request"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/slow"))
+        })
+        .expect("the slow request is announced")["params"]["requestId"]
+        .clone();
+    let failed = messages
+        .iter()
+        .find(|message| message["method"] == "Network.loadingFailed")
+        .unwrap();
+    assert_eq!(failed["params"]["requestId"], slow_request_id, "{failed}");
+    assert_eq!(failed["params"]["type"], "Document");
+    assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
+    assert_eq!(failed["params"]["canceled"], true);
     assert!(
         !messages
             .iter()
