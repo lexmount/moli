@@ -7,7 +7,7 @@ use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::WEBGLDebugRendererInfo)]
-struct WebGlDebugRendererInfoObjectDeclaration {
+pub(super) struct WebGlDebugRendererInfoObjectDeclaration {
     #[webapi(data_property = "UNMASKED_VENDOR_WEBGL")]
     unmasked_vendor_webgl: f64,
     #[webapi(data_property = "UNMASKED_RENDERER_WEBGL")]

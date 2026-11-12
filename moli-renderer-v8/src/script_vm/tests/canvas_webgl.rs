@@ -1,4 +1,57 @@
 use super::*;
+
+#[test]
+fn webgl_drawing_capabilities_preserve_native_sizes_and_matrix_arguments() {
+    let mut vm = new_storage_test_vm("https://webgl-drawing-capabilities.test/");
+    let result = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/webgl-drawing-capabilities.js"
+        ))
+        .expect("WebGL drawing capability contract should hold");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
+fn webgl_compatibility_profile_uses_d3d11_identity_and_precision() {
+    let mut vm = new_storage_test_vm("https://webgl-compatibility-profile.test/");
+    let result = vm
+        .eval(include_str!(
+            "../../../tests/fixtures/webgl-compatibility-profile.js"
+        ))
+        .expect("WebGL identity and precision should share the compatibility profile");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
+fn webgl_basic_queries_preserve_types_extension_gates_and_errors() {
+    let mut vm = new_storage_test_vm("https://webgl-query-contract.test/");
+    let result = vm
+        .eval(include_str!("../../../tests/fixtures/webgl-queries.js"))
+        .expect("WebGL queries should preserve their types and error contracts");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
+fn webgl_extension_registry_and_context_identity_are_consistent() {
+    let mut vm = new_storage_test_vm("https://webgl-extensions.test/");
+    let result = vm
+        .eval(include_str!("../../../tests/fixtures/webgl-extensions.js"))
+        .expect("WebGL extension contract should hold on HTML and OffscreenCanvas");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
 mod text;
 
 async fn drain_canvas_image_load_event_tasks(
@@ -448,7 +501,7 @@ fn webgl_fingerprint_pipeline_methods_are_available() {
 
     assert_eq!(
         result,
-        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[8192,8192],"redBits":8,"vendor":"","version":"WebGL 1.0","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":0}"#
+        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[32767,32767],"redBits":8,"vendor":"WebKit","version":"WebGL 1.0 (OpenGL ES 2.0 Chromium)","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":1280}"#
     );
 }
 

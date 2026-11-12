@@ -1248,7 +1248,7 @@ fn webgl_supported_extensions_have_expected_shape() {
 
     assert_eq!(
         result,
-        "true|ANGLE_instanced_arrays,EXT_blend_minmax,EXT_clip_control,EXT_color_buffer_half_float,EXT_depth_clamp,EXT_disjoint_timer_query,EXT_float_blend,EXT_frag_depth,EXT_polygon_offset_clamp,EXT_shader_texture_lod,EXT_texture_compression_bptc,EXT_texture_compression_rgtc,EXT_texture_filter_anisotropic,EXT_texture_mirror_clamp_to_edge,EXT_sRGB,KHR_parallel_shader_compile,OES_element_index_uint,OES_fbo_render_mipmap,OES_standard_derivatives,OES_texture_float,OES_texture_float_linear,OES_texture_half_float,OES_texture_half_float_linear,OES_vertex_array_object,WEBGL_blend_func_extended,WEBGL_color_buffer_float,WEBGL_compressed_texture_astc,WEBGL_compressed_texture_etc,WEBGL_compressed_texture_etc1,WEBGL_compressed_texture_pvrtc,WEBGL_compressed_texture_s3tc,WEBGL_compressed_texture_s3tc_srgb,WEBGL_debug_renderer_info,WEBGL_debug_shaders,WEBGL_depth_texture,WEBGL_draw_buffers,WEBGL_lose_context,WEBGL_multi_draw,WEBGL_polygon_mode|false"
+        "true|WEBGL_debug_renderer_info,WEBGL_lose_context|false"
     );
 }
 #[test]
@@ -1299,7 +1299,7 @@ fn webgl_extension_and_parameter_methods_parse_webidl_arguments() {
 
     assert_eq!(
         result,
-        r#"{"extensionObject":true,"vendorConstantOwn":"37445:false","rendererConstantOwn":"37446:false","extensionMissing":"TypeError","extensionSymbol":"TypeError","extensionNull":"null","extensionThrow":"RangeError","parameterObject":"","parameterMissing":"TypeError","parameterSymbol":"TypeError","parameterNegative":"null","parameterWrap":"null","parameterFraction":""}"#
+        r#"{"extensionObject":true,"vendorConstantOwn":"37445:false","rendererConstantOwn":"37446:false","extensionMissing":"TypeError","extensionSymbol":"TypeError","extensionNull":"null","extensionThrow":"RangeError","parameterObject":"Google Inc. (NVIDIA)","parameterMissing":"TypeError","parameterSymbol":"TypeError","parameterNegative":"null","parameterWrap":"null","parameterFraction":"Google Inc. (NVIDIA)"}"#
     );
 }
 #[test]
