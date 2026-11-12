@@ -424,7 +424,27 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
     event_id: u64,
     request: ServiceWorkerFetchRequest,
 ) -> ServiceWorkerFetchCompletion {
+    let client_ids = crate::service_worker_runtime::ServiceWorkerFetchEventClientIds {
+        client_id: crate::runtime::service_worker_exposed_client_id(request.client_id),
+        resulting_client_id: request
+            .resulting_client_id
+            .map(crate::runtime::service_worker_exposed_client_id)
+            .unwrap_or_default(),
+    };
+    dispatch_service_worker_fetch_event_with_client_ids_for_test(
+        handle, event_id, request, client_ids,
+    )
+    .await
+}
+
+async fn dispatch_service_worker_fetch_event_with_client_ids_for_test(
+    handle: &mut WorkerHandle,
+    event_id: u64,
+    request: ServiceWorkerFetchRequest,
+    client_ids: crate::service_worker_runtime::ServiceWorkerFetchEventClientIds,
+) -> ServiceWorkerFetchCompletion {
     handle.dispatch_service_worker_fetch_event(ServiceWorkerFetchEvent {
+        client_ids,
         event_id: ServiceWorkerEventId::from_u64_for_worker(event_id),
         owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(
             ServiceWorkerVersionId::from_u64_for_test(1),
