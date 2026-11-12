@@ -1676,3 +1676,36 @@ fn selection_endpoints_follow_associated_live_range_mutations() {
         ""
     );
 }
+
+#[test]
+fn selection_tracks_associated_range_document_across_realms() {
+    let mut vm = new_storage_test_vm("https://selection-range-owner.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../../tests/fixtures/selection-range-ownership.js"
+        ))
+        .expect("associated Range mutations should update their owning Selection"),
+        ""
+    );
+}
+
+#[test]
+fn selection_syncs_all_associations_after_shadow_host_adoption() {
+    for child_first in [false, true] {
+        let mut vm = new_storage_test_vm("https://selection-range-adoption.test/");
+        vm.eval(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/selection-range-adoption.js"
+        )))
+        .unwrap();
+        let result: serde_json::Value = serde_json::from_str(
+            &vm.eval(&format!(
+                "JSON.stringify(adoptedSelectionAssociations({child_first}))"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["cases"], 40, "{result}");
+        assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    }
+}

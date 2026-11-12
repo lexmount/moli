@@ -71,7 +71,9 @@ fn selection_attribute_value<'s>(
         SelectionAttribute::Type => {
             let value = if !selection_has_range(scope, selection) {
                 "None"
-            } else if selection_is_collapsed_internal(scope, selection) {
+            } else if selection_is_collapsed_internal(scope, selection)
+                && !selection_spans_dom_roots(scope, selection)
+            {
                 "Caret"
             } else {
                 "Range"
