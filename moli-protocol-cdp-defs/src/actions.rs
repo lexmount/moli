@@ -49,6 +49,7 @@ pub enum AutofillAction {
 pub enum BrowserAction {
     GetVersion,
     GetWindowForTarget,
+    GetWindowBounds,
     SetWindowBounds,
     SetDownloadBehavior,
     CancelDownload,
