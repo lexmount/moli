@@ -86,15 +86,15 @@ the result is `undefined`. JavaScript exceptions make the command fail.
 
 ## Readiness
 
-Start with `--wait-until done`. Change or extend it only when the page exposes
+Start with `--wait done`. Change or extend it only when the page exposes
 a better completion signal:
 
-- `--wait-until domcontentloaded` or `load`: stop at the corresponding browser
+- `--wait domcontentloaded` or `load`: stop at the corresponding browser
   lifecycle event when that event is the contract.
-- `--wait-until networkidle`: wait for relevant network activity to become
+- `--wait networkidle`: wait for relevant network activity to become
   quiet on API-driven or lazy-loading pages. Avoid it when polling or streams
   keep the network busy indefinitely.
-- `--wait-until domstable`: wait for relevant DOM mutations to settle on
+- `--wait domstable`: wait for relevant DOM mutations to settle on
   client-rendered pages. Avoid it when timers, counters, or animations mutate
   the DOM continuously.
 - `--wait-selector '<css>'`: wait for a stable content element. Prefer this for
@@ -208,7 +208,7 @@ For a crawl rather than a single lookup:
 ## Request State and Policy
 
 - Add initial navigation headers with repeated `-H 'Name: Value'`.
-- Import cookie files with repeated `--cookie-file`.
+- Import cookie files with repeated `--cookie`.
 - Use `--profile-dir` when state must persist across invocations; it also
   provides the default HTTP cache location unless `--http-cache-dir` is set.
 - Use `--http-proxy`, `--http-no-proxy`, or

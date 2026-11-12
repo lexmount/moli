@@ -33,7 +33,7 @@ structure-first; enable layout only when the result needs pixels or pagination.
 2. Fetch the seed URL as Markdown with the default completion strategy:
 
    ```bash
-   moli fetch --dump markdown --wait-until done "https://example.com"
+   moli fetch --dump markdown --wait done "https://example.com"
    ```
 
 3. Check the exit status and verify that stdout contains the requested page
@@ -41,16 +41,16 @@ structure-first; enable layout only when the result needs pixels or pagination.
    the extracted content.
 4. For dynamically rendered pages, choose the completion signal that matches
    the site:
-   - Use `--wait-until networkidle` when relevant data loading finishes after
+   - Use `--wait networkidle` when relevant data loading finishes after
      network activity becomes quiet.
-   - Use `--wait-until domstable` when content is ready after DOM mutations
+   - Use `--wait domstable` when content is ready after DOM mutations
      settle.
    Avoid `networkidle` on long-polling or streaming pages, and avoid `domstable`
    when the page continuously mutates timers, counters, or animations.
 
    ```bash
-   moli fetch --dump markdown --wait-until networkidle "https://example.com/app"
-   moli fetch --dump markdown --wait-until domstable "https://example.com/feed"
+   moli fetch --dump markdown --wait networkidle "https://example.com/app"
+   moli fetch --dump markdown --wait domstable "https://example.com/feed"
    ```
 
 5. If important client-rendered content is still absent, select a page-specific
@@ -108,7 +108,7 @@ structure-first; enable layout only when the result needs pixels or pagination.
   authorized intranet task.
 - Keep TLS verification enabled. Do not bypass authentication, paywalls,
   CAPTCHAs, or access controls.
-- Use `--cookie-file` or `--profile-dir` only for state the user is authorized
+- Use `--cookie` or `--profile-dir` only for state the user is authorized
   to use. Never expose headers, cookies, or tokens in the response.
 - Remember that `-H/--header` applies to the initial navigation, not every
   subresource.

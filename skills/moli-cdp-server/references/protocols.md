@@ -44,7 +44,7 @@ hard-coding a `/devtools/...` path.
 - Add individual resource flags or `--resource` when visual/media assets must
   load.
 - Add `--profile-dir` for persistent storage and cookies.
-- Add `--cookie-file` to import cookies.
+- Add `--cookie` to import cookies.
 - Configure proxy and connection controls on `moli serve`.
 - Add `--block-private-networks` or `--block-cidrs` for untrusted navigation.
 - Keep loopback binding unless remote clients genuinely require exposure.
