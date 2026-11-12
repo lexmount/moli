@@ -1652,6 +1652,10 @@ impl CdpConnection {
                     .runtime_slot
                     .fail_initial_document_page_build(reason.to_owned());
             }
+            // Native teardown can be queued behind this request. Cancel it
+            // while retiring the host, rather than waiting for the owned host
+            // (and its request) to be dropped after teardown has completed.
+            target.runtime_slot.clear_document_navigation_state();
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
             let attached_session_ids = target
