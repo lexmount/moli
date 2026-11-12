@@ -76,6 +76,10 @@ impl ScriptVm {
     /// or PDF) includes what the observers write, as a browser's frame before
     /// capture would. Pages without queued observations do nothing.
     pub(crate) fn run_pending_resize_observer_frame(&mut self) {
+        // Inside a debugger pause the frame timer delivers after resume.
+        if crate::runtime::nested_main_dispatch_active() {
+            return;
+        }
         let _ = self.with_current_main_world_scope(|scope, _| {
             crate::context_bootstrap::deliver_resize_observer_frame(scope);
             Ok(())
