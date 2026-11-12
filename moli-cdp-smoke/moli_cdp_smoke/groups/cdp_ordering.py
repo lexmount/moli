@@ -641,6 +641,79 @@ async def _paused_mutation(wire: _Wire, page: _Page, is_moli: bool) -> dict[str,
             "outerReplyIndex": wire.index(outer), "value": expected}
 
 
+async def _intercepted_navigation_control(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
+    operation = wire.scenario.removeprefix("intercepted_navigation_")
+    info = await wire.call("Target.getTargetInfo", session=page.session)
+    target = (await wire.call("Target.createTarget", {
+        "url": "about:blank", "browserContextId": info["targetInfo"]["browserContextId"]
+    }))["targetId"]
+    session = (await wire.call("Target.attachToTarget", {
+        "targetId": target, "flatten": True
+    }))["sessionId"]
+    await wire.call("Target.setDiscoverTargets", {"discover": True})
+    await wire.call("Page.enable", session=session)
+    await wire.call("Page.setLifecycleEventsEnabled", {"enabled": True}, session)
+    start = len(wire.messages)
+    loaded = await wire.call("Page.navigate", {"url": page.url}, session)
+    await wire.until(lambda m: m.get("sessionId") == session
+                     and m.get("method") == "Page.lifecycleEvent"
+                     and m["params"].get("loaderId") == loaded["loaderId"]
+                     and m["params"].get("name") == "load", "control fixture loaded", after=start)
+    await wire.evaluate(session, "globalThis.__oldDocument = 73")
+    await wire.call("Fetch.enable", {"patterns": [{
+        "urlPattern": "*scheduler-held*", "requestStage": "Request"
+    }]}, session)
+    start = len(wire.messages)
+    navigation = await wire.send("Page.navigate", {
+        "url": f"{page.url}?scheduler-held={operation}"
+    }, session)
+    paused = await wire.until(lambda m: m.get("sessionId") == session
+                              and m.get("method") == "Fetch.requestPaused"
+                              and "scheduler-held" in m["params"]["request"]["url"],
+                              "navigation intercepted before the request", after=start)
+    if wire.has_response(navigation):
+        raise SmokeError("intercepted navigation settled before the control operation")
+    if operation in ("page_close", "target_close"):
+        if operation == "page_close":
+            await wire.call("Page.close", session=session)
+        else:
+            assert_equal((await wire.call("Target.closeTarget", {"targetId": target}))["success"],
+                         True, "target close accepted")
+        await wire.until(lambda m: m.get("method") == "Target.targetDestroyed"
+                         and m["params"]["targetId"] == target,
+                         "target destroyed without releasing interception", after=start)
+    elif operation == "replace":
+        replacement = await wire.call("Page.navigate", {
+            "url": f"{page.url}?replacement={operation}"
+        }, session)
+        if replacement.get("errorText"):
+            raise SmokeError(f"replacement navigation failed: {replacement!r}")
+        await wire.until(lambda m: m.get("sessionId") == session
+                         and m.get("method") == "Page.lifecycleEvent"
+                         and m["params"].get("loaderId") == replacement["loaderId"]
+                         and m["params"].get("name") == "load",
+                         "replacement loaded without releasing interception", after=start)
+        assert_equal(await wire.evaluate(session, "location.search"), "?replacement=replace",
+                     "late completion cannot restore the intercepted navigation")
+    elif operation == "stop":
+        await wire.call("Page.stopLoading", session=session)
+        await wire.response(navigation, allow_error=True)
+        assert_equal(await wire.evaluate(session, "__oldDocument"), 73,
+                     "stopping the request retains the old Document")
+    else:
+        assert_equal(operation, "independent", "known navigation control")
+        assert_equal(await wire.evaluate(page.session, "6 * 7"), 42,
+                     "independent Page executes while its sibling navigates")
+        if wire.has_response(navigation):
+            raise SmokeError("independent execution unexpectedly settled the intercepted navigation")
+        await wire.call("Fetch.continueRequest", {"requestId": paused["params"]["requestId"]}, session)
+    terminal = await wire.response(navigation, allow_error=True)
+    if operation not in ("page_close", "target_close"):
+        await wire.call("Fetch.disable", session=session)
+        await wire.call("Target.closeTarget", {"targetId": target})
+    return {"operation": operation, "navigationTerminal": terminal}
+
+
 async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[dict[str, Any]]) -> None:
     is_moli = isinstance((await discover_browser_version(endpoint)).get("Moli-Version"), str)
     scenarios = [
@@ -650,6 +723,8 @@ async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[
         ("frame_facts_during_pending_evaluation", _frame_facts_during_pending_evaluation),
         ("navigation_during_pending_evaluation", _navigation_during_pending_evaluation),
         ("download_during_pending_evaluation", _download_during_pending_evaluation),
+        *((f"intercepted_navigation_{operation}", _intercepted_navigation_control)
+          for operation in ("independent", "replace", "stop", "page_close", "target_close")),
         ("normal_pause_native_queries", _normal_pause),
         ("normal_pause_dom_agent_commands", _paused_dom_agent),
         ("instrumentation_pause_io_only", _instrumentation_pause),

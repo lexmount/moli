@@ -65,6 +65,20 @@ pub fn publish_retired_target_termination_after_command_output(
     conn.publish_page_target_termination_after_command_output(action, output);
 }
 
+/// Publishes real, Page-owned channel cleanup without installing a V8 proxy.
+/// Scheduler tests exercise its dependencies separately from Native disposal.
+pub fn publish_bidi_channel_cleanup(conn: &mut CdpConnection, group: &str) {
+    let owner = crate::conn::BidiChannelPageOwner::capture_for_owner(
+        conn,
+        crate::conn::CommandOwnerScope::capture(conn, None),
+    )
+    .expect("channel cleanup requires the fixture's current Page owner");
+    let action = crate::conn::BidiChannelOwnerAction::release_object_group(owner, group.to_owned());
+    conn.publish_protocol_work(move |sequence| {
+        ProtocolSchedulerWork::bidi_channel_owner_action(sequence, action)
+    });
+}
+
 /// Binds a synthetic Page stream to a retired protocol Page owner, allowing
 /// scheduler tests to project historical output without a live Page.
 pub fn bind_renderer_page_output_stream_to_retired_owner(
