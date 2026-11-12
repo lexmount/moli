@@ -289,6 +289,57 @@ async def run_websocket_group(state: SmokeState) -> None:
             "eventMethods": request_methods,
         },
     )
+    await _verify_websocket_handshake_header_casing(state)
+
+
+async def _verify_websocket_handshake_header_casing(state: SmokeState) -> None:
+    page = state.page
+    await page.evaluate("document.cookie = 'smoke_ws_header_case=1; Path=/'")
+    try:
+        result = await page.evaluate(
+            """async () => await new Promise((resolve, reject) => {
+              const url = new URL('/ws-echo?handshakeHeaders=1', location.href);
+              url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+              const socket = new WebSocket(url.href, 'smoke');
+              let result;
+              const timer = setTimeout(() => {
+                socket.close();
+                reject(new Error('WebSocket header echo timed out'));
+              }, 5000);
+              socket.onopen = () => socket.send('headers');
+              socket.onmessage = event => {
+                result = { data: event.data, origin: location.origin, userAgent: navigator.userAgent };
+                socket.close(1000, 'done');
+              };
+              socket.onerror = () => {
+                clearTimeout(timer);
+                reject(new Error('WebSocket header echo failed'));
+              };
+              socket.onclose = event => {
+                clearTimeout(timer);
+                if (result) resolve(result);
+                else reject(new Error(`WebSocket header echo closed without a reply: ${event.code}`));
+              };
+            })"""
+        )
+        # The server echoes HTTP field names as received, before case-insensitive
+        # lookup. CDP header dictionaries cannot prove the spelling on the wire.
+        headers = json.loads(result["data"])
+        for name in ["Origin", "User-Agent", "Cookie", "Sec-WebSocket-Protocol"]:
+            assert_equal(
+                [field for field, _ in headers if field.lower() == name.lower()],
+                [name],
+                f"HTTP/1.1 WebSocket {name} spelling",
+            )
+        values = {name.lower(): value for name, value in headers}
+        assert_equal(values["origin"], result["origin"], "WebSocket Origin value")
+        assert_equal(values["user-agent"], result["userAgent"], "WebSocket User-Agent value")
+        assert_equal(values["sec-websocket-protocol"], "smoke", "WebSocket subprotocol value")
+        if "smoke_ws_header_case=1" not in values["cookie"].split("; "):
+            raise SmokeError(f"WebSocket cookie was lost: {headers!r}")
+        state.record("websocket_http1_browser_header_casing", {"headers": headers})
+    finally:
+        await page.evaluate("document.cookie = 'smoke_ws_header_case=; Max-Age=0; Path=/'")
 
 
 async def run_download_group(state: SmokeState) -> None:

@@ -1963,13 +1963,21 @@ class FixtureServer:
                 response.append("\r\n")
                 self.request.sendall("\r\n".join(response).encode("ascii"))
                 self.close_connection = True
+                return_headers = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(self.path).query
+                ).get("handshakeHeaders") == ["1"]
                 while True:
                     try:
                         opcode, payload = read_websocket_frame(self.request)
                     except Exception:
                         return
                     if opcode == 0x1:
-                        self.request.sendall(websocket_text_frame("echo:" + payload.decode("utf-8", errors="replace")))
+                        reply = (
+                            json.dumps(list(self.headers.raw_items()), separators=(",", ":"))
+                            if return_headers
+                            else "echo:" + payload.decode("utf-8", errors="replace")
+                        )
+                        self.request.sendall(websocket_text_frame(reply))
                     elif opcode == 0x8:
                         self.request.sendall(websocket_close_frame(1000, "bye"))
                         return

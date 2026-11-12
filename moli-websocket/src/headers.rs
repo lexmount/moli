@@ -34,6 +34,28 @@ pub(crate) fn header_map_entries(headers: &http::HeaderMap) -> moli_header_field
     )
 }
 
+/// HeaderMap lowercases names, but Chromium sends these browser-generated
+/// fields with this spelling on HTTP/1.1. Apply it only at the request boundary;
+/// response headers and observation dictionaries retain their existing format.
+pub(crate) fn request_header_entries(headers: &http::HeaderMap) -> moli_header_field::HeaderFields {
+    moli_header_field::HeaderFields::from_bytes(
+        headers
+            .iter()
+            .map(|(name, value)| {
+                let name = match name.as_str() {
+                    "origin" => "Origin",
+                    "user-agent" => "User-Agent",
+                    "cookie" => "Cookie",
+                    "authorization" => "Authorization",
+                    "sec-websocket-protocol" => "Sec-WebSocket-Protocol",
+                    name => name,
+                };
+                (name.to_owned(), value.as_bytes().to_vec())
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn insert_header_if_absent(
     headers: &mut http::HeaderMap,
     name: http::header::HeaderName,
