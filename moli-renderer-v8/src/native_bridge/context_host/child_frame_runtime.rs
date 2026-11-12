@@ -5,7 +5,6 @@ mod realm_state;
 mod sync;
 mod window;
 
-pub(super) use crate::context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES;
 pub(in crate::native_bridge::context_host) use window::ChildWindowProxyRecords;
 pub(crate) use window::{
     caller_can_access_window, contexts_can_script_access, cross_origin_lightweight_popup_id,
