@@ -121,12 +121,13 @@ impl PageScriptHost {
         let environment = self
             .page_script_environment()
             .ok_or_else(|| anyhow::anyhow!("auxiliary creator Page is retired"))?;
-        if exposes_opener
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        // An existing named window is chosen whether or not the opener is
+        // exposed; noopener only affects newly created windows.
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(existing) =
                 environment.named_related_window(&name, self.browsing_context_name())
         {
-            if update_existing_opener {
+            if update_existing_opener && exposes_opener {
                 existing.set_opener(Some(v8::Global::new(scope, creator)));
             }
             let (window, name) = existing
