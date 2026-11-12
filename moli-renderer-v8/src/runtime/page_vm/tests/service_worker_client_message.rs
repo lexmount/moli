@@ -180,7 +180,8 @@ navigator.serviceWorker.onmessageerror = event => {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn current_service_worker_client_without_a_dispatchable_container_is_checkpoint_only() {
+async fn service_worker_client_message_to_a_shadowed_container_without_listener_is_checkpoint_only()
+{
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -212,11 +213,17 @@ Object.defineProperty(navigator, "serviceWorker", {
 
         let task = page_vm
             .take_service_worker_client_message_body_task_for_test()
-            .expect("container-free current target should consume one bounded turn");
+            .expect("current target with a shadowed container should consume one bounded turn");
         let outcome = page_vm.apply_selected_page_service_worker_client_message_turn(task)?;
+        // An author property cannot remove the Window's associated container.
+        // Dispatching without a listener still only checkpoints this task.
         assert_eq!(
             outcome.action.target_effect,
-            PageServiceWorkerClientMessageTargetEffect::CurrentTargetProducedNoDispatchableEvent
+            PageServiceWorkerClientMessageTargetEffect::EventDispatchedToCurrentTarget {
+                event_kind: ServiceWorkerClientMessageEventKind::Message,
+                callback_effect:
+                    ServiceWorkerClientMessageCallbackEffect::CurrentTargetHadNoCallback,
+            }
         );
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
@@ -236,7 +243,7 @@ Object.defineProperty(navigator, "serviceWorker", {
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("ServiceWorker current-target no-event completion test should run");
+    .expect("ServiceWorker shadowed-container no-listener completion test should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
