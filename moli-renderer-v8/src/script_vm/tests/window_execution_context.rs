@@ -1,7 +1,16 @@
 use super::*;
 
 #[tokio::test]
+async fn first_document_retains_captured_window_identity_after_close() {
+    assert_document_retains_window_identity_after_close(false).await;
+}
+
+#[tokio::test]
 async fn replacement_document_retains_window_identity_after_target_unregistration() {
+    assert_document_retains_window_identity_after_close(true).await;
+}
+
+async fn assert_document_retains_window_identity_after_close(replacement: bool) {
     use crate::{
         network::{RendererResourceTaskRunner, context::DocumentResourceLoaderBootstrap},
         runtime::{
@@ -20,13 +29,12 @@ async fn replacement_document_retains_window_identity_after_target_unregistratio
         let runtime_owner = RendererBrowserContextRuntime::new();
         let runtime = runtime_owner.handle();
         let root_frame_id = "TID-retiring-page";
-        let name = runtime.browsing_context_name(root_frame_id);
+        let name = crate::runtime::RendererBrowsingContextName::default();
         name.set(window_name.to_owned());
         let group = name.group();
         let window = auxiliary.then(|| runtime.new_auxiliary_window());
-        if let Some(window) = &window {
-            runtime.bind_auxiliary_window(root_frame_id, window.clone());
-        }
+        let identity =
+            crate::runtime::RendererPageWindowIdentity::new(name.clone(), window.clone());
         let tasks = crate::page_task_queue::PageTaskQueueTestHarness::new();
         let task_sender = tasks.owner_attached_runtime_page_task_sender_for_test();
         let bootstrap = RendererIsolateHandle::new_standalone_without_owner_reservation_for_test(
@@ -43,17 +51,26 @@ async fn replacement_document_retains_window_identity_after_target_unregistratio
                     crate::PageId::new_for_testing(12346),
                 ),
             ),
+            identity.clone(),
         );
-        environment.bind_window_identity(name.clone(), window.clone());
-        // Target removal runs on the protocol owner while the renderer can
-        // still be finishing an already admitted replacement Document.
-        runtime.forget_browsing_context_name(root_frame_id);
-        runtime.close_auxiliary_window(root_frame_id);
+        // The protocol owner can unregister a Target before admitted
+        // Document work finishes. Bootstrap needs only its captured identity.
+        environment.close_browsing_context();
+        if let Some(window) = &window {
+            window.close();
+        }
         let loader =
             ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
         let document = DomHost::from_dom(NativeDom::new(
             Url::parse("https://retiring-page.test/replacement").unwrap(),
         ));
+        let document_bootstrap = if replacement {
+            environment
+                .bootstrap_replacement_document_isolate()
+                .expect("replacement isolate")
+        } else {
+            bootstrap.with_renderer_page_script_environment(environment.clone())
+        };
         let mut vm = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             document,
             &Default::default(),
@@ -65,8 +82,9 @@ async fn replacement_document_retains_window_identity_after_target_unregistratio
                 RendererResourceTaskRunner::from_current_tokio().unwrap(),
             ),
             runtime,
+            identity,
             Default::default(),
-            bootstrap.with_renderer_page_script_environment(environment),
+            document_bootstrap,
             &[],
             crate::runtime::new_shared_renderer_backend_node_registry(),
             Some(root_frame_id.to_owned()),
@@ -78,6 +96,7 @@ async fn replacement_document_retains_window_identity_after_target_unregistratio
         .finish()
         .expect("replacement ownership");
 
+        assert!(vm._context_host.borrow().browsing_context_is_closed());
         assert_eq!(*vm._context_host.borrow().browsing_context_name(), name);
         assert_eq!(
             vm._context_host.borrow().browsing_context_name().group(),
@@ -1781,12 +1800,14 @@ fn renderer_output_settlement_records_contexts_without_materializing_ordinary_me
         ));
     // Bind a real journal to this standalone VM to exercise settlement,
     // independently of Page-owner admission and scheduler residence.
+    let window_identity = vm.page_window_identity();
     vm.renderer_page_script_environment = Some(super::super::RendererPageScriptEnvironment::new(
         12345,
         vm.renderer_document_isolate.clone(),
         vm.page_inspector.isolate_backend_handle(),
         crate::page_task_queue::PageRuntimeTaskSource::new(None),
         journal,
+        window_identity,
     ));
     let raw = format!(
         r#"{{"method":"Debugger.scriptParsed","params":{{"sourceMapURL":"{}","text":"\ud800"}}}}"#,

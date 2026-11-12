@@ -114,8 +114,11 @@ impl PageScriptHost {
         &mut self,
         environment: &crate::script_vm::RendererPageScriptEnvironment,
     ) {
-        environment
-            .bind_window_identity(self.browsing_context_name.clone(), self.auxiliary_window());
+        assert_eq!(
+            environment.window_identity(),
+            &self.window_identity,
+            "a Document must retain its Page window identity"
+        );
         self.page_script_environment = Some(environment.downgrade());
     }
 
@@ -128,20 +131,24 @@ impl PageScriptHost {
         self.page_script_environment.as_ref()?.upgrade()
     }
 
-    pub(crate) fn bind_auxiliary_window(
+    #[cfg(test)]
+    pub(crate) fn bind_auxiliary_window_for_test(
         &mut self,
         window: Option<crate::runtime::RendererAuxiliaryWindow>,
     ) {
-        self.auxiliary_window = window;
+        self.window_identity = crate::runtime::RendererPageWindowIdentity::new(
+            self.window_identity.name().clone(),
+            window,
+        );
     }
 
     pub(crate) fn auxiliary_window(&self) -> Option<crate::runtime::RendererAuxiliaryWindow> {
-        self.auxiliary_window.clone()
+        self.window_identity.auxiliary_window().cloned()
     }
 
     pub(crate) fn browsing_context_is_closed(&self) -> bool {
-        self.auxiliary_window
-            .as_ref()
+        self.window_identity
+            .auxiliary_window()
             .is_some_and(|window| window.is_closed())
             || self
                 .page_script_environment
@@ -164,15 +171,12 @@ impl PageScriptHost {
         }
     }
 
-    pub(crate) fn browsing_context_name(&self) -> &crate::runtime::RendererBrowsingContextName {
-        &self.browsing_context_name
+    pub(crate) fn window_identity(&self) -> &crate::runtime::RendererPageWindowIdentity {
+        &self.window_identity
     }
 
-    pub(crate) fn bind_browsing_context_name(
-        &mut self,
-        name: crate::runtime::RendererBrowsingContextName,
-    ) {
-        self.browsing_context_name = name;
+    pub(crate) fn browsing_context_name(&self) -> &crate::runtime::RendererBrowsingContextName {
+        self.window_identity.name()
     }
 
     pub(crate) fn capture_node_creation_stack_trace(
@@ -304,6 +308,7 @@ impl PageScriptHost {
         top_level_navigation_handoff_tx: crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
         service_worker_task_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
         browser_context_runtime: RendererBrowserContextRuntime,
+        window_identity: crate::runtime::RendererPageWindowIdentity,
         javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
         page_context_cancel_rx: RendererPageContextCancelReceiver,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
@@ -526,8 +531,7 @@ impl PageScriptHost {
             next_child_window_event_registration_id: 0,
             event_callbacks: Default::default(),
             browser_context_runtime,
-            browsing_context_name: Default::default(),
-            auxiliary_window: None,
+            window_identity,
             page_script_environment: None,
             top_level_navigation_handoff_tx,
             service_worker_task_tx,

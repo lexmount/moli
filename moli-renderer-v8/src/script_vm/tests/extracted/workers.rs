@@ -99,7 +99,7 @@ async fn service_worker_register_after_auxiliary_page_close_settles_without_admi
         .new_auxiliary_window();
     vm._context_host
         .borrow_mut()
-        .bind_auxiliary_window(Some(auxiliary_window));
+        .bind_auxiliary_window_for_test(Some(auxiliary_window));
     assert_eq!(
         vm.eval(
             r#"
@@ -148,7 +148,7 @@ async fn service_worker_register_during_active_auxiliary_beforeunload_keeps_requ
         .new_auxiliary_window();
     vm._context_host
         .borrow_mut()
-        .bind_auxiliary_window(Some(auxiliary_window));
+        .bind_auxiliary_window_for_test(Some(auxiliary_window));
     assert_eq!(
         vm.eval(
             r#"

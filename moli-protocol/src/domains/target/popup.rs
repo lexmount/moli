@@ -351,6 +351,15 @@ pub(crate) fn prepare_popup_target(
                 .map(|target| target.window_id)
                 .unwrap_or_else(|| browser_context.page_targets.default_window_id())
         };
+        let name = browsing_context_name.unwrap_or_else(|| {
+            let name = moli_core::page::RendererBrowsingContextName::default();
+            name.set(
+                BrowserContext::reusable_window_open_target_name(&target_name).unwrap_or_default(),
+            );
+            name
+        });
+        let window_identity =
+            moli_core::page::RendererPageWindowIdentity::new(name, auxiliary_window);
         browser_context.stage_popup_background_target(
             target_id.clone(),
             auto_attached_background_session_id.clone(),
@@ -361,6 +370,7 @@ pub(crate) fn prepare_popup_target(
             initial_empty_document_storage_key,
             pending_auxiliary_page,
             window_id,
+            window_identity,
         );
         let history = &mut browser_context
             .page_target_mut(&target_id)
@@ -378,16 +388,6 @@ pub(crate) fn prepare_popup_target(
                 opener.frame_id,
                 can_access_opener,
             );
-        }
-        if let Some(name) = browsing_context_name {
-            browser_context.bind_target_browsing_context_name(&target_id, name);
-        } else {
-            browser_context.remember_target_window_name(&target_name, &target_id);
-        }
-        if let Some(window) = auxiliary_window {
-            browser_context
-                .renderer_runtime()
-                .bind_auxiliary_window(&target_id, window);
         }
         browser_context.remember_target_popup_id(popup_id, &target_id);
         browser_context

@@ -1721,6 +1721,27 @@ async fn navigation_engine_keeps_network_runtime_when_web_storage_changes() -> R
         .await?
         .page;
 
+    first_page
+        .evaluate_runtime_expression_async("window.name = 'first-only'")
+        .await?;
+    assert_eq!(
+        second_page
+            .evaluate_runtime_expression_async("window.name")
+            .await?,
+        serde_json::json!({"type": "string", "value": ""}),
+        "independent Pages built by one engine must not share window.name",
+    );
+    second_page
+        .evaluate_runtime_expression_async("window.name = 'second-only'")
+        .await?;
+    assert_eq!(
+        first_page
+            .evaluate_runtime_expression_async("window.name")
+            .await?,
+        serde_json::json!({"type": "string", "value": "first-only"}),
+        "renaming the second Page must not mutate the first Page",
+    );
+
     assert_eq!(
         engine
             .resource_request_client()

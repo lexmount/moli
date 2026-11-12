@@ -725,6 +725,7 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
         local_executor,
         &loader,
         &PageVmEnvConfig {
+            window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,
@@ -1013,6 +1014,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+            window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
@@ -1189,6 +1191,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
                 local_executor,
                 loader,
                 &PageVmEnvConfig {
+            window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
@@ -1787,6 +1790,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
             local_executor,
             &loader,
             &PageVmEnvConfig {
+                window_identity: Default::default(),
                 root_frame_id: None,
                 main_document_commit: None,
                 top_level_storage_key: None,

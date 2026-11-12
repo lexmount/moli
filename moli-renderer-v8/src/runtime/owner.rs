@@ -128,6 +128,7 @@ pub struct RendererPreparedDocumentCommitConfiguration {
 
 #[derive(Debug)]
 pub struct RendererCreateHtmlPageRequest {
+    pub window_identity: super::RendererPageWindowIdentity,
     pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     /// Exact owner-local Page identity reserved before this request is queued.
     ///
@@ -177,6 +178,7 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub window_identity: super::RendererPageWindowIdentity,
     pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub(super) document_replacement:
         Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,

@@ -1072,6 +1072,8 @@ async fn execute_page_owned_work_on_script_execution_lane(
 /// environment setup does not grow owner-loop wiring fields.
 #[derive(Clone)]
 pub(crate) struct PageVmEnvConfig {
+    /// Creation input for a new Page. Replacements use the existing Page identity.
+    pub(crate) window_identity: super::RendererPageWindowIdentity,
     pub(crate) root_frame_id: Option<String>,
     pub(crate) main_document_commit: Option<super::RendererMainDocumentCommit>,
     pub(crate) top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
@@ -1230,6 +1232,7 @@ impl Default for PageVmRuntimeHooks {
 }
 
 struct PageVmRendererDocumentIsolateBootstrap {
+    window_identity: super::RendererPageWindowIdentity,
     renderer_document_isolate_bootstrap: RendererDocumentIsolateBootstrap,
 }
 
@@ -1502,6 +1505,7 @@ impl PageVmRuntimeHooks {
     fn create_renderer_document_isolate_bootstrap(
         &mut self,
         page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,
+        window_identity: &super::RendererPageWindowIdentity,
     ) -> Result<PageVmRendererDocumentIsolateBootstrap> {
         if let Some(prepared) = self.prepared_renderer_document_isolate_bootstrap.take() {
             let bootstrap = prepared.borrow_mut().take().ok_or_else(|| {
@@ -1519,6 +1523,7 @@ impl PageVmRuntimeHooks {
                 "prepared renderer document isolate did not retain its Page runtime task source"
             );
             return Ok(PageVmRendererDocumentIsolateBootstrap {
+                window_identity: environment.window_identity().clone(),
                 renderer_document_isolate_bootstrap: bootstrap,
             });
         }
@@ -1535,6 +1540,7 @@ impl PageVmRuntimeHooks {
             let renderer_document_isolate_bootstrap =
                 environment.bootstrap_replacement_document_isolate()?;
             return Ok(PageVmRendererDocumentIsolateBootstrap {
+                window_identity: environment.window_identity().clone(),
                 renderer_document_isolate_bootstrap,
             });
         }
@@ -1543,12 +1549,22 @@ impl PageVmRuntimeHooks {
             &self.renderer_document_isolate_mode,
         ) {
             (Some(allocator), _) => {
-                let (renderer_document_isolate_bootstrap, reservation) =
-                    allocator.reserve_renderer_document_isolate(page_runtime_task_source)?;
+                let (renderer_document_isolate_bootstrap, reservation) = allocator
+                    .reserve_renderer_document_isolate(
+                        page_runtime_task_source,
+                        window_identity.clone(),
+                    )?;
                 self.renderer_page_script_environment =
                     renderer_document_isolate_bootstrap.renderer_page_script_environment();
                 self.renderer_document_isolate_reservation = Some(reservation);
+                let window_identity = self
+                    .renderer_page_script_environment
+                    .as_ref()
+                    .expect("an owner reservation provides a complete Page environment")
+                    .window_identity()
+                    .clone();
                 Ok(PageVmRendererDocumentIsolateBootstrap {
+                    window_identity,
                     renderer_document_isolate_bootstrap,
                 })
             }
@@ -1572,6 +1588,7 @@ impl PageVmRuntimeHooks {
                     )
                 });
                 Ok(PageVmRendererDocumentIsolateBootstrap {
+                    window_identity: window_identity.clone(),
                     renderer_document_isolate_bootstrap: renderer_document_isolate_bootstrap?,
                 })
             }
@@ -4320,8 +4337,10 @@ impl PageVm {
         let page_task_queue =
             PageTaskQueue::new_with_page_runtime_task_source(page_runtime_task_source.clone());
         let page_vm_isolate_bootstrap = match runtime_hooks
-            .create_renderer_document_isolate_bootstrap(page_runtime_task_source.clone())
-        {
+            .create_renderer_document_isolate_bootstrap(
+                page_runtime_task_source.clone(),
+                &env.window_identity,
+            ) {
             Ok(result) => result,
             Err(error) => return Err(Box::new((error, bootstrap_document))),
         };
@@ -4373,6 +4392,7 @@ impl PageVm {
             document_lifecycle_identity.document,
         );
         let PageVmRendererDocumentIsolateBootstrap {
+            window_identity,
             renderer_document_isolate_bootstrap,
         } = page_vm_isolate_bootstrap;
         let inherited_env = renderer_document_isolate_bootstrap
@@ -4417,6 +4437,7 @@ impl PageVm {
             resource_completion_sender,
             initial_document_loader_bootstrap,
             runtime_hooks.browser_context_runtime.clone(),
+            window_identity,
             runtime_hooks.javascript_dialog_runtime.clone(),
             renderer_document_isolate_bootstrap,
             &env.runtime_inspector_session_restore_snapshots,

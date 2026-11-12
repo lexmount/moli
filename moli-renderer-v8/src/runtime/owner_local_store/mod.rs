@@ -684,6 +684,7 @@ impl RendererDocumentIsolateAllocator {
     pub(crate) fn reserve_renderer_document_isolate(
         &self,
         page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,
+        window_identity: super::RendererPageWindowIdentity,
     ) -> Result<(
         RendererDocumentIsolateBootstrap,
         RendererDocumentIsolateReservation,
@@ -692,6 +693,7 @@ impl RendererDocumentIsolateAllocator {
             &self.owner,
             self.page_id,
             page_runtime_task_source,
+            window_identity,
         )
     }
 }
@@ -742,6 +744,7 @@ impl RendererOwnerLocalStoreSession<'_> {
         owner: &RendererOwnerLocalContext,
         page_id: PageId,
         page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,
+        window_identity: super::RendererPageWindowIdentity,
     ) -> Result<(
         RendererDocumentIsolateBootstrap,
         RendererDocumentIsolateReservation,
@@ -750,6 +753,7 @@ impl RendererOwnerLocalStoreSession<'_> {
             owner,
             page_id,
             page_runtime_task_source,
+            window_identity,
         )
     }
 
@@ -1205,6 +1209,7 @@ impl RendererOwnerLocalStore {
         owner: &RendererOwnerLocalContext,
         page_id: PageId,
         page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,
+        window_identity: super::RendererPageWindowIdentity,
     ) -> Result<(
         RendererDocumentIsolateBootstrap,
         RendererDocumentIsolateReservation,
@@ -1304,6 +1309,7 @@ impl RendererOwnerLocalStore {
             bootstrap.inspector_isolate_backend_handle(),
             page_runtime_task_source,
             output_journal.clone(),
+            window_identity,
         );
         page_script_environment
             .bind_auxiliary_allocator(RendererAuxiliaryPageAllocator::new(owner.clone(), page_id));

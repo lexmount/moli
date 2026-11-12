@@ -663,6 +663,75 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
 }
 
 #[tokio::test]
+async fn buffered_navigation_builds_keep_the_target_window_identity() {
+    for network_response in [false, true] {
+        let mut conn = CdpConnection::new();
+        let url = Url::parse("https://window-identity.test/page").unwrap();
+        let mut context = BrowserContext::new_with_page_for_test("BID-identity", "TID-identity");
+        context.set_target_url(url.to_string());
+        let name = context
+            .active_page_target()
+            .window_identity()
+            .name()
+            .clone();
+        name.set("accepted-target".to_owned());
+        conn.install_browser_context_fixture_for_test(context);
+
+        let html = "<!doctype html><title>target identity</title>".to_owned();
+        let mut navigation = if network_response {
+            let response = moli_core::page::NavigationResponse::from_text_body(
+                url.clone(),
+                200,
+                Vec::new(),
+                html,
+            );
+            conn.build_navigation_from_network_response_async(
+                url,
+                "GET".to_owned(),
+                Vec::new().into(),
+                moli_fetch::NetworkFetchResult::without_request_observation(response),
+            )
+            .await
+            .expect("buffered network response")
+        } else {
+            conn.build_loaded_navigation_from_buffered_response_async(
+                url,
+                "GET".to_owned(),
+                Vec::new().into(),
+                200,
+                Vec::new(),
+                html,
+            )
+            .await
+            .expect("synthetic buffered response")
+        };
+        assert_eq!(
+            navigation
+                .page
+                .evaluate_runtime_expression_async("window.name")
+                .await
+                .unwrap(),
+            serde_json::json!({"type": "string", "value": "accepted-target"}),
+            "Document must receive its accepted Target identity (network_response={network_response})",
+        );
+        navigation
+            .page
+            .evaluate_runtime_expression_async("window.name = 'updated-by-document'")
+            .await
+            .unwrap();
+        assert_eq!(name.get(), "updated-by-document");
+        assert_eq!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .target_id_for_browsing_context_name(&name),
+            Some("TID-identity"),
+        );
+        navigation.page.close_async().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn rebuild_buffered_response_preserving_request_report_avoids_second_access_touch() {
     let mut conn = CdpConnection::new();
     let requested_url = Url::parse("https://example.com/app/index.html").unwrap();

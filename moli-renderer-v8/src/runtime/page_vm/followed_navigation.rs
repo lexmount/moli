@@ -1410,6 +1410,7 @@ impl PageVm {
 
     fn followed_location_navigation_env(&self) -> PageVmEnvConfig {
         PageVmEnvConfig {
+            window_identity: self.vm().page_window_identity(),
             main_document_commit: None,
             web_storage: self.vm().web_storage_handles(),
             document_start_scripts: self.document_start_scripts.clone(),

@@ -26,7 +26,9 @@ mod service_workers;
 mod shared_workers;
 mod window_name;
 pub use auxiliary_window::{RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow};
-pub use window_name::{RendererBrowsingContextGroup, RendererBrowsingContextName};
+pub use window_name::{
+    RendererBrowsingContextGroup, RendererBrowsingContextName, RendererPageWindowIdentity,
+};
 
 static NEXT_RENDERER_STORAGE_PARTITION_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -195,8 +197,6 @@ struct RendererBrowserContextRuntimeInner {
     // Commit style and representations together, independently of any page's
     // V8 objects, so other pages can read a coherent snapshot in their own realm.
     clipboard_snapshot: Mutex<ClipboardSnapshot>,
-    window_names: Mutex<HashMap<String, RendererBrowsingContextName>>,
-    auxiliary_windows: Mutex<HashMap<String, RendererAuxiliaryWindow>>,
     next_auxiliary_window_id: AtomicU64,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
@@ -594,8 +594,6 @@ impl RendererBrowserContextRuntime {
                 debugger_enabled,
                 id,
                 clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
-                window_names: Mutex::new(HashMap::new()),
-                auxiliary_windows: Mutex::new(HashMap::new()),
                 next_auxiliary_window_id: AtomicU64::new(1),
                 message_port_registry,
                 broadcast_channel_registry,
@@ -630,55 +628,6 @@ impl RendererBrowserContextRuntime {
                 .fetch_add(1, Ordering::Relaxed),
             sandbox,
         )
-    }
-
-    pub fn bind_auxiliary_window(&self, root_frame_id: &str, window: RendererAuxiliaryWindow) {
-        let mut windows = self.inner.auxiliary_windows.lock();
-        assert!(
-            windows.iter().all(|(frame_id, existing)| {
-                frame_id == root_frame_id || existing.id() != window.id()
-            }),
-            "an auxiliary window must not bind to two live root frames"
-        );
-        windows.insert(root_frame_id.to_owned(), window);
-    }
-
-    pub fn auxiliary_window(&self, root_frame_id: &str) -> Option<RendererAuxiliaryWindow> {
-        self.inner
-            .auxiliary_windows
-            .lock()
-            .get(root_frame_id)
-            .cloned()
-    }
-
-    pub fn close_auxiliary_window(&self, root_frame_id: &str) {
-        if let Some(window) = self.inner.auxiliary_windows.lock().remove(root_frame_id) {
-            window.close();
-        }
-    }
-
-    pub fn browsing_context_name(&self, root_frame_id: &str) -> RendererBrowsingContextName {
-        self.inner
-            .window_names
-            .lock()
-            .entry(root_frame_id.to_owned())
-            .or_default()
-            .clone()
-    }
-
-    pub fn bind_browsing_context_name(
-        &self,
-        root_frame_id: &str,
-        name: RendererBrowsingContextName,
-    ) {
-        self.inner
-            .window_names
-            .lock()
-            .insert(root_frame_id.to_owned(), name);
-    }
-
-    pub fn forget_browsing_context_name(&self, root_frame_id: &str) {
-        self.inner.window_names.lock().remove(root_frame_id);
     }
 
     pub fn browser_resource_runtime(&self) -> crate::network::BrowserResourceRuntime {

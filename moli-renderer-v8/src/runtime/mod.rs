@@ -282,7 +282,7 @@ pub use self::browser_context_runtime::{
     DetachedParserScriptFetchContinuation, RendererAuxiliaryNavigationKind,
     RendererAuxiliaryWindow, RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererBrowsingContextGroup,
-    RendererBrowsingContextName, RendererReservedServiceWorkerClient,
+    RendererBrowsingContextName, RendererPageWindowIdentity, RendererReservedServiceWorkerClient,
     RendererServiceWorkerMainResourceFetch,
 };
 pub(crate) use self::document_lifecycle::{

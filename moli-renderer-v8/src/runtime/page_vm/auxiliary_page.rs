@@ -24,8 +24,10 @@ impl PageVm {
         let source = environment.page_runtime_task_source();
         let queue = PageTaskQueue::new_with_page_runtime_task_source(source.clone());
         let PageVmRendererDocumentIsolateBootstrap {
+            window_identity: _,
             renderer_document_isolate_bootstrap,
-        } = hooks.create_renderer_document_isolate_bootstrap(source.clone())?;
+        } = hooks
+            .create_renderer_document_isolate_bootstrap(source.clone(), &env.window_identity)?;
         let (capabilities, runtime, completion, parser, stylesheet, worker) = source
             .bound_task_producer_senders(identity.document)
             .ok_or_else(|| anyhow!("related Page has no typed producer routes"))?
