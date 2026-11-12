@@ -2449,3 +2449,82 @@ async fn synchronous_xhr_checks_intercepts_before_following_redirects() {
     );
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_synchronous_xhr_does_not_inherit_parent_interception() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let observed = hits.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/page",
+                    get(|| async { axum::response::Html("<!doctype html>ready") }),
+                )
+                .route(
+                    "/api/data",
+                    get(move || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async { "popup-body" }
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &format!("http://{addr}/page"), "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 38820,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {"patterns": [{"urlPattern": "*/api/*"}]}
+    }))
+    .await;
+    ctx.expect_result(38820, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 38821).await;
+    // Both sends run in the same JS task, before protocol adoption can update
+    // the new popup's policy. Only the parent target has enabled interception.
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 38822,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {"expression": r#"(() => {
+            const url = new URL('/api/data', location.href).href;
+            const send = target => {
+                try {
+                    const xhr = new target.XMLHttpRequest();
+                    xhr.open('GET', url, false);
+                    xhr.send();
+                    return `${xhr.status}:${xhr.responseText}`;
+                } catch (error) { return error.name; }
+            };
+            const parent = send(window);
+            const popup = window.open('about:blank');
+            if (!popup) throw new Error('popup was not created');
+            const child = send(popup);
+            popup.close();
+            return JSON.stringify({parent, child});
+        })()"#}
+    }))
+    .await;
+    let result = take_response_by_id(&mut ctx, 38822);
+    assert_eq!(
+        result["result"]["result"]["value"],
+        r#"{"parent":"NetworkError","child":"200:popup-body"}"#,
+        "{result}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "only the popup reaches /api/data"
+    );
+    server.abort();
+}
