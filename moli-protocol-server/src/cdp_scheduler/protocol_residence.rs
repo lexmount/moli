@@ -619,14 +619,26 @@ impl SchedulerQueues {
             {
                 return ProtocolSchedulerStep::Wait;
             }
-            for native in
-                self.inserted_publications(work.renderer_output_cursor, insertion.boundary.cursor())
-            {
+            for native in self.direct_inserted_publications(
+                work.renderer_output_cursor,
+                insertion.boundary.cursor(),
+            ) {
+                if ready.contains(&native.renderer_output_cursor) {
+                    continue;
+                }
                 let step = self.publication_scheduler_step(native, conn, visiting, ready);
                 if step != ProtocolSchedulerStep::CompleteReadyResidence {
                     return step;
                 }
                 ready.insert(native.renderer_output_cursor);
+            }
+            // A membership cycle can leave no direct members to visit. Every
+            // pending member must still be accounted for by this traversal.
+            if self
+                .inserted_publications(work.renderer_output_cursor, insertion.boundary.cursor())
+                .any(|native| !ready.contains(&native.renderer_output_cursor))
+            {
+                return ProtocolSchedulerStep::Wait;
             }
         }
         visiting.remove(&work.renderer_output_cursor);
@@ -659,18 +671,52 @@ impl SchedulerQueues {
         })
     }
 
+    /// Reserve a member for a nested source only when that source belongs to
+    /// this insertion. An independent source referencing a later position in
+    /// the same Native stream must not claim this source's earlier members.
+    fn direct_inserted_publications(
+        &self,
+        source: RendererOutputCursor,
+        boundary: RendererOutputCursor,
+    ) -> impl Iterator<Item = &RendererOutputPublicationWork> {
+        self.inserted_publications(source, boundary)
+            .filter(move |candidate| {
+                !self.inserted_publications(source, boundary).any(|nested| {
+                    nested.insertion.as_ref().is_some_and(|insertion| {
+                        inserted_cursor(
+                            candidate.renderer_output_cursor,
+                            nested.renderer_output_cursor,
+                            insertion.boundary.cursor(),
+                        )
+                    })
+                })
+            })
+    }
+
     pub(super) fn take_inserted_renderer_output(
         &mut self,
         source: RendererOutputCursor,
         boundary: RendererOutputCursor,
     ) -> VecDeque<ProtocolSchedulerResidence> {
-        // Use the same checkout rules as ordinary drains: a nested insertion
-        // stays in the FIFO until its own source consumes it at that position.
-        self.take_snapshot(|residence| {
+        let members = self
+            .direct_inserted_publications(source, boundary)
+            .map(|work| work.renderer_output_cursor)
+            .collect::<HashSet<_>>();
+        self.take_matching_residences(|residence| {
             matches!(residence,
             ProtocolSchedulerResidence::RendererOutputPublication(work)
-                if inserted_cursor(work.renderer_output_cursor, source, boundary))
+                if !work.projection_pending && members.contains(&work.renderer_output_cursor))
         })
+    }
+
+    pub(super) fn renderer_insertion_is_drained(
+        &self,
+        source: RendererOutputCursor,
+        boundary: RendererOutputCursor,
+    ) -> bool {
+        self.inserted_publications(source, boundary)
+            .next()
+            .is_none()
     }
 
     pub(super) fn admit_protocol_work_publish_sequence(
@@ -929,10 +975,8 @@ impl SchedulerQueues {
                     sources
                 },
             );
-        let mut snapshot = VecDeque::new();
-        let mut retained = VecDeque::with_capacity(self.protocol_residences.len());
-        while let Some(residence) = self.protocol_residences.pop_front() {
-            let pending = match &residence {
+        self.take_matching_residences(|residence| {
+            let pending = match residence {
                 ProtocolSchedulerResidence::RendererOutputPublication(work) => {
                     work.projection_pending
                         || insertions.iter().any(|(source, boundary)| {
@@ -947,7 +991,18 @@ impl SchedulerQueues {
                             || work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
                     }),
             };
-            if !pending && selected(&residence) {
+            !pending && selected(residence)
+        })
+    }
+
+    fn take_matching_residences(
+        &mut self,
+        mut selected: impl FnMut(&ProtocolSchedulerResidence) -> bool,
+    ) -> VecDeque<ProtocolSchedulerResidence> {
+        let mut snapshot = VecDeque::new();
+        let mut retained = VecDeque::with_capacity(self.protocol_residences.len());
+        while let Some(residence) = self.protocol_residences.pop_front() {
+            if selected(&residence) {
                 snapshot.push_back(residence);
             } else {
                 retained.push_back(residence);

@@ -3188,6 +3188,13 @@ impl CdpScheduler {
                     for residence in inserted {
                         out.append(self.complete_protocol_residence(residence));
                     }
+                    assert!(
+                        self.queues.renderer_insertion_is_drained(
+                            work.renderer_output_cursor,
+                            insertion.boundary.cursor(),
+                        ),
+                        "source output cannot finish before its inserted Native members"
+                    );
                     out.append(self.route_background_events_around_inflight_navigation(
                         insertion.after.into_background_events(),
                     ));
