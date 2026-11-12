@@ -2866,3 +2866,155 @@ async fn service_worker_client_focus_request_does_not_manufacture_cached_focus()
         .await
         .expect("service worker focus script server should finish");
 }
+
+#[tokio::test]
+async fn blob_iframes_inherit_parent_controller_and_preserve_client_creation_url() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/controlled/sw.js",
+            "text/javascript",
+            r#"
+            oninstall = event => event.waitUntil(skipWaiting());
+            onfetch = event => {
+                if (new URL(event.request.url).pathname === '/proof')
+                    event.respondWith(new Response('intercepted'));
+            };
+            onmessage = event => event.waitUntil((async () => {
+                const source = event.source;
+                const one = await clients.get(source.id);
+                const all = await clients.matchAll({type: 'window'});
+                source.postMessage({sourceURL: source.url, getURL: one.url,
+                    listed: all.some(client => client.id === source.id && client.url === source.url)});
+            })());
+            "#,
+        ),
+        (
+            "/controlled/parent.html",
+            "text/html",
+            r#"<!doctype html><body><script>
+            onmessage = event => {
+                const data = event.data;
+                if (data.kind !== 'make-local-frame') return;
+                const url = data.url || URL.createObjectURL(new Blob([data.html], {type:'text/html'}));
+                if (data.embedInRoot) {
+                    top.postMessage({kind:'load-in-root',url}, '*');
+                } else {
+                    const frame = document.createElement('iframe');
+                    frame.src = url;
+                    document.body.appendChild(frame);
+                }
+            };
+            </script>"#,
+        ),
+        ("/proof", "text/plain", "network"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, context) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/uncontrolled/root.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.__blobPhase = 'pending';
+        globalThis.__blobRows = [];
+        globalThis.__blobParent = null;
+        onmessage = event => {
+            if (event.data.kind === 'load-in-root') {
+                const frame = document.createElement('iframe');
+                frame.src = event.data.url;
+                document.body.appendChild(frame);
+            } else if (event.data.kind === 'blob-proof') {
+                const data = event.data;
+                __blobRows.push([data.token, data.controlled, data.body,
+                    data.sourceMatches, data.getMatches, data.listed, event.origin === location.origin].join('|'));
+            }
+        };
+        async function blobProof(proofURL, token) {
+            try {
+                const sw = navigator.serviceWorker;
+                const controller = sw.controller;
+                let metadata = null;
+                if (controller) {
+                    const reply = new Promise(resolve => { sw.onmessage = event => resolve(event.data); });
+                    controller.postMessage('client metadata');
+                    metadata = await reply;
+                }
+                const body = await (await fetch(proofURL)).text();
+                top.postMessage({kind:'blob-proof', token,
+                    controlled: !!controller && controller.scriptURL === new URL('/controlled/sw.js', proofURL).href,
+                    body, sourceMatches: !!metadata && metadata.sourceURL === location.href,
+                    getMatches: !!metadata && metadata.getURL === location.href,
+                    listed: !!metadata && metadata.listed}, '*');
+            } catch (error) {
+                top.postMessage({kind:'blob-proof', token, body:'error:'+String(error)}, '*');
+            }
+        }
+        globalThis.__runBlobProof = (token, creator, embedInRoot) => {
+            const html = '<!doctype html><script>(' + blobProof.toString() + ')(' +
+                JSON.stringify(new URL('/proof', location.href).href) + ',' + JSON.stringify(token) + ');</script>';
+            const url = creator === 'root' ? URL.createObjectURL(new Blob([html], {type:'text/html'})) : null;
+            __blobParent.contentWindow.postMessage({kind:'make-local-frame',html,url,embedInRoot}, '*');
+        };
+        (async () => {
+            const sw = navigator.serviceWorker;
+            const registration = await sw.register('/controlled/sw.js', {scope:'/controlled/'});
+            const worker = registration.installing || registration.waiting || registration.active;
+            if (worker.state !== 'activated') await new Promise(resolve => {
+                worker.addEventListener('statechange', () => { if (worker.state === 'activated') resolve(); });
+            });
+            const frame = document.createElement('iframe');
+            frame.onload = () => {
+                __blobPhase = sw.controller === null && frame.contentWindow.navigator.serviceWorker.controller !== null
+                    ? 'ready' : 'wrong initial controllers';
+            };
+            frame.src = '/controlled/parent.html';
+            document.body.appendChild(frame);
+            __blobParent = frame;
+        })().catch(error => { __blobPhase = 'error:'+String(error); });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &context,
+        &loader,
+        "String(__blobPhase)",
+        "ready",
+    )
+    .await;
+    for (index, token, creator, in_root, expected) in [
+        (
+            0,
+            "parent-created",
+            "parent",
+            false,
+            "parent-created|true|intercepted|true|true|true|true",
+        ),
+        (
+            1,
+            "root-created",
+            "root",
+            false,
+            "root-created|true|intercepted|true|true|true|true",
+        ),
+        (
+            2,
+            "uncontrolled-parent",
+            "parent",
+            true,
+            "uncontrolled-parent|false|network|false|false|false|true",
+        ),
+    ] {
+        vm.eval(&format!(
+            "__runBlobProof('{token}', '{creator}', {in_root})"
+        ))
+        .unwrap();
+        drain_service_worker_test_until_eval_equals(
+            &mut vm,
+            &context,
+            &loader,
+            &format!("String(__blobRows[{index}])"),
+            expected,
+        )
+        .await;
+    }
+    server.await.unwrap();
+}
