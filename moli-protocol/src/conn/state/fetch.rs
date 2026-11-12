@@ -1851,6 +1851,12 @@ fn network_intercept_matches_auth_required(
 }
 
 impl TargetFetchOwner {
+    pub(crate) fn subresource_response_is_paused(&self, request_id: &str) -> bool {
+        self.pending
+            .pending_subresource_fetch_responses
+            .contains_key(request_id)
+    }
+
     pub(crate) fn pending_state(&self) -> &TargetFetchState {
         &self.pending
     }
