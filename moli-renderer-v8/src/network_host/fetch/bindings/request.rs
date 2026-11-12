@@ -1,55 +1,6 @@
 use super::super::input::ParsedWindowFetchInput;
 use super::super::*;
-use crate::network_host::url_helpers::ResolveContextUrlError;
-use std::fmt;
-
-#[derive(Debug)]
-pub(super) enum FetchPrepareError {
-    DocumentExecutionContextUnavailable,
-    ResourceLoaderUnavailable,
-    ExecutionContextRetired,
-    PolicyContextUnavailable,
-    ReportContextUnavailable,
-    Url(ResolveContextUrlError),
-}
-
-impl From<ResolveContextUrlError> for FetchPrepareError {
-    fn from(error: ResolveContextUrlError) -> Self {
-        Self::Url(error)
-    }
-}
-
-impl fmt::Display for FetchPrepareError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DocumentExecutionContextUnavailable => {
-                f.write_str("fetch: Document execution context is unavailable")
-            }
-            Self::ResourceLoaderUnavailable => {
-                f.write_str("fetch: Document resource loader is unavailable")
-            }
-            Self::ExecutionContextRetired => {
-                f.write_str("fetch: Window execution context owner is retired")
-            }
-            Self::PolicyContextUnavailable => {
-                f.write_str("fetch: document policy context is unavailable")
-            }
-            Self::ReportContextUnavailable => {
-                f.write_str("fetch: document report context is unavailable")
-            }
-            Self::Url(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for FetchPrepareError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Url(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+use anyhow::Context as _;
 
 pub(super) struct PreparedWindowFetchRequest {
     pub(super) frame_id: Option<String>,
@@ -94,8 +45,10 @@ pub(super) fn prepare_window_fetch_request<'s>(
     parsed: ParsedWindowFetchInput,
     fetch_context: crate::native_bridge::WindowFetchContext,
     host: &JsContextHost,
-) -> Result<PreparedWindowFetchRequest, FetchPrepareError> {
-    let request_headers = parsed.headers;
+) -> anyhow::Result<PreparedWindowFetchRequest> {
+    // Combine duplicate values before preflight and context overrides while
+    // preserving the first field spelling for native network serialization.
+    let request_headers = combined_headers_entries(&parsed.headers);
     // Receiver capture and WebIDL conversion are complete before this pure
     // preparation stage. Never inspect `args.this()` here: doing so could bind
     // the operation to a replacement LocalWindow after an author getter
@@ -103,13 +56,13 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let request_scope = fetch_context.request_target().dispatch_scope();
     let document_target = host
         .current_window_document_task_target_for_dispatch_scope(request_scope)
-        .ok_or(FetchPrepareError::DocumentExecutionContextUnavailable)?;
+        .context("fetch: Document execution context is unavailable")?;
     let resource_loader = host
         .document_resource_loader_for_window_owner(document_target.owner())
-        .ok_or(FetchPrepareError::ResourceLoaderUnavailable)?;
+        .context("fetch: Document resource loader is unavailable")?;
     let environment = host
         .subresource_request_environment(&resource_loader, request_scope)
-        .ok_or(FetchPrepareError::ExecutionContextRetired)?;
+        .context("fetch: Window execution context owner is retired")?;
     let crate::network::context::SubresourceRequestEnvironment {
         document_url,
         base_url,
@@ -118,17 +71,18 @@ pub(super) fn prepare_window_fetch_request<'s>(
     } = environment;
     let connect_policy = host
         .document_connect_policy_snapshot_for_owner(request_scope)
-        .ok_or(FetchPrepareError::PolicyContextUnavailable)?;
+        .context("fetch: document policy context is unavailable")?;
     let csp_report_context =
         crate::network_host::capture_window_csp_report_request_context(scope, host, request_scope)
-            .ok_or(FetchPrepareError::ReportContextUnavailable)?;
+            .context("fetch: document report context is unavailable")?;
     let document_referrer_policy = effective_subresource_referrer_policy(host, request_scope);
     let policy_context = effective_subresource_policy_context(scope, host, request_scope);
     let network_partition_key = active_subresource_network_partition_key(host, request_scope);
     let cors_preflight_request_headers = request_headers.clone();
     let request_headers =
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
-    let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
+    let resolved_url = resolve_context_url(&base_url, parsed.url.as_str(), None)?;
+    parsed.url.validate_credentials(&resolved_url)?;
 
     Ok(PreparedWindowFetchRequest {
         resource_timing: crate::context_bootstrap::FetchResourceTiming::capture(

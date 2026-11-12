@@ -7,7 +7,7 @@ use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection},
+    inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection, glyph_cluster_ranges},
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
@@ -445,30 +445,6 @@ impl<'a> InlineTextPaint<'a> {
     }
 }
 
-fn glyph_cluster_ranges(
-    run: &parley::Run<'_, crate::stylo_to_parley::TextBrush>,
-) -> Vec<std::ops::Range<usize>> {
-    // Join ligature continuations in logical order first: in RTL their
-    // visual order puts the continuation *before* the glyph-bearing cluster.
-    let mut atoms: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
-    for cluster in run.clusters() {
-        if cluster.is_ligature_continuation() {
-            if let Some((range, _)) = atoms.last_mut() {
-                range.end = cluster.text_range().end;
-            }
-        } else {
-            atoms.push((cluster.text_range(), cluster.glyphs().count()));
-        }
-    }
-    if run.is_rtl() {
-        atoms.reverse();
-    }
-    atoms
-        .into_iter()
-        .flat_map(|(range, count)| std::iter::repeat_n(range, count))
-        .collect()
-}
-
 pub(super) fn project_selection<N>(
     layout_box: &LayoutBox<N>,
     transform: LayoutTransform2D,
@@ -476,43 +452,17 @@ pub(super) fn project_selection<N>(
     snapshot: &mut PaintSnapshot,
     text_range: Option<&std::ops::Range<usize>>,
 ) {
-    let Some(context) = layout_box.inline_layout.as_ref() else {
+    let Some(selection) = layout_box
+        .inline_layout
+        .as_ref()
+        .and_then(|context| context.selection.as_ref())
+    else {
         return;
     };
-    let Some(text_layout) = context.laid_out.as_ref() else {
-        return;
-    };
-    let Some(selection) = context.selection.as_ref() else {
-        return;
-    };
-    let origin_x = layout_box.final_layout.border.left + layout_box.final_layout.padding.left;
-    let origin_y = layout_box.final_layout.border.top + layout_box.final_layout.padding.top;
     match selection {
-        InlineSelection::Range(range) => {
-            let range = text_range.map_or_else(
-                || range.clone(),
-                |text| range.start.max(text.start)..range.end.min(text.end),
-            );
-            if range.is_empty() {
-                return;
-            }
-            let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
-            let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
-            Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
-                let rect = selection_rect(
-                    context,
-                    line_index,
-                    origin_x,
-                    origin_y,
-                    rect.x0 as f32,
-                    rect.y0 as f32,
-                    (rect.x1 - rect.x0).max(0.0) as f32,
-                    (rect.y1 - rect.y0).max(0.0) as f32,
-                );
-                if rect.width > 0.0
-                    && rect.height > 0.0
-                    && local_cull.is_none_or(|cull| rects_intersect(rect, cull))
-                {
+        InlineSelection::Range(_) => {
+            range_selection_rects(layout_box, text_range, |rect| {
+                if local_cull.is_none_or(|cull| rects_intersect(rect, cull)) {
                     snapshot.push_fragment(PaintFragment::Fill {
                         fill_rule: crate::PaintFillRule::NonZero,
                         shape: PaintShape::Rect(rect),
@@ -536,6 +486,50 @@ pub(super) fn project_selection<N>(
             }
         }
     }
+}
+
+/// One range geometry path for normal text, glyphless fragments, and culling.
+pub(super) fn range_selection_rects<N>(
+    layout_box: &LayoutBox<N>,
+    text_range: Option<&std::ops::Range<usize>>,
+    mut emit: impl FnMut(LayoutRect),
+) {
+    if !layout_box.style.is_visible() {
+        return;
+    }
+    let Some(context) = layout_box.inline_layout.as_ref() else {
+        return;
+    };
+    let Some(text_layout) = context.laid_out.as_ref() else {
+        return;
+    };
+    let Some(InlineSelection::Range(selected)) = context.selection.as_ref() else {
+        return;
+    };
+    let range = text_range.map_or_else(
+        || selected.clone(),
+        |text| selected.start.max(text.start)..selected.end.min(text.end),
+    );
+    if range.is_empty() {
+        return;
+    }
+    let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
+    let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
+    Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
+        let rect = selection_rect(
+            context,
+            line_index,
+            layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
+            layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
+            rect.x0 as f32,
+            rect.y0 as f32,
+            (rect.x1 - rect.x0).max(0.0) as f32,
+            (rect.y1 - rect.y0).max(0.0) as f32,
+        );
+        if rect.width > 0.0 && rect.height > 0.0 {
+            emit(rect);
+        }
+    });
 }
 
 /// Use the same caret ink for event culling and painting, independently of

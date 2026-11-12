@@ -103,9 +103,8 @@ pub(crate) use self::fetch_surface::{
 };
 pub(crate) use self::fetch_surface::{
     RESPONSE_BODY_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT, RESPONSE_OK_SLOT,
-    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT,
-    RESPONSE_TIMING_ALLOW_PASSED_SLOT, RESPONSE_TYPE_SLOT, RESPONSE_URL_SLOT,
-    is_branded_response_object,
+    RESPONSE_REDIRECTED_SLOT, RESPONSE_STATUS_SLOT, RESPONSE_STATUS_TEXT_SLOT, RESPONSE_TYPE_SLOT,
+    RESPONSE_URL_SLOT, is_branded_response_object,
 };
 pub(crate) use self::fetch_surface::{
     consume_webassembly_streaming_response_value, install_request_bindings,
@@ -118,7 +117,7 @@ pub(in crate::network_host) use self::fetch_surface::{
 };
 pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
-pub(crate) use self::headers::{HeadersGuard, filter_headers_for_guard};
+pub(crate) use self::headers::{HeadersGuard, combined_headers_entries, filter_headers_for_guard};
 pub(crate) use self::image::{
     ImageElementResourceFetchStart, ScannedImagePreloadStart,
     image_response_descriptor_from_parkable, start_image_element_resource_fetch,
@@ -130,13 +129,13 @@ pub(crate) use self::media::{
     start_media_element_resource_fetch,
 };
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
-pub(crate) use self::request::build_service_worker_request_object;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
 pub(crate) use self::request::{
     FetchArgs, parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
 pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
+pub(crate) use self::request::{RequestInputUrl, build_service_worker_request_object};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_body_already_used_error,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
@@ -155,9 +154,8 @@ pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
     FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
     MaterializedResponseHead, build_fetch_response_object_for_request_mode,
-    build_fetch_response_object_from_body_source_for_request_mode_with_filter,
-    build_fetch_response_object_from_stream_for_request_mode,
-    build_fetch_response_object_from_stream_for_request_mode_with_filter,
+    build_fetch_response_object_from_body_source_for_request_mode_with_metadata,
+    build_fetch_response_object_from_stream_for_request_mode_with_metadata,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
@@ -255,3 +253,8 @@ fn cross_origin_request_modes(
         ),
     }
 }
+
+pub(crate) use response::{fetch_response_metadata, set_response_metadata};
+
+#[cfg(test)]
+pub(crate) use response::build_fetch_response_object_from_stream_for_request_mode;

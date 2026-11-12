@@ -61,18 +61,7 @@ const STORAGE_BUCKET_CACHE_PUT_REQUEST_METHOD_SLOT: &str =
     "__moliStorageBucketCachePutRequestMethod";
 const STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT: &str =
     "__moliStorageBucketCachePutRequestHeaders";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT: &str = "__moliStorageBucketCachePutResponseType";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT: &str = "__moliStorageBucketCachePutResponseUrl";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT: &str =
-    "__moliStorageBucketCachePutResponseRedirected";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT: &str =
-    "__moliStorageBucketCachePutResponseTimingAllowPassed";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_SLOT: &str =
-    "__moliStorageBucketCachePutResponseStatus";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT: &str =
-    "__moliStorageBucketCachePutResponseStatusText";
-const STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT: &str =
-    "__moliStorageBucketCachePutResponseHeaders";
+const STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEAD_SLOT: &str = "__moliStorageBucketCachePutResponseHead";
 const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent";
 
 #[derive(WebApiObject)]
@@ -457,26 +446,8 @@ struct StorageBucketCachePutPendingDataDeclaration<'scope> {
     #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT)]
     request_headers_json: String,
 
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)]
-    response_type: String,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT)]
-    response_timing_allow_passed: bool,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT)]
-    response_url: String,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT)]
-    response_redirected: bool,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_SLOT)]
-    response_status: f64,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT)]
-    response_status_text: String,
-
-    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT)]
-    response_headers_json: String,
+    #[webapi(slot = STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEAD_SLOT)]
+    response_head_json: String,
 }
 
 enum StorageBucketCachedResponseMaterialization<'scope> {
@@ -1806,17 +1777,8 @@ fn storage_bucket_cache_put_pending_body<'s>(
         request_method: request.method,
         request_headers_json: serde_json::to_string(&request.headers)
             .unwrap_or_else(|_| "[]".to_owned()),
-        response_type: head.response_type,
-        response_timing_allow_passed: head.timing_allow_passed,
-        response_url: head
-            .final_url
-            .map(|url| url.to_string())
-            .unwrap_or_default(),
-        response_redirected: head.redirected,
-        response_status: f64::from(head.status),
-        response_status_text: head.status_text,
-        response_headers_json: serde_json::to_string(&head.headers)
-            .unwrap_or_else(|_| "[]".to_owned()),
+        response_head_json: serde_json::to_string(&head)
+            .expect("native Response head should serialize"),
     }
     .bind(scope)
     .expect("Cache.put pending body data should bind");
@@ -1873,16 +1835,7 @@ fn storage_bucket_cache_put_body_fulfilled_callback<'s>(
             return;
         }
     };
-    let response = StorageBucketCachedResponse {
-        response_type: pending.response_type,
-        timing_allow_passed: pending.response_timing_allow_passed,
-        url: pending.response_url,
-        redirected: pending.response_redirected,
-        status: pending.response_status,
-        status_text: pending.response_status_text,
-        headers: pending.response_headers,
-        body,
-    };
+    let response = pending.response_head.with_body(body);
     storage_bucket_cache_put_store_response(
         scope,
         pending.resolver,
@@ -1907,13 +1860,7 @@ struct StorageBucketCachePutPendingData<'scope> {
     resolver: v8::Local<'scope, v8::PromiseResolver>,
     handle: StorageBucketCacheHandle,
     request: CacheRequestInfo,
-    response_type: String,
-    response_timing_allow_passed: bool,
-    response_url: String,
-    response_redirected: bool,
-    response_status: u16,
-    response_status_text: String,
-    response_headers: Vec<(String, Vec<u8>)>,
+    response_head: moli_fetch_types::FetchResponseHead,
 }
 
 fn storage_bucket_cache_put_pending_data<'s>(
@@ -1948,33 +1895,12 @@ fn storage_bucket_cache_put_pending_data<'s>(
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_REQUEST_HEADERS_SLOT)?;
     let request_headers =
         serde_json::from_str::<Vec<(String, String)>>(&request_headers_json).unwrap_or_default();
-    let response_type =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_TYPE_SLOT)?;
-    let response_timing_allow_passed = data_private_bool(
+    let response_head = serde_json::from_str(&data_private_string(
         scope,
         data,
-        STORAGE_BUCKET_CACHE_PUT_RESPONSE_TIMING_ALLOW_PASSED_SLOT,
-    );
-    let response_url =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_URL_SLOT)?;
-    let response_redirected = data_private_bool(
-        scope,
-        data,
-        STORAGE_BUCKET_CACHE_PUT_RESPONSE_REDIRECTED_SLOT,
-    );
-    let response_status =
-        get_private_value(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_SLOT)
-            .and_then(|value| value.number_value(scope))
-            .map(|value| value as u16)?;
-    let response_status_text = data_private_string(
-        scope,
-        data,
-        STORAGE_BUCKET_CACHE_PUT_RESPONSE_STATUS_TEXT_SLOT,
-    )?;
-    let response_headers_json =
-        data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT)?;
-    let response_headers =
-        serde_json::from_str::<Vec<(String, Vec<u8>)>>(&response_headers_json).unwrap_or_default();
+        STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEAD_SLOT,
+    )?)
+    .ok()?;
     let bucket = StorageBucketHandle {
         identity: StorageBucketIdentity::new(&bucket_origin, &bucket_name, bucket_id),
         indexed_db_storage_key: bucket_storage_key,
@@ -1991,13 +1917,7 @@ fn storage_bucket_cache_put_pending_data<'s>(
             method: request_method,
             headers: request_headers,
         },
-        response_type,
-        response_timing_allow_passed,
-        response_url,
-        response_redirected,
-        response_status,
-        response_status_text,
-        response_headers,
+        response_head,
     })
 }
 
@@ -2009,14 +1929,6 @@ fn data_private_string<'s>(
     get_private_value(scope, data, slot)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn data_private_bool<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> bool {
-    get_private_value(scope, data, slot).is_some_and(|value| value.boolean_value(scope))
 }
 
 fn storage_bucket_cache_match_callback<'s>(
@@ -2855,19 +2767,7 @@ fn storage_bucket_cached_response_from_head_body(
     head: crate::network_host::MaterializedResponseHead,
     body: Vec<u8>,
 ) -> StorageBucketCachedResponse {
-    StorageBucketCachedResponse {
-        response_type: head.response_type,
-        timing_allow_passed: head.timing_allow_passed,
-        url: head
-            .final_url
-            .map(|url| url.to_string())
-            .unwrap_or_default(),
-        redirected: head.redirected,
-        status: head.status,
-        status_text: head.status_text,
-        headers: head.headers,
-        body,
-    }
+    head.with_body(body)
 }
 
 fn cache_request_info<'s>(
@@ -2946,62 +2846,36 @@ fn build_storage_bucket_cached_response_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     response: StorageBucketCachedResponse,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if matches!(response.response_type.as_str(), "opaque" | "opaqueredirect") {
+    let moli_fetch_types::FetchResponse { head, body } = response;
+    if !head.metadata.response_type.is_readable() {
         return crate::network_host::build_filtered_cached_response_object(
             scope,
-            &response.response_type,
-            &response.url,
-            response.body,
-            response.timing_allow_passed,
+            head.metadata,
+            body,
         );
     }
-    let body: v8::Local<'s, v8::Value> = if matches!(response.status, 204 | 205 | 304) {
+    let body: v8::Local<'s, v8::Value> = if matches!(head.status, 204 | 205 | 304) {
         v8::null(scope).into()
     } else {
-        crate::blob::array_buffer_from_bytes(scope, response.body)?.into()
+        crate::blob::array_buffer_from_bytes(scope, body)?.into()
     };
     let init = ObjectLiteralDeclaration::bind(scope);
     init.set_string_property(
         scope,
         "status",
-        v8::Integer::new(scope, response.status as i32).into(),
+        v8::Integer::new(scope, head.status as i32).into(),
     );
-    let status_text = v8_string(scope, &response.status_text)?;
+    let status_text = v8_string(scope, &head.status_text)?;
     init.set_string_property(scope, "statusText", status_text.into());
-    let headers = headers_entries_to_init_array(
-        scope,
-        &moli_fetch::headers_to_byte_strings(&response.headers),
-    );
+    let headers =
+        headers_entries_to_init_array(scope, &moli_fetch::headers_to_byte_strings(&head.headers));
     init.set_string_property(scope, "headers", headers.into());
     let global = scope.get_current_context().global(scope);
     let constructor = global
         .get(scope, v8str(scope, "Response").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     let response_obj = constructor.new_instance(scope, &[body, init.into_value()])?;
-    crate::network_host::set_response_slot_string(
-        scope,
-        response_obj,
-        crate::network_host::RESPONSE_TYPE_SLOT,
-        &response.response_type,
-    );
-    crate::network_host::set_response_slot_string(
-        scope,
-        response_obj,
-        crate::network_host::RESPONSE_URL_SLOT,
-        &response.url,
-    );
-    crate::network_host::set_response_slot_bool(
-        scope,
-        response_obj,
-        crate::network_host::RESPONSE_REDIRECTED_SLOT,
-        response.redirected,
-    );
-    crate::network_host::set_response_slot_bool(
-        scope,
-        response_obj,
-        crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
-        response.timing_allow_passed,
-    );
+    crate::network_host::set_response_metadata(scope, response_obj, &head.metadata);
     Some(response_obj)
 }
 
@@ -3063,6 +2937,7 @@ fn cache_entry_usage_bytes(
         .saturating_add(response.body.len() as u64)
         .saturating_add(
             response
+                .head
                 .headers
                 .iter()
                 .map(|(name, value)| name.len().saturating_add(value.len()) as u64)

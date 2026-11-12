@@ -2936,6 +2936,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-curl",
  "moli-dns-resolver",
+ "moli-fetch-types",
  "moli-header-field",
  "moli-http-cache",
  "moli-site",
@@ -2957,6 +2958,14 @@ dependencies = [
  "tracing",
  "url",
  "wildcard",
+]
+
+[[package]]
+name = "moli-fetch-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "url",
 ]
 
 [[package]]
@@ -3415,6 +3424,7 @@ dependencies = [
  "moli-encoding",
  "moli-encoding-detector",
  "moli-fetch",
+ "moli-fetch-types",
  "moli-file-api",
  "moli-geometry",
  "moli-history",
@@ -3582,6 +3592,7 @@ dependencies = [
  "base64 0.22.1",
  "moli-browser-profile",
  "moli-crypto",
+ "moli-fetch-types",
  "moli-header-field",
  "moli-indexeddb",
  "moli-opfs",

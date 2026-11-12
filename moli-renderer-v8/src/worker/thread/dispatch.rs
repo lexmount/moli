@@ -2630,7 +2630,7 @@ fn service_worker_respond_with_response_head_rejection(
     event_id: ServiceWorkerEventId,
     head: &MaterializedResponseHead,
 ) -> Option<String> {
-    if head.response_type != "opaque" {
+    if head.metadata.response_type != crate::types::FetchResponseType::Opaque {
         return None;
     }
     let state = get_worker_state(scope)?;
@@ -2711,31 +2711,13 @@ fn service_worker_fetch_response_from_materialized(
     head: MaterializedResponseHead,
     body: Vec<u8>,
 ) -> ServiceWorkerFetchResponse {
-    let response = head.with_body(body);
-    ServiceWorkerFetchResponse {
-        final_url: response.final_url,
-        response_type: response.response_type,
-        timing_allow_passed: response.timing_allow_passed,
-        redirected: response.redirected,
-        status: response.status,
-        status_text: response.status_text,
-        headers: response.headers,
-        body: response.body,
-    }
+    head.with_body(body)
 }
 
 fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
-    MaterializedServiceWorkerFetchResponseHead {
-        status_text: head.status_text.clone(),
-        final_url: head.final_url.clone(),
-        response_type: head.response_type.clone(),
-        timing_allow_passed: head.timing_allow_passed,
-        redirected: head.redirected,
-        status: head.status,
-        headers: head.headers.clone(),
-    }
+    head.clone()
 }
 
 fn send_service_worker_fetch_stream_started(
@@ -2924,14 +2906,15 @@ fn start_service_worker_navigation_preload_response_in_context(
         status_text: Some(started.response_head.status_text.clone()),
         final_url: started
             .response_head
-            .final_url
-            .clone()
+            .metadata
+            .final_url()
+            .cloned()
             .unwrap_or_else(|| started.request_url.clone()),
         status: started.response_head.status,
         headers: started.response_head.headers.clone(),
         request_cookie_report: None,
         cookie_set_reports: Vec::new(),
-        redirected: started.response_head.redirected,
+        redirected: started.response_head.metadata.redirected,
         redirect_chain: Vec::new(),
         from_cache: false,
         cache_state: Default::default(),
@@ -2946,6 +2929,7 @@ fn start_service_worker_navigation_preload_response_in_context(
         },
         head,
         started.body_source_id,
+        started.response_head.metadata,
     );
     let resolver = v8::Local::new(scope, resolver);
     let _ = resolver.resolve(scope, response_object.into());

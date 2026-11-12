@@ -1,5 +1,5 @@
 use super::*;
-use crate::network_host::{FetchArgumentError, convert_fetch_arguments};
+use crate::network_host::{FetchArgumentError, combined_headers_entries, convert_fetch_arguments};
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
     ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,
@@ -1963,7 +1963,8 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             metadata,
         )
     };
-    let resolved_url = resolve_context_url(base_url, &url_input, None)?;
+    let resolved_url = resolve_context_url(base_url, url_input.as_str(), None)?;
+    url_input.validate_credentials(&resolved_url)?;
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     if consumes_request_body && let Some(request_like) = request_like {
         crate::network_host::mark_request_input_body_used_for_fetch(scope, request_like);
@@ -2052,6 +2053,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
+    let request_headers = combined_headers_entries(&request_headers);
     let headers = merge_worker_request_headers(
         &extra_http_headers,
         &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
@@ -2647,25 +2649,15 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
     if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
         response_input
     {
-        let response_obj = build_fetch_response_object_from_stream_for_request_mode(
+        let response_obj = crate::network_host::build_fetch_response_object_from_stream_for_request_mode_with_metadata(
             scope,
-            &document_url,
             crate::network_host::FetchResponseRequest {
                 method: &request_method,
                 mode: request_mode,
             },
             observable_head,
             started.body_source_id,
-        );
-        crate::network_host::set_response_slot_bool(
-            scope,
-            response_obj,
-            crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
-            crate::context_bootstrap::FetchResourceTiming::allows_timing(
-                &(&document_url).into(),
-                &started.head,
-                None,
-            ),
+            started.head.fetch_metadata(&(&document_url).into(), request_mode),
         );
         let resolver = v8::Local::new(scope, &resolver);
         let _ = resolver.resolve(scope, response_obj.into());
@@ -2977,43 +2969,45 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
         Ok(response) => {
             let response_head = response.head();
             let response_filter = response.response_filter();
-            let security_validation =
-                if response_filter.is_some_and(|filter| filter.service_worker_timing.is_some()) {
-                    // respondWith has already enforced the request's response type.
-                    // Its exposed headers cannot be revalidated as a raw CORS response.
-                    Ok(())
-                } else {
-                    match &response {
-                        WorkerFetchResponse::Materialized(response)
-                        | WorkerFetchResponse::Filtered { response, .. } => {
+            let security_validation = if response_filter
+                .as_ref()
+                .is_some_and(|filter| filter.service_worker_metadata().is_some())
+            {
+                // respondWith has already enforced the request's response type.
+                // Its exposed headers cannot be revalidated as a raw CORS response.
+                Ok(())
+            } else {
+                match &response {
+                    WorkerFetchResponse::Materialized(response)
+                    | WorkerFetchResponse::Filtered { response, .. } => {
+                        validate_fetch_response_security_policy_with_body_classified(
+                            &pending.document_url,
+                            &response_head,
+                            response.body_bytes(),
+                            pending.request_mode,
+                            pending.credentials_mode,
+                            pending.policy_context,
+                        )
+                    }
+                    WorkerFetchResponse::Streamed { body, .. } => body
+                        .try_bytes()
+                        .map_err(|error| {
+                            FetchResponseSecurityViolation::Rejected(format!(
+                                "fetch: failed to read response body: {error}"
+                            ))
+                        })
+                        .and_then(|body_bytes| {
                             validate_fetch_response_security_policy_with_body_classified(
                                 &pending.document_url,
                                 &response_head,
-                                response.body_bytes(),
+                                &body_bytes,
                                 pending.request_mode,
                                 pending.credentials_mode,
                                 pending.policy_context,
                             )
-                        }
-                        WorkerFetchResponse::Streamed { body, .. } => body
-                            .try_bytes()
-                            .map_err(|error| {
-                                FetchResponseSecurityViolation::Rejected(format!(
-                                    "fetch: failed to read response body: {error}"
-                                ))
-                            })
-                            .and_then(|body_bytes| {
-                                validate_fetch_response_security_policy_with_body_classified(
-                                    &pending.document_url,
-                                    &response_head,
-                                    &body_bytes,
-                                    pending.request_mode,
-                                    pending.credentials_mode,
-                                    pending.policy_context,
-                                )
-                            }),
-                    }
-                };
+                        }),
+                }
+            };
             let opaque_response_blocked = match security_validation {
                 Ok(()) => false,
                 Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => true,
@@ -3069,17 +3063,24 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     pending.request_mode,
                     &response_head,
                     response.subresource_response_body().len(),
-                    response_filter,
+                    response_filter.as_ref(),
                 )
             };
             crate::context_bootstrap::record_resource_performance_entry(scope, entry);
-            let timing_allow_passed = !opaque_response_blocked
-                && crate::context_bootstrap::FetchResourceTiming::allows_timing(
-                    &(&pending.document_url).into(),
-                    &response_head,
-                    response_filter,
-                );
-            let filtered_headers = if response_filter.is_some_and(|filter| filter.is_readable()) {
+            let mut metadata = crate::network_host::fetch_response_metadata(
+                &(&pending.document_url).into(),
+                &response_head,
+                pending.request_mode,
+                response_filter.as_ref(),
+            );
+            if opaque_response_blocked {
+                metadata.response_type = crate::types::FetchResponseType::Opaque;
+                metadata.timing_allow_passed = false;
+            }
+            let filtered_headers = if response_filter
+                .as_ref()
+                .is_some_and(|filter| filter.is_readable())
+            {
                 response_head.headers.clone()
             } else {
                 filter_cors_exposed_response_headers(
@@ -3096,18 +3097,15 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     } else {
                         *body
                     };
-                    crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                    crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
                         scope,
-                        &pending.document_url,
                         crate::network_host::FetchResponseRequest {
                             method: &pending.request_method,
                             mode: pending.request_mode,
                         },
                         head,
                         body,
-                        opaque_response_blocked
-                            .then_some(crate::types::FetchResponseType::Opaque.into())
-                            .or(response_filter),
+                        metadata,
                     )
                 }
                 WorkerFetchResponseParts::Subresource { mut head, body } => {
@@ -3119,22 +3117,16 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     };
                     build_fetch_response_object_from_subresource_body_for_request_mode(
                         scope,
-                        &pending.document_url,
                         crate::network_host::FetchResponseRequest {
                             method: &pending.request_method,
                             mode: pending.request_mode,
                         },
                         head,
                         body,
+                        metadata,
                     )
                 }
             };
-            crate::network_host::set_response_slot_bool(
-                scope,
-                response_obj,
-                crate::network_host::RESPONSE_TIMING_ALLOW_PASSED_SLOT,
-                timing_allow_passed,
-            );
             let _ = resolver.resolve(scope, response_obj.into());
         }
         Err(message) => {

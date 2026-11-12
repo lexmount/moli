@@ -613,7 +613,7 @@ unsafe extern "C" fn window_access_check_callback(
     contexts_can_script_access(scope, accessing_context, accessed_context)
 }
 
-fn contexts_can_script_access<'s>(
+pub(crate) fn contexts_can_script_access<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     accessing_context: v8::Local<'s, v8::Context>,
     accessed_context: v8::Local<'s, v8::Context>,

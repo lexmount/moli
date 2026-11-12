@@ -125,13 +125,21 @@ fn metadata_candidates_preserve_cache_payloads_and_handle_identity_without_cloni
             usage_bytes: 1_048_576,
             request: StorageBucketCachedRequest::default(),
             response: StorageBucketCachedResponse {
-                response_type: "default".into(),
-                timing_allow_passed: true,
-                url: "https://a.test/resource".into(),
-                redirected: false,
-                status: 200,
-                status_text: "OK".into(),
-                headers: vec![],
+                head: moli_fetch_types::FetchResponseHead {
+                    metadata: moli_fetch_types::FetchResponseMetadata {
+                        response_type: moli_fetch_types::FetchResponseType::Default,
+                        timing_allow_passed: true,
+                        url_list: vec![
+                            "https://a.test/resource"
+                                .parse()
+                                .expect("valid response URL"),
+                        ],
+                        redirected: false,
+                    },
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                },
                 body: vec![17; 1_048_576],
             },
             insertion_order: 0,

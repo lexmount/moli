@@ -1006,10 +1006,10 @@ fn materialize_response_object_preserves_redirected_slot() {
             let materialized =
                 crate::network_host::materialize_response_object(scope, response.into(), "test")
                     .expect("materialized response should be accepted");
-            assert_eq!(materialized.final_url.as_ref(), Some(&final_url));
-            assert_eq!(materialized.response_type, "basic");
-            assert!(materialized.redirected);
-            assert_eq!(materialized.status, 200);
+            assert_eq!(materialized.head.metadata.final_url(), Some(&final_url));
+            assert_eq!(materialized.head.metadata.response_type.as_str(), "basic");
+            assert!(materialized.head.metadata.redirected);
+            assert_eq!(materialized.head.status, 200);
             assert_eq!(materialized.body, b"redirected-body".to_vec());
             Ok(())
         })
@@ -1025,8 +1025,6 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
             "https://response-materialize-filtered.test/",
             &loader,
         );
-        let document_url = Url::parse("https://response-materialize-filtered.test/")
-            .expect("document URL should parse");
         let final_url = Url::parse(
             "https://cross-response-materialize-filtered.test/redirect-start?x=%23#hidden",
         )
@@ -1042,9 +1040,8 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                 let scope = &mut scope.init();
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
-                let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
                     scope,
-                    &document_url,
                     crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
@@ -1060,7 +1057,7 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    Some(filter.into()),
+                    moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false },
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -1075,8 +1072,8 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                         "test",
                     )
                     .expect("filtered response head should materialize with internal URL");
-                assert_eq!(head.final_url.as_ref(), Some(&final_url));
-                assert_eq!(head.response_type, response_type);
+                assert_eq!(head.metadata.final_url(), Some(&final_url));
+                assert_eq!(head.metadata.response_type.as_str(), response_type);
                 assert_eq!(head.status, 0);
                 Ok(())
             }
@@ -1154,8 +1151,14 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                 let materialized_clone =
                     crate::network_host::materialize_response_object(scope, clone, "clone")
                         .expect("filtered response clone should preserve internal URL");
-                assert_eq!(materialized_clone.final_url.as_ref(), Some(&final_url));
-                assert_eq!(materialized_clone.response_type, response_type);
+                assert_eq!(
+                    materialized_clone.head.metadata.final_url(),
+                    Some(&final_url)
+                );
+                assert_eq!(
+                    materialized_clone.head.metadata.response_type.as_str(),
+                    response_type
+                );
 
                 let cached = global
                     .get(scope, v8str(scope, "__filteredResponseCached").into())
@@ -1163,8 +1166,14 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                 let materialized_cached =
                     crate::network_host::materialize_response_object(scope, cached, "cache")
                         .expect("cached filtered response should preserve internal URL");
-                assert_eq!(materialized_cached.final_url.as_ref(), Some(&final_url));
-                assert_eq!(materialized_cached.response_type, response_type);
+                assert_eq!(
+                    materialized_cached.head.metadata.final_url(),
+                    Some(&final_url)
+                );
+                assert_eq!(
+                    materialized_cached.head.metadata.response_type.as_str(),
+                    response_type
+                );
                 Ok(())
             })
             .expect("filtered response clone/cache should materialize");
@@ -1538,25 +1547,26 @@ fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
                             negotiated_http_version: None,
                         };
                         let id = crate::network_host::new_network_body_source_id();
+                        let metadata = head.fetch_metadata(&(&document_url).into(), request.mode);
                         let response = match source {
                             "response" => crate::network_host::build_fetch_response_object_for_request_mode(
                                 scope, &document_url, request,
                                 moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
                             ),
-                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
-                                scope, &document_url, request, head,
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_metadata(
+                                scope, request, head,
                                 moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
-                                opaque.then_some(crate::types::FetchResponseType::Opaque.into()),
+                                metadata,
                             ),
                             "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
-                                scope, &document_url, request, head,
-                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()),
+                                scope, request, head,
+                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()), metadata,
                             ),
                             "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                                 scope, &document_url, request, head, id,
                             ),
                             "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
-                                scope, &document_url, request, head, id,
+                                scope, &document_url, request, head, id, metadata,
                             ),
                             _ => unreachable!(),
                         };

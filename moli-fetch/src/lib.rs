@@ -60,6 +60,7 @@ pub use headers::{
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};
+pub use moli_fetch_types::{FetchResponseMetadata, FetchResponseType};
 pub use moli_header_field::HeaderFields as RequestHeaders;
 pub use moli_header_field::HeaderFields as ResponseHeaders;
 pub use moli_header_field::{

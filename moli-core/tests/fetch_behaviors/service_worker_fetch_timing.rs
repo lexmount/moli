@@ -65,6 +65,10 @@ async fn fetch_resource_timing_service_worker_distinguishes_synthetic_and_forwar
         ("cache-again-cors", "cors", 0),
         ("cache-again-tao", "cors", 4),
         ("cache-synthetic", "basic", 4),
+        ("forward-redirect-tao", "cors", 4),
+        ("forward-redirect-denied", "cors", 0),
+        ("cache-redirect-tao", "cors", 4),
+        ("cache-redirect-denied", "cors", 0),
     ]
     .into_iter()
     .map(|(name, response_type, size)| {
@@ -105,6 +109,7 @@ async fn serve_service_worker_timing_request(
     let path = request.split_whitespace().nth(1).context("request URL")?;
     captured.lock().push(path.to_owned());
     let mut headers = String::new();
+    let mut status = "200 OK";
     let (mime, body) = match path {
         "/sw.js" => ("text/javascript", r#"
         self.addEventListener('install',event=>event.waitUntil(self.skipWaiting()));
@@ -141,6 +146,16 @@ async fn serve_service_worker_timing_request(
                 include_str!("../../../moli-renderer-v8/tests/fixtures/service-worker-fetch-timing.js")
             ),
         ),
+        path if path.starts_with("/redirect?") => {
+            let url = url::Url::parse(&format!("http://localhost{path}"))?;
+            let target = url.query_pairs().find(|(name, _)| name == "to").context("redirect target")?.1.into_owned();
+            headers.push_str(&format!("Access-Control-Allow-Origin: *\r\nLocation: {target}\r\n"));
+            if url.query_pairs().any(|(name, value)| name == "tao" && value == "1") {
+                headers.push_str("Timing-Allow-Origin: *\r\n");
+            }
+            status = "302 Found";
+            ("text/plain", String::new())
+        }
         path if path.starts_with("/raw") => {
             headers.push_str("Access-Control-Allow-Origin: *\r\n");
             if path.contains("tao=1") {
@@ -151,6 +166,6 @@ async fn serve_service_worker_timing_request(
         path if path.starts_with("/synthetic") => ("text/plain", "unexpected-network".to_owned()),
         _ => ("text/html", "<!doctype html><body>SW timing".to_owned()),
     };
-    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{headers}Connection: close\r\n\r\n{body}",body.len()).as_bytes()).await?;
+    socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{headers}Connection: close\r\n\r\n{body}",body.len()).as_bytes()).await?;
     Ok(())
 }

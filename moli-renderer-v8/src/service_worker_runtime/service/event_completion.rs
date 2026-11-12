@@ -402,14 +402,15 @@ pub(super) fn service_worker_fetch_diagnostic_from_job_result(
         ServiceWorkerFetchResult::Response(response) => {
             crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Response {
                 final_url: response
-                    .final_url
-                    .as_ref()
+                    .head
+                    .metadata
+                    .final_url()
                     .unwrap_or(&job.request.url)
                     .as_str()
                     .to_owned(),
-                status: response.status,
-                status_text: response.status_text.clone(),
-                response_headers: response.headers.clone(),
+                status: response.head.status,
+                status_text: response.head.status_text.clone(),
+                response_headers: response.head.headers.clone(),
                 body_len: response.body.len(),
             }
         }

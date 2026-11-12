@@ -811,33 +811,14 @@ impl DocumentRuntime {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
-        let document_url = self.document_url();
-        let policies = self.document_content_security_policies_for_optional_document(
+        self.document_connect_csp_check_for_document_with_redirect_status(
             Some(self.document_handle()),
-            &self.policy_container.response_content_security_policies,
-            &self.policy_container.content_security_reporting_endpoints,
-        );
-        let enforced_violation = document_connect_policy_violation_from_document_policies(
-            policies,
-            document_url,
-            request_url,
-            redirect_status,
-            ContentSecurityPolicyDisposition::Enforce,
-        );
-        let report_only_violation = document_connect_policy_violation(
-            &self
-                .policy_container
-                .response_content_security_report_only_policies,
-            &self.policy_container.content_security_reporting_endpoints,
             self.document_url(),
+            None,
+            &self.policy_container,
             request_url,
             redirect_status,
-            ContentSecurityPolicyDisposition::Report,
-        );
-        DocumentContentSecurityPolicyCheck {
-            report_only_violation,
-            enforced_violation,
-        }
+        )
     }
 
     pub(crate) fn module_fetch_csp_context(
@@ -1010,6 +991,7 @@ impl DocumentRuntime {
         let enforced_violation = document_url_policy_violation_from_document_policies(
             policies,
             document_url,
+            None,
             request_url,
             kind.resource_kind(),
             ContentSecurityPolicyRedirectStatus::NoRedirect,
@@ -1393,38 +1375,31 @@ impl DocumentRuntime {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn document_connect_csp_check_for_document_with_redirect_status(
         &self,
         document_handle: Option<DomHandle>,
         document_url: &Url,
         document_origin: Option<&Url>,
-        response_policies: &[ContentSecurityPolicy],
-        response_report_only_policies: &[ContentSecurityPolicy],
-        response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
+        policy_container: &DocumentPolicyContainer,
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> DocumentContentSecurityPolicyCheck {
-        let mut policies = self.document_content_security_policies_for_optional_document(
+        let policies = self.document_content_security_policies_for_optional_document(
             document_handle,
-            response_policies,
-            response_reporting_endpoints,
+            &policy_container.response_content_security_policies,
+            &policy_container.content_security_reporting_endpoints,
         );
-        if let Some(origin) = document_origin {
-            for policy in &mut policies {
-                policy.policy = policy.policy.clone().with_fallback_self_origin(origin);
-            }
-        }
         let enforced_violation = document_connect_policy_violation_from_document_policies(
             policies,
             document_url,
+            document_origin,
             request_url,
             redirect_status,
             ContentSecurityPolicyDisposition::Enforce,
         );
         let report_only_violation = document_connect_policy_violation(
-            response_report_only_policies,
-            response_reporting_endpoints,
+            &policy_container.response_content_security_report_only_policies,
+            &policy_container.content_security_reporting_endpoints,
             document_url,
             request_url,
             redirect_status,
@@ -1934,6 +1909,17 @@ impl DocumentRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn reset_meta_content_security_policy_processing_for_document(
+        &self,
+        document: DomHandle,
+    ) {
+        // Opening a new input stream retains this Document's installed policies
+        // and the shared policy source used by its existing local workers.
+        self.processed_meta_content_security_policy_handles
+            .borrow_mut()
+            .retain(|(owner, _)| *owner != document);
+    }
+
     pub(crate) fn process_connected_meta_content_security_policies(&self, roots: &[DomHandle]) {
         for &root in roots {
             let mut stack = vec![root];
@@ -2127,6 +2113,7 @@ fn document_response_content_security_policies(
 fn document_connect_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
+    fallback_self_origin: Option<&Url>,
     request_url: &Url,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
@@ -2134,6 +2121,7 @@ fn document_connect_policy_violation_from_document_policies(
     document_url_policy_violation_from_document_policies(
         policies,
         document_url,
+        fallback_self_origin,
         request_url,
         ContentSecurityPolicyResourceKind::DocumentConnect,
         redirect_status,
@@ -2151,6 +2139,7 @@ fn document_frame_policy_violation_from_document_policies(
     document_url_policy_violation_from_document_policies(
         policies,
         document_url,
+        None,
         request_url,
         ContentSecurityPolicyResourceKind::DocumentFrame,
         redirect_status,
@@ -2186,7 +2175,7 @@ fn document_module_url_policy_violation_from_document_policies(
     };
     policies.iter().find_map(|policy| {
         let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
-            std::slice::from_ref(&policy.policy), document_url, request_url, original_url,
+            std::slice::from_ref(&policy.policy), document_url, None, request_url, original_url,
             resource_kind, redirect_status, disposition, &policy.reporting_endpoints, request,
         )?;
         apply_document_policy_reporting_flags(&mut violation, policy);
@@ -2197,21 +2186,24 @@ fn document_module_url_policy_violation_from_document_policies(
 fn document_url_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicy>,
     document_url: &Url,
+    fallback_self_origin: Option<&Url>,
     request_url: &Url,
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
     disposition: ContentSecurityPolicyDisposition,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
     policies.into_iter().find_map(|policy| {
-        let single_policy = [policy.policy.clone()];
-        let mut violation = document_url_policy_violation(
-            &single_policy,
-            &policy.reporting_endpoints,
+        let mut violation = crate::content_security_policy::content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+            std::slice::from_ref(&policy.policy),
             document_url,
+            fallback_self_origin,
+            request_url,
             request_url,
             kind,
             redirect_status,
             disposition,
+            &policy.reporting_endpoints,
+            crate::content_security_policy::ContentSecurityPolicyUrlRequest::Standard,
         )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
@@ -2721,6 +2713,21 @@ mod tests {
                 .is_enforced(),
             "checking the parent must not discard the child document's delivered policy"
         );
+        runtime.open_document();
+        assert!(
+            runtime
+                .dom_host_mut()
+                .set_attribute(child_meta, "content", "script-src 'none'")
+        );
+        let policies = runtime.meta_content_security_policies_for_document(child_document);
+        assert_eq!(
+            policies.len(),
+            1,
+            "reopening the parent must not reprocess a child's meta"
+        );
+        assert!(content_security_policy_requires_trusted_types_for_script(
+            &policies
+        ));
     }
 
     #[test]
@@ -2801,7 +2808,7 @@ mod tests {
     }
 
     #[test]
-    fn document_open_does_not_reuse_replaced_document_meta_csp() {
+    fn document_open_preserves_the_same_documents_delivered_meta_csp() {
         let mut runtime = runtime_for_html(
             r#"<!doctype html>
             <meta http-equiv="Content-Security-Policy"
@@ -2810,11 +2817,13 @@ mod tests {
         );
         assert!(runtime.requires_trusted_types_for_script());
 
+        let document = runtime.document_handle();
         runtime.open_document();
+        assert_eq!(runtime.document_handle(), document);
 
         assert!(
-            !runtime.requires_trusted_types_for_script(),
-            "the replacement document must not inherit delivered meta policies"
+            runtime.requires_trusted_types_for_script(),
+            "opening the same Document must retain its installed policies"
         );
     }
 

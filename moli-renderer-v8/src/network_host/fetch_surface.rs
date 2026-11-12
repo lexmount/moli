@@ -32,10 +32,8 @@ pub(in crate::network_host) const REQUEST_IS_RELOAD_NAVIGATION_SLOT: &str =
     "__lmRequestIsReloadNavigation";
 pub(in crate::network_host) const REQUEST_BODY_SLOT: &str = "__lmRequestBody";
 pub(in crate::network_host) const REQUEST_BODY_USED_SLOT: &str = "__lmRequestBodyUsed";
-pub(crate) const RESPONSE_TIMING_ALLOW_PASSED_SLOT: &str = "__moliResponseTimingAllowPassed";
 pub(crate) const RESPONSE_TYPE_SLOT: &str = "__lmResponseType";
 pub(crate) const RESPONSE_URL_SLOT: &str = "__lmResponseUrl";
-pub(crate) const RESPONSE_INTERNAL_URL_SLOT: &str = "__lmResponseInternalUrl";
 pub(crate) const RESPONSE_INTERNAL_STATUS_SLOT: &str = "__lmResponseInternalStatus";
 pub(crate) const RESPONSE_INTERNAL_STATUS_TEXT_SLOT: &str = "__lmResponseInternalStatusText";
 pub(crate) const RESPONSE_INTERNAL_HEADERS_SLOT: &str = "__lmResponseInternalHeadersObject";
@@ -74,8 +72,6 @@ struct ResponseInitObjectDeclaration<'scope> {
 #[derive(Default, WebApiObject)]
 #[webapi(interface = web_api_interfaces::Response)]
 struct ResponseErrorStateDeclaration {
-    #[webapi(slot = RESPONSE_TYPE_SLOT, init = string("error"))]
-    response_type: (),
     #[webapi(slot = RESPONSE_STATUS_SLOT, init = 0)]
     status: (),
     #[webapi(slot = RESPONSE_OK_SLOT, init = false)]
@@ -487,14 +483,13 @@ fn response_slot_attribute_getter_callback<'s>(
         rv.set(v8::Boolean::new(scope, body_used).into());
         return;
     }
-    if slot == RESPONSE_URL_SLOT {
-        let url = response_slot_string(scope, this, slot).unwrap_or_default();
-        let url = url.split_once('#').map_or(url.as_str(), |(url, _)| url);
-        rv.set(
-            v8_string(scope, url)
-                .map(|value| value.into())
-                .unwrap_or_else(|| v8::undefined(scope).into()),
-        );
+    if matches!(
+        slot,
+        RESPONSE_TYPE_SLOT | RESPONSE_URL_SLOT | RESPONSE_REDIRECTED_SLOT
+    ) {
+        let value = super::response::response_metadata_attribute(scope, this, slot)
+            .unwrap_or_else(|| v8::undefined(scope).into());
+        rv.set(value);
         return;
     }
     let value =
@@ -565,6 +560,15 @@ fn response_static_error_callback<'s>(
     ResponseErrorStateDeclaration::default()
         .initialize(scope, response)
         .expect("Response error state declaration should initialize");
+    super::response::set_response_metadata(
+        scope,
+        response,
+        &moli_fetch_types::FetchResponseMetadata {
+            response_type: moli_fetch_types::FetchResponseType::Error,
+            timing_allow_passed: false,
+            ..Default::default()
+        },
+    );
     if let Some(headers) = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT) {
         mark_headers_immutable(scope, headers);
     }
@@ -873,12 +877,9 @@ fn copy_response_surface_slots<'s>(
         RESPONSE_STATUS_TEXT_SLOT,
         RESPONSE_OK_SLOT,
         RESPONSE_URL_SLOT,
-        RESPONSE_INTERNAL_URL_SLOT,
         RESPONSE_INTERNAL_STATUS_SLOT,
         RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
-        RESPONSE_REDIRECTED_SLOT,
-        RESPONSE_TYPE_SLOT,
-        RESPONSE_TIMING_ALLOW_PASSED_SLOT,
+        super::response::RESPONSE_METADATA_SLOT,
     ] {
         if let Some(value) = response_slot_value(scope, from, slot) {
             set_response_slot_value(scope, to, slot, value);
@@ -1002,7 +1003,6 @@ fn is_response_slot(slot: &str) -> bool {
         slot,
         RESPONSE_TYPE_SLOT
             | RESPONSE_URL_SLOT
-            | RESPONSE_INTERNAL_URL_SLOT
             | RESPONSE_REDIRECTED_SLOT
             | RESPONSE_STATUS_SLOT
             | RESPONSE_OK_SLOT

@@ -1,10 +1,10 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, ops::Range};
 
 use parley::PositionedLayoutItem;
 
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
-    inline::{InlineObjectRole, InlineSelection},
+    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection, glyph_cluster_ranges},
 };
 
 /// One order shared by pixels and hit geometry. Inline events select individual
@@ -22,6 +22,13 @@ pub(crate) enum PaintOrderEvent {
     BoxText(LayoutBoxId),
     /// A mixed IFC's caret paints after its contents, including glyphless lines.
     BoxCaret(LayoutBoxId),
+    /// Selected text not covered by a drawable glyph run, placed in source order.
+    InlineSelection {
+        owner: LayoutBoxId,
+        line: usize,
+        start: usize,
+        end: usize,
+    },
     InlineBox {
         owner: LayoutBoxId,
         fragment: usize,
@@ -124,6 +131,18 @@ impl InlineOrder {
                 continue;
             };
             for (line_index, line) in layout.lines().enumerate() {
+                let selected = match &context.selection {
+                    Some(InlineSelection::Range(range)) => {
+                        let line_range = line.text_range();
+                        let selected =
+                            range.start.max(line_range.start)..range.end.min(line_range.end);
+                        (!selected.is_empty()).then_some(selected)
+                    }
+                    _ => None,
+                };
+                let mut covered = Vec::new();
+                let mut mapped_run = None;
+                let mut cluster_ranges = Vec::new().into_iter();
                 for (_, inline) in line.inline_box_indices() {
                     if let Some(object) = context.object(inline.id)
                         && object.role == InlineObjectRole::Atomic
@@ -135,6 +154,21 @@ impl InlineOrder {
                     let PositionedLayoutItem::GlyphRun(glyphs) = positioned else {
                         continue;
                     };
+                    if selected.is_some() {
+                        if mapped_run != Some(glyphs.run().index()) {
+                            cluster_ranges = glyph_cluster_ranges(glyphs.run()).into_iter();
+                            mapped_run = Some(glyphs.run().index());
+                        }
+                        if let Some(range) = cluster_ranges
+                            .by_ref()
+                            .take(glyphs.glyphs().count())
+                            .reduce(|range, cluster| {
+                                range.start.min(cluster.start)..range.end.max(cluster.end)
+                            })
+                        {
+                            covered.push(range);
+                        }
+                    }
                     let range = glyphs.run().text_range();
                     let source_index = context
                         .source_map
@@ -150,9 +184,109 @@ impl InlineOrder {
                         item,
                     });
                 }
+                if let Some(selected) = selected {
+                    covered.sort_unstable_by_key(|range| (range.start, range.end));
+                    let mut offset = selected.start;
+                    for range in covered {
+                        let end = range.start.min(selected.end);
+                        if offset < end {
+                            result.add_selection_gap(
+                                world,
+                                context,
+                                owner,
+                                line_index,
+                                offset..end,
+                            );
+                        }
+                        offset = offset.max(range.end).min(selected.end);
+                        if offset == selected.end {
+                            break;
+                        }
+                    }
+                    if offset < selected.end {
+                        result.add_selection_gap(
+                            world,
+                            context,
+                            owner,
+                            line_index,
+                            offset..selected.end,
+                        );
+                    }
+                }
             }
         }
         result
+    }
+
+    fn add_selection_gap<N>(
+        &mut self,
+        world: &LayoutWorld<N>,
+        context: &InlineFormattingContext,
+        owner: LayoutBoxId,
+        line: usize,
+        range: Range<usize>,
+    ) where
+        N: Copy + Debug + Eq + Hash,
+    {
+        // Split at source boundaries so a later inline or atomic sibling can
+        // cover the highlight, just as it covers the source text's glyphs.
+        let first = context
+            .source_map
+            .partition_point(|source| source.output_range.end <= range.start);
+        let mut offset = range.start;
+        for source in context.source_map[first..]
+            .iter()
+            .take_while(|source| source.output_range.start < range.end)
+        {
+            let start = source.output_range.start.min(range.end);
+            if offset < start {
+                self.push_selection_range(world, owner, owner, line, offset..start);
+                offset = start;
+            }
+            let end = source.output_range.end.min(range.end);
+            if offset < end {
+                self.push_selection_range(world, owner, source.box_id, line, offset..end);
+                offset = end;
+            }
+        }
+        if offset < range.end {
+            self.push_selection_range(world, owner, owner, line, offset..range.end);
+        }
+    }
+
+    fn push_selection_range<N>(
+        &mut self,
+        world: &LayoutWorld<N>,
+        owner: LayoutBoxId,
+        target: LayoutBoxId,
+        line: usize,
+        range: Range<usize>,
+    ) where
+        N: Copy + Debug + Eq + Hash,
+    {
+        if !world.boxes[target.index()].style.is_visible() {
+            return;
+        }
+        let entries = &mut self.entries[target.index()];
+        if let Some(PaintOrderEvent::InlineSelection {
+            owner: previous_owner,
+            line: previous_line,
+            end,
+            ..
+        }) = entries.last_mut()
+            && *previous_owner == owner
+            && *previous_line == line
+            && *end == range.start
+        {
+            *end = range.end;
+            return;
+        }
+        entries.push(PaintOrderEvent::InlineSelection {
+            owner,
+            line,
+            start: range.start,
+            end: range.end,
+        });
     }
 
     fn order(&self, id: LayoutBoxId, sequence: &[usize]) -> (usize, usize, usize, usize) {
@@ -361,6 +495,9 @@ fn collect_contents<N>(
                 0,
             ),
             PaintOrderEvent::InlineText { owner, line, item } => (owner, line, item + 1),
+            // Backgrounds precede the source's glyphs; sibling tree order is
+            // still shared with inline fragments and atomic groups.
+            PaintOrderEvent::InlineSelection { owner, line, .. } => (owner, line, 0),
             _ => unreachable!(),
         };
         flow.inline_contents.push(PaintEntry {
