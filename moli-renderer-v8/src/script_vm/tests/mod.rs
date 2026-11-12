@@ -2383,6 +2383,7 @@ mod webtransport_stream_interface_exposure;
 mod idb_index_native_receivers;
 
 mod window_execution_context;
+mod window_scheduling_receivers;
 
 mod window_immutable_prototype_chain;
 

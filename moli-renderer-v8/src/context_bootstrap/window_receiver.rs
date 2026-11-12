@@ -21,6 +21,41 @@ pub(crate) fn is_window_receiver<'s>(
         && context_host_ptr_from_context_slot(current_context).is_some()
 }
 
+pub(crate) fn require_same_origin_window_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    lenient_this: bool,
+) -> bool {
+    // An extracted method or accessor bypasses WindowProxy's property access check.
+    // Authorize native globals before reading slots, which can themselves
+    // trigger V8's cross-origin fallback. Leniency only applies to objects
+    // without the Window brand, never to a cross-origin Window.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
+        && context_host_ptr_from_context_slot(context).is_some()
+    {
+        let accessing_context = scope.get_current_context();
+        if crate::native_bridge::window_contexts_allow_access(scope, accessing_context, context) {
+            return true;
+        }
+    } else if !crate::native_bridge::is_cross_origin_top_window_proxy(scope, receiver) {
+        if is_window_receiver(scope, receiver) {
+            return true;
+        }
+        if !lenient_this {
+            throw_type_error(scope, "Window member called on incompatible receiver.");
+        }
+        return false;
+    }
+    crate::native_bridge::throw_dom_exception(
+        scope,
+        "SecurityError",
+        18,
+        "Blocked access to a cross-origin Window.",
+    );
+    false
+}
+
 /// Recognizes a Window whose V8 object still exposes its live realm markers.
 ///
 /// This is deliberately narrower than the WebIDL brand check above. Bound

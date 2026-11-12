@@ -12,7 +12,16 @@ use crate::{
 };
 
 // The two global surfaces enqueue the same browser-created V8 trampoline.
-pub(crate) use queue_microtask_callback as window_queue_microtask_callback;
+pub(crate) fn window_queue_microtask_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
+    queue_microtask_callback(scope, args, rv);
+}
 pub(crate) use queue_microtask_callback as worker_queue_microtask_callback;
 
 #[derive(webidl::WebIdlArgs)]

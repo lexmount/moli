@@ -26,15 +26,19 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_host::window_set_timeout_callback)]
+    #[webapi(receiver_access_check = false)]
     set_timeout: (),
 
     #[webapi(method, length = 1, callback = window_host::window_set_interval_callback)]
+    #[webapi(receiver_access_check = false)]
     set_interval: (),
 
     #[webapi(method, length = 0, callback = window_host::window_clear_timer_callback)]
+    #[webapi(receiver_access_check = false)]
     clear_timeout: (),
 
     #[webapi(method, length = 0, callback = window_host::window_clear_timer_callback)]
+    #[webapi(receiver_access_check = false)]
     clear_interval: (),
 
     #[webapi(method, length = 1, callback = window_host::window_post_message_callback)]
@@ -46,6 +50,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
         length = 1,
         callback = window_queue_microtask_callback
     )]
+    #[webapi(receiver_access_check = false)]
     queue_microtask: (),
 
     #[webapi(
@@ -132,6 +137,7 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
         length = 1,
         callback = window_host::window_request_animation_frame_callback
     )]
+    #[webapi(receiver_access_check = false)]
     request_animation_frame: (),
 
     #[webapi(
@@ -139,6 +145,7 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
         length = 1,
         callback = window_host::window_cancel_animation_frame_callback
     )]
+    #[webapi(receiver_access_check = false)]
     cancel_animation_frame: (),
 
     #[webapi(
@@ -146,6 +153,7 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
         length = 1,
         callback = window_host::window_request_idle_callback
     )]
+    #[webapi(receiver_access_check = false)]
     request_idle_callback: (),
 
     #[webapi(
@@ -153,6 +161,7 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
         length = 1,
         callback = window_host::window_cancel_idle_callback
     )]
+    #[webapi(receiver_access_check = false)]
     cancel_idle_callback: (),
 
     #[webapi(method, length = 1, callback = window_btoa_callback)]
