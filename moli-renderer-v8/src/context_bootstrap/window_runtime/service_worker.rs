@@ -373,6 +373,12 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     let Some(options) = service_worker_registration_options(scope, &args) else {
         return;
     };
+    // The container owns registration promises and rejection values, including
+    // calls through a register method borrowed from another Window.
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             return;
