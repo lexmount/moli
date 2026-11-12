@@ -180,6 +180,10 @@ IndexedDB/idbindex-objectStore-SameObject.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbindex-objectStore-SameObject.any.js?moli-wpt-any=window
 IndexedDB/idbindex-query-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbindex-query-exception-order.any.js?moli-wpt-any=window
+IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbindex-rename-abort.any.js?moli-wpt-any=window
+IndexedDB/idbindex-rename-errors.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbindex-rename-errors.any.js?moli-wpt-any=window
 IndexedDB/idbindex-request-source.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbindex-request-source.any.js?moli-wpt-any=window
 IndexedDB/idbindex_count.any.js?moli-wpt-any=dedicatedworker
@@ -233,12 +237,18 @@ IndexedDB/idbobjectstore-index-finished.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-index-finished.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-query-exception-order.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-query-exception-order.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore-rename-abort.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore-rename-abort.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore-rename-errors.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore-rename-errors.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-request-source.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-request-source.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore-transaction-SameObject.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore-transaction-SameObject.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_add.any.js?moli-wpt-any=window
+IndexedDB/idbobjectstore_clear.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idbobjectstore_clear.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_count.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idbobjectstore_count.any.js?moli-wpt-any=window
 IndexedDB/idbobjectstore_createIndex.any.js?moli-wpt-any=dedicatedworker
@@ -573,6 +583,8 @@ content-security-policy/generic/generic-0_1-script-src.html
 content-security-policy/generic/generic-0_2.html
 content-security-policy/generic/generic-0_2_3.html
 content-security-policy/generic/invalid-characters-in-policy.html
+content-security-policy/generic/only-valid-whitespaces-are-allowed.html
+content-security-policy/generic/policy-inherited-correctly-by-plznavigate.html
 content-security-policy/img-src/img-src-none-blocks-data-uri.html
 content-security-policy/img-src/img-src-none-blocks.html
 content-security-policy/img-src/img-src-self-unique-origin.html
@@ -580,6 +592,7 @@ content-security-policy/img-src/img-src-targeting.html
 content-security-policy/img-src/img-src-wildcard-allowed.html
 content-security-policy/inheritance/blob-inherits-from-meta-http-equiv-with-invalid-characters.html
 content-security-policy/inheritance/inherited-csp-list-modifications-are-local.html
+content-security-policy/inheritance/javascript-url-open-in-main-window.html
 content-security-policy/media-src/media-src-7_1.html
 content-security-policy/media-src/media-src-7_2.html
 content-security-policy/media-src/media-src-blocked-blob-url.html
@@ -1397,6 +1410,7 @@ css/css-flexbox/flexbox-gap-position-absolute.html
 css/css-flexbox/flexbox-iframe-intrinsic-size-001.html
 css/css-flexbox/flexbox-ignores-first-letter.html
 css/css-flexbox/flexbox-items-as-stacking-contexts-001.xhtml
+css/css-flexbox/flexbox-items-as-stacking-contexts-002.html
 css/css-flexbox/flexbox-items-as-stacking-contexts-003.html
 css/css-flexbox/flexbox-justify-content-horiz-001a.xhtml
 css/css-flexbox/flexbox-justify-content-horiz-001b.xhtml
@@ -1938,6 +1952,7 @@ css/css-flexbox/percentage-descendant-of-anonymous-flex-item.html
 css/css-flexbox/percentage-heights-000.html
 css/css-flexbox/percentage-heights-001.html
 css/css-flexbox/percentage-heights-002.html
+css/css-flexbox/percentage-heights-004.html
 css/css-flexbox/percentage-heights-005.html
 css/css-flexbox/percentage-heights-006.html
 css/css-flexbox/percentage-heights-007.html
@@ -2860,6 +2875,7 @@ css/css-properties-values-api/crashtests/transition-to-none-crash-001.html
 css/css-properties-values-api/crashtests/transition-to-none-crash-002.html
 css/css-properties-values-api/determine-registration.html
 css/css-properties-values-api/get-computed-style-enumeration.html
+css/css-properties-values-api/idlharness.html
 css/css-properties-values-api/invalid-at-computed-value-time.html
 css/css-properties-values-api/non-computed-unit-cycles.html
 css/css-properties-values-api/property-cascade.html
@@ -3582,6 +3598,7 @@ css/css-values/typed-arithmetic-different-categories-crash.html
 css/css-values/typed-arithmetic-inside-calc-crash.html
 css/css-values/typed-arithmetic-mixed-units-crash.html
 css/css-values/typed_arithmetic_cycle.html
+css/css-values/urls/empty.html
 css/css-values/urls/resolve-relative-to-stylesheet.html
 css/css-values/various-values-important.html
 css/css-values/viewport-units-after-font-load.html
@@ -3710,6 +3727,7 @@ css/cssom-view/outer-svg.html
 css/cssom-view/parsing/scroll-behavior-computed.html
 css/cssom-view/parsing/scroll-behavior-invalid.html
 css/cssom-view/parsing/scroll-behavior-valid.html
+css/cssom-view/position-sticky-root-scroller-with-scroll-behavior.html
 css/cssom-view/pt-to-px-width.html
 css/cssom-view/range-bounding-client-rect-with-display-contents.html
 css/cssom-view/resize-event-on-initial-layout-001.html
@@ -3810,6 +3828,7 @@ css/cssom/cssom-cssText-serialize.html
 css/cssom/cssom-cssstyledeclaration-set.html
 css/cssom/cssom-fontfacerule-constructors.html
 css/cssom/cssom-fontfacerule.html
+css/cssom/cssom-pagerule.html
 css/cssom/cssom-ruleTypeAndOrder.html
 css/cssom/cssom-setProperty-shorthand.html
 css/cssom/cssstyledeclaration-all-shorthand.html
@@ -6488,6 +6507,7 @@ html/cross-origin-opener-policy/no-https.html
 html/dom/access-key-label.html
 html/dom/aria-attribute-reflection.html
 html/dom/documents/dom-tree-accessors/Document.body.html
+html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/document.embeds-document.plugins-01.html
@@ -6832,10 +6852,10 @@ html/semantics/embedded-content/the-iframe-element/sandbox_025.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_026.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_027.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_028.htm
+html/semantics/embedded-content/the-iframe-element/sandbox_029.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_030.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_031.htm
 html/semantics/embedded-content/the-iframe-element/sandbox_032.htm
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-removed-iframe-crash.html
@@ -6978,6 +6998,7 @@ html/semantics/forms/textfieldselection/textfieldselection-setSelectionRange.htm
 html/semantics/forms/the-button-element/button-activate.html
 html/semantics/forms/the-button-element/button-checkvalidity.html
 html/semantics/forms/the-button-element/button-click-resets-with-commandfor.html
+html/semantics/forms/the-button-element/button-click-submits-with-commandfor.html
 html/semantics/forms/the-button-element/button-click-submits.html
 html/semantics/forms/the-button-element/button-events.html
 html/semantics/forms/the-button-element/button-labels.html
@@ -7673,6 +7694,7 @@ html/semantics/text-level-semantics/the-a-element/a.text-setter-01.html
 html/semantics/text-level-semantics/the-ruby-element/rt-without-ruby-crash.html
 html/semantics/text-level-semantics/the-time-element/001.html
 html/semantics/the-button-element/command-and-commandfor/button-event-dispatch-content-attribute.html
+html/semantics/the-button-element/command-and-commandfor/button-type-reflection.html
 html/semantics/the-button-element/command-and-commandfor/command-close-target-non-dialog-crash.html
 html/semantics/the-button-element/command-and-commandfor/event-interface.html
 html/semantics/the-button-element/command-and-commandfor/generic-eventtarget-crash.html
@@ -8768,8 +8790,19 @@ resource-timing/resource_dedicated_worker.html
 resource-timing/resource_subframe_self_navigation.html
 resource-timing/script-rt-entries.html
 resource-timing/shared-worker-rt-entry.html
+resource-timing/tentative/initiator-url/event-handler-overwritten.html
+resource-timing/tentative/initiator-url/event-handler.html
+resource-timing/tentative/initiator-url/iframe-post-message.html
+resource-timing/tentative/initiator-url/promise.html
+resource-timing/tentative/initiator-url/queue-microtask.html
+resource-timing/tentative/initiator-url/request-animation-frame.html
+resource-timing/tentative/initiator-url/request-idle-callback.html
+resource-timing/tentative/initiator-url/set-interval.html
+resource-timing/tentative/initiator-url/set-timeout.html
+resource-timing/tentative/initiator-url/xml-http-request.html
 resource-timing/tojson.html
 screen-orientation/lock-bad-argument.html
+secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 secure-contexts/basic-shared-worker.html
 selection/Document-open.html
@@ -8883,6 +8916,7 @@ service-workers/service-worker/claim-not-using-registration.https.html
 service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
+service-workers/service-worker/clients-matchall-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
 service-workers/service-worker/controller-on-load.https.html
 service-workers/service-worker/controller-on-reload.https.html
@@ -8939,6 +8973,7 @@ service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-events.https.html
 service-workers/service-worker/registration-iframe.https.html
 service-workers/service-worker/rejections.https.html
+service-workers/service-worker/request-end-to-end.https.html
 service-workers/service-worker/respond-with-body-accessed-response.https.html
 service-workers/service-worker/serviceworker-message-event-historical.https.html
 service-workers/service-worker/serviceworkerobject-scripturl.https.html
@@ -9507,10 +9542,8 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
-trusted-types/trusted-types-navigation.html?11-15
+trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?21-25
-trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9551,6 +9584,7 @@ trusted-types/trusted-types-tojson.html
 trusted-types/tt-block-eval.html
 uievents/constructors/inputevent-constructor.html
 uievents/historical.html
+uievents/interface/click-event.htm
 uievents/keyboard/keyboardevent-legacy.html
 uievents/legacy-domevents-tests/approved/dispatchEvent.click.checkbox.html
 uievents/legacy-domevents-tests/approved/stopImmediatePropagation.effect.html
@@ -10302,6 +10336,7 @@ xhr/setrequestheader-before-open.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
+xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm
