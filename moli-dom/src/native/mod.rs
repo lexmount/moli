@@ -1336,6 +1336,75 @@ mod tests {
     }
 
     #[test]
+    fn child_browsing_context_candidates_follow_shadow_including_subtree_order() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        // Creation/index order deliberately differs from shadow-including order.
+        let light_frame = host.create_element("iframe");
+        let first_host = host.create_element("div");
+        let last_host = host.create_element("section");
+        assert!(host.append_child(body, first_host));
+        assert!(host.append_child(body, last_host));
+        assert!(host.append_child(first_host, light_frame));
+        let root = host.attach_shadow_root(first_host, "closed").unwrap();
+        let nested_host = host.create_element("div");
+        let nested_root = host.attach_shadow_root(nested_host, "open").unwrap();
+        let nested_frame = host.create_element("iframe");
+        assert!(host.append_child(nested_root, nested_frame));
+        let shadow_frame = host.create_element("iframe");
+        assert!(host.append_child(root, shadow_frame));
+        assert!(host.append_child(root, nested_host));
+        let last_root = host.attach_shadow_root(last_host, "open").unwrap();
+        let last_frame = host.create_element("iframe");
+        assert!(host.append_child(last_root, last_frame));
+        let detached_host = host.create_element("div");
+        let detached_root = host.attach_shadow_root(detached_host, "closed").unwrap();
+        let detached_frame = host.create_element("iframe");
+        assert!(host.append_child(detached_root, detached_frame));
+        let template = host.create_element("template");
+        let contents = host.parser_template_contents_handle(template).unwrap();
+        let inert_frame = host.create_element("iframe");
+        assert!(host.append_child(contents, inert_frame));
+        assert!(host.append_child(body, template));
+        assert!(host.is_connected(template));
+        assert!(!host.is_connected(inert_frame));
+        let document = host.document_handle();
+        assert!(host.is_connected(nested_frame));
+        assert!(!host.dom().contains(document, nested_frame));
+        assert_eq!(
+            host.child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
+                document
+            ),
+            vec![shadow_frame, nested_frame, light_frame, last_frame]
+        );
+        assert_eq!(
+            host.child_browsing_context_host_candidate_handles_in_subtree_in_document_order(root),
+            vec![shadow_frame, nested_frame]
+        );
+        assert!(host.insert_before(body, last_host, Some(first_host)));
+        assert_eq!(
+            host.child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
+                document
+            ),
+            vec![last_frame, shadow_frame, nested_frame, light_frame]
+        );
+        assert!(host.remove_child(body, first_host));
+        assert_eq!(
+            host.child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
+                document
+            ),
+            vec![last_frame]
+        );
+        assert_eq!(
+            host.child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
+                first_host
+            ),
+            vec![shadow_frame, nested_frame, light_frame]
+        );
+    }
+
+    #[test]
     fn option_value_collects_nested_text_without_script_content() {
         let mut dom = NativeDom::new_html(test_url());
         let option = dom.create_element("option");
