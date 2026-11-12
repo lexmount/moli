@@ -1,3 +1,4 @@
+mod attributes;
 mod engine;
 
 #[cfg(test)]
