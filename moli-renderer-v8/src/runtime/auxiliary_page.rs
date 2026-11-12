@@ -77,8 +77,6 @@ pub(crate) struct RendererRelatedInitialEmptyPageInit {
     pub(crate) inherited_origin: String,
     pub(crate) inherited_security_token: v8::Global<v8::Value>,
     pub(crate) opener: Option<v8::Global<v8::Object>>,
-    pub(crate) window: RendererAuxiliaryWindow,
-    pub(crate) name: RendererBrowsingContextName,
 }
 
 #[derive(Clone)]
@@ -132,7 +130,12 @@ impl RendererAuxiliaryPageAllocator {
         let pending = RendererPendingAuxiliaryPage {
             inner: Arc::new(PendingAuxiliaryPageReservation {
                 reservation: RendererPageReservationToken::new(self.owner.local_host_id, page_id),
-                popup_id: init.window.id(),
+                popup_id: init
+                    .env
+                    .window_identity
+                    .auxiliary_window()
+                    .expect("auxiliary Page identity")
+                    .id(),
                 runtime: self
                     .owner
                     .owner_state

@@ -1017,8 +1017,7 @@ pub(crate) struct PageScriptHost {
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
-    browsing_context_name: crate::runtime::RendererBrowsingContextName,
-    auxiliary_window: Option<crate::runtime::RendererAuxiliaryWindow>,
+    window_identity: crate::runtime::RendererPageWindowIdentity,
     page_script_environment: Option<crate::script_vm::WeakRendererPageScriptEnvironment>,
     top_level_navigation_handoff_tx:
         crate::page_task_queue::RendererTopLevelNavigationHandoffSender,

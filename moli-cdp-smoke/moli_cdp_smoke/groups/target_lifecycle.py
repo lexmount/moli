@@ -162,6 +162,7 @@ class LifecycleProbe:
 
     async def close_during_navigation(
         self, fixture: str, mode: str, release_before_close: bool, background: bool,
+        replacement: bool,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"url": "about:blank", "background": background}
         if mode == "context":
@@ -169,11 +170,12 @@ class LifecycleProbe:
         target = (await self.call("Target.createTarget", params))["targetId"]
         session = await self.attach(target)
         await self.call("Page.enable", session=session)
-        # Replace the initial empty Document and materialize its Window before
-        # racing a second, cross-origin Document bootstrap against retirement.
-        await navigate_document(self.client, session, {
-            "url": "data:text/html,<script>window.name='retiring-page'</script>",
-        }, on_message=self.observe)
+        if replacement:
+            # Retain the second-navigation regression as well as the first
+            # navigation out of the initial empty Document.
+            await navigate_document(self.client, session, {
+                "url": "data:text/html,<script>window.name='retiring-page'</script>",
+            }, on_message=self.observe)
         await asyncio.to_thread(_navigation_gate_control, fixture, "reset")
         navigation = await self.client.send("Page.navigate", {
             "url": f"{fixture}/navigation-suspension-gated-document",
@@ -263,25 +265,29 @@ async def run_target_lifecycle_group(
         peer_session = await probe.attach(peer)
         await probe.call("Runtime.evaluate", {"expression": "globalThis.lifecycleSentinel = 42"}, peer_session)
 
-        for mode in ("target", "page", "context"):
-            # Keep the renderer-session Page.close route gated: Chromium can
-            # reject it during a cross-process Document swap. The browser-level
-            # target/context routes also race the released response.
-            for release_before_close in ((False,) if mode == "page" else (False, True)):
-                for background in (False, True):
-                    observed = await probe.close_during_navigation(
-                        fixture, mode, release_before_close, background,
-                    )
-                    sentinel = await probe.call("Runtime.evaluate", {
-                        "expression": "globalThis.lifecycleSentinel", "returnByValue": True,
-                    }, peer_session)
-                    assert_equal(sentinel.get("result", {}).get("value"), 42,
-                                 "peer survives closing an in-flight navigation")
-                    await probe.navigate(f"{fixture}/plain?after-inflight-{mode}")
-                    record(results, "target_lifecycle_inflight_navigation_close", {
-                        "mode": mode, "releaseBeforeClose": release_before_close,
-                        "background": background, "observed": observed,
-                    })
+        for replacement in (False, True):
+            for mode in ("target", "page", "context"):
+                # Hold the first navigation before response/Document commit.
+                # Chromium can acknowledge closeTarget during its initial
+                # process swap without destroying the Target. Page.close can
+                # also lose its active-page route during a later swap.
+                # Browser-level replacement routes still race response release.
+                release_modes = (False, True) if replacement and mode != "page" else (False,)
+                for release_before_close in release_modes:
+                    for background in (False, True):
+                        observed = await probe.close_during_navigation(
+                            fixture, mode, release_before_close, background, replacement,
+                        )
+                        sentinel = await probe.call("Runtime.evaluate", {
+                            "expression": "globalThis.lifecycleSentinel", "returnByValue": True,
+                        }, peer_session)
+                        assert_equal(sentinel.get("result", {}).get("value"), 42,
+                                     "peer survives closing an in-flight navigation")
+                        await probe.navigate(f"{fixture}/plain?after-inflight-{mode}")
+                        record(results, "target_lifecycle_inflight_navigation_close", {
+                            "mode": mode, "releaseBeforeClose": release_before_close,
+                            "background": background, "replacement": replacement, "observed": observed,
+                        })
 
         modes = (("target", 800), ("page", 800), ("detach", 128), ("context", 64))
         # Warm all closure routes and the shared network machinery once, then

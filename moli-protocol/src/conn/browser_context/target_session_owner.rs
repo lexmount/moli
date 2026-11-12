@@ -168,6 +168,7 @@ impl TargetNavigationStorageHandles {
 
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
+    pub(crate) window_identity: moli_core::page::RendererPageWindowIdentity,
     pub(crate) auxiliary_document_response:
         Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
@@ -350,6 +351,7 @@ impl TargetNavigationLoadInputs {
             redirect_chain: Vec::new(),
             redirect_headers: None,
             browser_context_id: Some(browser_context.id.clone()),
+            window_identity: target.window_identity().clone(),
             storage_handles: TargetNavigationStorageHandles::from_page_handles(
                 browser_context
                     .page_storage_handles_for_target(target_id)
@@ -459,6 +461,7 @@ impl TargetNavigationLoadInputs {
             redirect_chain: Vec::new(),
             redirect_headers: None,
             browser_context_id: None,
+            window_identity: Default::default(),
             storage_handles: TargetNavigationStorageHandles::from_page_handles(page_handles),
             root_frame_id: None,
             renderer_runtime,
@@ -558,11 +561,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
         &self,
         browser_initiated: bool,
     ) -> crate::conn::state::NavigationBrowsingContextGroup {
-        let group = self
-            .browser_context
-            .renderer_runtime()
-            .browsing_context_name(&self.target_id)
-            .group();
+        let group = self.target().window_identity().name().group();
         let target = self.target();
         target
             .owner_state
@@ -1198,11 +1197,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         document: moli_core::RendererDocumentLifecycleIdentity,
         url: &Url,
     ) {
-        let group = self
-            .browser_context
-            .renderer_runtime()
-            .browsing_context_name(&self.target_id)
-            .group();
+        let group = self.target().window_identity().name().group();
         let target = self.target_mut();
         if target.owner_state.navigation_history_document
             == Some((renderer_page, document.document))
@@ -1238,11 +1233,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Result<InstalledNavigationPage>> {
         let browser_context_id = self.browser_context.id.clone();
-        let group = self
-            .browser_context
-            .renderer_runtime()
-            .browsing_context_name(&self.target_id)
-            .group();
+        let group = self.target().window_identity().name().group();
         Some(
             self.browser_context
                 .page_target_mut(&self.target_id)
@@ -1473,11 +1464,7 @@ impl CdpConnection {
             return None;
         }
         let mut resolved = self.target_session_owner_mut_for_owner(owner)?;
-        let group = resolved
-            .browser_context
-            .renderer_runtime()
-            .browsing_context_name(&resolved.target_id)
-            .group();
+        let group = resolved.target().window_identity().name().group();
         Some(resolved.target_mut().commit_existing_page_navigation(
             expected,
             transaction,

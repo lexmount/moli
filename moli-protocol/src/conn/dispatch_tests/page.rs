@@ -326,6 +326,108 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
 }
 
 #[tokio::test]
+async fn closed_target_rejects_late_initial_document_without_registering_window_identity() {
+    for await_before_close in [false, true] {
+        let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
+        let context = AutomationContext {
+            protocol: FrontendProtocol::WebDriverBidi,
+            session_id: Some(DevToolsSessionId::from("bidi-initial-close")),
+            target_id: None,
+            browser_context_id: None,
+        };
+        let (created, _) = ctx.with_fixture(|conn| {
+            crate::domains::target::execute_immediate_devtools_target_command_with_protocol_events(
+                conn,
+                AutomationCommand::CreateTarget(DevToolsCreateTargetCommand {
+                    context,
+                    url: "about:blank".to_owned(),
+                    browser_context_id: None,
+                    activate: false,
+                }),
+            )
+        });
+        let AutomationResult::CreateTarget(created) = created.expect("accept initial Target")
+        else {
+            panic!("expected create target result");
+        };
+        let target_id = created.target_id.as_str().to_owned();
+        let (owner, identity) = ctx.with_fixture(|conn| {
+            let target = conn.browser_context.as_mut().unwrap();
+            target.remember_target_window_name("retiring-first-document", &target_id);
+            let host = target.page_target(&target_id).unwrap();
+            assert!(!host.has_loaded_page());
+            let identity = host.window_identity().clone();
+            let route = conn.target_session_route_for_target_id(&target_id).unwrap();
+            (CommandOwnerScope::for_route(route), identity)
+        });
+        let pending = ctx.with_fixture(|conn| {
+            conn.start_initial_document_page_ensure_for_owner(&owner)
+                .expect("enqueue first Document")
+                .expect("initial Document is pending")
+        });
+        // Close without awaiting the build result, or wait for a ready result
+        // and delay installation until after close. The first variant does not
+        // assume whether the renderer has already finished construction.
+        let mut pending = Some(pending);
+        let completed = if await_before_close {
+            Some(pending.take().unwrap().wait().await)
+        } else {
+            None
+        };
+        let messages = ctx
+            .dispatch_raw_command(
+                &serde_json::to_string(&json!({
+                    "id": 7901, "method": "Target.closeTarget", "params": {"targetId": target_id}
+                }))
+                .unwrap(),
+            )
+            .await;
+        assert!(
+            messages.iter().any(|message| {
+                message.get("id") == Some(&json!(7901)) && message["result"]["success"] == true
+            }),
+            "close first Document Target: {messages:?}"
+        );
+        let completed = if let Some(completed) = completed {
+            Ok(completed.expect("ready initial Document"))
+        } else {
+            pending.take().unwrap().wait().await
+        };
+        match completed {
+            Ok(completed) => {
+                completed
+                    .install_using(&mut crate::conn::ProtocolWorkflowDriver::new(ctx.handle()))
+                    .await
+                    .expect("discard late first Document");
+            }
+            Err(failed) => {
+                ctx.with_fixture(|conn| {
+                    conn.reset_failed_initial_document_page_build_for_owner(failed)
+                });
+            }
+        }
+        ctx.with_fixture(|conn| {
+            let context = conn.browser_context.as_ref().unwrap();
+            assert!(context.page_target(&target_id).is_none());
+            assert!(
+                context
+                    .target_id_for_browsing_context_name(identity.name())
+                    .is_none()
+            );
+            assert!(
+                context
+                    .target_id_for_window_name("retiring-first-document")
+                    .is_none()
+            );
+            assert!(
+                conn.target_session_route_for_target_id(&target_id)
+                    .is_none()
+            );
+        });
+    }
+}
+
+#[tokio::test]
 async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let mut ctx = crate::testing::TestContext::from_conn(CdpConnection::new());
     let context = AutomationContext {

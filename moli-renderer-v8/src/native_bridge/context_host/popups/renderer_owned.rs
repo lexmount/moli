@@ -129,9 +129,9 @@ impl PageScriptHost {
             if update_existing_opener {
                 existing.set_opener(Some(v8::Global::new(scope, creator)));
             }
-            let (window, name) = existing
-                .window_identity()
-                .expect("named related lookup retains its browsing context identity");
+            let identity = existing.window_identity();
+            let window = identity.auxiliary_window().cloned();
+            let name = identity.name().clone();
             let window_proxy = existing.window_proxy_in_scope(scope)?;
             // Tuple origins come from the Documents, independently of URL or
             // document.domain. Tokens disambiguate inherited opaque origins.
@@ -223,7 +223,20 @@ impl PageScriptHost {
         let loader = source_loader
             .request_client()
             .fork_with_isolated_page_network_policy();
+        let window = self
+            .browser_context_runtime
+            .new_auxiliary_window_with_sandbox(policy.sandbox);
+        let name = if exposes_opener {
+            crate::runtime::RendererBrowsingContextName::new_auxiliary(self.browsing_context_name())
+        } else {
+            crate::runtime::RendererBrowsingContextName::default()
+        };
+        name.set(trackable_lightweight_popup_window_name(target_name).unwrap_or_default());
         let env = crate::runtime::PageVmEnvConfig {
+            window_identity: crate::runtime::RendererPageWindowIdentity::new(
+                name.clone(),
+                Some(window.clone()),
+            ),
             root_frame_id: None,
             main_document_commit: None,
             top_level_storage_key: Some(storage_scope.storage_key().clone()),
@@ -267,15 +280,6 @@ impl PageScriptHost {
         );
         let document = dom_host.document_handle();
         dom_host.set_document_fallback_base_url_for_handle(document, Some(base_url));
-        let window = self
-            .browser_context_runtime
-            .new_auxiliary_window_with_sandbox(policy.sandbox);
-        let name = if exposes_opener {
-            crate::runtime::RendererBrowsingContextName::new_auxiliary(self.browsing_context_name())
-        } else {
-            crate::runtime::RendererBrowsingContextName::default()
-        };
-        name.set(trackable_lightweight_popup_window_name(target_name).unwrap_or_default());
         let creator_context = creator
             .get_creation_context(scope)
             .ok_or_else(|| anyhow::anyhow!("auxiliary creator has no live creation context"))?;
@@ -288,8 +292,6 @@ impl PageScriptHost {
             inherited_origin: storage_scope.origin().to_owned(),
             inherited_security_token,
             opener: exposes_opener.then(|| v8::Global::new(scope, creator)),
-            window: window.clone(),
-            name: name.clone(),
         };
         let (pending, window_proxy) =
             allocator.stage_in_scope(scope, &environment, &self.bridge.bindings, init)?;

@@ -40,6 +40,7 @@ impl PageTargetHostIdentity {
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
+    window_identity: moli_core::page::RendererPageWindowIdentity,
     lifetime: Arc<()>,
     pub(crate) closing: bool,
     /// Complete publication that announces this host. This is a delivery
@@ -66,16 +67,27 @@ pub struct PageTargetHost {
 }
 
 impl PageTargetHost {
-    pub(crate) fn empty(target_id: String) -> Self {
+    fn from_parts(
+        target_id: String,
+        primary_session_id: Option<String>,
+        target_identity: TargetIdentityState,
+        window_identity: moli_core::page::RendererPageWindowIdentity,
+        runtime_slot: TargetRuntimeSlot,
+    ) -> Self {
+        let mut devtools_sessions = DevToolsSessionRegistry::default();
+        if let Some(session_id) = primary_session_id {
+            devtools_sessions.attach_primary(session_id);
+        }
         Self {
             target_id,
+            window_identity,
             lifetime: Arc::new(()),
             closing: false,
             creation_output_predecessor: None,
             window_id: 0,
             navigation_engine: None,
-            target_identity: TargetIdentityState::about_blank(),
-            devtools_sessions: DevToolsSessionRegistry::default(),
+            target_identity,
+            devtools_sessions,
             javascript_dialog_state: TargetJavaScriptDialogState::default(),
             network_policy: TargetNetworkPolicyState::default(),
             http_proxy_override: None,
@@ -86,26 +98,37 @@ impl PageTargetHost {
             css_enabled: false,
             document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             dom_remote_object_node_cache: HashMap::new(),
-            runtime_slot: TargetRuntimeSlot::default(),
+            runtime_slot,
             fetch_owner: TargetFetchOwner::default(),
             owner_state: TargetOwnerState::default(),
             session_storage_namespace: TargetSessionStorageNamespace::default(),
         }
     }
 
+    pub(crate) fn empty(target_id: String) -> Self {
+        Self::from_parts(
+            target_id,
+            None,
+            TargetIdentityState::about_blank(),
+            Default::default(),
+            TargetRuntimeSlot::default(),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(
         target_id: String,
         primary_session_id: Option<String>,
         target_identity: TargetIdentityState,
         target_page_slot: TargetPageSlot,
     ) -> Self {
-        let mut host = Self::empty(target_id);
-        host.target_identity = target_identity;
-        host.runtime_slot = TargetRuntimeSlot::from_page_slot(target_page_slot);
-        if let Some(session_id) = primary_session_id {
-            host.devtools_sessions.attach_primary(session_id);
-        }
-        host
+        Self::from_parts(
+            target_id,
+            primary_session_id,
+            target_identity,
+            Default::default(),
+            TargetRuntimeSlot::from_page_slot(target_page_slot),
+        )
     }
 
     #[cfg(test)]
@@ -126,13 +149,21 @@ impl PageTargetHost {
         target_id: String,
         primary_session_id: Option<String>,
         target_identity: TargetIdentityState,
+        window_identity: moli_core::page::RendererPageWindowIdentity,
     ) -> Self {
-        Self::new(
+        Self::from_parts(
             target_id,
             primary_session_id,
             target_identity,
-            TargetPageSlot::empty_for_initial_document_page_build(),
+            window_identity,
+            TargetRuntimeSlot::from_page_slot(
+                TargetPageSlot::empty_for_initial_document_page_build(),
+            ),
         )
+    }
+
+    pub(crate) fn window_identity(&self) -> &moli_core::page::RendererPageWindowIdentity {
+        &self.window_identity
     }
 
     pub(crate) fn target_id(&self) -> &str {

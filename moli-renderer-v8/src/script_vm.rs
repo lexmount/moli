@@ -1171,6 +1171,10 @@ pub(super) struct ScriptVmRendererDocumentIsolateOps<'a> {
 }
 
 impl ScriptVm {
+    pub(crate) fn page_window_identity(&self) -> crate::runtime::RendererPageWindowIdentity {
+        self._context_host.borrow().window_identity().clone()
+    }
+
     pub(crate) fn document_isolate_identity_for_diagnostics(&self) -> usize {
         self.renderer_document_isolate.identity_key()
     }
@@ -2005,6 +2009,7 @@ impl ScriptVmPageRealmBootstrap {
         resource_completion_tx: RendererResourceCompletionSender,
         initial_document_loader_bootstrap: crate::network::context::DocumentResourceLoaderBootstrap,
         browser_context_runtime: RendererBrowserContextRuntime,
+        window_identity: crate::runtime::RendererPageWindowIdentity,
         javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
         mut renderer_document_isolate_bootstrap: RendererDocumentIsolateBootstrap,
         runtime_inspector_session_restore_snapshots:
@@ -2158,6 +2163,7 @@ impl ScriptVmPageRealmBootstrap {
             top_level_navigation_handoff_tx,
             service_worker_task_tx,
             browser_context_runtime,
+            window_identity,
             javascript_dialog_runtime,
             page_context_cancel_rx,
             top_level_storage_key,
@@ -2174,25 +2180,13 @@ impl ScriptVmPageRealmBootstrap {
             .bind_deferred_context_host_release_queue(
                 renderer_document_isolate.deferred_context_host_release_queue(),
             );
-        // A replacement belongs to the existing Page even after Target close
-        // has removed its browser-context lookup entries. Only the first
-        // Document obtains identity from that registry; subsequent Documents
-        // retain the Page's exact name cell and auxiliary close state.
+        if root_frame_id.is_some()
+            && let Some(group) = browsing_context_group
         {
-            let mut host = context_host.borrow_mut();
-            let inherited_window_identity = renderer_page_script_environment
-                .as_ref()
-                .is_some_and(|environment| environment.inherit_window_identity(&mut host));
-            if let Some(root_frame_id) = root_frame_id.as_deref() {
-                if !inherited_window_identity {
-                    let runtime = host.browser_context_runtime().clone();
-                    host.bind_browsing_context_name(runtime.browsing_context_name(root_frame_id));
-                    host.bind_auxiliary_window(runtime.auxiliary_window(root_frame_id));
-                }
-                if let Some(group) = browsing_context_group {
-                    host.browsing_context_name().set_group(group);
-                }
-            }
+            context_host
+                .borrow()
+                .browsing_context_name()
+                .set_group(group);
         }
         let main_document_owner = context_host
             .borrow()
@@ -2366,6 +2360,7 @@ impl ScriptVmDefaultWorldBootstrap {
             resource_completion_tx,
             initial_document_loader_bootstrap,
             browser_context_runtime,
+            crate::runtime::RendererPageWindowIdentity::default(),
             crate::runtime::RendererJavaScriptDialogRuntime::default(),
             renderer_document_isolate_bootstrap,
             &[],
@@ -2385,6 +2380,7 @@ impl ScriptVmDefaultWorldBootstrap {
         resource_completion_tx: RendererResourceCompletionSender,
         initial_document_loader_bootstrap: crate::network::context::DocumentResourceLoaderBootstrap,
         browser_context_runtime: RendererBrowserContextRuntime,
+        window_identity: crate::runtime::RendererPageWindowIdentity,
         javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
         renderer_document_isolate_bootstrap: RendererDocumentIsolateBootstrap,
         runtime_inspector_session_restore_snapshots:
@@ -2408,6 +2404,7 @@ impl ScriptVmDefaultWorldBootstrap {
             resource_completion_tx,
             initial_document_loader_bootstrap,
             browser_context_runtime,
+            window_identity,
             javascript_dialog_runtime,
             renderer_document_isolate_bootstrap,
             runtime_inspector_session_restore_snapshots,

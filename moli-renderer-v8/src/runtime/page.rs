@@ -28,6 +28,8 @@ use super::{
 /// Applied before document-start scripts; live updates use Page commands.
 #[derive(Default)]
 pub struct RendererDocumentOptions {
+    /// Identity captured when accepting a new Page; ignored for replacement Documents.
+    pub window_identity: super::RendererPageWindowIdentity,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub document_start_scripts: Vec<DocumentStartScript>,

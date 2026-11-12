@@ -8,6 +8,34 @@ use parking_lot::Mutex;
 #[derive(Clone, Debug, Default)]
 pub struct RendererBrowsingContextName(Arc<Mutex<WindowNameState>>);
 
+/// Complete identity of one Page, captured before any Document work is queued.
+/// An ordinary Page has no auxiliary window; that is a valid initialized state.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RendererPageWindowIdentity {
+    name: RendererBrowsingContextName,
+    auxiliary_window: Option<super::RendererAuxiliaryWindow>,
+}
+
+impl RendererPageWindowIdentity {
+    pub fn new(
+        name: RendererBrowsingContextName,
+        auxiliary_window: Option<super::RendererAuxiliaryWindow>,
+    ) -> Self {
+        Self {
+            name,
+            auxiliary_window,
+        }
+    }
+
+    pub fn name(&self) -> &RendererBrowsingContextName {
+        &self.name
+    }
+
+    pub fn auxiliary_window(&self) -> Option<&super::RendererAuxiliaryWindow> {
+        self.auxiliary_window.as_ref()
+    }
+}
+
 /// Identity of top-level contexts that can find each other by name. Session
 /// history retains this identity so traversing back can restore the group.
 #[derive(Clone, Debug, Default)]

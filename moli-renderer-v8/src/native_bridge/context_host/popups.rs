@@ -788,7 +788,7 @@ impl PageScriptHost {
             .and_then(|window| lightweight_popup_id_from_window(scope, window))
             .and_then(|id| self.lightweight_popup_record(id))
             .map(|record| &record.name)
-            .unwrap_or(&self.browsing_context_name);
+            .unwrap_or_else(|| self.browsing_context_name());
         // Named reuse was resolved before creating this Window: browser-owned
         // Pages use named_related_window; standalone popups use the local map.
         let browsing_context_name = if opener.is_some() {

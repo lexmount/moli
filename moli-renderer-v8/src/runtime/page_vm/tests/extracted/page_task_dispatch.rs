@@ -11,6 +11,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
         local_executor,
         &loader,
         &PageVmEnvConfig {
+            window_identity: Default::default(),
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,

@@ -36,6 +36,7 @@ use url::Url;
 
 #[derive(Debug, Clone)]
 struct DocumentPageLoadOptions {
+    pub window_identity: moli_renderer_v8::RendererPageWindowIdentity,
     pub resource_source: CommittedDocumentResourceSource,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
@@ -1429,6 +1430,7 @@ impl NavigationEngine {
                 indexed_db_manager,
                 storage_bucket_store,
                 DocumentPageLoadOptions {
+                    window_identity: Default::default(),
                     resource_source: CommittedDocumentResourceSource::Synthetic,
                     root_frame_id,
                     main_document_commit,
@@ -1553,6 +1555,7 @@ impl NavigationEngine {
     #[allow(clippy::too_many_arguments)]
     pub async fn build_html_page_from_response_with_inspector_session_restores_async(
         &mut self,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1586,6 +1589,7 @@ impl NavigationEngine {
             indexed_db_manager,
             storage_bucket_store,
             DocumentPageLoadOptions {
+                window_identity,
                 resource_source: CommittedDocumentResourceSource::Synthetic,
                 root_frame_id,
                 main_document_commit,
@@ -1617,6 +1621,7 @@ impl NavigationEngine {
     #[allow(clippy::too_many_arguments)]
     pub async fn build_html_page_from_response_with_storage_and_inspector_session_restores_async(
         &mut self,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1644,6 +1649,7 @@ impl NavigationEngine {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
         self.build_html_page_from_response_with_inspector_session_restores_async(
+            window_identity,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -1685,6 +1691,7 @@ impl NavigationEngine {
     fn start_build_html_page_from_response(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1732,6 +1739,7 @@ impl NavigationEngine {
             top_level_storage_key,
             moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
             moli_renderer_v8::RendererDocumentOptions {
+                window_identity,
                 indexed_db_manager,
                 storage_bucket_store,
                 document_start_scripts,
@@ -1763,6 +1771,7 @@ impl NavigationEngine {
     pub fn start_build_html_page_from_response_with_storage_and_inspector_session_restores(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1792,6 +1801,7 @@ impl NavigationEngine {
             storage.into_parts();
         self.start_build_html_page_from_response(
             page_reservation,
+            window_identity,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -1826,6 +1836,7 @@ impl NavigationEngine {
     async fn prepare_streaming_raw_page_from_external_body_async(
         &mut self,
         page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1888,6 +1899,7 @@ impl NavigationEngine {
                 reserved_service_worker_client,
                 None,
                 moli_renderer_v8::RendererDocumentOptions {
+                    window_identity,
                     indexed_db_manager,
                     storage_bucket_store,
                     document_start_scripts,
@@ -1921,6 +1933,7 @@ impl NavigationEngine {
     pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
         &mut self,
         page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
+        window_identity: moli_renderer_v8::RendererPageWindowIdentity,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1953,6 +1966,7 @@ impl NavigationEngine {
             storage.into_parts();
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
+            window_identity,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -2023,6 +2037,7 @@ impl NavigationEngine {
                 web_storage,
                 options.response_body,
                 moli_renderer_v8::RendererDocumentOptions {
+                    window_identity: options.window_identity,
                     indexed_db_manager,
                     storage_bucket_store,
                     document_start_scripts: options.document_start_scripts,

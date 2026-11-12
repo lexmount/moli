@@ -1623,6 +1623,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     let prepared_future = engine
         .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
             page_reservation,
+            load_inputs.window_identity.clone(),
             page_storage.into_navigation_storage(),
             requested_url.clone(),
             final_url.clone(),
@@ -2102,6 +2103,7 @@ impl CdpConnection {
         let pending = engine
             .start_build_html_page_from_response_with_storage_and_inspector_session_restores(
                 page_reservation,
+                load_inputs.window_identity.clone(),
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
                 requested_url,
@@ -3046,6 +3048,7 @@ impl CdpConnection {
             .navigation_engine_for_load_inputs_mut(load_inputs)
             .context("navigation Page engine unavailable")?
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
+                load_inputs.window_identity.clone(),
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
                 requested_url.clone(),
@@ -3299,6 +3302,7 @@ impl CdpConnection {
             .navigation_engine_for_load_inputs_mut(&load_inputs)
             .context("navigation Page engine unavailable")?
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
+                load_inputs.window_identity.clone(),
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
                 final_url.clone(),
@@ -3590,6 +3594,7 @@ async fn prepare_captured_document_response_with_engine_async(
     let prepared_future = engine
         .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
             page_reservation,
+            load_inputs.window_identity.clone(),
             page_storage.into_navigation_storage(),
             requested_url.clone(),
             final_url.clone(),

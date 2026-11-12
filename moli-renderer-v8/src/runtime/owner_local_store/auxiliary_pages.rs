@@ -38,11 +38,13 @@ impl RendererOwnerLocalStore {
             inherited_origin,
             inherited_security_token,
             opener,
-            window,
-            name,
         } = init;
         ensure!(
-            pending.popup_id() == window.id(),
+            Some(pending.popup_id())
+                == env
+                    .window_identity
+                    .auxiliary_window()
+                    .map(|window| window.id()),
             "auxiliary identity changed before staging"
         );
         let token = renderer_page_token_for_owner_context(owner, page_id);
@@ -85,10 +87,10 @@ impl RendererOwnerLocalStore {
             inspector_backend,
             runtime_source,
             journal.clone(),
+            env.window_identity.clone(),
         );
         environment
             .bind_auxiliary_allocator(RendererAuxiliaryPageAllocator::new(owner.clone(), page_id));
-        environment.bind_window_identity(name, Some(window));
         environment.set_opener(opener);
         let bootstrap = bootstrap
             .with_page_inspector(page_inspector.with_output_journal(journal.clone()))

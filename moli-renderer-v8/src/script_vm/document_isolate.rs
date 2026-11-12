@@ -272,8 +272,7 @@ struct RendererPageScriptEnvironmentInner {
     output_journal: crate::runtime::RendererTurnOutputJournal,
     global_proxy: OnceCell<v8::Global<v8::Object>>,
     auxiliary_allocator: OnceCell<crate::runtime::RendererAuxiliaryPageAllocator>,
-    browsing_context_name: OnceCell<crate::runtime::RendererBrowsingContextName>,
-    auxiliary_window: OnceCell<crate::runtime::RendererAuxiliaryWindow>,
+    window_identity: crate::runtime::RendererPageWindowIdentity,
     opener: RefCell<Option<v8::Global<v8::Object>>>,
     document_host: RefCell<Weak<RefCell<PageScriptHost>>>,
     closed: Cell<bool>,
@@ -343,6 +342,7 @@ impl RendererPageScriptEnvironment {
         inspector_isolate_backend: RendererInspectorIsolateBackendHandle,
         page_runtime_task_source: PageRuntimeTaskSource,
         output_journal: crate::runtime::RendererTurnOutputJournal,
+        window_identity: crate::runtime::RendererPageWindowIdentity,
     ) -> Self {
         let registry = renderer_document_isolate.related_pages.clone();
         let environment = Self {
@@ -354,8 +354,7 @@ impl RendererPageScriptEnvironment {
                 output_journal,
                 global_proxy: OnceCell::new(),
                 auxiliary_allocator: OnceCell::new(),
-                browsing_context_name: OnceCell::new(),
-                auxiliary_window: OnceCell::new(),
+                window_identity,
                 opener: RefCell::new(None),
                 document_host: RefCell::new(Weak::new()),
                 closed: Cell::new(false),
@@ -409,40 +408,6 @@ impl RendererPageScriptEnvironment {
         self.inner.auxiliary_allocator.get().cloned()
     }
 
-    pub(crate) fn bind_window_identity(
-        &self,
-        name: crate::runtime::RendererBrowsingContextName,
-        window: Option<crate::runtime::RendererAuxiliaryWindow>,
-    ) {
-        if let Some(current) = self.inner.browsing_context_name.get() {
-            assert_eq!(
-                current, &name,
-                "a Page must retain its browsing context name cell"
-            );
-        } else {
-            assert!(self.inner.browsing_context_name.set(name).is_ok());
-        }
-        if let Some(window) = window {
-            if let Some(current) = self.inner.auxiliary_window.get() {
-                assert_eq!(
-                    current, &window,
-                    "a Page must retain its auxiliary identity"
-                );
-            } else {
-                assert!(self.inner.auxiliary_window.set(window).is_ok());
-            }
-        }
-    }
-
-    pub(super) fn inherit_window_identity(&self, host: &mut PageScriptHost) -> bool {
-        let Some(name) = self.inner.browsing_context_name.get() else {
-            return false;
-        };
-        host.bind_browsing_context_name(name.clone());
-        host.bind_auxiliary_window(self.inner.auxiliary_window.get().cloned());
-        true
-    }
-
     pub(crate) fn set_opener(&self, opener: Option<v8::Global<v8::Object>>) {
         *self.inner.opener.borrow_mut() = opener;
     }
@@ -477,11 +442,11 @@ impl RendererPageScriptEnvironment {
             .borrow_mut();
         pages.retain(|_, page| page.strong_count() != 0);
         let matches = |inner: &RendererPageScriptEnvironmentInner| {
-            let current_name = inner.browsing_context_name.get()?;
+            let current_name = inner.window_identity.name();
             (!inner.closed.get()
                 && inner
-                    .auxiliary_window
-                    .get()
+                    .window_identity
+                    .auxiliary_window()
                     .is_none_or(|window| !window.is_closed())
                 && current_name.is_related_to(initiator)
                 && current_name.get() == name)
@@ -507,16 +472,8 @@ impl RendererPageScriptEnvironment {
             .collect()
     }
 
-    pub(crate) fn window_identity(
-        &self,
-    ) -> Option<(
-        Option<crate::runtime::RendererAuxiliaryWindow>,
-        crate::runtime::RendererBrowsingContextName,
-    )> {
-        Some((
-            self.inner.auxiliary_window.get().cloned(),
-            self.inner.browsing_context_name.get()?.clone(),
-        ))
+    pub(crate) fn window_identity(&self) -> &crate::runtime::RendererPageWindowIdentity {
+        &self.inner.window_identity
     }
 
     pub(crate) fn page_id(&self) -> u64 {

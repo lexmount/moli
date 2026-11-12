@@ -31,6 +31,7 @@ impl ScriptVmDefaultWorldBootstrap {
             resource_completion_tx,
             loader,
             browser_context_runtime,
+            env.window_identity.clone(),
             javascript_dialog_runtime,
             isolate_bootstrap,
             &[],

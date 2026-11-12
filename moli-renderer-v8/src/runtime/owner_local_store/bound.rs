@@ -159,12 +159,18 @@ pub(super) fn reserve_renderer_document_isolate_on_bound_owner_local_store(
     owner_local: &RendererOwnerLocalContext,
     page_id: PageId,
     page_runtime_task_source: crate::page_task_queue::PageRuntimeTaskSource,
+    window_identity: crate::runtime::RendererPageWindowIdentity,
 ) -> Result<(
     RendererDocumentIsolateBootstrap,
     RendererDocumentIsolateReservation,
 )> {
     with_bound_render_runtime_owner_local_store_session(|mut session| {
-        session.reserve_renderer_document_isolate(owner_local, page_id, page_runtime_task_source)
+        session.reserve_renderer_document_isolate(
+            owner_local,
+            page_id,
+            page_runtime_task_source,
+            window_identity,
+        )
     })
 }
 
