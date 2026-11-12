@@ -1202,6 +1202,62 @@ fn cli_dump_html_includes_and_strips_shadow_roots() -> Result<()> {
 }
 
 #[test]
+fn cli_dump_html_inlines_and_strips_frames_inside_shadow_roots() -> Result<()> {
+    // AFTER is produced by the child script, never present in authored srcdoc.
+    let fixture = r#"<div id=h></div><script>
+        const root = h.attachShadow({mode: 'MODE'});
+        globalThis.dumpFrame = document.createElement('iframe');
+        dumpFrame.srcdoc = '<p id=x>before</p><script>x.textContent="AF"+"TER";var secret=1<\/script><style>p{color:red}</style>';
+        root.appendChild(dumpFrame);
+    </script>"#;
+    for nested in [false, true] {
+        let html = fixture.replace("MODE", if nested { "closed" } else { "open" });
+        let (html, frame) = if nested {
+            (
+                format!(
+                    "<iframe id=outer srcdoc=\"{}\"></iframe>",
+                    html.replace('&', "&amp;").replace('"', "&quot;")
+                ),
+                "document.getElementById('outer')?.contentWindow?.dumpFrame",
+            )
+        } else {
+            (html, "globalThis.dumpFrame")
+        };
+        let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));
+        let ready =
+            format!("{frame}?.contentDocument?.getElementById('x')?.textContent === 'AFTER'");
+        let output = run_fetch_cli_with_args(&url, &["--wait-script", &ready])?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        assert!(!clean_output(&output.stdout).contains("AFTER"));
+
+        for strip in [false, true] {
+            let mut args = vec!["--with-frames", "--wait-script", &ready];
+            if strip {
+                args.extend(["--strip-mode", "full"]);
+            }
+            let output = run_fetch_cli_with_args(&url, &args)?;
+            assert!(output.status.success(), "{}", clean_output(&output.stderr));
+            let stdout = clean_output(&output.stdout);
+            assert_eq!(
+                stdout.matches("AFTER").count(),
+                1,
+                "nested={nested}, strip={strip}: {stdout}"
+            );
+            assert!(stdout.contains("shadowrootmode="), "{stdout}");
+            if strip {
+                for omitted in ["secret", "color:red", "before"] {
+                    assert!(!stdout.contains(omitted), "retained {omitted}: {stdout}");
+                }
+            } else {
+                assert!(stdout.contains("var secret=1"), "{stdout}");
+                assert!(stdout.contains("color:red"), "{stdout}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn cli_dump_full_screenshot_captures_tall_page_without_prior_layout() -> Result<()> {
     let html = "<!doctype html><style>html,body{margin:0}main{height:1600px;background:blue}</style><main></main>";
     let url = format!("data:text/html;base64,{}", BASE64_STANDARD.encode(html));

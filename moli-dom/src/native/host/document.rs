@@ -1578,13 +1578,15 @@ impl DomHost {
             .collect()
     }
 
+    /// Indexed frame owners in shadow-including order, including a frame root.
     pub fn child_browsing_context_host_candidate_handles_in_subtree_in_document_order(
         &self,
         root: DomHandle,
     ) -> Vec<DomHandle> {
-        let Some(root_node) = self.node(root) else {
+        if self.node(root).is_none() {
             return Vec::new();
-        };
+        }
+        let connected = self.is_connected(root);
         let mut handles = self
             .child_browsing_context_host_candidates
             .borrow()
@@ -1592,21 +1594,14 @@ impl DomHost {
             .copied()
             .filter(|handle| {
                 self.is_child_browsing_context_host_candidate(*handle)
-                    && root_node.contains(&self.dom, *handle)
+                    // Host-inclusive ancestry also crosses template.content.
+                    // A connected frame tree must exclude those inert owners.
+                    && (!connected || self.is_connected(*handle))
+                    && self.is_host_including_inclusive_ancestor(root, *handle)
             })
             .collect::<Vec<_>>();
         handles.sort_unstable_by(|left, right| {
-            let Some(left_node) = self.node(*left) else {
-                return std::cmp::Ordering::Greater;
-            };
-            let position = left_node.compare_document_position(&self.dom, *right);
-            if position & Node::DOCUMENT_POSITION_FOLLOWING != 0 {
-                std::cmp::Ordering::Less
-            } else if position & Node::DOCUMENT_POSITION_PRECEDING != 0 {
-                std::cmp::Ordering::Greater
-            } else {
-                left.index().cmp(&right.index())
-            }
+            self.compare_handles_in_shadow_including_tree_order(*left, *right)
         });
         handles.dedup();
         handles
