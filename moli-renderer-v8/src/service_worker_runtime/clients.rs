@@ -31,6 +31,7 @@ pub(crate) struct ServiceWorkerClientSnapshot {
     pub(crate) visibility_state: ServiceWorkerClientVisibilityState,
     pub(crate) controlled: bool,
     pub(crate) focused: bool,
+    pub(crate) ancestor_origins: Vec<String>,
 }
 
 impl ServiceWorkerClientSnapshot {
@@ -45,6 +46,7 @@ impl ServiceWorkerClientSnapshot {
             visibility_state: ServiceWorkerClientVisibilityState::Visible,
             controlled,
             focused: false,
+            ancestor_origins: Vec::new(),
         }
     }
 
@@ -63,6 +65,7 @@ impl ServiceWorkerClientSnapshot {
             visibility_state: ServiceWorkerClientVisibilityState::Visible,
             controlled,
             focused: true,
+            ancestor_origins: Vec::new(),
         }
     }
 
@@ -81,6 +84,7 @@ impl ServiceWorkerClientSnapshot {
             visibility_state: ServiceWorkerClientVisibilityState::Hidden,
             controlled,
             focused: false,
+            ancestor_origins: Vec::new(),
         }
     }
 }

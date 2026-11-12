@@ -2221,15 +2221,44 @@ async fn navigator_service_worker_clients_query_nested_frame_type() {
             self.addEventListener("activate", event => {
               event.waitUntil(clients.claim());
             });
+            let retained;
+            function checkOrigins(client) {
+              const value = client.ancestorOrigins;
+              const descriptor = Object.getOwnPropertyDescriptor(WindowClient.prototype, 'ancestorOrigins');
+              if (!Array.isArray(value) || !Object.isFrozen(value) ||
+                  value !== client.ancestorOrigins || Object.hasOwn(client, 'ancestorOrigins') ||
+                  Object.getPrototypeOf(value) !== Array.prototype ||
+                  !descriptor.enumerable || !descriptor.configurable || descriptor.set !== undefined ||
+                  descriptor.get.length !== 0 || descriptor.get.name !== 'get ancestorOrigins')
+                throw new Error('Invalid ancestorOrigins WebIDL shape');
+              let rejected = false;
+              try { value.push('changed'); } catch (e) { rejected = e.name === 'TypeError'; }
+              if (!rejected) throw new Error('ancestorOrigins must be frozen');
+              for (const receiver of [{}, WindowClient.prototype, Object.create(client), new Proxy(client, {})]) {
+                rejected = false;
+                try { descriptor.get.call(receiver); } catch (e) { rejected = e.name === 'TypeError'; }
+                if (!rejected) throw new Error('ancestorOrigins accepted an illegal receiver');
+              }
+              if ('ancestorOrigins' in Client.prototype) throw new Error('Attribute leaked onto Client');
+              return value;
+            }
             self.addEventListener("message", event => {
               event.waitUntil((async () => {
                 const windows = await clients.matchAll({
                   includeUncontrolled: true,
                   type: "window"
                 });
+                checkOrigins(event.source);
+                for (const client of windows) checkOrigins(client);
                 if (event.data === "navigate-nested") {
                   const nested = windows.find(client => client.frameType === "nested");
-                  const navigated = nested && await nested.navigate("./next-frame.html");
+                  const queried = await clients.get(nested.id);
+                  checkOrigins(queried);
+                  if (queried.ancestorOrigins === nested.ancestorOrigins)
+                    throw new Error('Distinct WindowClients must have distinct frozen arrays');
+                  const beforeNavigate = Array.from(nested.ancestorOrigins);
+                  const navigated = await nested.navigate("./next-frame.html");
+                  checkOrigins(navigated);
                   const afterNavigate = await clients.matchAll({
                     includeUncontrolled: true,
                     type: "window"
@@ -2242,10 +2271,14 @@ async fn navigator_service_worker_clients_query_nested_frame_type() {
                   event.source.postMessage(JSON.stringify({
                     navigatedUrl: navigated && navigated.url,
                     navigatedFrameType: navigated && navigated.frameType,
+                    beforeNavigate,
+                    navigatedOrigins: Array.from(navigated.ancestorOrigins),
+                    retainedOrigins: Array.from(checkOrigins(retained)),
                     rows
                   }));
                   return;
                 }
+                retained = windows.find(client => client.frameType === "nested");
                 const rows = windows.map(client => ({
                   url: client.url,
                   type: client.type,
@@ -2376,12 +2409,13 @@ async fn navigator_service_worker_clients_query_nested_frame_type() {
     vm.eval(
         r#"
         globalThis.__serviceWorkerNestedFrameTypeProbe = "navigate-pending";
+        document.querySelector("iframe").referrerPolicy = "no-referrer";
         __serviceWorkerNestedFrameRegistration.active.postMessage("navigate-nested");
         "#,
     )
     .expect("service worker nested WindowClient.navigate should post");
     let expected = format!(
-        r#"{{"navigatedUrl":"{base_url}/app/next-frame.html","navigatedFrameType":"nested","rows":[{{"url":"{base_url}/app/next-frame.html","type":"window","frameType":"nested"}},{{"url":"{base_url}/app/page.html","type":"window","frameType":"top-level"}}]}}"#
+        r#"{{"navigatedUrl":"{base_url}/app/next-frame.html","navigatedFrameType":"nested","beforeNavigate":["{base_url}"],"navigatedOrigins":["null"],"retainedOrigins":["{base_url}"],"rows":[{{"url":"{base_url}/app/next-frame.html","type":"window","frameType":"nested"}},{{"url":"{base_url}/app/page.html","type":"window","frameType":"top-level"}}]}}"#
     );
     drain_service_worker_test_until_eval_equals(
         &mut vm,

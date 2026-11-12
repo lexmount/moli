@@ -189,6 +189,10 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
             .set_prototype(scope, client_proto.into())
             .filter(|set| *set)
             .ok_or_else(|| anyhow!("failed to inherit WindowClient prototype"))?;
+        super::service_worker_api::install_window_client_ancestor_origins_prototype(
+            scope,
+            window_proto,
+        )?;
     }
 
     Ok(())
