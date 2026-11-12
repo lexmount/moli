@@ -1,9 +1,3 @@
-IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?101-last=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?21-40=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?41-60=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?61-80=&moli-wpt-any=window
-IndexedDB/structured-clone.any.js?81-100=&moli-wpt-any=window
 accessibility/crashtests/animated-textarea.html
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
@@ -69,7 +63,6 @@ fetch/api/policies/referrer-unsafe-url-service-worker.https.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/nested-focus-within-iframe-focus-event.html
-html/browsers/browsing-the-web/back-forward-cache/eligibility/broadcast-channel.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-push-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-reload-navigation.html
 html/browsers/browsing-the-web/history-traversal/pageswap/pageswap-replace-navigation.html
@@ -129,6 +122,7 @@ html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
@@ -154,6 +148,7 @@ infrastructure/expected-fail/timeout.html
 navigation-api/navigate-event/defer/tentative/defer-back.html
 navigation-api/navigate-event/defer/tentative/defer-restore-callback-abort.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigation-activation/activation-traverse-not-in-entries.html
 navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html
@@ -177,12 +172,8 @@ page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
 requestidlecallback/callback-suspended.html
-resource-timing/content-type-minimization.html
 resource-timing/event-source-timing.html
-resource-timing/iframe-sequence-of-events.html
 resource-timing/input-sequence-of-events.html
-resource-timing/tentative/initiator-url/post-message-shared-worker.html
-resource-timing/tentative/initiator-url/post-message-worker.html
 resource-timing/tentative/stylesheet-initiated.html
 scroll-to-text-fragment/find-range-from-text-directive-no-reveal.html
 selection/crashtests/selectall-and-find-svg-text-on-selectstart.html
@@ -211,7 +202,6 @@ service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/performance-timeline.https.html
 service-workers/service-worker/postmessage-to-client-message-queue.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
-service-workers/service-worker/resource-timing-fetch-variants.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
@@ -222,12 +212,13 @@ svg/linking/scripted/href-mpath-element.html
 svg/linking/scripted/href-script-element.html
 trusted-types/DOMParser-parseFromString-regression.html
 trusted-types/trusted-types-navigation.html?01-05
-trusted-types/trusted-types-navigation.html?06-10
+trusted-types/trusted-types-navigation.html?11-15
+trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-navigation.html?26-30
 trusted-types/trusted-types-navigation.html?31-35
+trusted-types/trusted-types-navigation.html?36-last
 trusted-types/trusted-types-reporting-for-Window-ServiceWorkerContainer-register.https.html
 web-based-payment-handler/can-make-payment-event-constructor.https.serviceworker.html
 web-based-payment-handler/payment-request-event-constructor.https.serviceworker.html
 webusb/usb.serviceworker.https.html
 xhr/open-url-multi-window-4.htm
-xhr/setrequestheader-content-type.htm
