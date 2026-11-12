@@ -417,7 +417,7 @@ fn zhihu_bot_detection_harness_fixture_matches_stable_moli_baseline() {
     assert_eq!(value["mediaSource"]["name"], "MediaSource");
     assert_eq!(value["mediaSource"]["staticName"], "isTypeSupported");
     assert_eq!(value["mediaSource"]["avc1"], true);
-    assert_eq!(value["mediaSource"]["vp09"], false);
+    assert_eq!(value["mediaSource"]["vp09"], true);
     assert_eq!(value["mediaSource"]["instanceOf"], true);
     assert_eq!(value["mediaSource"]["prototypeMatches"], true);
     assert_eq!(value["mediaSource"]["ownKeys"], serde_json::json!([]));

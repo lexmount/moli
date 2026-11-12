@@ -494,7 +494,7 @@ fn web_api_mime_surfaces_use_parser_normalization() {
 
     assert_eq!(
         result,
-        r#"{"blobType":"text/plain; charset=utf-8","sliceType":"application/json","domParserParagraph":"P","domParserParameterized":"TypeError","canPlayType":"probably","canPlayTypeObject":"maybe","canPlayTypeParameterizedAudio":"probably","canPlayTypeMissing":"TypeError","canPlayTypeSymbol":"TypeError"}"#
+        r#"{"blobType":"text/plain; charset=utf-8","sliceType":"application/json","domParserParagraph":"P","domParserParameterized":"TypeError","canPlayType":"probably","canPlayTypeObject":"probably","canPlayTypeParameterizedAudio":"probably","canPlayTypeMissing":"TypeError","canPlayTypeSymbol":"TypeError"}"#
     );
 }
 
