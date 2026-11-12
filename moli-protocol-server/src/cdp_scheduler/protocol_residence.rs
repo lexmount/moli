@@ -562,7 +562,12 @@ impl SchedulerQueues {
             return ProtocolSchedulerStep::Wait;
         }
         if let ProtocolSchedulerResidence::RendererOutputPublication(work) = residence {
-            return self.publication_scheduler_step(work, conn, &mut HashSet::new());
+            return self.publication_scheduler_step(
+                work,
+                conn,
+                &mut HashSet::new(),
+                &mut HashSet::new(),
+            );
         }
         if residence.has_open_load_binding_window() {
             ProtocolSchedulerStep::CloseLoadBindingWindow
@@ -580,14 +585,20 @@ impl SchedulerQueues {
         }
     }
 
+    /// Follow the insertion order without advancing actual delivery receipts.
+    /// Earlier successful checks may satisfy internal edges in this same batch.
     fn publication_scheduler_step(
         &self,
         work: &RendererOutputPublicationWork,
         conn: &moli_protocol::ProtocolWorkflowState<'_>,
         visiting: &mut HashSet<RendererOutputCursor>,
+        ready: &mut HashSet<RendererOutputCursor>,
     ) -> ProtocolSchedulerStep {
         if work.projection_pending
-            || self.delivery_predecessor_is_pending(work.delivery_predecessor)
+            || (self.delivery_predecessor_is_pending(work.delivery_predecessor)
+                && !work
+                    .delivery_predecessor
+                    .is_some_and(|predecessor| ready.contains(&predecessor)))
         {
             return ProtocolSchedulerStep::Wait;
         }
@@ -611,10 +622,11 @@ impl SchedulerQueues {
             for native in
                 self.inserted_publications(work.renderer_output_cursor, insertion.boundary.cursor())
             {
-                let step = self.publication_scheduler_step(native, conn, visiting);
+                let step = self.publication_scheduler_step(native, conn, visiting, ready);
                 if step != ProtocolSchedulerStep::CompleteReadyResidence {
                     return step;
                 }
+                ready.insert(native.renderer_output_cursor);
             }
         }
         visiting.remove(&work.renderer_output_cursor);
