@@ -993,7 +993,16 @@ impl ServiceWorkerClientEndpoint {
                     .is_ok()
             }
             Self::ReservedPage { .. } | Self::PendingWorker => false,
-            Self::Worker(sender) => sender.send(WorkerMessage::Post(payload)).is_ok(),
+            Self::Worker(sender) => sender
+                .send(WorkerMessage::ServiceWorkerClientMessage(Box::new(
+                    crate::types::ServiceWorkerClientMessageData {
+                        source_version_id,
+                        source_script_url,
+                        source_state,
+                        payload,
+                    },
+                )))
+                .is_ok(),
         }
     }
 

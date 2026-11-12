@@ -69,6 +69,9 @@ pub(crate) fn worker_secure_context_for_script_url(
 pub(crate) enum WorkerMessage {
     /// A `postMessage` payload encoded via V8 structured clone.
     Post(V8StructuredClonePayload),
+    /// Dispatch a ServiceWorker message at this client's container, retaining
+    /// the source version and origin rather than using the parent message port.
+    ServiceWorkerClientMessage(Box<crate::types::ServiceWorkerClientMessageData>),
     /// A DOM manipulation task belonging to an encoded RTP transformer.
     RtpTransform(super::rtp_tasks::RtpTransformTask),
     /// A transferred `MessagePort` has queued work ready for delivery.

@@ -316,11 +316,32 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     version: &crate::service_worker_runtime::ServiceWorkerVersionSnapshot,
 ) -> Result<v8::Local<'s, v8::Object>> {
+    build_worker_service_worker_object(
+        scope,
+        version.version_id(),
+        version.script_url(),
+        version.state(),
+    )
+}
+
+pub(crate) fn worker_service_worker_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    version_id: ServiceWorkerVersionId,
+    script_url: &Url,
+    lifecycle_state: &'static str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_worker_state(scope)?;
+    build_worker_service_worker_object(scope, version_id, script_url, lifecycle_state).ok()
+}
+
+fn build_worker_service_worker_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    version_id: ServiceWorkerVersionId,
+    script_url: &Url,
+    lifecycle_state: &'static str,
+) -> Result<v8::Local<'s, v8::Object>> {
     if let Some(state) = get_worker_state(scope)
-        && let Some(worker) = state
-            .borrow()
-            .service_worker_objects
-            .get(&version.version_id())
+        && let Some(worker) = state.borrow().service_worker_objects.get(&version_id)
     {
         return Ok(v8::Local::new(scope, worker));
     }
@@ -328,12 +349,12 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "ServiceWorker")?;
     let worker = ServiceWorkerObjectDeclaration {
         prototype,
-        script_url: version.script_url().as_str().to_owned(),
-        state: version.state(),
+        script_url: script_url.as_str().to_owned(),
+        state: lifecycle_state,
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build worker ServiceWorker object: {error:?}"))?;
-    let version_id_value = v8::BigInt::new_from_u64(scope, version.version_id().as_u64());
+    let version_id_value = v8::BigInt::new_from_u64(scope, version_id.as_u64());
     set_private_value(
         scope,
         worker,
@@ -345,7 +366,7 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
         state
             .borrow_mut()
             .service_worker_objects
-            .insert(version.version_id(), v8::Global::new(scope, worker));
+            .insert(version_id, v8::Global::new(scope, worker));
     }
     Ok(worker)
 }
@@ -1859,6 +1880,20 @@ pub(super) fn service_worker_worker_post_message_callback<'s>(
     let Some(target_version_id) = service_worker_version_id_from_object(scope, args.this()) else {
         return;
     };
+    if get_worker_state(scope)
+        .is_some_and(|state| state.borrow().service_worker_client_id.is_some())
+    {
+        let transfer_arg = (args.length() > 1).then(|| args.get(1));
+        if let Some(payload) = crate::context_bootstrap::structured_serialize_value_for_post_message(
+            scope,
+            args.get(0),
+            transfer_arg,
+            "ServiceWorker",
+        ) {
+            dispatch_service_worker_message_from_worker_client(scope, target_version_id, payload);
+        }
+        return;
+    }
     let Some((source_version_id, parent_tx)) = service_worker_runtime_message_identity(scope)
     else {
         return;

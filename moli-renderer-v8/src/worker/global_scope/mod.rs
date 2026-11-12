@@ -126,13 +126,15 @@ mod redirect_owner;
 mod resource_timing;
 mod service_worker_api;
 mod service_worker_container;
+pub(crate) use service_worker_api::worker_service_worker_object;
 use service_worker_container::{
     WorkerServiceWorkerRegistration, build_worker_service_worker_registration,
     worker_service_worker_registration_unregister,
 };
 pub(crate) use service_worker_container::{
+    dispatch_service_worker_message_from_worker_client, retain_worker_service_worker_container,
     try_worker_service_worker_get_registration, try_worker_service_worker_get_registrations,
-    try_worker_service_worker_register,
+    try_worker_service_worker_register, worker_service_worker_container,
 };
 pub(in crate::worker) use service_worker_results::drain_service_worker_unregister_result;
 mod service_worker_results;

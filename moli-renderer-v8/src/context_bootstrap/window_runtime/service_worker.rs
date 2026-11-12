@@ -705,7 +705,7 @@ pub(crate) fn dispatch_service_worker_client_message_body(
     let scope = &mut v8::ContextScope::new(scope, context);
     let previous_owner_context = owner.enter(scope);
     let effect =
-        dispatch_service_worker_client_message_in_owner_scope(scope, container, completion);
+        dispatch_service_worker_client_message_in_owner_scope(scope, container, completion.into());
     if effect.dispatched() {
         owner.defer_restore(scope, previous_owner_context);
     } else {
@@ -714,25 +714,47 @@ pub(crate) fn dispatch_service_worker_client_message_body(
     effect
 }
 
+pub(crate) fn dispatch_worker_service_worker_client_message_body(
+    scope: &mut v8::PinScope<'_, '_>,
+    message: crate::types::ServiceWorkerClientMessageData,
+) -> ServiceWorkerClientMessageDispatchEffect {
+    let Some(container) = crate::worker::worker_service_worker_container(scope) else {
+        return ServiceWorkerClientMessageDispatchEffect::CurrentTargetProducedNoDispatchableEvent;
+    };
+    dispatch_service_worker_client_message_in_owner_scope(scope, container, message)
+}
+
 fn dispatch_service_worker_client_message_in_owner_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     container: v8::Local<'s, v8::Object>,
-    completion: crate::types::ServiceWorkerClientMessageCompletion,
+    completion: crate::types::ServiceWorkerClientMessageData,
 ) -> ServiceWorkerClientMessageDispatchEffect {
-    let source = service_worker_container_cached_worker_for_version(
-        scope,
-        container,
-        completion.source_version_id,
-    )
-    .unwrap_or_else(|| {
-        let source = build_service_worker_object(
+    let source = if crate::worker::get_worker_state(scope).is_some() {
+        let Some(source) = crate::worker::worker_service_worker_object(
             scope,
-            completion.source_script_url.as_str(),
+            completion.source_version_id,
+            &completion.source_script_url,
             completion.source_state,
-        );
-        service_worker_worker_set_version_id(scope, source, completion.source_version_id);
+        ) else {
+            return ServiceWorkerClientMessageDispatchEffect::CurrentTargetProducedNoDispatchableEvent;
+        };
         source
-    });
+    } else {
+        service_worker_container_cached_worker_for_version(
+            scope,
+            container,
+            completion.source_version_id,
+        )
+        .unwrap_or_else(|| {
+            let source = build_service_worker_object(
+                scope,
+                completion.source_script_url.as_str(),
+                completion.source_state,
+            );
+            service_worker_worker_set_version_id(scope, source, completion.source_version_id);
+            source
+        })
+    };
     if !crate::context_bootstrap::runtime_message_allowed_for_current_target(
         scope,
         &completion.payload,
@@ -1185,17 +1207,21 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_controller_getter_c
         rv.set(v8::null(scope).into());
         return;
     };
-    let cached_for_version = state.active_version_id().and_then(|version_id| {
-        service_worker_container_cached_worker_for_version(scope, args.this(), version_id).or_else(
-            || {
-                get_private_value(scope, args.this(), SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT)
-                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                    .filter(|worker| {
-                        service_worker_worker_matches_version(scope, *worker, version_id)
-                    })
-            },
-        )
-    });
+    let cached_for_version = if crate::worker::get_worker_state(scope).is_some() {
+        // Worker wrappers use their realm's native version map and bindings.
+        None
+    } else {
+        state.active_version_id().and_then(|version_id| {
+            service_worker_container_cached_worker_for_version(scope, args.this(), version_id)
+                .or_else(|| {
+                    get_private_value(scope, args.this(), SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT)
+                        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                        .filter(|worker| {
+                            service_worker_worker_matches_version(scope, *worker, version_id)
+                        })
+                })
+        })
+    };
     let controller = cached_for_version
         .unwrap_or_else(|| build_service_worker_controller_object(scope, &state, owner));
     service_worker_worker_set_state(scope, controller, "activated");
@@ -2714,6 +2740,18 @@ fn build_service_worker_controller_object<'s>(
     state: &crate::runtime::ServiceWorkerControlState,
     owner: OwnerDispatchScope,
 ) -> v8::Local<'s, v8::Object> {
+    if crate::worker::get_worker_state(scope).is_some() {
+        let version_id = state
+            .active_version_id()
+            .expect("a live Worker controller has a native version");
+        return crate::worker::worker_service_worker_object(
+            scope,
+            version_id,
+            state.script_url(),
+            "activated",
+        )
+        .expect("ServiceWorker Worker bindings should be available");
+    }
     let controller = build_service_worker_object(scope, state.script_url().as_str(), "activated");
     if let Some(version_id) = state.active_version_id() {
         service_worker_worker_set_version_id(scope, controller, version_id);

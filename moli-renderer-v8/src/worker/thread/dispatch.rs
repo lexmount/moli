@@ -3930,6 +3930,25 @@ pub(super) fn dispatch_rtp_transform_task(
 }
 
 /// Dispatch a parent `postMessage()` delivery into the worker global.
+pub(super) fn dispatch_service_worker_client_message(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    message: crate::types::ServiceWorkerClientMessageData,
+) {
+    let scope = pin!(v8::HandleScope::new(isolate));
+    let scope = &mut scope.init();
+    let ctx = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, ctx);
+    {
+        let try_catch = pin!(v8::TryCatch::new(scope));
+        let scope = &mut try_catch.init();
+        crate::context_bootstrap::dispatch_worker_service_worker_client_message_body(
+            scope, message,
+        );
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+}
+
 pub(super) fn dispatch_message_event(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
