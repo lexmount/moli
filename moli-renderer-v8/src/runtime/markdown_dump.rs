@@ -14,12 +14,15 @@ impl PageVm {
     pub(crate) fn render_markdown(&self, options: RendererMarkdownOptions) -> String {
         let strip = options.strip;
         let host = self.vm().document_runtime.dom_host();
-        let dom = live_dom::LiveDom::new(host);
-        if dom.has_shadow_roots() {
-            self.render_markdown_source(&dom, strip)
-        } else {
-            self.render_markdown_source(host.dom(), strip)
-        }
+        self.vm()
+            .with_embedded_documents_for_export(options.with_frames, |frames| {
+                let dom = live_dom::LiveDom::new(host, frames);
+                if dom.is_projected() {
+                    self.render_markdown_source(&dom, strip)
+                } else {
+                    self.render_markdown_source(host.dom(), strip)
+                }
+            })
     }
 
     fn render_markdown_source(

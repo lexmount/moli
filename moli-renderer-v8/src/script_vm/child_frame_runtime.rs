@@ -448,6 +448,18 @@ impl ScriptVm {
         )
     }
 
+    /// Runs `f` with the live child Documents an export may inline.
+    pub(crate) fn with_embedded_documents_for_export<R>(
+        &self,
+        with_frames: bool,
+        f: impl FnOnce(Option<&dyn crate::dom::native::HtmlEmbeddedDocumentProvider>) -> R,
+    ) -> R {
+        f(self
+            ._context_host
+            .borrow()
+            .embedded_documents_for_export(with_frames))
+    }
+
     pub(crate) fn take_pending_location_navigation_with_seed(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {
