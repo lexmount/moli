@@ -866,58 +866,25 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
     context: &str,
     mut admit_additional_producer_work: impl FnMut(&PageVm),
 ) -> anyhow::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        page_vm
-            .runtime_hooks
-            .browser_context_runtime
-            .drain_service_worker_service_lane();
-        admit_additional_producer_work(page_vm);
-        while page_vm
-            .run_exact_page_websocket_selected_task_for_test()
-            .await?
-            .is_some()
-        {
+    let (sender, receiver) = crate::service_worker_runtime::service_worker_owner_wake_channel();
+    page_vm
+        .runtime_hooks
+        .browser_context_runtime
+        .add_service_worker_owner_wake_sender(sender);
+    super::drive_page_work_until_done_with_producer_wake(
+        page_vm,
+        done_expression,
+        context,
+        |page_vm| {
             page_vm
                 .runtime_hooks
                 .browser_context_runtime
                 .drain_service_worker_service_lane();
             admit_additional_producer_work(page_vm);
-        }
-        let loader = page_vm.main_document_resource_loader();
-        while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
-            .await?
-        {
-            page_vm
-                .runtime_hooks
-                .browser_context_runtime
-                .drain_service_worker_service_lane();
-            admit_additional_producer_work(page_vm);
-        }
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
-        if page_vm.vm_mut().eval(done_expression)? == "true" {
-            return Ok(());
-        }
-        let _ = tokio::time::timeout(
-            Duration::from_secs(1),
-            page_vm.wait_for_page_work_arrival_without_timeout(false),
-        )
-        .await;
-    }
-    admit_additional_producer_work(page_vm);
-    while page_vm
-        .run_exact_page_websocket_selected_task_for_test()
-        .await?
-        .is_some()
-    {}
-    let value = page_vm
-        .vm_mut()
-        .eval(done_expression)
-        .unwrap_or_else(|error| format!("<failed to read done expression: {error}>"));
-    anyhow::bail!("{context}; done={value}");
+        },
+        Some(receiver),
+    )
+    .await
 }
 
 async fn drive_service_worker_page_vm_until_done(
@@ -925,13 +892,7 @@ async fn drive_service_worker_page_vm_until_done(
     done_expression: &str,
     context: &str,
 ) -> anyhow::Result<()> {
-    drive_service_worker_page_vm_until_done_with_explicit_producer_admission(
-        page_vm,
-        done_expression,
-        context,
-        |_| {},
-    )
-    .await
+    super::drive_service_worker_until_done(page_vm, done_expression, context).await
 }
 
 async fn drive_service_worker_and_shared_worker_page_vm_until_done(
