@@ -177,6 +177,9 @@ pub(crate) struct PreparedPageStopLoading {
         Result<moli_core::page::PendingPageCommand>,
     )>,
     cleanup: crate::domains::fetch::PreparedFetchCleanup,
+    /// Frame, loader and session of a provisional navigation cancelled by
+    /// this stop.
+    cancelled_navigation: Option<(String, String, Option<String>)>,
 }
 
 impl PreparedPageStopLoading {
@@ -190,8 +193,29 @@ impl PreparedPageStopLoading {
         // Capture the interrupted work now. A navigation admitted while the
         // original Native stop waits must not become part of this cleanup.
         let pending = take_pending_fetch_state_for_owner(conn, owner);
+        // Like Chromium, stop cancels an uncommitted navigation; its pending
+        // Page.navigate then resolves as aborted.
+        // Fetch-paused navigations are stopped by the Fetch cleanup below.
+        let fetch_paused_navigation =
+            !pending.0.is_empty() || !pending.1.is_empty() || !pending.2.is_empty();
+        let cancelled_navigation = conn
+            .runtime_session_owner_slot_for_owner(owner)
+            .filter(|slot| !fetch_paused_navigation && slot.has_pending_document_navigation())
+            .and_then(|slot| slot.current_document_loader_id())
+            .map(str::to_owned)
+            .and_then(|loader_id| {
+                conn.clear_pending_document_navigation_for_owner_if_loader_matches(
+                    owner, &loader_id,
+                );
+                let frame_id = conn.runtime_session_owner_frame_id_for_owner(owner)?;
+                Some((frame_id, loader_id, owner.session_id().map(str::to_owned)))
+            });
         let cleanup = crate::domains::fetch::prepare_page_stop_loading(conn, owner, pending);
-        Self { lifecycle, cleanup }
+        Self {
+            lifecycle,
+            cleanup,
+            cancelled_navigation,
+        }
     }
 
     pub(crate) async fn run(
@@ -222,6 +246,14 @@ impl PreparedPageStopLoading {
             .into_disposal_output(&mut events);
         if let Some(error) = result.first_error {
             tracing::debug!(%error, "failed to clear pending Fetch work while stopping navigation");
+        }
+        if let Some((frame_id, loader_id, session_id)) = self.cancelled_navigation {
+            super::emit_navigation_frame_stopped_loading_background_events(
+                &mut events,
+                session_id.as_deref(),
+                &frame_id,
+                &loader_id,
+            );
         }
         let mut plan = CommandOutputPlan::success();
         plan.extend_background_events(events);

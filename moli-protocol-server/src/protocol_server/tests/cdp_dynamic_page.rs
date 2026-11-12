@@ -4764,6 +4764,78 @@ async fn websocket_cdp_dynamic_page_pending_runtime_command_does_not_block_later
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_loading_aborts_a_provisional_navigation() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/slow",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    axum::response::Html("<p id=slow>slow</p>")
+                }),
+            )
+            .fallback(get(|| async {
+                axum::response::Html("<p id=home>home</p>")
+            })),
+        "stop-loading-provisional",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) = connect_async(
+        discover_browser_websocket_url(addr)
+            .await
+            .expect("discover browser endpoint"),
+    )
+    .await
+    .unwrap();
+    let target_id = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target_id).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut page, 2, &format!("http://{fixture_addr}/home"))
+        .await;
+
+    for (id, method, params) in [
+        (
+            3_u64,
+            "Page.navigate",
+            json!({"url": format!("http://{fixture_addr}/slow")}),
+        ),
+        (4_u64, "Page.stopLoading", json!({})),
+    ] {
+        page.send(WsMessage::Text(
+            json!({"id": id, "method": method, "params": params})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let (mut navigated, mut stopped, mut stopped_loading) = (false, false, false);
+    let messages = recv_until_match(&mut page, |message| {
+        navigated |= message["id"] == json!(3);
+        stopped |= message["id"] == json!(4);
+        stopped_loading |= message["method"] == "Page.frameStoppedLoading";
+        navigated && stopped && stopped_loading
+    })
+    .await;
+    assert_eq!(
+        response_by_id(&messages, 3)["result"]["errorText"],
+        "net::ERR_ABORTED"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message["method"] == "Page.frameNavigated"),
+        "the stopped navigation must not commit"
+    );
+    assert_eq!(
+        evaluate_window_name_probe(&mut page, 5, "location.pathname").await,
+        "/home"
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_dynamic_page_matches_chromium_browser_attach_access_modes() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (mut browser, _) = connect_async(
