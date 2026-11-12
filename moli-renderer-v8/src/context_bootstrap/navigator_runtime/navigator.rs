@@ -1759,3 +1759,25 @@ fn navigator_runtime_data_object<'s>(
     get_private_value(scope, navigator, NAVIGATOR_RUNTIME_DATA_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
+
+pub(in crate::context_bootstrap) fn service_worker_container_for_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    // Native notifications address the Window's associated container. Neither
+    // Window.navigator nor Navigator.serviceWorker invokes author code here.
+    let navigator = get_private_value(scope, window, WINDOW_NAVIGATOR_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .or_else(|| {
+            super::super::window_lazy_surface::ensure_window_lazy_surface_object(
+                scope,
+                window,
+                super::super::window_lazy_surface::WindowLazySurface::Navigator,
+            )
+            .ok()
+        })?;
+    let backing = navigator_runtime_data_object(scope, navigator)?;
+    ensure_navigator_subobject(scope, backing, NavigatorSubobject::ServiceWorker)
+        .ok()
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}

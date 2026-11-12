@@ -1,6 +1,7 @@
 use super::*;
 use crate::context_bootstrap::navigator_runtime::{
-    SERVICE_WORKER_OWNER_TOKEN_SLOT, service_worker_owner_token_value,
+    SERVICE_WORKER_OWNER_TOKEN_SLOT, service_worker_container_for_window,
+    service_worker_owner_token_value,
 };
 use crate::context_bootstrap::service_worker_interfaces::{
     CONTAINER_READY, NavigationPreloadManagerObjectDeclaration, REGISTRATION_UPDATE_VIA_CACHE,
@@ -882,12 +883,7 @@ fn service_worker_container_from_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let navigator = window
-        .get(scope, v8str(scope, "navigator").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    navigator
-        .get(scope, v8str(scope, "serviceWorker").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    service_worker_container_for_window(scope, window)
 }
 
 fn service_worker_container_registration_cache<'s>(

@@ -1,6 +1,7 @@
 use super::*;
 
 mod navigation_preload;
+mod window_container;
 
 #[tokio::test]
 async fn service_worker_navigation_fallback_preserves_reload_validation_on_wire() {
