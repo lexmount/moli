@@ -173,6 +173,7 @@ impl PageScriptHost {
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
         let reserved_service_worker_client =
             self.pending_reserved_service_worker_top_level_client_for_navigation(&url);
+        let navigation_initiator = Some(self.document_navigation_initiator());
         self.pending_top_level_navigation = Some(PendingTopLevelNavigation::Location(Box::new(
             PendingLocationNavigation {
                 handoff,
@@ -186,7 +187,7 @@ impl PageScriptHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
-                navigation_initiator: None,
+                navigation_initiator,
                 initial_document_environment: None,
                 entry_seed,
                 reserved_service_worker_client,
@@ -195,6 +196,28 @@ impl PageScriptHost {
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
+    }
+
+    /// The page Document as the initiator of its own location navigation, so
+    /// its referrer policy (Referrer-Policy header or `<meta name=referrer>`,
+    /// or the activating hyperlink's own policy) applies to the request.
+    /// Navigations from another realm replace this with their own source.
+    fn document_navigation_initiator(&self) -> crate::runtime::RendererNavigationInitiator {
+        let top = crate::native_bridge::OwnerDispatchScope::Top;
+        let url = self
+            .document_referrer_source_url_for_dispatch_scope(top)
+            .unwrap_or_else(|| self.document_url().clone());
+        let origin = self
+            .document_resource_loader_for_dispatch_scope(top)
+            .map(|loader| loader.fetch_context().request_origin())
+            .unwrap_or_else(|| moli_url::WebOrigin::from_url(&url));
+        let policy = self.hyperlink_referrer_policy.clone().or_else(|| {
+            crate::context_bootstrap::document_referrer_policy_for_native_document(
+                self,
+                self.document_handle(),
+            )
+        });
+        crate::runtime::RendererNavigationInitiator::new(url, origin, policy)
     }
 
     pub(crate) fn record_pending_service_worker_client_navigation(

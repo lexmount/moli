@@ -70,6 +70,7 @@ pub(super) async fn load_followed_location_navigation(
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
 ) -> Result<LoadedFollowedLocationNavigation> {
     debug!(%url, "starting pre-commit location navigation fetch");
     if let Some(response) = about_blank_navigation_response(&url)
@@ -115,6 +116,7 @@ pub(super) async fn load_followed_location_navigation(
         request_body,
         request_headers,
         browser_navigation_kind,
+        request_metadata,
     )
     .map_err(|error| anyhow!("failed to build location navigation request: {error}"))?;
     let mut response = loader
@@ -464,13 +466,19 @@ fn build_followed_location_navigation_request(
     request_body: Option<bytes::Bytes>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
+    request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
 ) -> Result<Request> {
     Request::new_bytes(request_method, url.as_str(), request_body, request_headers).map(|request| {
-        request
+        let request = request
             .with_top_level_navigation_cookie_context()
             .with_browser_navigation_kind(browser_navigation_kind)
             .with_initiator_url(initiator_url)
-            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+            .with_request_origin(moli_url::WebOrigin::from_url(initiator_url));
+        // The initiating Document's referrer policy, when it recorded one.
+        match request_metadata {
+            Some(metadata) => request.with_subresource_request_metadata(metadata),
+            None => request,
+        }
     })
 }
 
@@ -772,6 +780,10 @@ impl PageVm {
         let request_body = pending.request_body.clone();
         let request_headers = pending.request_headers.clone();
         let browser_navigation_kind = pending.browser_navigation_kind;
+        let request_metadata = pending
+            .navigation_initiator
+            .as_ref()
+            .map(|initiator| initiator.request_metadata());
         let reserved_service_worker_client_id = pending
             .reserved_service_worker_client
             .map(|reserved| reserved.release());
@@ -840,6 +852,7 @@ impl PageVm {
             request_body,
             request_headers,
             browser_navigation_kind,
+            request_metadata,
         )
         .await
         {
@@ -1523,6 +1536,7 @@ mod tests {
             None,
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .unwrap();
         let headers = outgoing_request_headers(&Default::default(), &request, None);
@@ -1566,6 +1580,7 @@ mod tests {
             None,
             Vec::new(),
             BrowserNavigationRequestKind::Reload,
+            None,
         )
         .unwrap();
         let headers = outgoing_request_headers(&Default::default(), &request, None);
@@ -1599,6 +1614,7 @@ mod tests {
                 "application/x-www-form-urlencoded".to_owned(),
             )],
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .unwrap();
 
@@ -1626,6 +1642,7 @@ mod tests {
                 None,
                 Vec::new(),
                 BrowserNavigationRequestKind::Navigate,
+                None,
             )
             .await;
             match result {
@@ -1644,6 +1661,7 @@ mod tests {
             Some(bytes::Bytes::from_static(b"upload")),
             Vec::new(),
             BrowserNavigationRequestKind::Navigate,
+            None,
         )
         .await
         .unwrap();

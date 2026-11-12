@@ -549,6 +549,7 @@ impl PageScriptHost {
             current_inline_script_stack: Vec::new(),
             compiled_string_provenance: Vec::new(),
             active_runtime_command_cause: None,
+            hyperlink_referrer_policy: None,
             active_inspector_dispatch: false,
             pending_top_level_navigation: None,
             ordinary_page_turn_navigation_handoff_active: false,

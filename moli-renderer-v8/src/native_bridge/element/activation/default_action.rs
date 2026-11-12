@@ -1895,6 +1895,43 @@ fn anchor_click_default_action(
     user_initiated: bool,
     pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
 ) -> Option<RendererPendingDownloadActivation> {
+    let runtime = unsafe { &*runtime_ptr };
+    let noreferrer = element_attribute(runtime, handle, "rel").is_some_and(|rel| {
+        rel.split_ascii_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("noreferrer"))
+    });
+    let link_policy = if noreferrer {
+        Some("no-referrer".to_owned())
+    } else {
+        element_attribute(runtime, handle, "referrerpolicy")
+            .and_then(|value| crate::referrer_policy::normalize_referrer_policy(&value))
+    };
+    let previous = std::mem::replace(
+        &mut unsafe { &mut *runtime_ptr }.hyperlink_referrer_policy,
+        link_policy,
+    );
+    let result = anchor_click_navigation(
+        scope,
+        runtime_ptr,
+        handle,
+        button,
+        modifiers,
+        user_initiated,
+        pending_child_navigations_before_default,
+    );
+    unsafe { &mut *runtime_ptr }.hyperlink_referrer_policy = previous;
+    result
+}
+
+fn anchor_click_navigation(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    button: i32,
+    modifiers: u8,
+    user_initiated: bool,
+    pending_child_navigations_before_default: &[(DomHandle, ChildBrowsingContextBootstrap)],
+) -> Option<RendererPendingDownloadActivation> {
     let resolved = resolve_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href");
     if resolved.is_empty() || url::Url::parse(&resolved).is_err() {
         return None;

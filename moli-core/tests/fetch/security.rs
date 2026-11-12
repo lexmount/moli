@@ -104,6 +104,61 @@ fn fixture_response(request: &IncomingRequest) -> (u16, String, String) {
     } else {
         "Cache-Control: no-store\r\n"
     };
+    if url.path() == "/referrer-nav" {
+        // A page whose script navigates to /nav-target?case=.. one way.
+        let case = url.query().unwrap_or_default().trim_start_matches("case=");
+        let target = format!("/nav-target?case={case}");
+        let meta = |policy| format!("<meta name=referrer content={policy}>");
+        let click = "<script>setTimeout(() => l.click(), 20)</script>";
+        let (headers, body) = match case {
+            "meta-link" => (
+                String::new(),
+                format!("{}<a id=l href={target}>go</a>{click}", meta("no-referrer")),
+            ),
+            "header-link" => (
+                "Referrer-Policy: no-referrer\r\n".to_owned(),
+                format!("<a id=l href={target}>go</a>{click}"),
+            ),
+            "attr-link" => (
+                String::new(),
+                format!("<a id=l referrerpolicy=no-referrer href={target}>go</a>{click}"),
+            ),
+            "rel-link" => (
+                String::new(),
+                format!("<a id=l rel=noreferrer href={target}>go</a>{click}"),
+            ),
+            "origin-link" => (
+                String::new(),
+                format!("{}<a id=l href={target}>go</a>{click}", meta("origin")),
+            ),
+            "meta-location" => (
+                String::new(),
+                format!(
+                    "{}<script>setTimeout(() => location.href = '{target}', 20)</script>",
+                    meta("no-referrer")
+                ),
+            ),
+            "meta-form" => (
+                String::new(),
+                format!(
+                    "{}<form id=f action=/nav-target><input name=case value={case}></form><script>setTimeout(() => f.submit(), 20)</script>",
+                    meta("no-referrer")
+                ),
+            ),
+            _ => (
+                String::new(),
+                format!("<a id=l href={target}>go</a>{click}"),
+            ),
+        };
+        return (200, format!("Content-Type: text/html\r\n{headers}"), body);
+    }
+    if url.path() == "/nav-target" {
+        return (
+            200,
+            "Content-Type: text/html\r\n".to_owned(),
+            "<p>target</p>".to_owned(),
+        );
+    }
     if url.path() == "/page" {
         return (
             200,
@@ -960,6 +1015,39 @@ async fn csp_sandboxed_child_script_and_modulepreload_preserve_opaque_origin() -
             assert_eq!(request.origin.as_deref(), Some("null"), "{request:?}");
             assert!(request.cookie.is_none(), "{request:?}");
         }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_navigations_apply_the_document_and_link_referrer_policy() -> Result<()> {
+    let server = SecurityServers::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let origin = server.origin.clone();
+    let source = |case: &str| format!("{origin}/referrer-nav?case={case}");
+    for (case, expected) in [
+        ("plain-link", Some(source("plain-link"))),
+        ("meta-link", None),
+        ("header-link", None),
+        ("attr-link", None),
+        ("rel-link", None),
+        ("origin-link", Some(format!("{origin}/"))),
+        ("meta-location", None),
+        ("meta-form", None),
+    ] {
+        browser
+            .fetch_with_wait_until(
+                &source(case),
+                moli_core::runtime::RenderedDomWaitUntil::NetworkIdle,
+                std::time::Duration::from_secs(5),
+            )
+            .await?;
+        let requests = server.requests.lock();
+        let target = requests
+            .iter()
+            .find(|request| request.path == format!("/nav-target?case={case}"))
+            .unwrap_or_else(|| panic!("{case}: no navigation request in {requests:?}"));
+        assert_eq!(target.referrer, expected, "{case}");
     }
     Ok(())
 }
