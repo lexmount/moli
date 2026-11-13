@@ -1,9 +1,9 @@
 use moli_core::network::WebStorageMutationSubscription;
 use moli_core::network::{WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord};
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::{Value, json};
 
 use crate::conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope};
-use crate::domains::command_output::protocol_message_background_event;
 
 pub(crate) fn take_pending_dom_storage_outputs_for_owner(
     conn: &CdpConnection,
@@ -80,13 +80,13 @@ fn event_from_mutation_record(
     record: WebStorageMutationRecord,
     session_id: Option<&str>,
 ) -> Option<BackgroundProtocolEvent> {
-    let (method, params) = match record.mutation {
+    let (event, params) = match record.mutation {
         WebStorageMutation::ItemAdded {
             area_key,
             key,
             value,
         } => (
-            "DOMStorage.domStorageItemAdded",
+            LocalCdpEvent::DomStorageItemAdded,
             json!({
                 "storageId": storage_id_for_area_key(&area_key, record.area_kind)?,
                 "key": key.to_string_lossy(),
@@ -99,7 +99,7 @@ fn event_from_mutation_record(
             old_value,
             new_value,
         } => (
-            "DOMStorage.domStorageItemUpdated",
+            LocalCdpEvent::DomStorageItemUpdated,
             json!({
                 "storageId": storage_id_for_area_key(&area_key, record.area_kind)?,
                 "key": key.to_string_lossy(),
@@ -108,27 +108,22 @@ fn event_from_mutation_record(
             }),
         ),
         WebStorageMutation::ItemRemoved { area_key, key, .. } => (
-            "DOMStorage.domStorageItemRemoved",
+            LocalCdpEvent::DomStorageItemRemoved,
             json!({
                 "storageId": storage_id_for_area_key(&area_key, record.area_kind)?,
                 "key": key.to_string_lossy(),
             }),
         ),
         WebStorageMutation::ItemsCleared { area_key } => (
-            "DOMStorage.domStorageItemsCleared",
+            LocalCdpEvent::DomStorageItemsCleared,
             json!({
                 "storageId": storage_id_for_area_key(&area_key, record.area_kind)?,
             }),
         ),
     };
-    let mut message = json!({
-        "method": method,
-        "params": params,
-    });
-    if let Some(session_id) = session_id {
-        message["sessionId"] = Value::String(session_id.to_owned());
-    }
-    Some(protocol_message_background_event(message))
+    Some(BackgroundProtocolEvent::immediate_event(
+        event, params, session_id,
+    ))
 }
 
 fn storage_id_for_area_key(area_key: &str, area_kind: WebStorageAreaKind) -> Option<Value> {
