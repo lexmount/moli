@@ -149,6 +149,127 @@ fn allowed(policy: &str, kind: ContentSecurityPolicyResourceKind, request: &str)
     )
 }
 
+#[test]
+fn prefetch_preserves_captured_and_native_self_origins_for_local_documents() {
+    let captured =
+        ContentSecurityPolicy::from("default-src 'self'").with_self_origin(&protected_url());
+    let unbound = ContentSecurityPolicy::from("default-src 'self'");
+    let native_origin = request_url("https://native.test/");
+    for document_url in [
+        "about:blank",
+        "about:srcdoc",
+        "https://different.test/document",
+    ] {
+        let document = request_url(document_url);
+        for (policy, allowed_host) in [(&captured, "app.test"), (&unbound, "native.test")] {
+            for host in ["app.test", "native.test", "different.test"] {
+                let target = request_url(&format!("https://{host}/next.xml"));
+                let violation = content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_reporting_endpoints_and_request(
+                    std::slice::from_ref(policy),
+                    &document,
+                    Some(&native_origin),
+                    &target,
+                    &target,
+                    ContentSecurityPolicyResourceKind::DocumentPrefetch,
+                    ContentSecurityPolicyRedirectStatus::NoRedirect,
+                    ContentSecurityPolicyDisposition::Enforce,
+                    &ContentSecurityPolicyReportingEndpoints::default(),
+                    ContentSecurityPolicyUrlRequest::Standard,
+                );
+                assert_eq!(
+                    violation.is_none(),
+                    host == allowed_host,
+                    "{document_url}: {allowed_host}: {host}"
+                );
+                if let Some(violation) = violation {
+                    assert_eq!(violation.document_uri, csp_url_for_report(&document));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn prefetch_uses_fetch_sources_without_treating_document_directives_as_permission() {
+    let kind = ContentSecurityPolicyResourceKind::DocumentPrefetch;
+    let url = "https://app.test/next.xml";
+    for policy in [
+        "",
+        "img-src 'none'; connect-src 'none'",
+        "default-src 'self'; script-src 'unsafe-inline'",
+        "default-src 'none'; img-src 'self'; connect-src 'none'",
+        "default-src 'none'; script-src 'strict-dynamic'; img-src 'self'",
+    ] {
+        assert!(allowed(policy, kind, url), "{policy}");
+    }
+    for policy in [
+        "default-src 'none'",
+        "default-src 'none'; script-src 'unsafe-inline' 'nonce-dGVzdA==' 'strict-dynamic'",
+        "default-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+        "default-src; img-src 'none'",
+    ] {
+        assert!(!allowed(policy, kind, url), "{policy}");
+    }
+}
+
+#[test]
+fn prefetch_enforces_each_policy_and_reports_the_restricting_default_directive() {
+    let permissive = "default-src 'none'; img-src 'self'";
+    let restricting = "default-src 'none'; script-src 'unsafe-inline'";
+    let policies = vec![permissive.into(), restricting.into()];
+    let kind = ContentSecurityPolicyResourceKind::DocumentPrefetch;
+    let url = request_url("https://app.test/next.xml");
+    assert!(!content_security_policy_allows_url(
+        &policies,
+        &protected_url(),
+        &url,
+        kind
+    ));
+    let violation = content_security_policy_url_violation_with_redirect_status_and_disposition(
+        &policies,
+        &protected_url(),
+        &url,
+        kind,
+        ContentSecurityPolicyRedirectStatus::NoRedirect,
+        ContentSecurityPolicyDisposition::Report,
+    )
+    .unwrap();
+    assert_eq!(violation.effective_directive, "default-src");
+    assert_eq!(violation.original_policy, restricting);
+    assert_eq!(
+        violation.disposition,
+        ContentSecurityPolicyDisposition::Report
+    );
+    assert_eq!(violation.blocked_uri, url.as_str());
+}
+
+#[test]
+fn prefetch_redirect_checks_keep_origin_restrictions_and_ignore_source_paths() {
+    let policies = vec!["default-src 'none'; img-src https://app.test/allowed/".into()];
+    let kind = ContentSecurityPolicyResourceKind::DocumentPrefetch;
+    let elsewhere = request_url("https://app.test/elsewhere/next.xml");
+    assert!(!content_security_policy_allows_url(
+        &policies,
+        &protected_url(),
+        &elsewhere,
+        kind
+    ));
+    assert!(content_security_policy_allows_url_with_redirect_status(
+        &policies,
+        &protected_url(),
+        &elsewhere,
+        kind,
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+    ));
+    assert!(!content_security_policy_allows_url_with_redirect_status(
+        &policies,
+        &protected_url(),
+        &request_url("https://other.test/allowed/next.xml"),
+        kind,
+        ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+    ));
+}
+
 fn script_element_request_allowed(
     policy: &str,
     request: ContentSecurityPolicyScriptElementRequest<'_>,
