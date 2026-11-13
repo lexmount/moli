@@ -32,7 +32,10 @@ impl WorkerIsolateState {
         shared_worker: bool,
         debugger_enabled: bool,
     ) -> Self {
-        let mut isolate = v8::Isolate::new(Default::default());
+        let mut isolate = v8::Isolate::new(
+            v8::CreateParams::default()
+                .array_buffer_allocator(moli_v8_init::new_array_buffer_allocator()),
+        );
         crate::context_bootstrap::install_agent_microtask_checkpoint_tasks(&mut isolate);
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
         isolate.set_capture_stack_trace_for_uncaught_exceptions(true, 32);

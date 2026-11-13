@@ -880,7 +880,11 @@ impl RendererIsolateHolder {
         // Window agents must not block their event loop with Atomics.wait().
         // Blink configures its main-thread isolates the same way; dedicated
         // workers keep V8's default and may use the blocking operation.
-        let mut isolate = v8::Isolate::new(v8::CreateParams::default().allow_atomics_wait(false));
+        let mut isolate = v8::Isolate::new(
+            v8::CreateParams::default()
+                .allow_atomics_wait(false)
+                .array_buffer_allocator(moli_v8_init::new_array_buffer_allocator()),
+        );
         if timing_enabled {
             tracing::info!(
                 target: "moli_cdp_nav_timing",

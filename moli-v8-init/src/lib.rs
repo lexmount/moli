@@ -3,6 +3,10 @@
 //! V8 platform initialization is process-global. Keep the `Once` boundary
 //! here so production and tests do not each grow their own init guards.
 
+mod array_buffer_allocator;
+
+pub use array_buffer_allocator::new_array_buffer_allocator;
+
 use std::sync::Once;
 
 static V8_INIT: Once = Once::new();
