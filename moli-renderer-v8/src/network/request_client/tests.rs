@@ -983,7 +983,7 @@ async fn browser_resource_text_rejects_cors_redirect_destination_before_reading_
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
     let error = timeout(
         Duration::from_secs(5),
-        loader.fetch_browser_resource_text(request),
+        loader.fetch_browser_resource_text_with_cancel(request, FetchCancelHandle::new()),
     )
     .await?
     .expect_err("reject the CORS response while its body is still pending");
@@ -1039,7 +1039,7 @@ async fn browser_resource_text_checks_cors_on_a_shared_script_cache_hit() -> Res
     ));
 
     let error = loader
-        .fetch_browser_resource_text(request)
+        .fetch_browser_resource_text_with_cancel(request, FetchCancelHandle::new())
         .await
         .expect_err("a shared transport response must still pass the resource's CORS check");
     assert_eq!(

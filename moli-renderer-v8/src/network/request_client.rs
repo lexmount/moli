@@ -631,7 +631,11 @@ impl ResourceRequestClient {
     /// Fetches a browser resource for a consumer that requires a CORS-accepted
     /// response. Checks streaming responses before collecting the body and
     /// checks shared script responses for every consumer, including cache hits.
-    pub(crate) async fn fetch_browser_resource_text(&self, request: Request) -> Result<Response> {
+    pub(crate) async fn fetch_browser_resource_text_with_cancel(
+        &self,
+        request: Request,
+        cancel: FetchCancelHandle,
+    ) -> Result<Response> {
         let origin = request.browser_origin()?;
         let cors_origin = (request.request_mode == RequestMode::Cors
             && !self.web_security_disabled())
@@ -645,18 +649,17 @@ impl ResourceRequestClient {
             && request.transport_follows_redirects()
             && !request.auth_requires_buffered_transport()
         {
-            let response = self
-                .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
-                .await?;
+            let response = self.fetch_raw_stream_with_cancel(request, cancel).await?;
             validate_cors_response_chain(origin, &response.head(), credentials_mode, false)
                 .map_err(anyhow::Error::msg)?;
             return collect_streaming_raw_response_as_text(response).await;
         }
 
         let response = if use_script_cache {
-            self.fetch_cacheable_script_text_stream(request).await?
+            self.fetch_cacheable_script_text_stream_with_cancel(request, cancel)
+                .await?
         } else {
-            self.fetch_text_stream(request).await?
+            self.fetch_text_stream_with_cancel(request, cancel).await?
         };
         if let Some(origin) = &cors_origin {
             validate_cors_response_chain(origin, &response.head(), credentials_mode, false)
@@ -716,6 +719,7 @@ impl ResourceRequestClient {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn fetch_cacheable_script_text_stream(
         &self,
         request: Request,
