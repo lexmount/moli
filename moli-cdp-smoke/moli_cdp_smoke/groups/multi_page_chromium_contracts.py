@@ -19,6 +19,7 @@ from .multi_page_support import (
 def multi_page_chromium_contract_cases() -> tuple[MultiPageCase, ...]:
     return (
         _debugger_pause_is_target_local,
+        _stop_loading_does_not_wait_for_debugger_resume,
         _dom_storage_namespaces_route_across_targets,
         _navigation_history_entries_are_target_local,
         _blocked_urls_aggregate_across_target_sessions,
@@ -141,6 +142,96 @@ async def _debugger_pause_is_target_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
+        await close_context(context)
+
+
+async def _stop_loading_does_not_wait_for_debugger_resume(
+    browser: Any,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    context = await browser.new_context()
+    session = None
+    evaluation: asyncio.Task[Any] | None = None
+    try:
+        page = await context.new_page()
+        await page.goto(f"{fixture}/plain?stop-loading=before", wait_until="load")
+        session = await new_cdp_session(context, page)
+        events = attach_cdp_event_collector(
+            session, ["Debugger.paused", "Debugger.resumed"]
+        )
+        await session.send("Debugger.enable")
+        evaluation = asyncio.create_task(
+            session.send(
+                "Runtime.evaluate",
+                {
+                    "expression": "debugger; 6 * 7",
+                    "returnByValue": True,
+                },
+            )
+        )
+        await wait_until(
+            lambda: _event_count(events, "Debugger.paused") == 1,
+            "the original evaluation is paused",
+            timeout_ms=5_000,
+        )
+        stopped = await asyncio.wait_for(session.send("Page.stopLoading"), timeout=5)
+        assert_equal(
+            stopped, {}, "browser-side stop completes while the Renderer is paused"
+        )
+        assert_equal(
+            evaluation.done(),
+            False,
+            "stopping loading does not finish the paused script",
+        )
+        assert_equal(
+            _event_count(events, "Debugger.resumed"),
+            0,
+            "stopLoading does not resume the debugger",
+        )
+
+        await session.send("Debugger.resume")
+        completed = await asyncio.wait_for(evaluation, timeout=5)
+        evaluation = None
+        assert_equal(
+            runtime_value(completed), 42, "the original evaluation resumes normally"
+        )
+        await page.goto(f"{fixture}/plain?stop-loading=after", wait_until="load")
+        assert_equal(
+            await page.evaluate("6 * 7"), 42, "a successor navigation remains usable"
+        )
+        record_contract(
+            results,
+            "stop_loading_does_not_wait_for_debugger_resume",
+            contract=(
+                "Page.stopLoading acknowledges browser-side cancellation independently "
+                "of Renderer lifecycle cleanup, without resuming a paused script."
+            ),
+            source="Chrome 156.0.8078.73 CDP oracle; Chromium PageHandler::StopLoading",
+            commands=[
+                "Debugger.enable",
+                "Runtime.evaluate",
+                "Page.stopLoading",
+                "Debugger.resume",
+                "Page.navigate",
+            ],
+            observed={
+                "stopWhilePaused": True,
+                "valueAfterResume": 42,
+                "successorValue": 42,
+            },
+        )
+    finally:
+        if session is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(session.send("Debugger.resume"), timeout=1)
+        if evaluation is not None and not evaluation.done():
+            evaluation.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await evaluation
+        if session is not None:
+            with suppress(Exception):
+                await session.detach()
         await close_context(context)
 
 
@@ -538,7 +629,9 @@ async def _cache_disabled_aggregates_without_crossing_targets(
         await peer.goto(cache_page, wait_until="load")
         peer_generation = await peer.evaluate("__semanticCacheRequest")
         if not isinstance(first_generation, int):
-            raise SmokeError(f"cache fixture returned no integer generation: {first_generation!r}")
+            raise SmokeError(
+                f"cache fixture returned no integer generation: {first_generation!r}"
+            )
         assert_equal(
             peer_generation,
             first_generation,
@@ -681,9 +774,7 @@ def _storage_event_count(
 ) -> int:
     return sum(
         event.get("params", {}).get("key") == key
-        and event.get("params", {})
-        .get("storageId", {})
-        .get("isLocalStorage")
+        and event.get("params", {}).get("storageId", {}).get("isLocalStorage")
         is is_local
         for event in events
     )
