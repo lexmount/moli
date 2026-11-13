@@ -45,6 +45,15 @@ impl ProtocolWorkflowState<'_> {
     }
 
     #[cfg(feature = "test-support")]
+    pub fn push_page_javascript_dialog_for_test(
+        self,
+        context: &crate::automation::AutomationContext,
+        dialog: moli_core::page::RendererPendingJavaScriptDialog,
+    ) {
+        crate::test_support::push_page_javascript_dialog(self.connection, context, dialog);
+    }
+
+    #[cfg(feature = "test-support")]
     pub fn has_pending_document_navigation_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -248,6 +257,14 @@ impl ProtocolWorkflowState<'_> {
     ) -> bool {
         self.connection
             .has_pending_javascript_dialog_for_devtools_context(context)
+    }
+
+    pub fn has_current_javascript_dialog_for_devtools_context(
+        &self,
+        context: &crate::automation::AutomationContext,
+    ) -> bool {
+        self.connection
+            .has_current_javascript_dialog_for_devtools_context(context)
     }
 
     pub fn page_screencast_subscription_status(

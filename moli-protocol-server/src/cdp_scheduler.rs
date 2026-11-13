@@ -1637,15 +1637,20 @@ impl CdpScheduler {
         context: &moli_protocol::automation::AutomationContext,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         let mut out = ProtocolOutputSequence::empty();
-        // Navigation controls and existing-dialog handling do not need a new
-        // Document. Waiting here could block the operation that lets it commit.
-        if devtools_command_bypasses_document_admission(command) {
+        // Dialog operations are finite Page-owned operations. Classic adds its
+        // own navigation wait, interrupted by a live dialog just as ChromeDriver's
+        // ExecuteAlertCommand permits UnexpectedAlertOpen. BiDi has no such wait.
+        let classic_dialog = context.protocol == FrontendProtocol::WebDriverClassic
+            && devtools_command_is_javascript_dialog_operation(command);
+        if !classic_dialog && devtools_command_bypasses_document_admission(command) {
             return Ok(out);
         }
         while self
             .state
             .with_state(|state| {
                 state.has_inflight_background_navigation_for_devtools_context(context)
+                    && !(classic_dialog
+                        && state.has_current_javascript_dialog_for_devtools_context(context))
             })
             .expect("live protocol actor state")
         {
@@ -3370,17 +3375,26 @@ fn renderer_output_transport_terminal_error(
 
 fn devtools_command_bypasses_document_admission(command: &AutomationCommand) -> bool {
     devtools_navigation_wait(command).is_some()
+        || devtools_command_is_javascript_dialog_operation(command)
         || matches!(
             command,
             AutomationCommand::CloseTarget(_)
                 | AutomationCommand::RemoveBrowserContext(_)
-                | AutomationCommand::HandleJavaScriptDialog(_)
                 | AutomationCommand::ContinueInterceptedRequest(_)
                 | AutomationCommand::ContinueInterceptedResponse(_)
                 | AutomationCommand::ContinueWithAuth(_)
                 | AutomationCommand::FailInterceptedRequest(_)
                 | AutomationCommand::FulfillInterceptedRequest(_)
         )
+}
+
+fn devtools_command_is_javascript_dialog_operation(command: &AutomationCommand) -> bool {
+    matches!(
+        command,
+        AutomationCommand::GetJavaScriptDialog(_)
+            | AutomationCommand::SetJavaScriptDialogPromptText(_)
+            | AutomationCommand::HandleJavaScriptDialog(_)
+    )
 }
 
 pub(crate) fn devtools_navigation_wait(

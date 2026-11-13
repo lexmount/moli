@@ -157,6 +157,26 @@ pub fn settle_background_navigation_request(
     conn.settle_background_navigation_completion(&fixture.token)
 }
 
+/// Installs a dialog on an exact owned Page without running V8. The renderer
+/// completion remains the caller's real one-shot.
+pub fn push_page_javascript_dialog(
+    conn: &mut CdpConnection,
+    context: &crate::automation::AutomationContext,
+    dialog: moli_core::page::RendererPendingJavaScriptDialog,
+) {
+    let owner = conn
+        .command_owner_scope_for_devtools_context(context)
+        .expect("dialog fixture requires a live target");
+    let page = conn
+        .target_page_residence_identity_for_owner(&owner)
+        .or_else(|| conn.pending_target_page_residence_identity_for_owner(&owner))
+        .expect("dialog fixture requires a current or reserved Page");
+    let frame_id = page.target_id().expect("fixture target").to_owned();
+    let dialog = crate::conn::TargetJavaScriptDialog::new(page, frame_id, dialog);
+    conn.with_target_javascript_dialog_state_for_owner_mut(&owner, |state| state.push(dialog))
+        .expect("dialog fixture requires target state");
+}
+
 /// Constructs one nonzero deferred-load observation identity.
 pub fn deferred_main_document_load_observation_id(
     value: u64,
