@@ -1,14 +1,14 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[test]
 fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
     let document = Url::parse("https://fetch-abort-timing.test/page").unwrap();
     for streaming in [false, true] {
         let mut vm = new_storage_test_vm(document.as_str());
-        vm.set_fetch_subresource_interception(
-            true,
-            Some(crate::types::SubresourceResourceType::Fetch),
-        );
+        vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ));
         execute_with_source(
             &mut vm,
             r#"
@@ -92,7 +92,9 @@ fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
 #[test]
 fn fetch_resource_timing_pre_aborted_signal_has_no_request_or_entry() {
     let mut vm = new_storage_test_vm("https://fetch-abort-timing.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        crate::types::SubresourceResourceType::Fetch,
+    ));
     vm.exec("const controller = new AbortController();controller.abort();fetch('/asset',{signal:controller.signal}).catch(()=>{});",None).unwrap();
     assert!(vm.take_pending_subresource_fetch_infos().is_empty());
     assert_eq!(
@@ -105,7 +107,9 @@ fn fetch_resource_timing_pre_aborted_signal_has_no_request_or_entry() {
 #[test]
 fn fetch_resource_timing_abort_uses_the_fetch_realm_instead_of_the_signal_realm() {
     let mut vm = new_storage_html_test_vm("https://fetch-abort-timing.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        crate::types::SubresourceResourceType::Fetch,
+    ));
     vm.exec(
         r#"
         globalThis.frame = document.body.appendChild(document.createElement('iframe'));

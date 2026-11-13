@@ -575,11 +575,9 @@ fn worker_xhr_request(
 }
 
 fn prepare_worker_xhr_interception_route(state: &WorkerGlobalState) -> XhrInterceptionRoute {
-    let (enabled, resource_type) = state.subresource_interception_config();
-    if !enabled
-        || !resource_type.is_none_or(|expected| {
-            expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Xhr)
-        })
+    if !state
+        .subresource_interception_config()
+        .intercepts(SubresourceResourceType::Xhr)
     {
         return XhrInterceptionRoute::Ordinary;
     }

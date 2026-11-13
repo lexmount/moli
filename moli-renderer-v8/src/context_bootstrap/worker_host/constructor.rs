@@ -294,10 +294,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                 network_offline: host.network_offline(),
                 blocked_url_patterns: host.blocked_url_patterns().to_vec(),
                 network_partition_key: network_partition_key.clone(),
-                fetch_subresource_interception_enabled: host
-                    .fetch_subresource_interception_enabled(),
-                fetch_subresource_interception_resource_type: host
-                    .fetch_subresource_interception_resource_type(),
+                fetch_subresource_interception_classes: host
+                    .fetch_subresource_interception_classes(),
             };
             let parent_service_worker_client_id =
                 host.service_worker_client_id_for_worker_owner(owner_scope);

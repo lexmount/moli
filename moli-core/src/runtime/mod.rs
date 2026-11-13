@@ -1188,8 +1188,7 @@ impl Browser {
             Default::default(),
             false,
             Vec::new(),
-            false,
-            None,
+            crate::page::SubresourceInterceptionClasses::NONE,
             stage,
         );
         create_page_request

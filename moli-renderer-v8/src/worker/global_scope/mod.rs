@@ -80,9 +80,9 @@ use crate::network_host::{
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
     PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    PendingSubresourceResponseInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    SubresourceResourceType, SubresourceResponseBody, SubresourceResponseBodyWriter,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    PendingSubresourceResponseInfo, SubresourceInterceptionClasses, SubresourceNetworkRecord,
+    SubresourceNetworkRequestHandle, SubresourceResourceType, SubresourceResponseBody,
+    SubresourceResponseBodyWriter, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{

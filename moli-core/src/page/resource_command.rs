@@ -79,11 +79,10 @@ impl super::PageDocumentCommandTarget {
     }
     pub fn update_native_interception_policy(
         &self,
-        enabled: bool,
-        resource_type: Option<crate::page::SubresourceResourceType>,
+        classes: crate::page::SubresourceInterceptionClasses,
     ) -> bool {
         if let Some(pause) = &self.network_pause {
-            pause.set_target_interception(enabled, resource_type);
+            pause.set_target_interception(classes);
             true
         } else {
             false

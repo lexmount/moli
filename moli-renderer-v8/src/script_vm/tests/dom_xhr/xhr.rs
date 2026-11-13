@@ -2180,7 +2180,11 @@ globalThis.__pendingReader.read().then(({ value, done }) => {
 #[test]
 fn streaming_xhr_coalesces_progress_while_publishing_partial_text_before_done() {
     let mut vm = new_storage_test_vm("https://xhr-streaming-visible.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Xhr,
+        ),
+    );
     vm.eval(
         r#"
 globalThis.__streamingXhrEvents = [];
@@ -2293,7 +2297,11 @@ __streamingXhr.send();
 async fn streaming_xhr_progress_gate_can_expire_without_pending_data_and_cancel_on_reopen() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm("https://xhr-progress-gate.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Xhr,
+        ),
+    );
     vm.eval(
         r#"
 globalThis.__xhrGate = new XMLHttpRequest();
@@ -3931,8 +3939,9 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 .set_document_source_last_modified(Some(5_025_000.0));
             environment.set_timezone(Some("UTC")).unwrap();
             vm.set_fetch_subresource_interception(
-                true,
-                Some(crate::types::SubresourceResourceType::Xhr),
+                crate::types::SubresourceInterceptionClasses::for_resource_type(
+                    crate::types::SubresourceResourceType::Xhr,
+                ),
             );
             vm.eval(
                 r#"
@@ -4226,8 +4235,9 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
             ] {
                 let mut vm = new_storage_test_vm("https://xhr-document-eligibility.test/");
                 vm.set_fetch_subresource_interception(
-                    true,
-                    Some(crate::types::SubresourceResourceType::Xhr),
+                    crate::types::SubresourceInterceptionClasses::for_resource_type(
+                        crate::types::SubresourceResourceType::Xhr,
+                    ),
                 );
                 vm.eval(&format!(
                     r#"globalThis.__documentXhr = new XMLHttpRequest();

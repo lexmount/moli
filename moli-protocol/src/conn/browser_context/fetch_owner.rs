@@ -208,15 +208,12 @@ fn remove_network_intercept_from_browser_context(
         if !target.fetch_owner.remove_network_intercept(intercept_id) {
             continue;
         }
-        let (enabled, resource_type) = target.fetch_owner.subresource_interception_config();
+        let classes = target.fetch_owner.subresource_interception_config();
         return browser_context
             .start_page_policy_update(
                 &target_id,
-                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
-                    enabled,
-                    resource_type,
-                },
-                |page| page.start_set_fetch_subresource_interception(enabled, resource_type),
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception { classes },
+                |page| page.start_set_fetch_subresource_interception(classes),
             )
             .map(Some)
             .context("failed to update page fetch interception");
@@ -1093,7 +1090,7 @@ impl CdpConnection {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err(crate::conn::BrowserContextNotLoaded.into());
         };
-        let (subresource_enabled, subresource_resource_type) = owner.configure_fetch(
+        let subresource_classes = owner.configure_fetch(
             command_owner.session_id().map(str::to_owned),
             handle_auth_requests,
             patterns,
@@ -1103,15 +1100,9 @@ impl CdpConnection {
             .start_page_policy_update(
                 &owner.target_id,
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
-                    enabled: subresource_enabled,
-                    resource_type: subresource_resource_type,
+                    classes: subresource_classes,
                 },
-                |page| {
-                    page.start_set_fetch_subresource_interception(
-                        subresource_enabled,
-                        subresource_resource_type,
-                    )
-                },
+                |page| page.start_set_fetch_subresource_interception(subresource_classes),
             )
             .context("failed to update page fetch interception")
     }
@@ -1129,7 +1120,7 @@ impl CdpConnection {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err(crate::conn::BrowserContextNotLoaded.into());
         };
-        let (subresource_enabled, subresource_resource_type) = owner.add_network_intercept(
+        let subresource_classes = owner.add_network_intercept(
             intercept_id,
             intercept_session_id,
             handle_auth_requests,
@@ -1141,15 +1132,9 @@ impl CdpConnection {
             .start_page_policy_update(
                 &owner.target_id,
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
-                    enabled: subresource_enabled,
-                    resource_type: subresource_resource_type,
+                    classes: subresource_classes,
                 },
-                |page| {
-                    page.start_set_fetch_subresource_interception(
-                        subresource_enabled,
-                        subresource_resource_type,
-                    )
-                },
+                |page| page.start_set_fetch_subresource_interception(subresource_classes),
             )
             .context("failed to update page fetch interception")
     }
@@ -1163,9 +1148,7 @@ impl CdpConnection {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err(crate::conn::BrowserContextNotLoaded.into());
         };
-        let Some((subresource_enabled, subresource_resource_type)) =
-            owner.remove_network_intercept(intercept_id)
-        else {
+        let Some(subresource_classes) = owner.remove_network_intercept(intercept_id) else {
             if allow_global_lookup {
                 return self.start_remove_network_intercept_from_any_target(intercept_id);
             }
@@ -1176,15 +1159,9 @@ impl CdpConnection {
             .start_page_policy_update(
                 &owner.target_id,
                 moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
-                    enabled: subresource_enabled,
-                    resource_type: subresource_resource_type,
+                    classes: subresource_classes,
                 },
-                |page| {
-                    page.start_set_fetch_subresource_interception(
-                        subresource_enabled,
-                        subresource_resource_type,
-                    )
-                },
+                |page| page.start_set_fetch_subresource_interception(subresource_classes),
             )
             .context("failed to update page fetch interception")
     }
@@ -1227,16 +1204,11 @@ impl CdpConnection {
         SessionOwnerPendingFetchState,
         Option<Result<moli_core::page::PendingPageCommand>>,
     )> {
-        let (pending, (enabled, resource_type), update_required) = self
+        let (pending, classes, update_required) = self
             .target_session_owner_mut_for_owner(command_owner)?
             .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
-        let policy = self.start_fetch_cleanup_policy(
-            command_owner,
-            update_required,
-            &pending,
-            enabled,
-            resource_type,
-        );
+        let policy =
+            self.start_fetch_cleanup_policy(command_owner, update_required, &pending, classes);
         Some((pending, policy))
     }
 
@@ -1247,16 +1219,11 @@ impl CdpConnection {
         SessionOwnerPendingFetchState,
         Option<Result<moli_core::page::PendingPageCommand>>,
     )> {
-        let (pending, (enabled, resource_type), update_required) = self
+        let (pending, classes, update_required) = self
             .target_session_owner_mut_for_owner(command_owner)?
             .disable_target_fetch_and_drain_pending_state();
-        let policy = self.start_fetch_cleanup_policy(
-            command_owner,
-            update_required,
-            &pending,
-            enabled,
-            resource_type,
-        );
+        let policy =
+            self.start_fetch_cleanup_policy(command_owner, update_required, &pending, classes);
         Some((pending, policy))
     }
 
@@ -1265,8 +1232,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         update_required: bool,
         pending: &SessionOwnerPendingFetchState,
-        enabled: bool,
-        resource_type: Option<moli_core::page::SubresourceResourceType>,
+        classes: moli_core::page::SubresourceInterceptionClasses,
     ) -> Option<Result<moli_core::page::PendingPageCommand>> {
         if !update_required {
             return None;
@@ -1278,7 +1244,7 @@ impl CdpConnection {
         let mut native = false;
         for (_, request) in requests {
             if let Some(target) = request.document_command_target() {
-                native |= target.update_native_interception_policy(enabled, resource_type);
+                native |= target.update_native_interception_policy(classes);
             }
         }
         for target in auths
@@ -1290,7 +1256,7 @@ impl CdpConnection {
                     .filter_map(|(_, request)| request.command_target.as_ref()),
             )
         {
-            native |= target.update_native_interception_policy(enabled, resource_type);
+            native |= target.update_native_interception_policy(classes);
         }
         if native {
             return None;
@@ -1300,11 +1266,8 @@ impl CdpConnection {
             .browser_context
             .start_page_policy_update(
                 &target.target_id,
-                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception {
-                    enabled,
-                    resource_type,
-                },
-                |page| page.start_set_fetch_subresource_interception(enabled, resource_type),
+                moli_core::page::RendererPageRequestPolicyUpdate::FetchInterception { classes },
+                |page| page.start_set_fetch_subresource_interception(classes),
             )
             .transpose()
     }

@@ -1094,8 +1094,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub(crate) fetch_subresource_interception_enabled: bool,
-    pub(crate) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub(crate) fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
     pub(crate) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
@@ -1699,8 +1698,7 @@ pub(crate) struct PageVm {
     pub(super) blocked_url_patterns: Vec<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(super) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub(super) fetch_subresource_interception_enabled: bool,
-    pub(super) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub(super) fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
     pub(super) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(super) wpt_extensions_enabled: bool,
     pub(crate) runtime_hooks: PageVmRuntimeHooks,
@@ -4528,9 +4526,7 @@ impl PageVm {
             blocked_url_patterns: env.blocked_url_patterns.clone(),
             indexed_db_manager: env.indexed_db_manager.clone(),
             storage_bucket_store: env.storage_bucket_store.clone(),
-            fetch_subresource_interception_enabled: env.fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type: env
-                .fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes: env.fetch_subresource_interception_classes,
             layout_configuration: env.layout_configuration,
             wpt_extensions_enabled: env.wpt_extensions_enabled,
             runtime_hooks,
@@ -4592,10 +4588,8 @@ impl PageVm {
         self.vm_mut().set_network_offline(env.network_offline);
         self.vm_mut()
             .set_blocked_url_patterns(&env.blocked_url_patterns);
-        self.vm_mut().set_fetch_subresource_interception(
-            env.fetch_subresource_interception_enabled,
-            env.fetch_subresource_interception_resource_type,
-        );
+        self.vm_mut()
+            .set_fetch_subresource_interception(env.fetch_subresource_interception_classes);
         if matches!(
             mode,
             AuxiliaryEnvironmentApply::Navigation | AuxiliaryEnvironmentApply::InheritedNavigation

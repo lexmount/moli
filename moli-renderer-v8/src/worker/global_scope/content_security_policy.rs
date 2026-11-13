@@ -249,11 +249,9 @@ fn should_intercept_worker_content_security_policy_report(
     state: &Rc<RefCell<WorkerGlobalState>>,
 ) -> bool {
     let state = state.borrow();
-    let (enabled, resource_type) = state.subresource_interception_config();
-    enabled
-        && resource_type.is_none_or(|expected| {
-            expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::CspReport)
-        })
+    state
+        .subresource_interception_config()
+        .intercepts(SubresourceResourceType::CspReport)
 }
 
 fn pause_worker_content_security_policy_report_for_fetch_interception(

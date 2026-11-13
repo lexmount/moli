@@ -122,8 +122,7 @@ pub struct RendererPreparedDocumentCommitConfiguration {
     pub bypass_service_worker: bool,
     pub cache_disabled: bool,
     pub blocked_url_patterns: Vec<String>,
-    pub fetch_subresource_interception_enabled: bool,
-    pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
 }
 
 #[derive(Debug)]
@@ -161,8 +160,7 @@ pub struct RendererCreateHtmlPageRequest {
     pub blocked_url_patterns: Vec<String>,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub fetch_subresource_interception_enabled: bool,
-    pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
     pub layout_configuration: moli_page_types::LayoutConfiguration,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,
@@ -207,8 +205,7 @@ pub struct RendererCreateStreamingRawPageRequest {
     pub blocked_url_patterns: Vec<String>,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub fetch_subresource_interception_enabled: bool,
-    pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+    pub fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
     pub layout_configuration: moli_page_types::LayoutConfiguration,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,

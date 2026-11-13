@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn websocket_inherited_csp_relative_report_uri_popup_posts_to_delivery_path() {
@@ -23,9 +24,7 @@ async fn check_websocket_inherited_csp_relative_report_uri(sandbox_srcdoc: bool)
                     &document_url,
                 ),
             );
-            page_vm.vm_mut().set_fetch_subresource_interception(
-                true, Some(SubresourceResourceType::WebSocket),
-            );
+            page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::WebSocket));
             let script = format!(
                 r#"
                 const reportWindow = top.opener || top;
@@ -228,9 +227,7 @@ async fn websocket_sandbox_srcdoc_inherited_self_still_blocks_foreign_base_origi
                     &document_url,
                 ),
             );
-            page_vm.vm_mut().set_fetch_subresource_interception(
-                true, Some(SubresourceResourceType::WebSocket),
-            );
+            page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::WebSocket));
             let script = format!(
                 r#"
                 addEventListener('securitypolicyviolation', event => {{

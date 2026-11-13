@@ -1139,11 +1139,37 @@ impl TargetFetchConfig {
 
     pub(crate) fn subresource_interception_config(
         &self,
-    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
-        if self.handle_auth_requests {
-            return (true, None);
+    ) -> moli_core::page::SubresourceInterceptionClasses {
+        if self.auth_interception_can_match_any_url() {
+            // Auth challenges are matched by URL alone, regardless of the
+            // resource classes named by Fetch.enable patterns. The renderer
+            // must route every class through the protocol so no class scope
+            // can silently disable Fetch.authRequired pauses.
+            return moli_core::page::SubresourceInterceptionClasses::ALL;
         }
         fetch_subresource_interception_config_for_patterns(self.enabled, &self.patterns)
+    }
+
+    /// Whether `matches_auth_required` can hold for some URL. Auth matching
+    /// is URL-granular while the renderer channel is class-granular, so any
+    /// possible auth match widens interception to every class.
+    ///
+    /// This mirrors `matches_auth_required` exactly: the aggregate
+    /// `handle_auth_requests` flag only produces pauses when there are no
+    /// network intercepts at all, or when some intercept itself has
+    /// `handle_auth_requests` with non-empty `auth_url_patterns`. A
+    /// non-empty intercept map without such an intercept can never match,
+    /// so the class set must not widen for it.
+    fn auth_interception_can_match_any_url(&self) -> bool {
+        if !self.handle_auth_requests {
+            return false;
+        }
+        if self.network_intercepts.is_empty() {
+            return true;
+        }
+        self.network_intercepts.values().any(|intercept| {
+            intercept.handle_auth_requests && !intercept.auth_url_patterns.is_empty()
+        })
     }
 
     pub(crate) fn subresource_interception_snapshot(
@@ -1958,7 +1984,7 @@ impl TargetFetchOwner {
 
     pub(crate) fn subresource_interception_config(
         &self,
-    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
+    ) -> moli_core::page::SubresourceInterceptionClasses {
         self.config.subresource_interception_config()
     }
 

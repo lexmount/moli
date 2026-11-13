@@ -243,7 +243,7 @@ async fn enable_and_disable_are_session_local_for_same_target() {
             bc.active_page_target()
                 .fetch_owner
                 .subresource_interception_config(),
-            (true, Some(moli_core::page::SubresourceResourceType::Xhr))
+            moli_page_types::SubresourceInterceptionClasses::FETCH_LIKE
         );
     });
 }
@@ -404,7 +404,7 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
         assert!(fetch_owner.has_pending_fetch_request_id_for_test("NETWORK-owned"));
         assert_eq!(
             fetch_owner.subresource_interception_config(),
-            (true, Some(moli_core::page::SubresourceResourceType::Fetch)),
+            moli_page_types::SubresourceInterceptionClasses::FETCH_LIKE,
             "Fetch.disable should leave same-session Network/BiDi intercept config active"
         );
         assert!(

@@ -353,7 +353,7 @@ pub use service_worker_runtime::{
 pub use shared_worker_runtime::RendererSharedWorkerRuntimeDiagnostics;
 pub(crate) use types::{
     DocumentStartScript, PendingSubresourceContinueOutcome, SubresourceAuthCredentials,
-    SubresourceResourceType,
+    SubresourceInterceptionClasses,
 };
 #[allow(unused_imports)]
 pub use types::{ScriptKind, ScriptMode, ScriptRunOutcome, ScriptSourceKind};

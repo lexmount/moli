@@ -224,7 +224,11 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
 #[test]
 fn borrowed_fetch_enforces_cross_origin_receiver_before_entering_its_realm() {
     let mut vm = new_storage_test_vm("https://fetch-accessing-origin.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
     vm.exec(
         r#"
         const frame = document.createElement("iframe");
@@ -262,7 +266,11 @@ fn borrowed_fetch_enforces_cross_origin_receiver_before_entering_its_realm() {
 #[test]
 fn chromium_fetch_promise_realm_matrix_uses_current_realm_for_pre_idl_errors() {
     let mut vm = new_storage_test_vm("https://fetch-promise-realm.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -312,7 +320,11 @@ fn chromium_fetch_promise_realm_matrix_uses_current_realm_for_pre_idl_errors() {
 #[test]
 fn fetch_receiver_generation_is_frozen_before_request_init_getters_run() {
     let mut vm = new_storage_test_vm("https://fetch-receiver-generation.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
     vm.eval(
         r#"
         const frame = document.createElement("iframe");
@@ -382,7 +394,11 @@ fn fetch_receiver_generation_is_frozen_before_request_init_getters_run() {
 #[test]
 fn detached_fetch_receiver_returns_a_rejected_current_realm_promise() {
     let mut vm = new_storage_test_vm("https://detached-fetch-receiver.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
 
     assert_eq!(
         vm.eval(
@@ -476,7 +492,11 @@ fn chromium_discarded_window_fetch_rejects_in_the_detached_function_realm() {
 #[test]
 fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
     let mut vm = new_storage_test_vm("https://borrowed-fetch-context.test/top/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
     vm.eval(
         r#"
         const frame = document.createElement("iframe");

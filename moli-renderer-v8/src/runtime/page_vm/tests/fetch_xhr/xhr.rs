@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn cross_site_child_credentialed_xhr_reports_active_storage_access() {
@@ -1636,10 +1637,7 @@ async fn synchronous_window_xhr_file_url_throws_network_error_without_progress_e
 
         let (observed, pending_count, network_output) = local_executor
             .run(async move {
-                page_vm.vm_mut().set_fetch_subresource_interception(
-                    true,
-                    Some(SubresourceResourceType::Xhr),
-                );
+                page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Xhr));
                 let observed = page_vm.vm_mut().eval(
                     r#"
                     (() => {

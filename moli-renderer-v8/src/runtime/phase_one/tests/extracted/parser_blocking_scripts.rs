@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn main_parser_classic_pending_script_cancels_after_document_open() {
@@ -745,8 +746,7 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,
             storage_bucket_store: None,
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,
@@ -1034,8 +1034,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -1211,8 +1210,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -1810,8 +1808,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
                 blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
                 storage_bucket_store: None,
-                fetch_subresource_interception_enabled: false,
-                fetch_subresource_interception_resource_type: None,
+                fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                 layout_configuration: moli_page_types::LayoutConfiguration {
                     policy: moli_page_types::LayoutPolicy::default(),
                     scrollbars_hidden: false,

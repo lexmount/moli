@@ -1553,8 +1553,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         }));
     }
 
-    let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-        load_inputs.fetch_subresource_interception;
+    let fetch_subresource_interception_classes = load_inputs.fetch_subresource_interception;
     body_progress_source.emit_response_metadata(
         initial_request_cookie_report.as_ref(),
         &response.redirect_chain,
@@ -1645,8 +1644,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             load_inputs.viewport_surface,
             load_inputs.network_offline,
             load_inputs.blocked_url_patterns.clone(),
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             PageVmInitStage::DomContentLoaded,
             reply_boundary,
             load_inputs.root_frame_id.clone(),
@@ -2046,8 +2044,7 @@ impl CdpConnection {
         let requested_url = self
             .runtime_session_owner_initial_empty_document_url_for_owner(owner)
             .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank should be valid"));
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
+        let fetch_subresource_interception_classes = load_inputs.fetch_subresource_interception;
         let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_storage = load_inputs.page_storage_handles();
         let top_level_storage_key =
@@ -2125,8 +2122,7 @@ impl CdpConnection {
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
                 load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
                 load_inputs.root_frame_id.clone(),
                 top_level_storage_key,
                 None,
@@ -3038,8 +3034,7 @@ impl CdpConnection {
     ) -> Result<LoadedNavigation> {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&requested_url, &response_headers)?;
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
+        let fetch_subresource_interception_classes = load_inputs.fetch_subresource_interception;
         let page_storage = load_inputs.page_storage_handles();
         let main_document_commit = load_inputs
             .main_document_commit_for_final_url(&requested_url, None)
@@ -3070,8 +3065,7 @@ impl CdpConnection {
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
                 load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
                 load_inputs.root_frame_id.clone(),
                 main_document_commit.as_deref().cloned(),
             )
@@ -3276,8 +3270,7 @@ impl CdpConnection {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         let network_extra_info_available = !network_observation_journal.is_empty();
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
+        let fetch_subresource_interception_classes = load_inputs.fetch_subresource_interception;
         let (response_head, response_body, response_body_bytes) = response.into_parts();
         let final_url = response_head.final_url.clone();
         let response_status = response_head.status;
@@ -3324,8 +3317,7 @@ impl CdpConnection {
                 load_inputs.viewport_surface,
                 load_inputs.network_offline,
                 load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
                 load_inputs.root_frame_id.clone(),
                 main_document_commit.as_deref().cloned(),
             )
@@ -3576,8 +3568,7 @@ async fn prepare_captured_document_response_with_engine_async(
         .map(|producer| (producer.clone(), head.clone()));
     let body_network_progress_state = body_progress_source
         .body_network_progress_for_response_head(&head, network_observation_journal);
-    let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-        load_inputs.fetch_subresource_interception;
+    let fetch_subresource_interception_classes = load_inputs.fetch_subresource_interception;
     let response_from_cache = head.from_cache;
     let final_url = head.final_url;
     let response_status = head.status;
@@ -3616,8 +3607,7 @@ async fn prepare_captured_document_response_with_engine_async(
             load_inputs.viewport_surface,
             load_inputs.network_offline,
             load_inputs.blocked_url_patterns.clone(),
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             PageVmInitStage::DomContentLoaded,
             reply_boundary,
             load_inputs.root_frame_id.clone(),

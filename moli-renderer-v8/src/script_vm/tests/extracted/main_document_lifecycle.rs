@@ -442,8 +442,9 @@ fn main_document_open_preserves_ordinary_and_keepalive_fetches() {
 fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     let mut vm = new_storage_test_vm("https://main-fetch-csp-owner.test/source-document");
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     let request_url = Url::parse("https://main-fetch-csp-owner.test/accepted").unwrap();
     let final_url = Url::parse("https://redirected-fetch-csp-owner.test/final").unwrap();
@@ -534,7 +535,11 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
 #[test]
 fn main_document_open_preserves_accepted_beacon_without_rebind() {
     let mut vm = new_storage_test_vm("https://main-owner-beacon.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Ping));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Ping,
+        ),
+    );
     let before_owner = vm
         .current_main_document_task_owner()
         .expect("initial main document owner");
@@ -611,8 +616,9 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
     let violation = test_window_csp_report_violation(&document_url, &report_url);
     let mut vm = new_storage_test_vm(document_url.as_str());
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     let before_owner = vm
         .current_main_document_task_owner()

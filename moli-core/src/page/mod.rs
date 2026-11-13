@@ -173,12 +173,12 @@ pub use protocol_support::{
     ScriptObservableOutputItem, SubresourceAuthChallenge, SubresourceAuthCredentials,
     SubresourceAuthScheme, SubresourceAuthTarget, SubresourceBodyFinished,
     SubresourceBodyFinishedResult, SubresourceDataReceived, SubresourceEventSourceMessageReceived,
-    SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceNetworkOutcome,
-    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
-    SubresourceRequestStarted, SubresourceResourceType, SubresourceResponseBody,
-    SubresourceResponseStarted, SubresourceResponseWaitCriteria, ViewportSurface,
-    WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent, WebSocketLifecycleKind,
-    WebSocketNetworkEvent, extract_subresource_auth_challenge,
+    SubresourceInterceptionClasses, SubresourceJsonPathEquals, SubresourceJsonPathRegex,
+    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
+    SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
+    SubresourceResponseBody, SubresourceResponseStarted, SubresourceResponseWaitCriteria,
+    ViewportSurface, WebSocketFrameDirection, WebSocketFrameOpcode, WebSocketLifecycleEvent,
+    WebSocketLifecycleKind, WebSocketNetworkEvent, extract_subresource_auth_challenge,
     subresource_auth_credentials_for_challenge,
 };
 pub use renderer_command_support::DocumentNodeClientRectResolution;

@@ -3,7 +3,7 @@
 use crate::RendererSyntheticResponseBody;
 use crate::protocol_types::{
     PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, SubresourceAuthCredentials,
-    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceInterceptionClasses, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
     WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::runtime::WorkerInspectorError;
@@ -184,10 +184,7 @@ pub(crate) enum WorkerMessage {
     /// Update the Network.setBlockedURLs state visible to worker-owned fetch/XHR.
     SetBlockedUrlPatterns(Vec<String>),
     /// Update Fetch domain subresource interception visible to worker-owned fetch/XHR.
-    SetFetchSubresourceInterception {
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
-    },
+    SetFetchSubresourceInterception(SubresourceInterceptionClasses),
     /// Continue a worker-owned fetch() that was paused for Fetch domain interception.
     ContinuePendingFetch(WorkerPendingFetchContinue),
     /// Continue a worker-owned XHR that was paused for Fetch domain interception.
@@ -675,8 +672,7 @@ pub(crate) struct WorkerNetworkPolicy {
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) network_partition_key: Option<String>,
-    pub(crate) fetch_subresource_interception_enabled: bool,
-    pub(crate) fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+    pub(crate) fetch_subresource_interception_classes: SubresourceInterceptionClasses,
 }
 
 #[derive(Debug)]
@@ -945,15 +941,11 @@ impl WorkerHandle {
 
     pub(crate) fn set_fetch_subresource_interception(
         &self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
+        classes: SubresourceInterceptionClasses,
     ) {
         let _ = self
             .tx
-            .send(WorkerMessage::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            });
+            .send(WorkerMessage::SetFetchSubresourceInterception(classes));
     }
 
     pub(crate) fn dispatch_service_worker_lifecycle_event(

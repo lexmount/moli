@@ -1,5 +1,6 @@
 // Tests grouped by behavior. Shared fixtures live in the parent module.
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn worker_fetch_uses_worker_script_base_url_and_resolves_response_text() {
@@ -267,7 +268,9 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
             ..WorkerNetworkPolicy::default()
         },
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -334,8 +337,12 @@ async fn worker_subresource_request_handles_are_owner_unique() {
 
     let mut first = spawn_intercepted_fetch_worker();
     let mut second = spawn_intercepted_fetch_worker();
-    first.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
-    second.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    first.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
+    second.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     first.post_message(serialize_test_string("go"));
     second.post_message(serialize_test_string("go"));
 
@@ -467,7 +474,9 @@ async fn worker_fetch_continue_request_resolves_response_before_delayed_body() {
         format!("http://{addr}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -528,7 +537,9 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -615,7 +626,9 @@ async fn worker_fetch_response_stage_continue_preserves_large_spooled_body_strea
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -684,7 +697,9 @@ async fn worker_fetch_auth_required_then_continue_with_auth_resolves() {
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -769,7 +784,9 @@ async fn worker_fetch_auth_required_then_fail_rejects_without_exposing_challenge
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -1058,7 +1075,9 @@ async fn worker_fetch_file_url_rejects_before_interception_or_transport() {
         "https://example.test/worker/main.js".into(),
         worker_test_request_client(),
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Fetch,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let mut post = None;

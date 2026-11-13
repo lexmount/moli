@@ -382,7 +382,11 @@ async fn image_fetch_enabled_rejects_http_success_with_corrupt_image_bytes() {
         "https://corrupt-image.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
 
     vm.eval(
         r#"
@@ -434,7 +438,11 @@ async fn inserting_completed_detached_image_does_not_restart_request() {
         "https://image-insertion.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
 
     vm.eval(
         r#"
@@ -496,7 +504,11 @@ async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
         "https://removed-lazy-image.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
 
     vm.eval(
         r#"
@@ -692,7 +704,11 @@ async fn replacing_image_source_discards_queued_stale_decode_pixels() {
         "https://example.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         (() => {
@@ -794,7 +810,11 @@ async fn image_request_interception_fulfills_through_image_continuation() {
     vm.set_extra_http_headers(
         &vec![("X-Image-Request".to_owned(), "intercepted".to_owned())].into(),
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         (() => {
@@ -859,7 +879,11 @@ async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource()
         "https://example.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
 
     vm.eval(
         r#"
@@ -962,7 +986,11 @@ async fn changing_image_cross_origin_restarts_intercepted_request() {
         "https://example.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         (() => {
@@ -1038,7 +1066,11 @@ async fn changing_picture_source_restarts_intercepted_image_request() {
         "https://example.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         (() => {
@@ -1103,7 +1135,11 @@ async fn picture_source_and_image_tree_mutations_reselect_requests() {
         "https://picture-source-removal.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
 
     vm.eval(
         r#"
@@ -1213,7 +1249,11 @@ async fn svg_image_decode_preserves_href_precedence_and_mutation_cancellation() 
         "https://svg-decode-mutations.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         globalThis.__svgDecodeImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
@@ -1409,7 +1449,11 @@ async fn image_decode_cross_realm_loads_settle_in_the_receiver_realm() {
         "https://image-decode-load-realms.test/page.html",
         &loader,
     );
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Image,
+        ),
+    );
     vm.eval(
         r#"
         document.body.innerHTML = '<iframe id="decode-load-frame"></iframe>';
@@ -1488,8 +1532,9 @@ async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
         );
         vm.set_layout_policy(policy);
         vm.set_fetch_subresource_interception(
-            true,
-            Some(crate::types::SubresourceResourceType::Image),
+            crate::types::SubresourceInterceptionClasses::for_resource_type(
+                crate::types::SubresourceResourceType::Image,
+            ),
         );
         vm.eval(
             r#"

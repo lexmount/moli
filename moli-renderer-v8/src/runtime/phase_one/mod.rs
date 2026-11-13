@@ -16,6 +16,8 @@ use crate::planning::SharedScriptSourceLoad;
 #[cfg(test)]
 use crate::runtime::page_vm::{ScannedStylesheetAdmission, ScannedStylesheetDeferral};
 #[cfg(test)]
+use crate::types::SubresourceInterceptionClasses;
+#[cfg(test)]
 use moli_fetch::FetchConfig;
 use moli_fetch::StreamingRawResponse;
 #[cfg(test)]
@@ -99,14 +101,9 @@ use super::script_preloads::{BufferedDocumentPreloadState, ServiceWorkerScriptPr
 
 fn script_preloads_require_owner_admission(env: &PageVmEnvConfig) -> bool {
     !main_document_parser_scripting_enabled(env)
-        || env.fetch_subresource_interception_enabled
-            && env
-                .fetch_subresource_interception_resource_type
-                .is_none_or(|resource_type| {
-                    resource_type.has_same_cdp_fetch_interception_type(
-                        crate::types::SubresourceResourceType::Script,
-                    )
-                })
+        || env
+            .fetch_subresource_interception_classes
+            .intercepts(crate::types::SubresourceResourceType::Script)
 }
 
 pub(in crate::runtime) fn main_document_parser_scripting_enabled(env: &PageVmEnvConfig) -> bool {
@@ -673,8 +670,7 @@ mod tests {
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,
             storage_bucket_store: None,
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,

@@ -122,8 +122,9 @@ async fn child_module_csp_admission_queues_events_and_rejects_replaced_document(
     for replace in [false, true] {
         let mut vm = new_storage_test_vm("https://child-module-csp-event.test/");
         vm.set_fetch_subresource_interception(
-            true,
-            Some(crate::types::SubresourceResourceType::CspReport),
+            crate::types::SubresourceInterceptionClasses::for_resource_type(
+                crate::types::SubresourceResourceType::CspReport,
+            ),
         );
         vm.eval(r#"
           globalThis.__queuedModuleCspEvents = [];
@@ -194,8 +195,9 @@ async fn child_module_csp_admission_queues_events_and_rejects_replaced_document(
 async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     let mut vm = new_storage_test_vm("https://detached-fetch-csp-owner.test/");
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     vm.eval(
         r#"
@@ -379,8 +381,9 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
 async fn child_csp_report_keeps_exact_violation_document_without_v8_after_navigation() {
     let mut vm = new_storage_test_vm("https://child-owner-csp-report.test/");
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     vm.eval(
         r#"

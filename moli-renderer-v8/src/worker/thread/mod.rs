@@ -985,13 +985,8 @@ async fn run_worker_pre_bootstrap_debugger_pause(
                     .request_client()
                     .set_blocked_url_patterns(&patterns_for_loader);
             }
-            Some(WorkerMessage::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            }) => {
-                let mut state = state.borrow_mut();
-                state.fetch_subresource_interception_enabled = enabled;
-                state.fetch_subresource_interception_resource_type = resource_type;
+            Some(WorkerMessage::SetFetchSubresourceInterception(classes)) => {
+                state.borrow_mut().fetch_subresource_interception_classes = classes;
             }
             Some(WorkerMessage::Terminate) => {
                 trace!(url = %script_url, "worker terminated before bootstrap by parent");
@@ -1622,10 +1617,8 @@ async fn worker_main(
         blocked_url_patterns: network_policy.blocked_url_patterns,
         network_partition_key: network_policy.network_partition_key,
         policy_context,
-        fetch_subresource_interception_enabled: network_policy
-            .fetch_subresource_interception_enabled,
-        fetch_subresource_interception_resource_type: network_policy
-            .fetch_subresource_interception_resource_type,
+        fetch_subresource_interception_classes: network_policy
+            .fetch_subresource_interception_classes,
         fetch_completion_tx,
         pending_fetches: std::collections::HashMap::new(),
         pending_network_body_sources: std::collections::HashMap::new(),
@@ -2782,13 +2775,10 @@ async fn worker_main(
                     .request_client()
                     .set_blocked_url_patterns(&patterns_for_loader);
             }
-            WorkerLoopWake::Message(Some(WorkerMessage::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            })) => {
-                let mut state = state.borrow_mut();
-                state.fetch_subresource_interception_enabled = enabled;
-                state.fetch_subresource_interception_resource_type = resource_type;
+            WorkerLoopWake::Message(Some(WorkerMessage::SetFetchSubresourceInterception(
+                classes,
+            ))) => {
+                state.borrow_mut().fetch_subresource_interception_classes = classes;
             }
             WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetch(request))) => {
                 continue_pending_worker_fetch(&state, request);

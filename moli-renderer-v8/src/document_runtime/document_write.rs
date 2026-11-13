@@ -1057,7 +1057,15 @@ impl DocumentRuntime {
         html: &str,
         reset_scanner: bool,
     ) {
-        if html.is_empty() || unsafe { &*host_ptr }.fetch_subresource_interception_enabled() {
+        // Match the class-precise script interception gates (phase-one
+        // admission and scanned script preloads): speculative preloads are
+        // skipped only when the Script class itself routes through the
+        // protocol, not whenever interception is enabled for any class.
+        if html.is_empty()
+            || unsafe { &*host_ptr }
+                .fetch_subresource_interception_classes()
+                .intercepts(crate::types::SubresourceResourceType::Script)
+        {
             return;
         }
         let Some(resource_loader) = self.current_document_resource_loader() else {

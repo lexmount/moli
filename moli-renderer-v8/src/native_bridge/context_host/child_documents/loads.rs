@@ -6,6 +6,8 @@ use super::{
 };
 #[cfg(test)]
 use crate::referrer_policy::response_referrer_policy_from_headers;
+#[cfg(test)]
+use crate::types::SubresourceInterceptionClasses;
 use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
@@ -1283,7 +1285,11 @@ mod tests {
             .unwrap()
             .finish()
             .unwrap();
-            vm.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Document));
+            vm.set_fetch_subresource_interception(
+                SubresourceInterceptionClasses::for_resource_type(
+                    SubresourceResourceType::Document,
+                ),
+            );
             let host = vm.context_host_weak_for_test().upgrade().unwrap();
             let mut host = host.borrow_mut();
             let initiating_owner = host.current_main_document_task_owner().unwrap();

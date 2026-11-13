@@ -4,6 +4,8 @@ use super::parser_blocking_pending::main_parser_blocking_classic_script_item;
 use super::scaffold::continue_phase_one_until_streaming_boundary_on_execution_context;
 use super::*;
 use crate::document_response_decoder::{decode_document_response, new_document_response_decoder};
+#[cfg(test)]
+use crate::types::SubresourceInterceptionClasses;
 use moli_encoding::DocumentStreamingDecoder;
 use moli_web_mime::response_headers_indicate_attachment_download;
 use tokio::sync::{mpsc, oneshot};
@@ -1075,8 +1077,7 @@ mod tests {
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,
             storage_bucket_store: None,
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,

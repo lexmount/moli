@@ -2,6 +2,7 @@
 mod split30_websocket_native_receivers;
 
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 use moli_webapi_declare::WebApiObject;
 
 use moli_websocket::test_support::{header_value, spawn_tls_header_capture_websocket_server};
@@ -48,8 +49,9 @@ async fn assert_websocket_cross_origin_popup_child_handshake_origin(srcdoc: bool
                 // Fulfill only the cross-origin opener Document. WebSocket
                 // handshakes must reach the actual TLS server.
                 vm.set_fetch_subresource_interception(
-                    true,
-                    Some(crate::types::SubresourceResourceType::Document),
+                    SubresourceInterceptionClasses::for_resource_type(
+                        crate::types::SubresourceResourceType::Document,
+                    ),
                 );
                 let opener_literal = serde_json::to_string(opener_url.as_str()).unwrap();
                 vm.eval(&format!(
@@ -237,7 +239,7 @@ async fn assert_websocket_popup_child_frames_security(
             let mut vm = new_page_task_executor_test_vm_with_loader(host_url, &loader);
             // Supply the opener's response without external networking, and
             // hold any allowed WebSocket handshake at the request boundary.
-            vm.set_fetch_subresource_interception(true, None);
+            vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::ALL);
             vm.eval(&format!(
                 r#"
                 globalThis.__popupChildWebSocketResult = null;

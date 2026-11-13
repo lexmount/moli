@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 mod cache;
 mod cancellation;
@@ -68,10 +69,9 @@ fn fetch_resource_timing_publishes_once_after_buffered_and_streaming_body_comple
     let caller = document_url.join("caller.js").unwrap();
     for streaming in [false, true] {
         let mut vm = new_storage_test_vm(document_url.as_str());
-        vm.set_fetch_subresource_interception(
-            true,
-            Some(crate::types::SubresourceResourceType::Fetch),
-        );
+        vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ));
         execute_with_source(
             &mut vm,
             r#"
@@ -176,7 +176,9 @@ async fn fetch_resource_timing_retains_initiators_through_real_network_and_lazy_
 fn fetch_resource_timing_reports_failed_network_requests() {
     let base = Url::parse("https://failed-fetch-timing.test/page").unwrap();
     let mut vm = new_storage_test_vm(base.as_str());
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        crate::types::SubresourceResourceType::Fetch,
+    ));
     execute_with_source(
         &mut vm,
         "fetch('/failed').catch(error => globalThis.fetchError = error.name);",
@@ -240,8 +242,9 @@ fn fetch_resource_timing_separates_cors_attribution_from_timing_allow_origin() {
         for &streaming in modes {
             let mut vm = new_storage_test_vm(document.as_str());
             vm.set_fetch_subresource_interception(
-                true,
-                Some(crate::types::SubresourceResourceType::Fetch),
+                SubresourceInterceptionClasses::for_resource_type(
+                    crate::types::SubresourceResourceType::Fetch,
+                ),
             );
             execute_with_source(
                 &mut vm,
@@ -317,8 +320,9 @@ fn fetch_resource_timing_keeps_cache_hits_and_unknown_script_sources_unattribute
             for known_source in [false, true] {
                 let mut vm = new_storage_test_vm(document.as_str());
                 vm.set_fetch_subresource_interception(
-                    true,
-                    Some(crate::types::SubresourceResourceType::Fetch),
+                    SubresourceInterceptionClasses::for_resource_type(
+                        crate::types::SubresourceResourceType::Fetch,
+                    ),
                 );
                 let script =
                     "fetch('/asset').then(response => globalThis.fetchResponse = response);";

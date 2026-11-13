@@ -2849,6 +2849,80 @@ impl SubresourceResourceType {
     }
 }
 
+bitflags::bitflags! {
+    /// The set of CDP Fetch interception classes that the renderer routes
+    /// through the protocol.
+    ///
+    /// Interception classes mirror the distinct tokens of
+    /// [`SubresourceResourceType::as_cdp_fetch_interception_type`]: Chromium's
+    /// loader collapses Blink's Fetch, EventSource, and XHR into the shared
+    /// "XHR" class and text tracks into "Media", so several resource types
+    /// share one class bit. Fetch.enable patterns with heterogeneous resource
+    /// types used to collapse the renderer channel to "intercept every
+    /// class"; a class set keeps them scoped to exactly the classes the
+    /// patterns name. An empty set routes nothing through the protocol, while
+    /// [`Self::ALL`] routes every class and preserves type-less pattern,
+    /// auth, and response-stage admission.
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    pub struct SubresourceInterceptionClasses: u16 {
+        const NONE = 0;
+        const DOCUMENT = 1 << 0;
+        const SCRIPT = 1 << 1;
+        const STYLESHEET = 1 << 2;
+        const IMAGE = 1 << 3;
+        const FONT = 1 << 4;
+        const MEDIA = 1 << 5;
+        const FETCH_LIKE = 1 << 6;
+        const PING = 1 << 7;
+        const CSP_VIOLATION_REPORT = 1 << 8;
+        const MANIFEST = 1 << 9;
+        const WEBSOCKET = 1 << 10;
+        const OTHER = 1 << 11;
+        const ALL = Self::DOCUMENT.bits()
+            | Self::SCRIPT.bits()
+            | Self::STYLESHEET.bits()
+            | Self::IMAGE.bits()
+            | Self::FONT.bits()
+            | Self::MEDIA.bits()
+            | Self::FETCH_LIKE.bits()
+            | Self::PING.bits()
+            | Self::CSP_VIOLATION_REPORT.bits()
+            | Self::MANIFEST.bits()
+            | Self::WEBSOCKET.bits()
+            | Self::OTHER.bits();
+    }
+}
+
+impl SubresourceInterceptionClasses {
+    /// The set holding only `resource_type`'s CDP Fetch interception class.
+    pub const fn for_resource_type(resource_type: SubresourceResourceType) -> Self {
+        match resource_type {
+            SubresourceResourceType::Document => Self::DOCUMENT,
+            SubresourceResourceType::Script => Self::SCRIPT,
+            SubresourceResourceType::Stylesheet => Self::STYLESHEET,
+            SubresourceResourceType::Image => Self::IMAGE,
+            SubresourceResourceType::Font => Self::FONT,
+            SubresourceResourceType::Audio
+            | SubresourceResourceType::Video
+            | SubresourceResourceType::Media
+            | SubresourceResourceType::TextTrack => Self::MEDIA,
+            SubresourceResourceType::Fetch
+            | SubresourceResourceType::EventSource
+            | SubresourceResourceType::Xhr => Self::FETCH_LIKE,
+            SubresourceResourceType::Ping => Self::PING,
+            SubresourceResourceType::CspReport => Self::CSP_VIOLATION_REPORT,
+            SubresourceResourceType::Dictionary => Self::OTHER,
+            SubresourceResourceType::Manifest => Self::MANIFEST,
+            SubresourceResourceType::WebSocket => Self::WEBSOCKET,
+        }
+    }
+
+    /// Whether the set admits `resource_type`'s interception class.
+    pub const fn intercepts(self, resource_type: SubresourceResourceType) -> bool {
+        self.intersects(Self::for_resource_type(resource_type))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubresourceNetworkOutcome {
     Success {
@@ -3904,6 +3978,96 @@ mod tests {
         assert_eq!(
             SubresourceResourceType::TextTrack.as_cdp_type(),
             "TextTrack"
+        );
+    }
+
+    #[test]
+    fn interception_classes_share_bits_with_cdp_fetch_interception_groups() {
+        let grouped: &[(&[SubresourceResourceType], SubresourceInterceptionClasses)] = &[
+            (
+                &[SubresourceResourceType::Document],
+                SubresourceInterceptionClasses::DOCUMENT,
+            ),
+            (
+                &[SubresourceResourceType::Script],
+                SubresourceInterceptionClasses::SCRIPT,
+            ),
+            (
+                &[SubresourceResourceType::Stylesheet],
+                SubresourceInterceptionClasses::STYLESHEET,
+            ),
+            (
+                &[SubresourceResourceType::Image],
+                SubresourceInterceptionClasses::IMAGE,
+            ),
+            (
+                &[SubresourceResourceType::Font],
+                SubresourceInterceptionClasses::FONT,
+            ),
+            (
+                &[
+                    SubresourceResourceType::Audio,
+                    SubresourceResourceType::Video,
+                    SubresourceResourceType::Media,
+                    SubresourceResourceType::TextTrack,
+                ],
+                SubresourceInterceptionClasses::MEDIA,
+            ),
+            (
+                &[
+                    SubresourceResourceType::Fetch,
+                    SubresourceResourceType::EventSource,
+                    SubresourceResourceType::Xhr,
+                ],
+                SubresourceInterceptionClasses::FETCH_LIKE,
+            ),
+            (
+                &[SubresourceResourceType::Ping],
+                SubresourceInterceptionClasses::PING,
+            ),
+            (
+                &[SubresourceResourceType::CspReport],
+                SubresourceInterceptionClasses::CSP_VIOLATION_REPORT,
+            ),
+            (
+                &[SubresourceResourceType::Dictionary],
+                SubresourceInterceptionClasses::OTHER,
+            ),
+            (
+                &[SubresourceResourceType::Manifest],
+                SubresourceInterceptionClasses::MANIFEST,
+            ),
+            (
+                &[SubresourceResourceType::WebSocket],
+                SubresourceInterceptionClasses::WEBSOCKET,
+            ),
+        ];
+
+        let all: Vec<SubresourceResourceType> = grouped
+            .iter()
+            .flat_map(|(types, _)| types.iter().copied())
+            .collect();
+        assert_eq!(all.len(), 17);
+        for (types, class) in grouped {
+            for resource_type in *types {
+                assert_eq!(
+                    SubresourceInterceptionClasses::for_resource_type(*resource_type),
+                    *class
+                );
+                assert!(class.intercepts(*resource_type));
+                assert!(SubresourceInterceptionClasses::ALL.intercepts(*resource_type));
+                let others = SubresourceInterceptionClasses::ALL.difference(*class);
+                assert!(!others.intercepts(*resource_type));
+            }
+        }
+        let union = grouped
+            .iter()
+            .fold(SubresourceInterceptionClasses::NONE, |set, (_, class)| {
+                set.union(*class)
+            });
+        assert_eq!(union, SubresourceInterceptionClasses::ALL);
+        assert!(
+            !SubresourceInterceptionClasses::NONE.intersects(SubresourceInterceptionClasses::ALL)
         );
     }
 

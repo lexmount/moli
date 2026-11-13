@@ -5,7 +5,7 @@ use super::document_cookie_diagnostics::{
 };
 use super::protocol_support::{
     EmulatedIdleOverride, EmulatedMediaOverrides, PermissionOverrideRegistration,
-    SubresourceResourceType, ViewportSurface,
+    SubresourceInterceptionClasses, ViewportSurface,
 };
 use super::{CompletedPageCommand, Page, PendingDevToolsIoCommandDispatch, PendingPageCommand};
 use crate::renderer::{
@@ -17,14 +17,10 @@ use moli_renderer_v8::network::BrowserResourceRuntime;
 impl Page {
     pub async fn set_fetch_subresource_interception_async(
         &mut self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
+        classes: SubresourceInterceptionClasses,
     ) -> Result<()> {
         self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            },
+            RendererPageCommand::SetFetchSubresourceInterception { classes },
             "set fetch subresource interception",
         )
         .await
@@ -32,13 +28,9 @@ impl Page {
 
     pub fn start_set_fetch_subresource_interception(
         &self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
+        classes: SubresourceInterceptionClasses,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetFetchSubresourceInterception {
-            enabled,
-            resource_type,
-        })
+        self.start_page_command(RendererPageCommand::SetFetchSubresourceInterception { classes })
     }
 
     pub fn finish_set_fetch_subresource_interception(
