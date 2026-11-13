@@ -75,13 +75,49 @@ async fn inline_svg_batch_geometry_uses_one_frozen_scene() {
             document.querySelector('svg').style.left='300px';
             document.querySelector('rect').setAttribute('x','30');
             return JSON.stringify([document.querySelector('svg').getBoundingClientRect().x,document.querySelector('rect').getBoundingClientRect().x]);
-        })()"#)?, "[100,110]", "both coordinate levels must stay in the same frozen publication");
-        assert_eq!(crate::layout_renderer::svg_parse_count(), frozen);
+        })()"#)?, "[300,330]", "an SVG observation must refresh both coordinate levels together");
+        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 1);
+        assert_eq!(page_vm.vm_mut().eval("document.querySelector('rect').getBoundingClientRect().x")?, "330");
+        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 1, "clean SVG reads must reuse the publication");
         page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 150, 1.0))?;
         assert_eq!(page_vm.vm_mut().eval("document.querySelector('rect').getBoundingClientRect().x")?, "330");
-        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 1);
+        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 2);
         Ok::<_, anyhow::Error>(())
     }).await.expect("SVG geometry must share its outer layout's publication");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_measurement_observes_a_chart_shown_after_container_measurement() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader, Vec::new(), Url::parse("https://example.com/svg-hidden-chart.html")?,
+        );
+        page_vm.vm_mut().eval(r#"
+            document.head.innerHTML = '<style>html,body{margin:0}#container{width:250px}.hidden{display:none}svg{font:12px "DejaVu Sans"}</style>';
+            document.body.innerHTML = '<div id="container"><svg class="hidden"><g><text>Code review</text></g></svg></div>';
+            'installed'
+        "#)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        // GitHub measures its container before revealing the graph, then uses
+        // SVG measurements repeatedly while assigning label positions.
+        assert_eq!(page_vm.vm_mut().eval("document.getElementById('container').clientWidth")?, "250");
+        let measured = page_vm.vm_mut().eval(r#"(() => {
+            const svg=document.querySelector('svg'), text=svg.querySelector('text'), group=svg.querySelector('g');
+            svg.classList.remove('hidden');
+            const label=text.getBoundingClientRect();
+            text.setAttribute('x','40'); text.setAttribute('y','50');
+            const bounds=group.getBoundingClientRect();
+            svg.setAttribute('width',Math.ceil(bounds.width)); svg.setAttribute('height',Math.ceil(bounds.height));
+            return JSON.stringify([label.width,label.height,bounds.x,bounds.y,bounds.width,bounds.height]);
+        })()"#)?;
+        let measured: Vec<f64> = serde_json::from_str(&measured)?;
+        assert!(measured[0] > 50.0 && measured[1] > 8.0, "visible label: {measured:?}");
+        assert!(measured[2] > 39.0 && measured[3] > 30.0, "updated position: {measured:?}");
+        assert!((measured[0] - measured[4]).abs() < 0.001);
+        assert!((measured[1] - measured[5]).abs() < 0.001);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("chart construction must not read a hidden or incomplete SVG snapshot");
 }
 
 #[tokio::test(flavor = "current_thread")]

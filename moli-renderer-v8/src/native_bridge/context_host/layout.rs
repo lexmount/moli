@@ -5,6 +5,7 @@ use moli_layout::{
 };
 
 use super::PageScriptHost;
+use super::layout_snapshot::LayoutInputSnapshot;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
 use crate::{
     css_resource_urls::{
@@ -305,6 +306,44 @@ impl PageScriptHost {
         Ok(())
     }
 
+    fn layout_input_snapshot(&self) -> LayoutInputSnapshot {
+        LayoutInputSnapshot {
+            dom: self.dom_host().dom_version(),
+            styles: self
+                .style_engine
+                .visual_style_input_generations(self.active_layout_document_handles()),
+            interaction: self.visual_state_generation(),
+            resources: self.visual_resource_generation(),
+            viewport: self.layout_viewport_for_document(self.document_handle()),
+        }
+    }
+
+    /// SVG scripts measure while constructing their scene. Refresh the whole
+    /// recursive layout when inputs changed, so local SVG bounds and the outer
+    /// CSS viewport always come from the same observation. Clean reads and
+    /// every source in a Range batch reuse the resulting numeric publication.
+    pub(crate) fn ensure_svg_geometry_layout(&self) -> Result<(), LayoutError> {
+        self.ensure_initial_layout()?;
+        if !self.layout_policy.uses_real_layout()
+            || self
+                .document_layout_state
+                .borrow()
+                .layout_inputs_are_current(&self.layout_input_snapshot())
+        {
+            return Ok(());
+        }
+        let document = self.document_handle();
+        let request = LayoutPassRequest::new(
+            self.layout_viewport_for_document(document),
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        );
+        let pass = self
+            .build_layout_pass_for_document(document, request)?
+            .ok_or(LayoutError::NoLayoutRoot)?;
+        self.publish_layout_pass_for_document(document, pass);
+        Ok(())
+    }
+
     /// FontFace and Canvas use the document's font service without requesting a
     /// layout pass or changing the frozen synchronous DOM geometry snapshot.
     pub(crate) fn with_font_services<T>(
@@ -455,13 +494,16 @@ impl PageScriptHost {
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.publish_latest_layout(document, tree);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
         }
+        let inputs = self.layout_input_snapshot();
+        self.document_layout_state
+            .borrow_mut()
+            .publish_latest_layout(document, tree, inputs);
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
