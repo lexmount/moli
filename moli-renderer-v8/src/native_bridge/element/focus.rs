@@ -1243,7 +1243,8 @@ pub(crate) fn perform_mouse_focus_default_action(
                         runtime.dom_host().shadow_root_delegates_focus(root) == Some(true)
                             && delegated_focus_target(runtime, handle).is_some()
                     });
-            let should_focus = is_focusable(runtime, handle) || delegates_focus;
+            let should_focus = (is_focusable(runtime, handle) || delegates_focus)
+                && !focused_chain_requires_async_blur(runtime, handle);
             let parent = if should_focus {
                 None
             } else {

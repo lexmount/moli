@@ -141,7 +141,7 @@ fn in_shadow_including_subtree(dom: &DomHost, root: DomHandle, target: DomHandle
     .any(|ancestor| ancestor == root)
 }
 
-fn common_flat_tree_ancestor(
+pub(crate) fn common_flat_tree_ancestor(
     dom: &DomHost,
     pressed: DomHandle,
     released: DomHandle,
