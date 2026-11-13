@@ -2,7 +2,7 @@ use anyhow::Result;
 use moli_inspector_json::InspectorJson;
 use serde_json::{Value, json};
 
-use crate::cdp_writer::CdpSocketSink;
+use crate::cdp_writer::{CdpSocketSink, CheckedCdpMessage};
 
 use self::{frontend_registry::FrontendRegistry, pending_commands::PendingCommandTable};
 
@@ -22,8 +22,8 @@ impl CdpRoutedFrontend {
         self.frontend_id
     }
 
-    pub(super) fn enqueue_message(self, message: impl Into<InspectorJson>) -> bool {
-        self.sink.enqueue_owned_message(message)
+    pub(super) fn enqueue_message(self, message: CheckedCdpMessage) -> bool {
+        self.sink.enqueue_checked_message(message)
     }
 
     pub(super) fn into_sink(self) -> CdpSocketSink {
@@ -91,6 +91,25 @@ impl CdpFrontendRoutingState {
         self.frontends
             .frontend_sink(frontend_id)
             .map(|sink| CdpRoutedFrontend { frontend_id, sink })
+    }
+
+    fn encode_for_frontend(
+        &self,
+        frontend_id: u64,
+        output: &session_output::SessionOutputRoute,
+        message: impl Into<InspectorJson>,
+    ) -> Option<CheckedCdpMessage> {
+        match output.encode(message) {
+            Ok(message) => Some(message),
+            Err(error) => {
+                if let Some(frontend) = self.frontend_by_id(frontend_id) {
+                    frontend
+                        .sink
+                        .reject_event_contract(&error, error.session_id());
+                }
+                None
+            }
+        }
     }
 }
 

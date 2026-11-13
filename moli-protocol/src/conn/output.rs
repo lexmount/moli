@@ -1,6 +1,6 @@
 use anyhow::Result;
 use moli_inspector_json::{InspectorJson, PRIVATE_PROTOCOL_PARAM_FIELDS};
-use moli_protocol_cdp::{CdpEventContractError, validate_event_name};
+use moli_protocol_cdp::{CdpEventContractError, validate_event_name, validate_event_names};
 use moli_protocol_cdp_defs::LocalCdpEvent;
 use std::sync::Arc;
 
@@ -2031,9 +2031,16 @@ impl ProtocolDeliveryEnvelope {
 
     pub(crate) fn target_received_message_from_target(
         target_session_id: impl Into<String>,
-        nested_event: BackgroundProtocolEvent,
+        mut nested_event: BackgroundProtocolEvent,
         strip_implicit_session: bool,
     ) -> Self {
+        // Typed payloads have fixed event names. Opaque messages must be
+        // checked before a legal Target shell can obscure their envelope.
+        if let BackgroundProtocolEventPayload::Protocol(event) = &mut nested_event.payload {
+            event.contract_error = validate_event_names(&event.message, "Target inner message")
+                .err()
+                .map(Arc::new);
+        }
         Self::wrap_target_received_message_from_target_event(Box::new(
             BackgroundTargetReceivedMessageFromTargetEvent {
                 target_session_id: target_session_id.into(),
@@ -6096,6 +6103,43 @@ mod tests {
         let event = BackgroundProtocolEvent::inspector_message(message, None);
         assert!(!event.is_document_network_response_started());
         assert!(!event.protocol_json().unwrap().is_materialized());
+    }
+
+    #[test]
+    fn legacy_target_wrapper_checks_an_opaque_child_before_encoding_it() {
+        let inner = BackgroundProtocolEvent::inspector_message(
+            json!({
+                "method":"Target.receivedMessageFromTarget","params":{
+                    "sessionId":"SID-inner","message":r#"{"method":"Runtime.someUnknownEvent"}"#,
+                },
+            }),
+            None,
+        );
+        assert!(inner.cdp_contract_violation().is_none());
+        let wrapped =
+            BackgroundProtocolEvent::target_received_message_from_target("SID-outer", inner, true);
+        assert!(!wrapped.has_protocol_wire_message());
+        let error = wrapped.cdp_contract_violation().unwrap();
+        assert_eq!(error.method(), "Runtime.someUnknownEvent");
+        assert_eq!(error.session_id(), Some("SID-inner"));
+    }
+
+    #[test]
+    fn legacy_target_wrapper_preserves_opaque_child_parameter_bytes() {
+        let raw = moli_inspector_json::InspectorJson::from_slice(
+            br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\ud800"}]}}"#,
+        )
+        .unwrap();
+        let original = raw.to_string();
+        let wrapped = BackgroundProtocolEvent::target_received_message_from_target(
+            "SID-child",
+            BackgroundProtocolEvent::inspector_message(raw.clone(), None),
+            true,
+        );
+        assert!(wrapped.cdp_contract_violation().is_none());
+        let wire = wrapped.into_cdp_message();
+        assert_eq!(wire.value()["params"]["message"], original);
+        assert!(!raw.is_materialized());
     }
 
     #[test]

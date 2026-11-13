@@ -12,8 +12,11 @@ matching pinned protocol revision and recheck the JS schema against the vendored
 PDL. The build merges `protocol_extensions.json`, selects commands and events
 using `moli-protocol-cdp-defs`, and validates definitions, type references, and
 domain dependencies. The dispatcher uses the same action enum types as this
-catalog. Browser events and V8 forwarding rules are explicit static lists;
-adding an emitted event still requires updating the catalog.
+catalog. Local notification constructors use `LocalCdpEvent`; the build derives
+their advertised names from that enum and fails if any definition is missing.
+Add a local event to this enum and use it at the sender, without maintaining a
+second whitelist. V8 forwarding still selects the pinned schema's events in the
+explicit forwarded domains.
 
 All types remain available for cross-domain references. The final advertised
 schema is compacted and compressed with the existing `brotlic` dependency at
@@ -21,5 +24,13 @@ quality 11. Only the `.json.br` bytes are embedded, without a network dependency
 The server decodes this final response once through `BufReader` and caches it
 with `OnceLock`; it does not parse, merge, or filter schema JSON at runtime. The
 uncompressed build artifact is used only by the byte-for-byte round-trip test.
+
+The same build generates an exact event-name check from the final schema.
+Opaque Inspector output and nested `Target.receivedMessageFromTarget` messages
+must pass this check before routing wraps them and before the socket queue.
+An unadvertised notification closes its owning frontend, without sending an
+invented command reply. Validation reads envelope fields and preserves opaque
+Inspector parameter encoding. The protocol-schema smoke checks every observed
+notification, including non-flat session messages, against live discovery.
 
 Upstream licensing is preserved in `LICENSE`.

@@ -3,6 +3,76 @@
 const assert = require("node:assert/strict");
 const CDP = require("chrome-remote-interface");
 
+function observeAdvertisedEvents(client, schema) {
+  const advertised = new Set(schema.domains.flatMap((domain) =>
+    (domain.events || []).map((event) => `${domain.domain}.${event.name}`)));
+  const failures = [];
+  let notifications = 0;
+  let nestedNotifications = 0;
+  function check(message, nested = false) {
+    if (message.method === undefined) return;
+    assert(advertised.has(message.method), `unadvertised event: ${message.method}`);
+    notifications++;
+    if (nested) nestedNotifications++;
+    if (message.method === "Target.receivedMessageFromTarget") {
+      assert.equal(typeof message.params.message, "string");
+      check(JSON.parse(message.params.message), true);
+    }
+  }
+  const listener = (message) => {
+    try { check(message); } catch (error) { failures.push(error.message); }
+  };
+  client.on("event", listener);
+  return {
+    finish() {
+      client.off("event", listener);
+      assert.deepEqual(failures, []);
+      assert(notifications > 0);
+      assert(nestedNotifications > 0);
+      return {name: "protocol_schema_all_observed_events_advertised", ok: true,
+        notifications, nestedNotifications};
+    },
+  };
+}
+
+async function verifyNonFlatEvents(client, targetId) {
+  const {sessionId} = await client.Target.attachToTarget({targetId, flatten: false});
+  const id = 1000001;
+  let remove;
+  let timeout;
+  try {
+    const complete = new Promise((resolve, reject) => {
+      let context = false;
+      let response = false;
+      remove = client.Target.receivedMessageFromTarget((event) => {
+        if (event.sessionId !== sessionId) return;
+        try {
+          const message = JSON.parse(event.message);
+          if (message.method === "Runtime.executionContextCreated") {
+            assert.equal(typeof message.params.context.id, "number");
+            context = true;
+          }
+          if (message.id === id) {
+            assert.equal(message.error, undefined);
+            response = true;
+          }
+          if (context && response) resolve();
+        } catch (error) { reject(error); }
+      });
+      timeout = setTimeout(() => reject(new Error("timed out waiting for non-flat Runtime output")), 7000);
+    });
+    await Promise.all([
+      client.Target.sendMessageToTarget({sessionId, message: JSON.stringify({id, method: "Runtime.enable"})}),
+      complete,
+    ]);
+    return {name: "protocol_schema_generated_client_non_flat_events", ok: true};
+  } finally {
+    clearTimeout(timeout);
+    if (remove) remove();
+    await client.Target.detachFromTarget({sessionId});
+  }
+}
+
 async function verifyTracing(client) {
   assert.equal(typeof client.Tracing.dataCollected, "function");
   assert.equal(typeof client.Tracing.tracingComplete, "function");
@@ -54,11 +124,14 @@ async function main() {
   assert(fixture, "usage: protocol_schema_smoke.cjs ENDPOINT FIXTURE");
   const options = {host: endpoint.hostname, port: Number(endpoint.port)};
   const version = await CDP.Version(options);
+  const schema = await CDP.Protocol(options);
   // No local schema or protocol override: CRI must fetch /json/protocol and
   // generate all command functions and event subscriptions from that response.
   const client = await CDP({...options, target: version.webSocketDebuggerUrl});
+  const observedEvents = observeAdvertisedEvents(client, schema);
   let targetId;
   const unsubscribe = [];
+  let results;
   try {
     assert.equal(client.Page.navigate.parameters.url.type, "string");
     assert(client.Page.navigate.returns.some((field) => field.name === "frameId"));
@@ -106,16 +179,19 @@ async function main() {
     assert.equal(exceptionDetails, undefined);
     assert.equal(result.value, url);
     const tracingResults = await verifyTracing(client);
-    process.stdout.write(JSON.stringify({ok: true, results: [{
+    const nonFlatResult = await verifyNonFlatEvents(client, targetId);
+    results = [{
       name: "protocol_schema_generated_client_navigation", ok: true,
       client: "chrome-remote-interface", schema: "/json/protocol",
       events: ["Target.attachedToTarget", "Network.requestWillBeSent", "Page.loadEventFired"],
-    }, ...tracingResults]}));
+    }, ...tracingResults, nonFlatResult];
   } finally {
     for (const remove of unsubscribe) remove();
     if (targetId) await client.Target.closeTarget({targetId});
     await client.close();
   }
+  results.push(observedEvents.finish());
+  process.stdout.write(JSON.stringify({ok: true, results}));
 }
 
 main().catch((error) => {

@@ -8,6 +8,60 @@ use super::*;
 
 mod target_message;
 
+#[test]
+fn rejected_opaque_event_closes_its_frozen_frontend_and_keeps_the_peer_open() {
+    let router = CdpFrontendRouter::new();
+    let (bad, bad_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    let (good, mut good_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    router
+        .register_browser_frontend(5, "SID-bad".into(), bad)
+        .unwrap();
+    router
+        .register_browser_frontend(6, "SID-good".into(), good)
+        .unwrap();
+    let event = moli_protocol::conn::BackgroundProtocolEvent::inspector_message(
+        json!({"method":"Runtime.someUnknownEvent","sessionId":"SID-bad"}),
+        None,
+    );
+    assert!(!event.has_protocol_wire_message());
+    assert!(!router.enqueue_protocol_output_sequence(
+        ProtocolOutputSequence::from_background_events(vec![event])
+    ));
+    assert!(!bad_writer.is_open());
+    assert!(bad_writer.is_empty());
+    assert!(good_writer.is_open());
+    assert!(
+        router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+            json!({"method":"Page.loadEventFired","params":{"timestamp":1},"sessionId":"SID-good"}),
+        ]))
+    );
+    assert_eq!(good_writer.take_message()["method"], "Page.loadEventFired");
+}
+
+#[test]
+fn prewrapped_unknown_event_closes_its_owner_at_session_routing() {
+    let router = CdpFrontendRouter::new();
+    let (sink, mut writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    router
+        .register_browser_frontend(5, "SID-browser".into(), sink)
+        .unwrap();
+    assert!(
+        router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+            json!({"method":"Target.attachedToTarget","sessionId":"SID-browser","params":{
+                "sessionId":"SID-child","targetInfo":{"targetId":"TID-child"},
+            }}),
+        ]))
+    );
+    writer.take_message();
+    router.enqueue_protocol_output_sequence(ProtocolOutputSequence::from_messages(vec![
+        json!({"method":"Target.receivedMessageFromTarget","params":{
+            "sessionId":"SID-child","message":r#"{"method":"Runtime.someUnknownEvent","sessionId":"SID-unregistered"}"#,
+        }}),
+    ]));
+    assert!(!writer.is_open());
+    assert!(writer.is_empty());
+}
+
 fn test_sink() -> CdpSocketSink {
     CdpSocketSink::for_test()
 }

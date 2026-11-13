@@ -275,3 +275,44 @@ fn raw_inspector_output_preserves_utf16_and_enforces_exact_wire_byte_limits() {
     assert_eq!(*close.borrow(), SocketCloseSignal::ImmediateClose);
     assert!(!message.is_materialized());
 }
+
+#[test]
+fn unknown_notification_closes_only_its_frontend_without_queuing_a_reply() {
+    let (bad, bad_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    let (good, mut good_writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    assert!(!bad.enqueue_owned_message(json!({
+        "method": "Runtime.someUnknownEvent", "sessionId": "SID-bad",
+    })));
+    assert!(!bad_writer.is_open());
+    assert!(bad_writer.is_empty());
+    assert!(good_writer.is_open());
+    assert!(good.enqueue_owned_message(json!({"id": 7, "result": {}})));
+    assert_eq!(good_writer.take_message(), json!({"id": 7, "result": {}}));
+}
+
+#[test]
+fn a_prebuilt_target_shell_cannot_hide_an_unknown_notification() {
+    let (sink, writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    assert!(!sink.enqueue_owned_message(json!({
+        "method": "Target.receivedMessageFromTarget", "params": {
+            "sessionId": "SID-child",
+            "message": r#"{"method":"Runtime.someUnknownEvent"}"#,
+        },
+    })));
+    assert!(!writer.is_open());
+    assert!(writer.is_empty());
+}
+
+#[test]
+fn valid_raw_notification_keeps_its_original_parameter_encoding() {
+    let raw = InspectorJson::from_slice(
+        br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\ud800"}]}}"#,
+    )
+    .unwrap();
+    let before = raw.to_string();
+    let (sink, mut writer) = CdpSocketSink::with_stalled_writer_for_test(2);
+    assert!(sink.enqueue_owned_message(raw.clone()));
+    assert_eq!(writer.take_text(), before);
+    assert!(!raw.is_materialized());
+    assert!(writer.is_open());
+}

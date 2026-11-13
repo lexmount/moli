@@ -50,7 +50,7 @@ impl CdpFrontendRouter {
     pub(crate) fn enqueue_immediate_response(&self, frontend_id: u64, message: Value) {
         let frontend = self.routing.lock().frontend_by_id(frontend_id);
         if let Some(frontend) = frontend {
-            frontend.enqueue_message(message);
+            frontend.into_sink().enqueue_owned_message(message);
         }
     }
 
@@ -59,7 +59,7 @@ impl CdpFrontendRouter {
     pub(crate) fn enqueue_response(&self, message: Value) -> Option<CdpSocketSink> {
         let (frontend, message) = self.routing.lock().route_message(message, None, None)?;
         let sink = frontend.into_sink();
-        sink.enqueue_owned_message(message).then_some(sink)
+        sink.enqueue_checked_message(message).then_some(sink)
     }
 
     pub(crate) fn register_browser_frontend(
@@ -118,7 +118,13 @@ impl CdpFrontendRouter {
             );
         }
         for delivery in output.into_deliveries() {
-            if !delivery.has_protocol_wire_message() {
+            if let Some(error) = delivery.cdp_contract_violation() {
+                tracing::error!(%error, session_id = delivery.protocol_session_id(), "rejecting CDP event contract violation");
+                all_enqueued = false;
+                // Resolve the actual owning frontend through the ordinary
+                // route, including a legacy Target shell. The checked encoder
+                // rejects its content and closes that frontend before enqueue.
+            } else if !delivery.has_protocol_wire_message() {
                 continue;
             }
             let attachment_flattened_protocol = delivery.target_attachment_uses_flat_protocol();

@@ -1,3 +1,4 @@
+use crate::cdp_writer::CheckedCdpMessage;
 use moli_inspector_json::InspectorJson;
 use serde_json::Value;
 
@@ -13,7 +14,7 @@ impl CdpFrontendRoutingState {
         message: impl Into<InspectorJson>,
         wire_session_id: Option<&str>,
         attachment_flattened_protocol: Option<bool>,
-    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
+    ) -> Option<(CdpRoutedFrontend, CheckedCdpMessage)> {
         let message = message.into();
         if let Some(internal_command_id) = message.id_u64() {
             return self.route_response(message, internal_command_id);
@@ -25,7 +26,7 @@ impl CdpFrontendRoutingState {
         &mut self,
         mut message: InspectorJson,
         internal_command_id: u64,
-    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
+    ) -> Option<(CdpRoutedFrontend, CheckedCdpMessage)> {
         let pending = self.pending_commands.take(internal_command_id)?;
         message.set_id(pending.client_command_id);
         let CdpCommandFrontend {
@@ -59,7 +60,7 @@ impl CdpFrontendRoutingState {
         }
         Some((
             CdpRoutedFrontend { frontend_id, sink },
-            pending.output.encode(message),
+            self.encode_for_frontend(frontend_id, &pending.output, message)?,
         ))
     }
 
@@ -68,7 +69,7 @@ impl CdpFrontendRoutingState {
         message: InspectorJson,
         wire_session_id: Option<&str>,
         attachment_flattened_protocol: Option<bool>,
-    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
+    ) -> Option<(CdpRoutedFrontend, CheckedCdpMessage)> {
         let method = message.method().map(str::to_owned);
         debug_assert_eq!(
             message.session_id(),
@@ -106,7 +107,7 @@ impl CdpFrontendRoutingState {
                 .unwrap_or_default();
             return Some((
                 CdpRoutedFrontend { frontend_id, sink },
-                output.encode(message),
+                self.encode_for_frontend(frontend_id, &output, message)?,
             ));
         }
         if method.as_deref() == Some("Target.attachedToTarget")
@@ -149,7 +150,7 @@ impl CdpFrontendRoutingState {
                     frontend_id: session.frontend_id,
                     sink,
                 },
-                session.output.encode(message),
+                self.encode_for_frontend(session.frontend_id, &session.output, message)?,
             ));
         }
         if wire_session_id.is_some() {
@@ -185,7 +186,7 @@ impl CdpFrontendRoutingState {
                                 frontend_id: session.frontend_id,
                                 sink,
                             },
-                            output.encode(message),
+                            self.encode_for_frontend(session.frontend_id, &output, message)?,
                         ));
                     }
                 }
