@@ -8,11 +8,11 @@ mod tree;
 
 pub use effects::{
     DomAttributeMutation, DomAttributeMutationOutcome, DomChildListMutation, DomMutationEffects,
-    DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind, DomScriptMutationEffects,
-    DomSlotAssignmentChange, DomSlotMutationEffects, DomStyleInvalidationInputs,
-    DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind, DomStylesheetOwnerTransitions,
-    DomStylesheetOwnerTreeScopes, DomTreeMutationEffects, ScriptPrepareTrigger,
-    ScriptPrepareTriggerKind,
+    DomMutationObserverEffect, DomMutationRecord, DomMutationRecordBatch, DomMutationRecordKind,
+    DomScriptMutationEffects, DomSlotAssignmentChange, DomSlotMutationEffects,
+    DomStyleInvalidationInputs, DomStylesheetOwnerChange, DomStylesheetOwnerChangeKind,
+    DomStylesheetOwnerTransitions, DomStylesheetOwnerTreeScopes, DomTreeMutationEffects,
+    ScriptPrepareTrigger, ScriptPrepareTriggerKind,
 };
 
 impl Deref for DomHost {
