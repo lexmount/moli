@@ -139,6 +139,7 @@ pub use isolate::PromiseHook;
 pub use isolate::PromiseHookType;
 pub use isolate::PromiseRejectCallback;
 pub use isolate::RealIsolate;
+pub use isolate::SharedArrayBufferConstructorEnabledCallback;
 pub use isolate::TimeZoneDetection;
 pub use isolate::UseCounterCallback;
 pub use isolate::UseCounterFeature;
