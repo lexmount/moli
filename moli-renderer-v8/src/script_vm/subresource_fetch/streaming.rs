@@ -36,17 +36,34 @@ impl ScriptVm {
         &mut self,
         request_client: ResourceRequestClient,
         request: moli_fetch::Request,
-        state: RunningSubresourceFetchState,
+        mut state: RunningSubresourceFetchState,
         cancel_handle: Option<moli_fetch::FetchCancelHandle>,
     ) {
+        let intercepted_window = state
+            .pending
+            .continuation
+            .window_fetch()
+            .is_some_and(|fetch| fetch.intercepted_request.is_some());
+        if intercepted_window {
+            state.pending.update_request_snapshot(request.clone());
+        }
         let response = async move {
-            crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
-                request_client,
-                request,
-                cancel_handle,
-            )
-            .await
-            .map(|observed| {
+            let result = if intercepted_window {
+                crate::network_host::fetch_intercepted_window_hop(
+                    request_client,
+                    request,
+                    cancel_handle,
+                )
+                .await
+            } else {
+                crate::network_host::fetch_browser_subresource_with_preflight_and_network_metadata(
+                    request_client,
+                    request,
+                    cancel_handle,
+                )
+                .await
+            };
+            result.map(|observed| {
                 let (response, request_observation) = observed.into_parts();
                 crate::protocol_types::NavigationResponse::from(response)
                     .with_network_request_headers(
@@ -306,11 +323,16 @@ impl ScriptVm {
                 activity?
             }
         };
-        self._context_host
-            .borrow_mut()
-            .record_pending_subresource_continue_event(
+        let mut host = self._context_host.borrow_mut();
+        // Redirects already retired the old hop before publishing its next
+        // pause. A second completion here would claim that new correlation.
+        if !host.async_subresource_fetch_event_target_is_current(
+            crate::types::AsyncSubresourceFetchEventTarget::Completion { internal_id },
+        ) {
+            host.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::Completed { internal_id },
             );
+        }
         Ok(activity)
     }
     /// Standalone ScriptVm test turn: apply one terminal and immediately submit

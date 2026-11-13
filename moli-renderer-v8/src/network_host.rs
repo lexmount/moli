@@ -14,6 +14,7 @@ mod font_face;
 mod headers;
 mod image;
 mod js_values;
+mod loaded_response;
 mod media;
 mod preflight_events;
 mod request;
@@ -41,7 +42,7 @@ pub(crate) use self::async_fetch::{
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    spawn_async_subresource_fetch,
+    fetch_intercepted_window_hop, spawn_async_subresource_fetch,
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
