@@ -16,6 +16,7 @@ pub enum FetchTimeoutPhase {
     WaitingForSubresourceResponse,
     WaitingForSelector,
     WaitingForScript,
+    WaitingForIdle,
 }
 
 impl FetchTimeoutPhase {
@@ -54,6 +55,7 @@ impl fmt::Display for FetchTimeoutPhase {
             Self::WaitingForSubresourceResponse => "waiting for a subresource response",
             Self::WaitingForSelector => "waiting for a selector",
             Self::WaitingForScript => "waiting for a script to become truthy",
+            Self::WaitingForIdle => "waiting for idle",
         })
     }
 }

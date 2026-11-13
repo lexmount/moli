@@ -154,6 +154,7 @@ pub async fn run_cli_with_config<W: Write>(
                             .await
                             .context("failed while waiting for page delay")?;
                     }
+                    readiness.wait_for_idle(&browser, &mut page).await?;
                     Ok::<(), anyhow::Error>(())
                 }
                 .await;
@@ -213,9 +214,18 @@ pub async fn run_cli_with_config<W: Write>(
                             eval_output::execute(&mut page, expression)
                                 .await
                                 .map_err(with_output_context)?;
+                            readiness
+                                .wait_for_idle(&browser, &mut page)
+                                .await
+                                .map_err(with_output_context)?;
                             fetch_dump::render_page_output_async(&mut page, &config.fetch).await
                         } else {
-                            eval_output::evaluate(&mut page, expression).await
+                            async {
+                                let result = eval_output::evaluate(&mut page, expression).await?;
+                                readiness.wait_for_idle(&browser, &mut page).await?;
+                                Ok(result)
+                            }
+                            .await
                         }
                     } else {
                         fetch_dump::render_page_output_async(&mut page, &config.fetch).await

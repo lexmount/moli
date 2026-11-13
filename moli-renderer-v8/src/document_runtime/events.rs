@@ -92,7 +92,17 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
     ) -> bool {
-        self.timeouts.queue_internal_task(scope, callback)
+        self.queue_internal_task_after(scope, callback, 0)
+    }
+
+    pub(crate) fn queue_internal_task_after<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+        delay_ms: u64,
+    ) -> bool {
+        self.timeouts
+            .queue_internal_task_after(scope, callback, delay_ms)
     }
 
     pub(crate) fn queue_timeout_with_receiver<'s>(
@@ -320,6 +330,10 @@ impl DocumentRuntime {
 
     pub(crate) fn ms_to_next_timeout(&self) -> Option<u64> {
         self.timeouts.ms_to_next()
+    }
+
+    pub(crate) fn has_keep_alive_timers(&self) -> bool {
+        self.timeouts.has_keep_alive_timers()
     }
 
     pub(crate) fn next_timeout_deadline(&self) -> Option<std::time::Instant> {

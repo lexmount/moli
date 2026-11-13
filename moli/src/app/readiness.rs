@@ -70,7 +70,9 @@ impl ReadinessPlan {
                 )
                 .await
             }
-            RenderedDomWaitUntil::NetworkIdle | RenderedDomWaitUntil::DomStable => {
+            RenderedDomWaitUntil::NetworkIdle
+            | RenderedDomWaitUntil::DomStable
+            | RenderedDomWaitUntil::Idle => {
                 browser
                     .fetch_request_document_allow_http_error_with_wait_until_deadline(
                         request,
@@ -107,6 +109,17 @@ impl ReadinessPlan {
 
         Ok(())
     }
+
+    /// Include work scheduled by automation predicates, delays and --eval in
+    /// the explicit idle lifecycle, sharing the original readiness deadline.
+    pub(super) async fn wait_for_idle(&self, browser: &Browser, page: &mut Page) -> Result<()> {
+        if self.wait_until == RenderedDomWaitUntil::Idle {
+            browser
+                .wait_for_page_readiness_with_deadline(page, self.wait_until, self.deadline)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 fn rendered_wait_until(wait_until: FetchWaitUntil) -> RenderedDomWaitUntil {
@@ -115,6 +128,7 @@ fn rendered_wait_until(wait_until: FetchWaitUntil) -> RenderedDomWaitUntil {
         FetchWaitUntil::Load => RenderedDomWaitUntil::Load,
         FetchWaitUntil::NetworkIdle => RenderedDomWaitUntil::NetworkIdle,
         FetchWaitUntil::DomStable => RenderedDomWaitUntil::DomStable,
+        FetchWaitUntil::Idle => RenderedDomWaitUntil::Idle,
         FetchWaitUntil::Done => RenderedDomWaitUntil::Done,
     }
 }

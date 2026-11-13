@@ -278,10 +278,11 @@ impl HostTimeoutScheduler {
     /// Browser tasks share the Window task scheduler and its retirement checks,
     /// but are not JS timer handles that clearTimeout can cancel.
     /// Returns whether the task was admitted by the owner and Realm checks.
-    pub(crate) fn queue_internal_task<'s>(
+    pub(crate) fn queue_internal_task_after<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
+        delay_ms: u64,
     ) -> bool {
         let receiver = scope.get_current_context().global(scope);
         let Some(callback) = scheduled_timer_function(scope, callback, receiver) else {
@@ -302,7 +303,7 @@ impl HostTimeoutScheduler {
                 is_interval: false,
                 extra_args: Vec::new(),
             },
-            0,
+            delay_ms,
             Instant::now(),
         );
         true
@@ -966,6 +967,12 @@ impl HostTimeoutScheduler {
 
     pub(crate) fn ms_to_next(&self) -> Option<u64> {
         self.scheduler.ms_to_next(Instant::now())
+    }
+
+    pub(crate) fn has_keep_alive_timers(&self) -> bool {
+        self.scheduler.has_pending_matching(|task| {
+            !matches!(task.callback, ScheduledTimerCallback::InternalFunction(_))
+        })
     }
 
     pub(crate) fn next_deadline(&self) -> Option<Instant> {

@@ -426,10 +426,10 @@ impl RendererOwnerHandle {
         .await
     }
 
-    pub(super) async fn wait_live_page_network_idle_turn(
+    pub(super) async fn wait_live_page_idle_turn(
         &self,
         token: RendererPageToken,
-        state: PageVmNetworkIdleWaitState,
+        state: PageVmIdleWaitState,
         deadline: Instant,
         loader: ResourceRequestClient,
     ) -> RenderRuntimeDispatchOutcome {
@@ -440,9 +440,9 @@ impl RendererOwnerHandle {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             self.restore_live_page_entry(token, entry);
-            return Err(anyhow!("timed out waiting for networkidle")).into();
+            return Err(anyhow!("timed out waiting for {}", state.label())).into();
         }
-        let (entry, wait_result) = advance_network_idle_wait_turn_on_entry_via_local_task(
+        let (mut entry, wait_result) = advance_idle_wait_turn_on_entry_via_local_task(
             self.state.local_executor.clone(),
             entry,
             state,
@@ -450,7 +450,21 @@ impl RendererOwnerHandle {
         )
         .await;
         match wait_result {
-            Ok(PageVmNetworkIdleWaitAdvance::Completed) => {
+            Ok(PageVmIdleWaitAdvance::Completed)
+                if matches!(state, PageVmIdleWaitState::EventLoop)
+                    && has_ready_page_tasks_on_bound_owner_local_store(token, &mut entry) =>
+            {
+                self.restore_live_page_entry(token, entry);
+                RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
+                    RenderRuntimeTurn::WaitLivePageIdle {
+                        token,
+                        state,
+                        deadline,
+                        loader,
+                    },
+                ))
+            }
+            Ok(PageVmIdleWaitAdvance::Completed) => {
                 self.finish_live_page_entry_with_page_state(
                     token,
                     entry,
@@ -459,18 +473,22 @@ impl RendererOwnerHandle {
                 )
                 .await
             }
-            Ok(PageVmNetworkIdleWaitAdvance::TriggeredNavigation) => self
+            Ok(PageVmIdleWaitAdvance::TriggeredNavigation) => self
                 .continue_live_page_pending_navigation(
                     token,
                     entry,
                     PageVmInitStage::Load,
                     0,
-                    LivePagePendingNavigationCompletion::ContinueNetworkIdle { deadline, loader },
+                    LivePagePendingNavigationCompletion::ContinueIdle {
+                        state,
+                        deadline,
+                        loader,
+                    },
                 ),
-            Ok(PageVmNetworkIdleWaitAdvance::Progressed { state }) => {
+            Ok(PageVmIdleWaitAdvance::Progressed { state }) => {
                 self.restore_live_page_entry(token, entry);
                 RenderRuntimeDispatchOutcome::ContinueNextTurn(Box::new(
-                    RenderRuntimeTurn::WaitLivePageNetworkIdle {
+                    RenderRuntimeTurn::WaitLivePageIdle {
                         token,
                         state,
                         deadline,
@@ -478,10 +496,10 @@ impl RendererOwnerHandle {
                     },
                 ))
             }
-            Ok(PageVmNetworkIdleWaitAdvance::Waiting { sleep_for, state }) => {
+            Ok(PageVmIdleWaitAdvance::Waiting { sleep_for, state }) => {
                 if Instant::now() >= deadline {
                     self.restore_live_page_entry(token, entry);
-                    Err(anyhow!("timed out waiting for networkidle")).into()
+                    Err(anyhow!("timed out waiting for {}", state.label())).into()
                 } else {
                     self.restore_live_page_entry(token, entry);
                     let ready_at = Instant::now()
@@ -489,7 +507,7 @@ impl RendererOwnerHandle {
                         .unwrap_or(deadline)
                         .min(deadline);
                     RenderRuntimeDispatchOutcome::ContinueAfterPageWakeOrDeadline {
-                        turn: Box::new(RenderRuntimeTurn::WaitLivePageNetworkIdle {
+                        turn: Box::new(RenderRuntimeTurn::WaitLivePageIdle {
                             token,
                             state,
                             deadline,

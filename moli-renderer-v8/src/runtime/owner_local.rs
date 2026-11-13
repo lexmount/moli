@@ -686,10 +686,34 @@ impl RendererPageHandle {
         timeout_ms: u64,
         loader: ResourceRequestClient,
     ) -> Result<(RendererPageReply, Arc<RendererPageState>)> {
+        self.wait_for_idle_with_mode(crate::RendererPageIdleWaitMode::Network, timeout_ms, loader)
+            .await
+    }
+
+    pub async fn wait_for_idle(
+        &self,
+        timeout_ms: u64,
+        loader: ResourceRequestClient,
+    ) -> Result<(RendererPageReply, Arc<RendererPageState>)> {
+        self.wait_for_idle_with_mode(
+            crate::RendererPageIdleWaitMode::EventLoop,
+            timeout_ms,
+            loader,
+        )
+        .await
+    }
+
+    async fn wait_for_idle_with_mode(
+        &self,
+        mode: crate::RendererPageIdleWaitMode,
+        timeout_ms: u64,
+        loader: ResourceRequestClient,
+    ) -> Result<(RendererPageReply, Arc<RendererPageState>)> {
         match self
             .render_runtime
-            .dispatch(RendererOwnerCommand::WaitForNetworkIdle {
+            .dispatch(RendererOwnerCommand::WaitForIdle {
                 token: self.token(),
+                mode,
                 timeout_ms,
                 loader,
             })
@@ -697,7 +721,8 @@ impl RendererPageHandle {
         {
             RendererOwnerReply::AsyncPageCommandRan(result) => Ok(result.into_reply_and_state()),
             _ => Err(anyhow!(
-                "renderer owner returned non-async page-command reply for wait-for-network-idle"
+                "renderer owner returned non-async page-command reply for wait-for-{}",
+                PageVmIdleWaitState::new(mode).label()
             )),
         }
     }
