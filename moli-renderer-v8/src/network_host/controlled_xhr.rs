@@ -1,9 +1,11 @@
 //! One native loading/decision path for intercepted asynchronous and synchronous XHR.
 
 mod context;
+mod result;
 mod stream;
 pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
-pub(crate) use stream::{ControlledXhrBody, ControlledXhrCompletion, ControlledXhrStream};
+pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
+pub(crate) use stream::{ControlledXhrCompletion, ControlledXhrStream};
 
 use moli_fetch::{FetchCancelHandle, Request, Response, ResponseHead};
 use tokio::sync::oneshot;
@@ -26,22 +28,15 @@ use crate::{
 };
 
 pub(crate) struct ControlledXhrLoad {
-    pub(crate) request: Request,
-    pub(crate) info: PendingSubresourceFetchInfo,
-    pub(crate) load: ResourceLoadLease,
-    pub(crate) cancel: FetchCancelHandle,
-    pub(crate) source_document: RendererDocumentLifecycleIdentity,
-    pub(crate) output: InterceptionOutput,
-    pub(crate) connect_policy: DocumentConnectPolicySnapshot,
-    pub(crate) preflight_headers: Vec<(String, String)>,
-    pub(crate) initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ControlledXhrResponse {
-    pub(crate) result: Result<Response, String>,
-    pub(crate) synthetic: bool,
-    pub(crate) info: PendingSubresourceFetchInfo,
+    request: Request,
+    info: PendingSubresourceFetchInfo,
+    load: ResourceLoadLease,
+    cancel: FetchCancelHandle,
+    source_document: RendererDocumentLifecycleIdentity,
+    output: InterceptionOutput,
+    connect_policy: DocumentConnectPolicySnapshot,
+    preflight_headers: Vec<(String, String)>,
+    initial_decision: Option<oneshot::Receiver<ResourceInterceptionDecision>>,
 }
 
 /// A hop is complete at headers. Its owner cancels any unread body on redirect,
@@ -77,7 +72,7 @@ impl LoadedXhrResponse {
         info: &PendingSubresourceFetchInfo,
         stream: Option<&mut ControlledXhrStream>,
         network_request_headers: Option<Vec<(String, String)>>,
-    ) -> Result<ControlledXhrBody, String> {
+    ) -> Result<Option<Response>, String> {
         if let Some(stream) = stream {
             stream.start(info, self.head.clone(), network_request_headers)?;
             let mut offset = 0;
@@ -95,14 +90,8 @@ impl LoadedXhrResponse {
                     break;
                 }
             }
-            return Ok(ControlledXhrBody::Streamed {
-                head: self.head.clone(),
-                body: self
-                    .body
-                    .capture(usize::MAX)
-                    .await
-                    .map_err(|error| format!("{error:#}"))?,
-            });
+            // The stream consumer already owns delivery; no buffered Response is needed.
+            return Ok(None);
         }
         let body = self
             .body
@@ -112,9 +101,10 @@ impl LoadedXhrResponse {
         let bytes = body
             .materialize_bytes()
             .map_err(|error| error.to_string())?;
-        Ok(ControlledXhrBody::Buffered(
-            Response::from_head_and_lossy_body_bytes(self.head.clone(), bytes),
-        ))
+        Ok(Some(Response::from_head_and_lossy_body_bytes(
+            self.head.clone(),
+            bytes,
+        )))
     }
 }
 
@@ -139,7 +129,7 @@ impl ControlledXhrLoad {
         }
     }
 
-    pub(crate) async fn run(self) -> ControlledXhrResponse {
+    pub(crate) async fn run(self) -> XhrLoadResult {
         match self.run_with_stream(None).await {
             ControlledXhrCompletion::Buffered(completed) => *completed,
             ControlledXhrCompletion::Streamed { .. } => {
@@ -153,59 +143,38 @@ impl ControlledXhrLoad {
         mut stream: Option<ControlledXhrStream>,
     ) -> ControlledXhrCompletion {
         let result = self.run_inner(stream.as_mut()).await;
-        // Network terminal facts belong to the load, including cancellation
-        // after its Worker can no longer deliver an XHR callback. Page/Worker
-        // delivery shares this same handle; protocol already commits each
-        // request's terminal once.
-        let record = match &result {
-            Ok((loaded, _, network_headers)) => {
-                let response = loaded.head();
-                crate::types::SubresourceNetworkRecord::success_with_body(
-                    self.info.frame_id.clone(),
-                    self.info.document_url.clone(),
-                    self.info.url.clone(),
-                    self.info.method.clone(),
-                    self.info.request_headers.clone(),
-                    self.info.request_body.clone(),
-                    self.info.resource_type,
-                    response
-                        .request_cookie_report
-                        .clone()
-                        .or_else(|| self.info.request_cookie_report.clone()),
-                    // Each redirect was already announced with its next native pause.
-                    Vec::new(),
-                    response.final_url.clone(),
-                    response.status,
-                    response.headers.clone(),
-                    loaded.body(),
-                    response.cookie_set_reports.clone(),
-                )
-                .with_from_cache(response.from_cache)
-                .with_negotiated_http_version(response.negotiated_http_version)
-                .with_network_request_headers(network_headers.clone())
-            }
-            Err(error) => crate::types::SubresourceNetworkRecord::failure(
-                self.info.frame_id.clone(),
-                self.info.document_url.clone(),
-                self.info.url.clone(),
-                self.info.method.clone(),
-                self.info.request_headers.clone(),
-                self.info.request_body.clone(),
-                self.info.resource_type,
-                error.clone(),
-            ),
+        if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id) {
+            self.publish_completed();
+            return ControlledXhrCompletion::Streamed {
+                internal_id: self.info.internal_id,
+                body_source_id,
+                result: result.map(|_| ()),
+            };
         }
-        .with_request_body_bytes(self.info.request_body_bytes.clone());
-        if stream
-            .as_ref()
-            .is_none_or(|stream| stream.body_source_id.is_none())
-            && let Some(handle) = self.info.network_request_handle
-        {
+        let (result, synthetic, network_headers) = match result {
+            Ok((Some(response), synthetic, headers)) => (Ok(response), synthetic, headers),
+            Ok((None, _, _)) => {
+                unreachable!("streamed body requires its registered sink")
+            }
+            Err(error) => (Err(error), false, None),
+        };
+        let completed = XhrLoadResult::new(self.info.clone(), result, synthetic, network_headers);
+        if completed.info.network_request_handle.is_some() {
+            // Redirects already crossed their own native request-pause boundary.
+            // Diagnostics retain the full chain; protocol sees only the terminal.
             self.output.record_subresource_network(
                 self.source_document,
-                record.with_request_handle(handle),
+                completed
+                    .network_record
+                    .clone()
+                    .with_redirect_chain(Vec::new()),
             );
         }
+        self.publish_completed();
+        ControlledXhrCompletion::Buffered(Box::new(completed))
+    }
+
+    fn publish_completed(&self) {
         let _ = self
             .output
             .publish(RendererOwnerAction::SubresourceContinue {
@@ -215,25 +184,6 @@ impl ControlledXhrLoad {
                 }),
                 network_pause: None,
             });
-        if let Some(body_source_id) = stream.as_ref().and_then(|stream| stream.body_source_id) {
-            return ControlledXhrCompletion::Streamed {
-                internal_id: self.info.internal_id,
-                body_source_id,
-                result: result.map(|_| ()),
-            };
-        }
-        let (result, synthetic) = match result {
-            Ok((ControlledXhrBody::Buffered(response), synthetic, _)) => (Ok(response), synthetic),
-            Ok((ControlledXhrBody::Streamed { .. }, _, _)) => {
-                unreachable!("streamed body requires its registered sink")
-            }
-            Err(error) => (Err(error), false),
-        };
-        ControlledXhrCompletion::Buffered(Box::new(ControlledXhrResponse {
-            result,
-            synthetic,
-            info: self.info,
-        }))
     }
 
     fn pause(
@@ -323,7 +273,7 @@ impl ControlledXhrLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledXhrStream>,
-    ) -> Result<(ControlledXhrBody, bool, Option<Vec<(String, String)>>), String> {
+    ) -> Result<(Option<Response>, bool, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = true;
         let mut intercept_response = false;
@@ -564,6 +514,17 @@ impl ControlledXhrLoad {
             else {
                 response.head.redirect_chain = self.request.redirect_chain().to_vec();
                 response.head.redirected = !response.head.redirect_chain.is_empty();
+                if !is_synthetic {
+                    // Commit the same final CORS decision used by Page/Worker
+                    // delivery before publishing a successful Network terminal.
+                    super::validate_cors_response_chain(
+                        self.request
+                            .request_origin()
+                            .expect("XHR has a requesting origin"),
+                        &response.head,
+                        self.request.credentials_mode,
+                    )?;
+                }
                 if !is_synthetic {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }

@@ -593,7 +593,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             Err(error) => (Err(format!("xhr: failed to build request: {error}")), None),
         };
         let _ = completion_tx.send(WorkerXhrCompletion {
-            native_result: None,
+            native_record: None,
             xhr_id,
             network_request_headers,
             result,
@@ -1064,7 +1064,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1089,7 +1089,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr_auth(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1130,7 +1130,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),
@@ -1170,7 +1170,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Streamed {
@@ -1201,7 +1201,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr_response(
         completion_tx
     };
     let _ = completion_tx.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id,
         network_request_headers: None,
         result: Err(error_text),
@@ -1233,7 +1233,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
         (completion_tx, response, xhr_id)
     };
     let _ = completion.0.send(WorkerXhrCompletion {
-        native_result: None,
+        native_record: None,
         xhr_id: completion.2,
         network_request_headers: None,
         result: Ok(WorkerXhrResponse::Materialized(Box::new(completion.1))),

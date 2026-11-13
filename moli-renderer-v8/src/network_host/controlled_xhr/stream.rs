@@ -1,39 +1,15 @@
-use moli_fetch::{Response, ResponseHead};
+use moli_fetch::ResponseHead;
 
 use crate::{
     page_task_queue::RendererResourceCompletionSender,
     types::{
         AsyncSubresourceFetchEvent, AsyncSubresourceStreamingChunk,
         AsyncSubresourceStreamingStarted, NetworkBodySourceId, PendingSubresourceFetchInfo,
-        SubresourceResponseBody,
     },
 };
 
-pub(crate) enum ControlledXhrBody {
-    Buffered(Response),
-    Streamed {
-        head: ResponseHead,
-        body: SubresourceResponseBody,
-    },
-}
-
-impl ControlledXhrBody {
-    pub(super) fn head(&self) -> ResponseHead {
-        match self {
-            Self::Buffered(response) => response.head(),
-            Self::Streamed { head, .. } => head.clone(),
-        }
-    }
-    pub(super) fn body(&self) -> SubresourceResponseBody {
-        match self {
-            Self::Buffered(response) => SubresourceResponseBody::from_fetch_response(response),
-            Self::Streamed { body, .. } => body.clone(),
-        }
-    }
-}
-
 pub(crate) enum ControlledXhrCompletion {
-    Buffered(Box<super::ControlledXhrResponse>),
+    Buffered(Box<super::XhrLoadResult>),
     Streamed {
         internal_id: u64,
         body_source_id: NetworkBodySourceId,

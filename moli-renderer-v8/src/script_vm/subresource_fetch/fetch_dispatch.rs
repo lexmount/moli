@@ -394,6 +394,34 @@ impl ScriptVm {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn resolve_pending_subresource_fetch_completion(
         &mut self,
+        pending: PendingSubresourceFetchState,
+        request_url: Url,
+        request_method: String,
+        request_headers: moli_fetch::RequestHeaders,
+        request_body: Option<String>,
+        response_status_text: Option<String>,
+        skip_fetch_security_validation: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+        network_error_text: Option<String>,
+        completion_result: AsyncSubresourceFetchResult,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        self.resolve_pending_subresource_fetch_completion_with_record(
+            pending,
+            request_url,
+            request_method,
+            request_headers,
+            request_body,
+            response_status_text,
+            skip_fetch_security_validation,
+            response_filter,
+            network_error_text,
+            completion_result,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn resolve_pending_subresource_fetch_completion_with_record(
+        &mut self,
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
@@ -404,6 +432,7 @@ impl ScriptVm {
         response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
+        mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let (supplied_parkable_image, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
@@ -597,7 +626,7 @@ impl ScriptVm {
                         .or_else(|| pending.info.request_cookie_report.clone());
                     let record_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-                    let mut network_record = if opaque_response_blocked {
+                    let mut network_record = supplied_network_record.take().unwrap_or_else(|| if opaque_response_blocked {
                         crate::types::SubresourceNetworkRecord::failure(
                             pending.info.frame_id.clone(),
                             pending.info.document_url.clone(),
@@ -639,7 +668,7 @@ impl ScriptVm {
                         )
                         .with_request_initiator_type(request_initiator_type)
                         .with_request_body_bytes(pending.info.request_body_bytes.clone())
-                    };
+                    });
                     if !opaque_response_blocked
                         && let Some(status_text) = response_status_text.as_deref()
                     {
@@ -868,7 +897,9 @@ impl ScriptVm {
                         .unwrap_or(&error_text);
                     let record_started =
                         moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-                    let mut network_record = crate::types::SubresourceNetworkRecord::failure(
+                    let mut network_record = supplied_network_record.take()
+                        .filter(|record| matches!(record.outcome(), crate::types::SubresourceNetworkOutcome::Failure { .. }))
+                        .unwrap_or_else(|| crate::types::SubresourceNetworkRecord::failure(
                         pending.info.frame_id.clone(),
                         pending.info.document_url.clone(),
                         request_url,
@@ -878,7 +909,7 @@ impl ScriptVm {
                         pending.info.resource_type,
                         network_error_text.to_owned(),
                     )
-                    .with_request_initiator_type(request_initiator_type);
+                    .with_request_initiator_type(request_initiator_type));
                     if let Some(handle) = pending.info.network_request_handle {
                         network_record = network_record.with_request_handle(handle);
                     }
