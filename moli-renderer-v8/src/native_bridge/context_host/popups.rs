@@ -493,6 +493,9 @@ impl LightweightPopupDocumentState {
         self.policy_container.referrer_policy = response.referrer_policy;
         self.policy_container.content_security_policy_self_url =
             response.content_security_policy_self_url;
+        self.policy_container
+            .inherited_meta_content_security_policies =
+            response.inherited_meta_content_security_policies;
         self.policy_container.cross_origin_embedder_policy = response.cross_origin_embedder_policy;
         self.policy_container.document_isolation_policy = response.document_isolation_policy;
         self.policy_container.cross_origin_isolated = response.cross_origin_isolated;
@@ -2889,6 +2892,13 @@ impl PageScriptHost {
                 .insert(document_handle, popup_id);
             if let Some(current_document) = self.lightweight_popup_document_record_mut(popup_id) {
                 current_document.handle = Some(document_handle);
+            }
+            if let Some(policy) = self.lightweight_popup_policy_container(popup_id) {
+                unsafe { &*self.runtime }
+                    .set_inherited_meta_content_security_policies_for_document(
+                        document_handle,
+                        &policy.inherited_meta_content_security_policies,
+                    );
             }
             return Some(document_handle);
         }

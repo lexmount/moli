@@ -337,6 +337,10 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container
             .content_security_policy_self_url =
             policy_container.content_security_policy_self_url.clone();
+        self.document_policy_container
+            .inherited_meta_content_security_policies = policy_container
+            .inherited_meta_content_security_policies
+            .clone();
         self.document_policy_container.cross_origin_embedder_policy =
             policy_container.cross_origin_embedder_policy;
         self.document_policy_container.document_isolation_policy =
@@ -382,6 +386,11 @@ impl ChildBrowsingContextEntry {
             .content_security_policy_self_url = snapshot
             .policy_container
             .content_security_policy_self_url
+            .clone();
+        self.document_policy_container
+            .inherited_meta_content_security_policies = snapshot
+            .policy_container
+            .inherited_meta_content_security_policies
             .clone();
         self.document_policy_container.cross_origin_embedder_policy =
             snapshot.policy_container.cross_origin_embedder_policy;

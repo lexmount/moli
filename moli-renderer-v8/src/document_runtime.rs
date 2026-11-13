@@ -649,12 +649,25 @@ pub(crate) struct DocumentPolicyContainer {
     pub(crate) response_content_security_report_only_policies: Vec<ContentSecurityPolicy>,
     // Local-scheme Documents keep the source URL of their inherited policy.
     pub(crate) content_security_policy_self_url: Option<Url>,
+    pub(crate) inherited_meta_content_security_policies: Vec<ContentSecurityPolicy>,
     pub(crate) content_security_reporting_endpoints:
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     pub(crate) credentialless: bool,
     pub(crate) credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     pub(crate) sandbox: DocumentSandboxPolicy,
     pub(crate) permissions_policy: crate::permissions_policy::DocumentPermissionsPolicy,
+}
+
+#[derive(Debug, Default)]
+struct DocumentMetaContentSecurityPolicies {
+    inherited: Vec<ContentSecurityPolicy>,
+    delivered: Vec<ContentSecurityPolicy>,
+}
+
+impl DocumentMetaContentSecurityPolicies {
+    fn iter(&self) -> impl Iterator<Item = &ContentSecurityPolicy> {
+        self.inherited.iter().chain(&self.delivered)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -746,7 +759,7 @@ pub(super) struct DocumentRuntime {
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies:
-        Arc<parking_lot::RwLock<HashMap<DomHandle, Vec<ContentSecurityPolicy>>>>,
+        Arc<parking_lot::RwLock<HashMap<DomHandle, DocumentMetaContentSecurityPolicies>>>,
     processed_meta_content_security_policy_handles: RefCell<HashSet<(DomHandle, DomHandle)>>,
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,

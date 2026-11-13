@@ -315,6 +315,10 @@ impl PageScriptHost {
                 local_window_transition,
                 expected_current_owner,
             )?;
+        unsafe { &*self.runtime }.set_inherited_meta_content_security_policies_for_document(
+            document_handle,
+            &document_policy_container.inherited_meta_content_security_policies,
+        );
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
         crate::context_bootstrap::web_mcp::commit_child_navigation(
             self,

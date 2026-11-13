@@ -251,6 +251,7 @@ impl DocumentPolicyContainer {
 
     pub(crate) fn clear_content_security_policy_for_bypass(&mut self) {
         self.document_content_security_policies.clear();
+        self.inherited_meta_content_security_policies.clear();
         self.response_content_security_policies.clear();
         self.response_content_security_report_only_policies.clear();
         self.content_security_reporting_endpoints = Default::default();
@@ -588,6 +589,10 @@ impl DocumentRuntime {
         &mut self,
         policy: DocumentPolicyContainer,
     ) {
+        self.set_inherited_meta_content_security_policies_for_document(
+            self.document_handle(),
+            &policy.inherited_meta_content_security_policies,
+        );
         self.policy_container = policy;
     }
 
@@ -597,6 +602,10 @@ impl DocumentRuntime {
     ) {
         policy.sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
             &policy.response_content_security_policies,
+        );
+        self.set_inherited_meta_content_security_policies_for_document(
+            self.document_handle(),
+            &policy.inherited_meta_content_security_policies,
         );
         self.policy_container = policy;
     }
@@ -1936,6 +1945,25 @@ impl DocumentRuntime {
         policies
     }
 
+    pub(crate) fn set_inherited_meta_content_security_policies_for_document(
+        &self,
+        document: DomHandle,
+        inherited: &[ContentSecurityPolicy],
+    ) {
+        let mut policies = self.delivered_meta_content_security_policies.write();
+        if inherited.is_empty() {
+            let remove = policies.get_mut(&document).is_some_and(|state| {
+                state.inherited.clear();
+                state.delivered.is_empty()
+            });
+            if remove {
+                policies.remove(&document);
+            }
+        } else {
+            policies.entry(document).or_default().inherited = inherited.to_vec();
+        }
+    }
+
     pub(crate) fn meta_content_security_policies_for_document(
         &self,
         document_handle: DomHandle,
@@ -1950,7 +1978,7 @@ impl DocumentRuntime {
         self.delivered_meta_content_security_policies
             .read()
             .get(&document_handle)
-            .cloned()
+            .map(|policies| policies.iter().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -2031,6 +2059,7 @@ impl DocumentRuntime {
                 .write()
                 .entry(document_handle)
                 .or_default()
+                .delivered
                 .push(ContentSecurityPolicy::from_meta(policy));
         }
     }
@@ -2961,6 +2990,63 @@ mod tests {
             runtime
                 .script_element_request_csp_violation(&allowed_url)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn inherited_meta_policy_installation_keeps_live_delivery_and_is_idempotent() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://meta-inheritance.test/").unwrap(),
+            "<!doctype html><head><meta http-equiv=Content-Security-Policy content=\"script-src 'none'\"></head>".to_owned(),
+        );
+        let mut runtime = DocumentRuntime::from_document(document);
+        let policy = DocumentPolicyContainer {
+            inherited_meta_content_security_policies: vec![ContentSecurityPolicy::from_meta(
+                "require-trusted-types-for 'script'".to_owned(),
+            )],
+            ..Default::default()
+        };
+        runtime.set_initial_document_policy_container(policy.clone());
+        let handle = runtime.document_handle();
+        assert_eq!(
+            runtime
+                .meta_content_security_policies_for_document(handle)
+                .len(),
+            2
+        );
+        runtime.set_initial_document_policy_container(policy);
+        assert_eq!(
+            runtime
+                .meta_content_security_policies_for_document(handle)
+                .len(),
+            2
+        );
+        assert!(
+            runtime
+                .trusted_types_for_script_requirements_for_document(
+                    Some(handle),
+                    &[],
+                    &[],
+                    &Default::default(),
+                )
+                .is_enforced()
+        );
+        runtime.set_initial_document_policy_container(Default::default());
+        assert_eq!(
+            runtime
+                .meta_content_security_policies_for_document(handle)
+                .len(),
+            1
+        );
+        assert!(
+            !runtime
+                .trusted_types_for_script_requirements_for_document(
+                    Some(handle),
+                    &[],
+                    &[],
+                    &Default::default(),
+                )
+                .is_enforced()
         );
     }
 

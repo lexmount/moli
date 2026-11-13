@@ -405,6 +405,9 @@ impl PageScriptHost {
                         .unwrap_or_default(),
                     content_security_policy_self_url: refresh_policy_source
                         .and_then(|policy| policy.content_security_policy_self_url.clone()),
+                    inherited_meta_content_security_policies: refresh_policy_source
+                        .map(|policy| policy.inherited_meta_content_security_policies.clone())
+                        .unwrap_or_default(),
                     credentialless: document_credentialless,
                     credentialless_storage_nonce,
                     sandbox: if attribute_bootstrap_changed || is_new {
