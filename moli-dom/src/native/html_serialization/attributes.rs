@@ -41,8 +41,13 @@ impl<'a> EffectiveAttributes<'a> {
         }
     }
 
-    #[inline]
-    pub(super) fn next(&self, index: &mut usize, embedded: bool) -> Option<&'a Attribute> {
+    // Keep the ordinary/embedded choice at the caller. Otherwise each filtered
+    // attribute pays for a shared out-of-line function and its frame branches.
+    #[inline(always)]
+    pub(super) fn next<const EMBEDDED: bool>(
+        &self,
+        index: &mut usize,
+    ) -> Option<(&'a Attribute, Option<EmbeddedAttribute>)> {
         loop {
             let position = *index;
             let attribute = if let Some(original) = self.original.get(position) {
@@ -62,12 +67,17 @@ impl<'a> EffectiveAttributes<'a> {
             // Live frame output always replaces these values, even when a
             // source-attribute filter would exclude them. Ordinary attributes
             // are filtered after overrides in both traversal paths.
-            if embedded && EmbeddedAttribute::for_attribute(attribute).is_some()
+            let embedded = if EMBEDDED {
+                EmbeddedAttribute::for_attribute(attribute)
+            } else {
+                None
+            };
+            if embedded.is_some()
                 || self
                     .filter
                     .is_none_or(|p| p.include_attribute(self.owner, attribute))
             {
-                return Some(attribute);
+                return Some((attribute, embedded));
             }
         }
     }
