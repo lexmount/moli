@@ -1,5 +1,5 @@
 use crate::util::call_global_bridge_method;
-use crate::webidl;
+use crate::{web_api_interfaces, webidl};
 
 use super::super::super::{
     document,
@@ -23,6 +23,20 @@ struct ElementGetAttributeNodeNsArgs {
     namespace: Option<String>,
     #[webidl(required)]
     local_name: String,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element.setAttributeNode")]
+struct ElementSetAttributeNodeArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Attr)]
+    attr: v8::Local<'s, v8::Object>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element.removeAttributeNode")]
+struct ElementRemoveAttributeNodeArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Attr)]
+    attr: v8::Local<'s, v8::Object>,
 }
 
 pub(in crate::native_bridge) fn node_get_attribute_node_callback<'s>(
@@ -115,6 +129,9 @@ pub(in crate::native_bridge) fn node_set_attribute_node_callback<'s>(
     {
         return;
     };
+    let Some(parsed) = webidl::parse_args::<ElementSetAttributeNodeArgs>(scope, &args) else {
+        return;
+    };
     if document::detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
         document::detached_set_attribute_node_method_callback(scope, args, rv);
         return;
@@ -122,7 +139,8 @@ pub(in crate::native_bridge) fn node_set_attribute_node_callback<'s>(
     let this_value: v8::Local<'_, v8::Value> = args.this().into();
     let this_value = v8::Global::new(scope, this_value);
     let this_value = v8::Local::new(scope, &this_value);
-    let attr_value = v8::Global::new(scope, args.get(0));
+    let attr_value: v8::Local<'_, v8::Value> = parsed.attr.into();
+    let attr_value = v8::Global::new(scope, attr_value);
     let attr_value = v8::Local::new(scope, &attr_value);
     match call_global_bridge_method(
         scope,
@@ -153,6 +171,9 @@ pub(in crate::native_bridge) fn node_remove_attribute_node_callback<'s>(
     ) {
         return;
     };
+    let Some(parsed) = webidl::parse_args::<ElementRemoveAttributeNodeArgs>(scope, &args) else {
+        return;
+    };
     if document::detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
         document::detached_remove_attribute_node_method_callback(scope, args, rv);
         return;
@@ -160,7 +181,8 @@ pub(in crate::native_bridge) fn node_remove_attribute_node_callback<'s>(
     let this_value: v8::Local<'_, v8::Value> = args.this().into();
     let this_value = v8::Global::new(scope, this_value);
     let this_value = v8::Local::new(scope, &this_value);
-    let attr_value = v8::Global::new(scope, args.get(0));
+    let attr_value: v8::Local<'_, v8::Value> = parsed.attr.into();
+    let attr_value = v8::Global::new(scope, attr_value);
     let attr_value = v8::Local::new(scope, &attr_value);
     match call_global_bridge_method(
         scope,
