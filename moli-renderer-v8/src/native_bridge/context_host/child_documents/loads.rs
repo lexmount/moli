@@ -175,6 +175,18 @@ impl PageScriptHost {
             &bootstrap,
             credentialless_storage_nonce,
         );
+        // Reserve the navigation client only after its actual storage partition
+        // (including a credentialless nonce) is known. The eventual committed
+        // client must use the same partition as this main-resource request.
+        if let Some(storage_key) = network_partition_key.as_ref() {
+            self.register_reserved_service_worker_child_client_for_navigation(
+                handle,
+                &target_url,
+                storage_key.clone(),
+            );
+        } else {
+            self.clear_pending_service_worker_child_client(handle);
+        }
         let browser_context_runtime = self.browser_context_runtime();
         let service_worker_client_id = self
             .child_browsing_contexts
