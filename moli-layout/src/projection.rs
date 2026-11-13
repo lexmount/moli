@@ -234,6 +234,7 @@ where
     pub(crate) background_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) content_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) paint_events: Vec<PaintOrderEvent>,
+    pub(crate) text_overflow_visibility: crate::text_overflow::TextOverflowVisibility,
 }
 
 impl<'a, N> OutputProjection<'a, N>
@@ -279,6 +280,7 @@ where
             background_clips: vec![None; count],
             content_clips: vec![None; count],
             paint_events: Vec::new(),
+            text_overflow_visibility: crate::text_overflow::TextOverflowVisibility::new(world),
         }
     }
 
@@ -765,7 +767,7 @@ where
             self.scroll_extents[self.world.root.index()].scrollport,
         );
         self.assign_box_clip_metadata(self.world.root, Some(viewport_clip), viewport_clip);
-        self.paint_events = build_paint_order(self.world);
+        self.paint_events = build_paint_order(self.world, &self.text_overflow_visibility);
         let mut text_owners = HashMap::new();
         for event in self.paint_events.clone() {
             match event {

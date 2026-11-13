@@ -5,6 +5,7 @@ use parley::PositionedLayoutItem;
 use crate::{
     LayoutBoxId, LayoutPosition, LayoutWorld,
     inline::{InlineFormattingContext, InlineObjectRole, InlineSelection, glyph_cluster_ranges},
+    text_overflow::TextOverflowVisibility,
 };
 
 /// One order shared by pixels and hit geometry. Inline events select individual
@@ -99,21 +100,21 @@ struct StackingDescendants {
 
 /// Only IFCs containing atomic objects need fragment-level interleaving. Keep
 /// the existing single-pass text projection for all other paragraphs.
-struct InlineOrder {
+struct InlineOrder<'a> {
     split: Vec<bool>,
-    hidden: Vec<bool>,
+    visibility: &'a TextOverflowVisibility,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
 
-impl InlineOrder {
-    fn new<N>(world: &LayoutWorld<N>) -> Self
+impl<'a> InlineOrder<'a> {
+    fn new<N>(world: &LayoutWorld<N>, visibility: &'a TextOverflowVisibility) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
             split: vec![false; world.boxes.len()],
-            hidden: vec![false; world.boxes.len()],
+            visibility,
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
@@ -121,11 +122,6 @@ impl InlineOrder {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
-            if let Some(overflow) = &context.text_overflow {
-                for id in &overflow.hidden_boxes {
-                    result.hidden[id.index()] = true;
-                }
-            }
             if !context
                 .objects
                 .iter()
@@ -312,14 +308,17 @@ impl InlineOrder {
 /// CSS atomic pseudo-contexts have their own block/float/inline stages, while
 /// positioned descendants and real stacking contexts escape to the enclosing
 /// real stacking context. They must not inherit one flattened paint level.
-pub(crate) fn build_paint_order<N>(world: &LayoutWorld<N>) -> Vec<PaintOrderEvent>
+pub(crate) fn build_paint_order<N>(
+    world: &LayoutWorld<N>,
+    visibility: &TextOverflowVisibility,
+) -> Vec<PaintOrderEvent>
 where
     N: Copy + Debug + Eq + Hash,
 {
     let mut sequence = vec![0; world.boxes.len()];
     let mut next = 0;
     assign_tree_order(world, world.root, &mut sequence, &mut next);
-    let inline = InlineOrder::new(world);
+    let inline = InlineOrder::new(world, visibility);
     let mut events = Vec::with_capacity(world.boxes.len() * 4);
     emit_context(world, world.root, &sequence, &inline, &mut events);
     events
@@ -350,10 +349,15 @@ fn emit_context<N>(
     N: Copy + Debug + Eq + Hash,
 {
     events.push(PaintOrderEvent::PushStackingContext(root));
-    push_background(root, events);
+    let hidden = inline.visibility.is_hidden(root);
+    if !hidden {
+        push_background(root, events);
+    }
     let mut flow = FlowCollection::default();
     let mut stacking = StackingDescendants::default();
-    collect_contents(world, root, sequence, inline, &mut flow);
+    if !hidden {
+        collect_contents(world, root, sequence, inline, &mut flow);
+    }
     for child in ordered_children(world, root) {
         collect_subtree(world, child, sequence, inline, &mut flow, &mut stacking);
     }
@@ -373,7 +377,9 @@ fn emit_context<N>(
         emit_context(world, context.id, sequence, inline, events);
     }
     emit_entries(world, outlines, sequence, inline, events);
-    events.push(PaintOrderEvent::BoxOutline(root));
+    if !hidden {
+        events.push(PaintOrderEvent::BoxOutline(root));
+    }
     events.push(PaintOrderEvent::PopStackingContext(root));
 }
 
@@ -388,11 +394,19 @@ fn collect_subtree<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &world.boxes[id.index()];
-    if inline.hidden[id.index()] {
+    let flex_or_grid_item = is_flex_or_grid_item(world, id);
+    let creates_context = layout_box.creates_stacking_context(false, flex_or_grid_item);
+    if inline.visibility.is_hidden(id) && !creates_context {
+        // Do not emit this box's normal-flow paint/hit events, but still find
+        // independent descendants collected by the enclosing real context.
+        for child in ordered_children(world, id) {
+            collect_subtree(world, child, sequence, inline, flow, stacking);
+        }
         return;
     }
-    let flex_or_grid_item = is_flex_or_grid_item(world, id);
-    if layout_box.creates_stacking_context(false, flex_or_grid_item) {
+    // A hidden stacking root still contains independently painted descendants;
+    // retain its effects and z-order, omitting only its own paint in emit_context.
+    if creates_context {
         let context = ChildContext {
             id,
             z_index: layout_box.style.explicit_z_index().unwrap_or(0),

@@ -56,6 +56,7 @@ async def run_text_overflow_group(
     context = await browser.new_context(viewport={"width": 400, "height": 200})
     try:
         page = await context.new_page()
+        await _check_positioned_descendants(page, font, results)
         for name, content, reference, extra in CASES:
             html = f"""<!doctype html><style>
               @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
@@ -108,3 +109,35 @@ async def run_text_overflow_group(
                 observed={"differentPixels": different, **original})
     finally:
         await context.close()
+
+
+async def _check_positioned_descendants(page: Any, font: str,
+                                        results: list[dict[str, Any]]) -> None:
+    for position, opacity in (("absolute", 1), ("fixed", 1), ("absolute", 0.5), ("fixed", 0.5)):
+        html = f"""<!doctype html><style>
+          @font-face{{font-family:OverflowTest;src:url(data:font/ttf;base64,{font})}}
+          body{{margin:0;background:white}}
+          #probe{{position:relative;width:90px;overflow:hidden;text-overflow:ellipsis;
+            font:20px/24px OverflowTest;white-space:nowrap}}
+          .atomic{{position:relative;display:inline-block;width:80px;height:20px;background:lime;opacity:{opacity}}}
+          .inner{{position:{position};left:0;top:0;color:red}}
+        </style><div id="probe">ABC<span class="atomic"><span class="inner">INNER</span></span>XYZ</div>"""
+        await page.goto("data:text/html;base64," + base64.b64encode(html.encode()).decode(),
+                        wait_until="load")
+        await page.evaluate("document.fonts.ready")
+        image = decode_png(await page.screenshot(clip={"x": 0, "y": 0, "width": 200, "height": 100}))
+        pixels = [image.rgba[i:i+4] for i in range(0, len(image.rgba), 4)]
+        green = sum(g > r and g > b for r, g, b, _ in pixels)
+        red = sum(r > g and r > b for r, g, b, _ in pixels)
+        pure_red = sum(pixel == bytes((255, 0, 0, 255)) for pixel in pixels)
+        assert_equal(green > 0, position == "fixed",
+                     f"{position}: retain the atomic only when OOF descendants propagate")
+        assert_equal(red > 0, True, f"{position}: independently painted descendant survives")
+        assert_equal(pure_red > 0, opacity == 1,
+                     f"{position}: descendant retains the hidden stacking root's opacity")
+        record_contract(results, f"text_overflow_positioned_{position}_{opacity}",
+            contract="A truncated atomic background and independent positioned descendants have separate visibility.",
+            source="Blink LineTruncator::HideChild; PhysicalFragment OofPositionedDescendants",
+            commands=["Page.captureScreenshot", "Runtime.evaluate"],
+            observed={"greenPixels": green, "redPixels": red, "pureRedPixels": pure_red,
+                      "opacity": opacity})

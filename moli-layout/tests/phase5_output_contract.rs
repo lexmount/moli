@@ -1303,6 +1303,120 @@ fn text_overflow_hides_an_atomic_subtree_from_both_paint_and_hits_but_keeps_its_
 }
 
 #[test]
+fn text_overflow_distinguishes_contained_and_propagating_positioned_descendants() {
+    let green = PaintColor::new(0.0, 1.0, 0.0, 1.0);
+    let source = Source(vec![
+        Node::element("root", vec![6]),
+        Node::text("prefix", "ABC"),
+        Node::element("atomic", vec![4]),
+        Node::text("suffix", "XYZ"),
+        Node::element("positioned", vec![5]),
+        Node::text("atomic-text", "INNER"),
+        Node::element("probe", vec![1, 2, 3]),
+    ]);
+    for (parent, opacity) in [
+        (LayoutPosition::Static, 1.0),
+        (LayoutPosition::Relative, 1.0),
+        (LayoutPosition::Static, 0.5),
+        (LayoutPosition::Relative, 0.5),
+    ] {
+        for child in [
+            LayoutPosition::Static,
+            LayoutPosition::Relative,
+            LayoutPosition::Absolute,
+            LayoutPosition::Fixed,
+        ] {
+            let (style, mut services) = ellipsis_style(70.0, |_| {});
+            let atomic = ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::InlineBlock,
+                Style {
+                    size: Size {
+                        width: length(80.0),
+                        height: length(20.0),
+                    },
+                    ..Style::default()
+                },
+                green,
+            )
+            .with_position(parent)
+            .with_opacity(opacity);
+            let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+            let child_style = ResolvedLayoutStyle::synthetic(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(48.0),
+                        height: length(20.0),
+                    },
+                    inset: Rect {
+                        left: length(0.0),
+                        top: length(0.0),
+                        ..Style::<Atom>::default().inset
+                    },
+                    ..Style::default()
+                },
+                red,
+            )
+            .with_position(child);
+            let output = build_layout_pass(
+                &source,
+                &mut Styles(HashMap::from([
+                    (0, fixed_size(LayoutDisplay::Block, 320.0, 240.0)),
+                    (2, atomic),
+                    (4, child_style),
+                    (6, style.with_position(LayoutPosition::Relative)),
+                ])),
+                &mut services,
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::Print,
+                ),
+            )
+            .unwrap();
+            let propagates = child == LayoutPosition::Fixed
+                || (child == LayoutPosition::Absolute && parent == LayoutPosition::Static);
+            let background = output
+                .paint_snapshot()
+                .unwrap()
+                .fragments
+                .iter()
+                .filter_map(PaintFragment::solid_fill)
+                .any(|(_, color, _)| color == green);
+            assert_eq!(background, propagates, "parent={parent:?}, child={child:?}");
+            if matches!(child, LayoutPosition::Static | LayoutPosition::Relative) {
+                assert_eq!(
+                    output
+                        .paint_snapshot()
+                        .unwrap()
+                        .fragments
+                        .iter()
+                        .filter_map(PaintFragment::solid_fill)
+                        .any(|(_, color, _)| color == red),
+                    child == LayoutPosition::Relative,
+                    "positioned paint is independent of the truncated background: parent={parent:?}, child={child:?}"
+                );
+            }
+            if opacity < 1.0 && child == LayoutPosition::Relative {
+                assert!(output.paint_snapshot().unwrap().fragments.iter().any(|fragment| {
+                    matches!(fragment, PaintFragment::PushLayer { opacity: alpha, .. } if *alpha == opacity)
+                }), "independent descendants retain the hidden stacking root's effects");
+            }
+            assert!(
+                output.box_model_for_source(2).is_some(),
+                "geometry survives truncation"
+            );
+            assert!(
+                !output
+                    .hit_test_all(LayoutPoint::new(42.0, 8.0), false)
+                    .iter()
+                    .any(|hit| hit.source == 2 && !propagates)
+            );
+            assert_balanced_paint_stack(&output.paint_snapshot().unwrap().fragments);
+        }
+    }
+}
+
+#[test]
 fn text_overflow_with_a_leading_atomic_keeps_nowrap_on_one_line() {
     let source = Source(vec![
         Node::element("root", vec![1, 2]),

@@ -58,12 +58,64 @@ struct VisualChild {
     kind: ChildKind,
 }
 
+/// Pass-local visibility shared by stacking, paint and its auxiliary phases.
+/// Truncation hides normal-flow contents, while independently painted
+/// positioned/stacking descendants can still participate in the outer context.
+pub(crate) struct TextOverflowVisibility {
+    hidden: Vec<bool>,
+}
+
+impl TextOverflowVisibility {
+    pub(crate) fn new<N: Copy + Debug + Eq + Hash>(world: &LayoutWorld<N>) -> Self {
+        let mut hidden = vec![false; world.boxes.len()];
+        let mut has_hidden = false;
+        for layout_box in &world.boxes {
+            if let Some(overflow) = layout_box
+                .inline_layout
+                .as_ref()
+                .and_then(|context| context.text_overflow.as_ref())
+            {
+                for id in &overflow.hidden_boxes {
+                    hidden[id.index()] = true;
+                    has_hidden = true;
+                }
+            }
+        }
+        if !has_hidden {
+            return Self { hidden };
+        }
+        let mut stack = vec![(world.root, false)];
+        while let Some((id, parent_hidden)) = stack.pop() {
+            let layout_box = &world.boxes[id.index()];
+            let flex_or_grid_item = layout_box.parent.is_some_and(|parent| {
+                let display = world.boxes[parent.index()].style.display();
+                display.is_flex_container() || display.is_grid_container()
+            });
+            let independent = layout_box.style.position() != crate::LayoutPosition::Static
+                || layout_box.creates_stacking_context(false, flex_or_grid_item);
+            hidden[id.index()] |= parent_hidden && !independent;
+            stack.extend(
+                layout_box
+                    .children
+                    .iter()
+                    .map(|child| (*child, hidden[id.index()])),
+            );
+        }
+        Self { hidden }
+    }
+
+    pub(crate) fn is_hidden(&self, id: LayoutBoxId) -> bool {
+        self.hidden[id.index()]
+    }
+}
+
 pub(crate) fn prepare_text_overflow<N>(
     world: &mut LayoutWorld<N>,
     services: &mut DocumentLayoutServices,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let mut propagating_oof = None;
     for index in 0..world.boxes.len() {
         let layout_box = &world.boxes[index];
         let Some(context) = layout_box.inline_layout.as_ref() else {
@@ -118,6 +170,8 @@ pub(crate) fn prepare_text_overflow<N>(
         if !text.lines().any(|line| line_overflows(&line, width, rtl)) {
             continue;
         }
+        let propagating_oof =
+            propagating_oof.get_or_insert_with(|| propagating_positioned_descendants(world));
         let parley = services.parley_mut();
         let mut marker_style = style.parley_text_style();
         // Blink shapes the generated marker directly with the line's font,
@@ -227,7 +281,7 @@ pub(crate) fn prepare_text_overflow<N>(
                         visible_text.push(range.clone());
                     }
                 } else if let ChildKind::Atomic(id) = child.kind
-                    && !has_positioned_descendant(world, id)
+                    && !propagating_oof[id.index()]
                 {
                     // Blink leaves these fragments available so their OOF
                     // descendants can still participate in the outer context.
@@ -351,15 +405,40 @@ fn line_overflows(line: &parley::Line<'_, TextBrush>, width: f32, rtl: bool) -> 
     }
 }
 
-fn has_positioned_descendant<N: Copy + Debug + Eq + Hash>(
+fn propagating_positioned_descendants<N: Copy + Debug + Eq + Hash>(
     world: &LayoutWorld<N>,
-    id: LayoutBoxId,
-) -> bool {
-    world.boxes[id.index()].children.iter().any(|child| {
-        world.boxes[child.index()].style.is_absolute_positioned()
-            || world.boxes[child.index()].style.is_fixed_positioned()
-            || has_positioned_descendant(world, *child)
-    })
+) -> Vec<bool> {
+    #[derive(Clone, Copy, Default)]
+    struct Pending {
+        absolute: bool,
+        fixed: bool,
+    }
+    let mut order = vec![world.root];
+    let mut cursor = 0;
+    while cursor < order.len() {
+        let id = order[cursor];
+        order.extend(&world.boxes[id.index()].children);
+        cursor += 1;
+    }
+    let mut pending = vec![Pending::default(); world.boxes.len()];
+    let mut propagating = vec![false; world.boxes.len()];
+    for id in order.into_iter().rev() {
+        let layout_box = &world.boxes[id.index()];
+        let mut descendants = pending[id.index()];
+        // Only OOF information still escaping this box prevents truncation.
+        // An absolute child already placed by this box's containing block is
+        // not equivalent to Blink's pending OofPositionedDescendants.
+        descendants.absolute &= !world.establishes_positioned_containing_block(id);
+        descendants.fixed &= !world.establishes_fixed_containing_block(id);
+        propagating[id.index()] = descendants.absolute || descendants.fixed;
+        if let Some(parent) = layout_box.parent {
+            pending[parent.index()].absolute |=
+                descendants.absolute || layout_box.style.is_absolute_positioned();
+            pending[parent.index()].fixed |=
+                descendants.fixed || layout_box.style.is_fixed_positioned();
+        }
+    }
+    propagating
 }
 
 fn visual_children(
