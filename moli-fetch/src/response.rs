@@ -70,6 +70,34 @@ pub struct ResponseHead {
 }
 
 impl ResponseHead {
+    /// Records one response-driven redirect. The caller supplies its source
+    /// and whether this hop has observable network metadata; request/response
+    /// ExtraInfo and the dispatched destination request are attached later by
+    /// their observation owners.
+    pub fn into_redirect(
+        self,
+        to_url: Url,
+        source: RedirectSource,
+        network_extra_info_available: bool,
+    ) -> RedirectInfo {
+        RedirectInfo {
+            source,
+            from_url: self.final_url,
+            to_url,
+            status: self.status,
+            headers: self.headers,
+            network_extra_info_available,
+            request_extra_info: None,
+            dispatched_request: None,
+            response_extra_info: None,
+            redirect_has_extra_info: network_extra_info_available,
+            request_cookie_report: self.request_cookie_report,
+            cookie_set_reports: self.cookie_set_reports,
+            from_cache: self.from_cache,
+            negotiated_http_version: self.negotiated_http_version,
+        }
+    }
+
     pub fn url_list(&self) -> crate::FetchUrlList<'_> {
         crate::FetchUrlList::new(&self.final_url, &self.redirect_chain)
     }

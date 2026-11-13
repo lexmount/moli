@@ -159,22 +159,11 @@ impl NavigationInterception {
         if !matches!(next_url.scheme(), "http" | "https") {
             bail!("document redirect to unsupported URL {next_url}");
         }
-        let redirect = RedirectInfo {
-            source: moli_fetch::RedirectSource::Network,
-            from_url: head.final_url.clone(),
-            to_url: next_url.clone(),
-            status: head.status,
-            headers: head.headers.clone(),
-            network_extra_info_available: false,
-            request_extra_info: None,
-            dispatched_request: None,
-            response_extra_info: None,
-            redirect_has_extra_info: false,
-            request_cookie_report: head.request_cookie_report.clone(),
-            cookie_set_reports: head.cookie_set_reports.clone(),
-            from_cache: head.from_cache,
-            negotiated_http_version: head.negotiated_http_version,
-        };
+        let redirect = head.clone().into_redirect(
+            next_url.clone(),
+            moli_fetch::RedirectSource::Network,
+            false,
+        );
         self.request.follow_redirect(redirect.clone())?;
         self.loader.restart_after_response()?;
         self.navigation_url = next_url;

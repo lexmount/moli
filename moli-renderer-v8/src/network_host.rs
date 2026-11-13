@@ -19,6 +19,7 @@ mod preflight_events;
 mod request;
 mod request_scope;
 mod response;
+mod response_hop;
 mod stylesheet_subresource;
 mod subresource;
 pub(crate) use subresource::SubresourceRequestDispatch;
