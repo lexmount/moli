@@ -1,5 +1,5 @@
-use super::super::NativeDom;
 use super::super::node::{NativeNodeId, Node, NodeData};
+use super::super::{NativeDom, ShadowRootInit};
 use super::attributes::{EffectiveAttributes, EmbeddedAttribute};
 use super::{
     HtmlEmbeddedDocument, HtmlEmbeddedDocumentProvider, HtmlInsertionPoint, HtmlSerializationError,
@@ -32,35 +32,29 @@ pub(in crate::native) enum HtmlSerializationTarget {
     ChildrenOnly,
 }
 
-pub(in crate::native) struct HtmlSerializedShadowRoot {
-    root: NativeNodeId,
-    template_start: String,
+pub(in crate::native) struct HtmlSerializedShadowRoot<'a> {
+    pub root: NativeNodeId,
+    pub init: &'a ShadowRootInit,
+    pub web_api: bool,
+    pub registry_attribute: bool,
+    pub include_style_sheets: bool,
 }
 
-impl HtmlSerializedShadowRoot {
-    pub(in crate::native) fn new(root: NativeNodeId, template_start: String) -> Self {
-        Self {
-            root,
-            template_start,
-        }
-    }
-}
-
-pub(in crate::native) trait HtmlShadowRootProvider {
+pub(in crate::native) trait HtmlShadowRootProvider<'a> {
     fn serialized_shadow_root_for_host(
         &self,
         host: NativeNodeId,
-    ) -> Option<HtmlSerializedShadowRoot>;
+    ) -> Option<HtmlSerializedShadowRoot<'a>>;
 }
 
-impl<F> HtmlShadowRootProvider for F
+impl<'a, F> HtmlShadowRootProvider<'a> for F
 where
-    F: Fn(NativeNodeId) -> Option<HtmlSerializedShadowRoot>,
+    F: Fn(NativeNodeId) -> Option<HtmlSerializedShadowRoot<'a>>,
 {
     fn serialized_shadow_root_for_host(
         &self,
         host: NativeNodeId,
-    ) -> Option<HtmlSerializedShadowRoot> {
+    ) -> Option<HtmlSerializedShadowRoot<'a>> {
         self(host)
     }
 }
@@ -71,7 +65,7 @@ pub(in crate::native) struct HtmlSerializationOptions<'a> {
     // This is node-scoped: one traversal can enter inert template contents
     // whose owner Document has different scripting state from the outer tree.
     pub scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
-    pub shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
+    pub shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider<'a>>,
     pub policy: Option<&'a dyn HtmlSerializationPolicy>,
     pub embedded_documents: Option<&'a dyn HtmlEmbeddedDocumentProvider>,
     pub max_bytes: Option<usize>,
@@ -430,8 +424,9 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
 
 enum HtmlSerializationFrame<'a> {
     Node(NativeNodeId),
+    Siblings(NativeNodeId),
     Children(NativeNodeId),
-    ShadowRootTemplate(HtmlSerializedShadowRoot),
+    ShadowRootTemplate(HtmlSerializedShadowRoot<'a>),
     CloseElement(&'a str),
     CloseShadowRootTemplate,
     Markup(&'a str),
@@ -450,7 +445,7 @@ struct EmbeddedAttributes<'a> {
 struct HtmlSerializer<'dom, 'sink, S, const EMBEDDED: bool, const POLICY: bool> {
     dom: &'dom NativeDom,
     scripting_enabled_for_node: &'dom dyn Fn(NativeNodeId) -> bool,
-    shadow_root_provider: Option<&'dom dyn HtmlShadowRootProvider>,
+    shadow_root_provider: Option<&'dom dyn HtmlShadowRootProvider<'dom>>,
     policy: Option<&'dom dyn HtmlSerializationPolicy>,
     filtering: bool,
     insertion: Option<HtmlSerializationInsertion<'dom>>,
@@ -473,7 +468,19 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                 break;
             };
             match frame {
-                HtmlSerializationFrame::Node(node) => self.node(node)?,
+                HtmlSerializationFrame::Node(id) => {
+                    if let Some(node) = self.dom.node(id) {
+                        self.node(id, node)?;
+                    }
+                }
+                HtmlSerializationFrame::Siblings(id) => {
+                    if let Some(node) = self.dom.node(id) {
+                        if let Some(next) = node.next_sibling() {
+                            self.stack.push(HtmlSerializationFrame::Siblings(next));
+                        }
+                        self.node(id, node)?;
+                    }
+                }
                 HtmlSerializationFrame::Children(node) => {
                     let insertion = self.insertion.filter(|i| POLICY && i.node == node);
                     if let Some(insertion) = insertion
@@ -488,11 +495,9 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                         .and_then(Node::as_element)
                         .and_then(|e| e.template_contents())
                         .unwrap_or(node);
-                    self.stack.extend(
-                        self.dom
-                            .child_ids_reversed(children_root)
-                            .map(HtmlSerializationFrame::Node),
-                    );
+                    if let Some(first) = self.dom.first_child(children_root) {
+                        self.stack.push(HtmlSerializationFrame::Siblings(first));
+                    }
                     if let Some(insertion) = insertion
                         && insertion.point == HtmlInsertionPoint::FirstChild
                     {
@@ -500,7 +505,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                     }
                 }
                 HtmlSerializationFrame::ShadowRootTemplate(root) => {
-                    self.out.push_str(&root.template_start);
+                    self.shadow_template_start(&root);
                     self.stack
                         .push(HtmlSerializationFrame::CloseShadowRootTemplate);
                     self.stack.push(HtmlSerializationFrame::Children(root.root));
@@ -524,10 +529,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
     // Keep node dispatch in the traversal loop so ordinary output can
     // eliminate frame-only work along with the depth-aware writer.
     #[inline(always)]
-    fn node(&mut self, id: NativeNodeId) -> Result<(), HtmlSerializationError> {
-        let Some(node) = self.dom.node(id) else {
-            return Ok(());
-        };
+    fn node(&mut self, id: NativeNodeId, node: &'dom Node) -> Result<(), HtmlSerializationError> {
         if let Some(insertion) = self.insertion
             && POLICY
             && insertion.node == id
@@ -612,7 +614,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             self.out.attribute(attribute);
                         }
                     }
-                    self.end_open_element(id);
+                    self.end_open_element(id, element);
                 }
             }
             NodeData::Text(text) => {
@@ -647,13 +649,12 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
     }
 
     #[inline]
-    fn end_open_element(&mut self, id: NativeNodeId) {
+    fn end_open_element(
+        &mut self,
+        id: NativeNodeId,
+        element: &'dom super::super::element::Element,
+    ) {
         self.out.push('>');
-        let element = self
-            .dom
-            .node(id)
-            .and_then(Node::as_element)
-            .expect("visited element");
         if !is_void_html_element(element.namespace(), element.local_name()) {
             self.stack
                 .push(HtmlSerializationFrame::CloseElement(element.local_name()));
@@ -663,6 +664,9 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
     }
 
     fn shadow_root(&mut self, host: NativeNodeId) {
+        if self.out.limit_exceeded() {
+            return;
+        }
         if let Some(root) = self
             .shadow_root_provider
             .and_then(|p| p.serialized_shadow_root_for_host(host))
@@ -670,6 +674,45 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             self.stack
                 .push(HtmlSerializationFrame::ShadowRootTemplate(root));
         }
+    }
+
+    fn shadow_template_start(&mut self, root: &HtmlSerializedShadowRoot<'_>) {
+        self.out.push_str("<template shadowrootmode=\"");
+        self.out.attribute_value(root.init.mode());
+        self.out.push('"');
+        if root.init.delegates_focus() {
+            self.out.push_str(" shadowrootdelegatesfocus=\"\"");
+        }
+        if root.init.serializable() {
+            self.out.push_str(" shadowrootserializable=\"\"");
+        }
+        if root.web_api && root.init.slot_assignment() != "named" {
+            self.out.push_str(" shadowrootslotassignment=\"");
+            self.out.attribute_value(root.init.slot_assignment());
+            self.out.push('"');
+        }
+        if root.init.clonable() {
+            self.out.push_str(" shadowrootclonable=\"\"");
+        }
+        if root.registry_attribute {
+            self.out.push_str(" shadowrootcustomelementregistry=\"\"");
+        }
+        if root.web_api
+            && let Some(reference_target) = root.init.reference_target()
+        {
+            self.out.push_str(" shadowrootreferencetarget=\"");
+            self.out.attribute_value(reference_target);
+            self.out.push('"');
+        }
+        if root.web_api
+            && root.include_style_sheets
+            && let Some(sheets) = root.init.adopted_style_sheets()
+        {
+            self.out.push_str(" shadowrootadoptedstylesheets=\"");
+            self.out.attribute_value(sheets);
+            self.out.push('"');
+        }
+        self.out.push('>');
     }
 
     fn embedded_attributes(&mut self) -> Result<(), HtmlSerializationError> {
@@ -722,7 +765,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             self.out.attribute_value(&state.embedded.url);
             self.out.push('"');
         }
-        self.end_open_element(state.owner);
+        self.end_open_element(state.owner, element);
         Ok(())
     }
 
@@ -942,10 +985,10 @@ pub(super) fn serialize_html(
     .then_some(html)
 }
 
-pub(in crate::native) fn serialize_html_with_options(
-    dom: &NativeDom,
+pub(in crate::native) fn serialize_html_with_options<'a>(
+    dom: &'a NativeDom,
     node_id: NativeNodeId,
-    options: HtmlSerializationOptions<'_>,
+    options: HtmlSerializationOptions<'a>,
 ) -> Result<Option<String>, HtmlSerializationError> {
     if let Some(limit) = options.max_bytes {
         let mut out = BoundedHtmlSerialization::new(limit);

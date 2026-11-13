@@ -299,6 +299,54 @@ fn shadow_excluding_outer_html_matches_native_serializer() {
 }
 
 #[test]
+fn export_reads_current_metadata_for_detached_shadow_hosts_after_a_limited_export() {
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    let element = host.create_element("div");
+    let mut init = ShadowRootInit::new("closed");
+    init.set_reference_target(Some("old".into()));
+    init.set_adopted_style_sheets(Some("data:text/css,雪&\"".into()));
+    let root = host.attach_shadow_root_with_init(element, init).unwrap();
+    let text = host.create_text_node("KEEP");
+    assert!(host.append_child(root, text));
+    let before = host
+        .get_html_for_export(element, &scripting_enabled, None, None, None)
+        .unwrap();
+    assert!(before.contains("shadowrootreferencetarget=\"old\""));
+    assert_eq!(
+        host.get_html_for_export(element, &scripting_enabled, None, None, Some(10)),
+        Err(HtmlSerializationError::OutputLimitExceeded { max_bytes: 10 }),
+    );
+    assert!(host.set_shadow_root_reference_target(root, Some("new&\"雪".into())));
+    let after = host
+        .get_html_for_export(element, &scripting_enabled, None, None, None)
+        .unwrap();
+    assert_eq!(
+        after,
+        concat!(
+            "<template shadowrootmode=\"closed\" ",
+            "shadowrootreferencetarget=\"new&amp;&quot;雪\" ",
+            "shadowrootadoptedstylesheets=\"data:text/css,雪&amp;&quot;\">KEEP</template>",
+        ),
+    );
+    assert_eq!(
+        host.get_html_for_export(element, &scripting_enabled, None, None, Some(after.len())),
+        Ok(after.clone()),
+    );
+    assert_eq!(
+        host.get_html_for_export(
+            element,
+            &scripting_enabled,
+            None,
+            None,
+            Some(after.len() - 1)
+        ),
+        Err(HtmlSerializationError::OutputLimitExceeded {
+            max_bytes: after.len() - 1
+        }),
+    );
+}
+
+#[test]
 fn export_policy_can_omit_shadow_stylesheets_without_mutating_live_metadata() {
     struct StripCss;
     impl HtmlSerializationPolicy for StripCss {

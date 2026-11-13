@@ -20,7 +20,7 @@ fn output_limit_stops_before_shadow_queries_or_embedded_document_validation() {
     let owner = dom.create_element("iframe");
     assert!(dom.set_attribute(owner, "title", &"x".repeat(128)));
     assert!(dom.set_attribute(owner, "data-after", "kept"));
-    let shadow = |_| -> Option<HtmlSerializedShadowRoot> {
+    let shadow = |_| -> Option<HtmlSerializedShadowRoot<'_>> {
         panic!("output already exceeded the limit before reaching this host's shadow tree")
     };
     let documents = InvalidDocument(owner);

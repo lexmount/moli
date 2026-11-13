@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::html_serialization::{
     HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
-    HtmlShadowRootProvider, escape_html_attribute_into_string, serialize_html_with_options,
+    HtmlShadowRootProvider, serialize_html_with_options,
 };
 use crate::native::{
     HtmlEmbeddedDocumentProvider, HtmlSerializationError, HtmlSerializationPolicy,
@@ -120,8 +120,10 @@ impl DomHost {
         let include_style_sheets = options
             .policy
             .is_none_or(|p| p.include_shadow_adopted_style_sheets());
+        // Serialization is synchronous and does not run author code. Borrow
+        // the existing host index once, including detached author roots.
+        let roots = self.shadow_roots_by_host.borrow();
         let provider = |host| {
-            let roots = self.shadow_roots_by_host.borrow();
             let state = roots.get(&host)?;
             let included = match inclusion {
                 ShadowRootInclusion::None => false,
@@ -135,21 +137,19 @@ impl DomHost {
             if !included {
                 return None;
             }
-            let mut template_start = String::new();
-            self.write_shadow_root_template_start(
-                host,
-                state.handle,
-                &state.init,
-                profile,
-                &mut template_start,
-                registry,
+            Some(HtmlSerializedShadowRoot {
+                root: state.handle,
+                init: &state.init,
+                web_api: profile == ShadowRootMarkupProfile::WebApi,
+                registry_attribute: registry.map_or_else(
+                    || state.init.null_custom_element_registry(),
+                    |policy| policy(host, state.handle, &state.init),
+                ),
                 include_style_sheets,
-            );
-            Some(HtmlSerializedShadowRoot::new(state.handle, template_start))
+            })
         };
-        let provider = (!self.shadow_roots_by_host.borrow().is_empty()
-            && inclusion != ShadowRootInclusion::None)
-            .then_some(&provider as &dyn HtmlShadowRootProvider);
+        let provider = (!roots.is_empty() && inclusion != ShadowRootInclusion::None)
+            .then_some(&provider as &dyn HtmlShadowRootProvider<'_>);
         serialize_html_with_options(
             &self.dom,
             handle,
@@ -158,57 +158,6 @@ impl DomHost {
                 ..options
             },
         )
-    }
-
-    fn write_shadow_root_template_start(
-        &self,
-        host: DomHandle,
-        shadow_root: DomHandle,
-        init: &ShadowRootInit,
-        markup_profile: ShadowRootMarkupProfile,
-        out: &mut String,
-        registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
-        include_adopted_style_sheets: bool,
-    ) {
-        out.push_str("<template shadowrootmode=\"");
-        escape_html_attribute_into_string(init.mode(), out);
-        out.push('"');
-        if init.delegates_focus() {
-            out.push_str(" shadowrootdelegatesfocus=\"\"");
-        }
-        if init.serializable() {
-            out.push_str(" shadowrootserializable=\"\"");
-        }
-        if markup_profile == ShadowRootMarkupProfile::WebApi && init.slot_assignment() != "named" {
-            out.push_str(" shadowrootslotassignment=\"");
-            escape_html_attribute_into_string(init.slot_assignment(), out);
-            out.push('"');
-        }
-        if init.clonable() {
-            out.push_str(" shadowrootclonable=\"\"");
-        }
-        let serialize_registry_attribute = registry_attribute_policy
-            .map(|policy| policy(host, shadow_root, init))
-            .unwrap_or_else(|| init.null_custom_element_registry());
-        if serialize_registry_attribute {
-            out.push_str(" shadowrootcustomelementregistry=\"\"");
-        }
-        if markup_profile == ShadowRootMarkupProfile::WebApi
-            && let Some(reference_target) = init.reference_target()
-        {
-            out.push_str(" shadowrootreferencetarget=\"");
-            escape_html_attribute_into_string(reference_target, out);
-            out.push('"');
-        }
-        if include_adopted_style_sheets
-            && markup_profile == ShadowRootMarkupProfile::WebApi
-            && let Some(adopted_style_sheets) = init.adopted_style_sheets()
-        {
-            out.push_str(" shadowrootadoptedstylesheets=\"");
-            escape_html_attribute_into_string(adopted_style_sheets, out);
-            out.push('"');
-        }
-        out.push('>');
     }
 }
 
