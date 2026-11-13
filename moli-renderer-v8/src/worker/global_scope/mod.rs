@@ -123,6 +123,7 @@ mod network_state;
 mod origin;
 mod performance;
 mod service_worker_api;
+mod service_worker_container;
 mod service_worker_results;
 mod state;
 mod timers;
@@ -135,6 +136,11 @@ pub(super) use self::service_worker_api::{
 };
 pub(crate) use self::service_worker_api::{
     service_worker_runtime_identity, worker_notification_permission_state,
+    worker_service_worker_object,
+};
+pub(crate) use self::service_worker_container::{
+    dispatch_service_worker_message_from_worker_client, retain_worker_service_worker_container,
+    worker_service_worker_container,
 };
 
 use content_security_policy::*;

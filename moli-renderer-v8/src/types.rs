@@ -958,6 +958,27 @@ pub(super) struct ServiceWorkerClientMessageCompletion {
     pub(super) payload: crate::structured_clone::V8StructuredClonePayload,
 }
 
+/// Message data shared by Window and Worker client destinations. Window task
+/// ownership stays on its Page completion and is not fabricated for Workers.
+#[derive(Debug)]
+pub(super) struct ServiceWorkerClientMessageData {
+    pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
+    pub(super) source_script_url: url::Url,
+    pub(super) source_state: &'static str,
+    pub(super) payload: crate::structured_clone::V8StructuredClonePayload,
+}
+
+impl From<ServiceWorkerClientMessageCompletion> for ServiceWorkerClientMessageData {
+    fn from(completion: ServiceWorkerClientMessageCompletion) -> Self {
+        Self {
+            source_version_id: completion.source_version_id,
+            source_script_url: completion.source_script_url,
+            source_state: completion.source_state,
+            payload: completion.payload,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct ServiceWorkerClientNavigateRequestCompletion {
     pub(super) target: ServiceWorkerWindowClientTarget,

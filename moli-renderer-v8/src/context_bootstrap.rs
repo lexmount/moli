@@ -264,8 +264,8 @@ pub(crate) use window_runtime::{
     ServiceWorkerClientMessageCallbackDispatchEffect, ServiceWorkerClientMessageDispatchEffect,
     ServiceWorkerInternalEventCallbackDispatchEffect, dispatch_service_worker_client_message_body,
     dispatch_service_worker_controller_change, dispatch_service_worker_lifecycle_notification,
-    settle_service_worker_ready_completion, settle_service_worker_register_completion,
-    settle_service_worker_unregister_completion,
+    dispatch_worker_service_worker_client_message_body, settle_service_worker_ready_completion,
+    settle_service_worker_register_completion, settle_service_worker_unregister_completion,
 };
 mod window_template;
 mod worker_host;
