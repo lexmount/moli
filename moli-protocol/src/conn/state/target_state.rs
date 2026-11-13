@@ -105,6 +105,7 @@ impl PendingInspectorAwait {
         self.session_id.as_deref()
     }
 
+    #[cfg(test)]
     pub(crate) fn object_group(&self) -> Option<&str> {
         self.object_group.as_deref()
     }
@@ -209,18 +210,6 @@ impl TargetPendingInspectorAwaitRegistry {
     ) -> Option<RendererCommandCorrelation> {
         self.entries
             .renderer_call_for_frontend(FrontendCommandId::new(cdp_request_id))
-    }
-
-    pub(crate) fn renderer_command_descriptor_for_renderer_if_attachment_matches(
-        &self,
-        renderer_call_id: moli_page_types::RendererCallId,
-        dispatched_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
-    ) -> Option<RendererCommandDescriptor> {
-        self.entries
-            .renderer_command_descriptor_for_renderer_if_attachment_matches(
-                renderer_call_id,
-                dispatched_attachment_id,
-            )
     }
 
     pub(crate) fn prepare_renderer_call_replays(

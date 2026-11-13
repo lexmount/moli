@@ -84,35 +84,6 @@ impl CdpConnection {
         Ok(())
     }
 
-    pub(crate) fn validate_runtime_remote_object_ids_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-        object_ids: &[String],
-    ) -> Result<()> {
-        if owner.session_id().is_some() {
-            return self.validate_runtime_remote_object_ids_for_session_owner(
-                owner.session_id(),
-                object_ids,
-            );
-        }
-        if object_ids.is_empty() {
-            return Ok(());
-        }
-        let Some(owner_identity) = self.runtime_remote_object_owner_identity_for_owner(owner)
-        else {
-            return Ok(());
-        };
-        for object_id in object_ids {
-            if self.runtime_remote_object_id_known_for_owner(owner, object_id) {
-                continue;
-            }
-            if self.runtime_remote_object_id_known_for_different_owner(&owner_identity, object_id) {
-                return Err(RuntimeInspectorError::CannotFindObject.into());
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn runtime_remote_object_id_known_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -204,48 +175,6 @@ impl CdpConnection {
             .map(str::to_owned)
     }
 
-    pub(crate) fn unregister_runtime_remote_object_ids_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        object_ids: &[String],
-    ) {
-        if object_ids.is_empty() {
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
-        {
-            target.unregister_runtime_remote_object_ids(owner_session_id, object_ids);
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(session_id)
-        {
-            target.unregister_runtime_remote_object_ids(owner_session_id, object_ids);
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.unregister_runtime_remote_object_ids(object_ids);
-        });
-    }
-
-    pub(crate) fn unregister_runtime_remote_object_ids_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        object_ids: &[String],
-    ) {
-        if owner.session_id().is_some() {
-            self.unregister_runtime_remote_object_ids_for_session_owner(
-                owner.session_id(),
-                object_ids,
-            );
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.unregister_runtime_remote_object_ids(object_ids)
-        });
-    }
-
     pub(crate) fn unregister_runtime_remote_object_group_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -285,191 +214,6 @@ impl CdpConnection {
         });
     }
 
-    pub(crate) fn clear_runtime_remote_object_tracking_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) {
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
-        {
-            target.clear_runtime_remote_object_tracking(owner_session_id);
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(session_id)
-        {
-            target.clear_runtime_remote_object_tracking(owner_session_id);
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.clear_runtime_remote_object_tracking();
-        });
-    }
-
-    pub(crate) fn clear_runtime_remote_object_tracking_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) {
-        if owner.session_id().is_some() {
-            self.clear_runtime_remote_object_tracking_for_session_owner(owner.session_id());
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(
-            owner,
-            DevToolsSessionState::clear_runtime_remote_object_tracking,
-        );
-    }
-
-    pub(crate) fn record_runtime_contexts_reported_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) {
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
-        {
-            target.record_runtime_contexts_reported_to_frontend(owner_session_id);
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(session_id)
-        {
-            target.record_runtime_contexts_reported_to_frontend(owner_session_id);
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.record_runtime_contexts_reported_to_frontend();
-        });
-    }
-
-    pub(crate) fn record_runtime_contexts_reported_for_owner(&mut self, owner: &CommandOwnerScope) {
-        if owner.session_id().is_some() {
-            self.record_runtime_contexts_reported_for_session_owner(owner.session_id());
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(
-            owner,
-            DevToolsSessionState::record_runtime_contexts_reported_to_frontend,
-        );
-    }
-
-    pub(crate) fn record_runtime_contexts_cleared_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) {
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
-        {
-            target.record_runtime_contexts_cleared_for_frontend(owner_session_id);
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(session_id)
-        {
-            target.record_runtime_contexts_cleared_for_frontend(owner_session_id);
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.record_runtime_contexts_cleared_for_frontend();
-        });
-    }
-
-    pub(crate) fn record_runtime_contexts_cleared_for_owner(&mut self, owner: &CommandOwnerScope) {
-        if owner.session_id().is_some() {
-            self.record_runtime_contexts_cleared_for_session_owner(owner.session_id());
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(
-            owner,
-            DevToolsSessionState::record_runtime_contexts_cleared_for_frontend,
-        );
-    }
-
-    pub(crate) fn record_runtime_context_protocol_event_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        event: &RuntimeContextProtocolEvent,
-    ) {
-        if session_id.is_none() {
-            return;
-        }
-        if let Some(target) = self.shared_worker_target_for_session_mut(session_id) {
-            match event {
-                RuntimeContextProtocolEvent::Created(event) => {
-                    target.record_runtime_execution_context_created_event(event);
-                }
-                RuntimeContextProtocolEvent::Destroyed(event) => {
-                    target.record_runtime_execution_context_destroyed_event(event);
-                }
-                RuntimeContextProtocolEvent::Cleared(_) => {
-                    target.record_runtime_execution_contexts_cleared_event();
-                }
-            }
-            return;
-        }
-        if let Some(target) = self.service_worker_target_for_session_mut(session_id) {
-            match event {
-                RuntimeContextProtocolEvent::Created(event) => {
-                    target.record_runtime_execution_context_created_event(event);
-                }
-                RuntimeContextProtocolEvent::Destroyed(event) => {
-                    target.record_runtime_execution_context_destroyed_event(event);
-                }
-                RuntimeContextProtocolEvent::Cleared(_) => {
-                    target.record_runtime_execution_contexts_cleared_event();
-                }
-            }
-        }
-    }
-
-    pub(crate) fn record_runtime_context_protocol_event_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        event: &RuntimeContextProtocolEvent,
-    ) {
-        if owner.session_id().is_some() {
-            self.record_runtime_context_protocol_event_for_session_owner(owner.session_id(), event);
-        }
-    }
-
-    pub(crate) fn clear_runtime_remote_objects_for_realm_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        realm_id: &str,
-    ) {
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
-        {
-            target.clear_runtime_remote_objects_for_realm(owner_session_id, realm_id);
-            return;
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(session_id)
-        {
-            target.clear_runtime_remote_objects_for_realm(owner_session_id, realm_id);
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.clear_runtime_remote_objects_for_realm(realm_id);
-        });
-    }
-
-    pub(crate) fn clear_runtime_remote_objects_for_realm_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        realm_id: &str,
-    ) {
-        if owner.session_id().is_some() {
-            self.clear_runtime_remote_objects_for_realm_for_session_owner(
-                owner.session_id(),
-                realm_id,
-            );
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.clear_runtime_remote_objects_for_realm(realm_id)
-        });
-    }
-
     pub(crate) fn register_runtime_remote_object_ids_for_session_owner_with_realm(
         &mut self,
         session_id: Option<&str>,
@@ -501,28 +245,6 @@ impl CdpConnection {
         }
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.register_runtime_remote_object_ids_with_realm(object_ids, realm_id);
-        });
-    }
-
-    pub(crate) fn register_runtime_remote_object_ids_for_owner_with_realm(
-        &mut self,
-        owner: &CommandOwnerScope,
-        object_ids: Vec<String>,
-        realm_id: &str,
-    ) {
-        if owner.session_id().is_some() {
-            self.register_runtime_remote_object_ids_for_session_owner_with_realm(
-                owner.session_id(),
-                object_ids,
-                realm_id,
-            );
-            return;
-        }
-        if object_ids.is_empty() {
-            return;
-        }
-        let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.register_runtime_remote_object_ids_with_realm(object_ids, realm_id)
         });
     }
 
@@ -638,21 +360,6 @@ impl CdpConnection {
             browser_context_id,
             target_id,
             devtools_session_id,
-        })
-    }
-
-    pub(super) fn runtime_remote_object_owner_identity_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<RuntimeRemoteObjectOwnerIdentity> {
-        if owner.session_id().is_some() {
-            return self.runtime_remote_object_owner_identity_for_session(owner.session_id());
-        }
-        let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
-        Some(RuntimeRemoteObjectOwnerIdentity::Page {
-            browser_context_id,
-            target_id,
-            devtools_session_id: None,
         })
     }
 

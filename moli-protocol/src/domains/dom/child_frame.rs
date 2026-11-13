@@ -291,10 +291,9 @@ impl ChildFrameDomWorkflow<'_> {
                         .or_insert_with(|| json!("node"));
                 }
                 let scope = self.scope.clone();
-                let registered = json!({"object": object.clone()});
                 self.context
                     .with_state(self.driver, move |state, _| {
-                        state.register_scoped_dom_object(&scope, registered, object_group)
+                        state.validate_scoped_dom_result(&scope)
                     })
                     .map_err(dom_error)?
                     .map_err(dom_error)?;

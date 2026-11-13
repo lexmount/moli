@@ -2426,6 +2426,7 @@ impl CdpConnection {
         self.target_owner_identity_for_session(session_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn target_devtools_attached_session_id_for_session(
         &self,
         session_id: Option<&str>,

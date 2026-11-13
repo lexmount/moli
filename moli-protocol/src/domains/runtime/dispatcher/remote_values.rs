@@ -36,24 +36,7 @@ pub(super) fn cdp_value_from_devtools_argument(argument: &Value) -> Option<Value
     }
 }
 
-pub(super) fn devtools_call_function_remote_object_ids(
-    command: &DevToolsCallFunctionCommand,
-) -> Vec<String> {
-    let mut object_ids = Vec::new();
-    if let Some(object_id) = command.object_id.as_ref() {
-        object_ids.push(object_id.as_str().to_owned());
-    }
-    if let Some(this_parameter) = &command.this_parameter {
-        collect_devtools_remote_object_ids(this_parameter, &mut object_ids);
-    }
-    for argument in &command.arguments {
-        collect_devtools_remote_object_ids(argument, &mut object_ids);
-    }
-    object_ids.sort();
-    object_ids.dedup();
-    object_ids
-}
-
+#[cfg(test)]
 pub(super) fn collect_devtools_remote_object_ids(value: &Value, out: &mut Vec<String>) {
     let mut stack = vec![(value, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
     while let Some((value, remaining_tree_depth)) = stack.pop() {

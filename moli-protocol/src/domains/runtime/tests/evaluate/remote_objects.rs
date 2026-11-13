@@ -21,10 +21,14 @@ async fn call_function_on_rejects_object_id_known_to_different_target_owner() {
         .unwrap_or_else(|| panic!("Runtime.evaluate should return an object handle: {response:?}"))
         .to_owned();
 
-    let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
-    other_context.set_active_target_id("TID-2");
-    other_context.attach_active_session("SID-2");
-    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(other_context));
+    push_loaded_runtime_frontend_enabled_background_context_async(
+        &mut ctx,
+        "BID-2",
+        "TID-2",
+        "SID-2",
+        "<html><body>owner-b</body></html>",
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 513,
@@ -41,7 +45,7 @@ async fn call_function_on_rejects_object_id_known_to_different_target_owner() {
     assert_eq!(response["error"]["code"], json!(-32000));
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }
 
@@ -210,10 +214,14 @@ async fn call_function_on_rejects_dom_resolve_node_object_id_from_different_targ
         .unwrap_or_else(|| panic!("DOM.resolveNode should return an object handle: {resolved:?}"))
         .to_owned();
 
-    let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
-    other_context.set_active_target_id("TID-2");
-    other_context.attach_active_session("SID-2");
-    ctx.with_fixture(|conn| conn.push_inactive_browser_context_fixture_for_test(other_context));
+    push_loaded_runtime_frontend_enabled_background_context_async(
+        &mut ctx,
+        "BID-2",
+        "TID-2",
+        "SID-2",
+        "<html><body>owner-b</body></html>",
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 518,
@@ -230,7 +238,7 @@ async fn call_function_on_rejects_dom_resolve_node_object_id_from_different_targ
     assert_eq!(response["error"]["code"], json!(-32000));
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }
 
@@ -277,7 +285,7 @@ async fn get_properties_rejects_object_id_known_to_different_target_owner() {
     assert_eq!(response["error"]["code"], json!(-32000));
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }
 
@@ -348,7 +356,7 @@ async fn call_function_on_rejects_get_properties_returned_object_id_from_differe
     assert_eq!(response["error"]["code"], json!(-32000));
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }
 
@@ -433,17 +441,6 @@ async fn release_object_group_drops_inherited_get_properties_and_call_function_h
         })
         .to_owned();
 
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                &[child_object_id.clone(), returned_object_id.clone()],
-            )
-            .is_err(),
-            "active owner should see inherited-group handles as belonging to the background target"
-        )
-    });
-
     ctx.process_async(json!({
         "id": 532,
         "method": "Runtime.releaseObjectGroup",
@@ -455,15 +452,12 @@ async fn release_object_group_drops_inherited_get_properties_and_call_function_h
     .await;
     let response = take_response_by_id(&mut ctx, 532);
     assert_eq!(response["result"], json!({}));
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                &[child_object_id, returned_object_id],
-            )
-            .is_ok(),
-        "releaseObjectGroup should remove handles whose group was inherited from the receiver object"
-    ) });
+    assert_native_objects_released(
+        &mut ctx,
+        Some("SID-background"),
+        &[parent_object_id, child_object_id, returned_object_id],
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -606,10 +600,7 @@ async fn call_function_on_loaded_background_owner_without_activation() {
     .await;
     let response = take_response_by_id(&mut ctx, 536);
     assert_eq!(response["error"]["code"], json!(-32000));
-    assert_eq!(
-        response["error"]["message"],
-        json!("Cannot find object with given id")
-    );
+    assert_eq!(response["error"]["message"], json!("NoDocumentLoaded"));
 
     ctx.process_async(json!({
         "id": 537,
@@ -659,7 +650,7 @@ async fn evaluate_in_isolated_world_preserves_remote_object_handles() {
 }
 
 #[tokio::test]
-async fn isolated_world_evaluate_registers_remote_object_owner() {
+async fn isolated_world_object_cannot_be_used_in_another_target() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>owner-a</body></html>").await;
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 382).await;
@@ -712,6 +703,6 @@ async fn isolated_world_evaluate_registers_remote_object_owner() {
     let response = take_response_by_id(&mut ctx, 385);
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }

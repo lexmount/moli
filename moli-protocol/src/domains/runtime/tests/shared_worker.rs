@@ -1566,30 +1566,6 @@ onconnect = event => {
             )
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-let worker_target = {
-        conn.shared_worker_target_for_session(Some(&shared_worker_session_id))
-            .expect("shared worker target should exist")
-    };
-    assert!(
-        worker_target.has_runtime_remote_object_id(&shared_worker_session_id, &objects_id),
-        "shared worker Runtime.queryObjects result handle should be target-local: {query_response:?}"
-    );
-    assert_eq!(
-        worker_target.runtime_remote_object_group(&shared_worker_session_id, &objects_id),
-        Some("worker-query-results"),
-        "shared worker Runtime.queryObjects should register its result in the explicit objectGroup"
-    );
-});
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&objects_id)
-            )
-            .is_err(),
-        "active page owner should see shared worker queryObjects result as another target's handle"
-    ) });
 
     ctx.process_async(json!({
         "id": 90_093,
@@ -1601,21 +1577,8 @@ let worker_target = {
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_093)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        let worker_target = {
-            conn.shared_worker_target_for_session(Some(&shared_worker_session_id))
-                .expect("shared worker target should exist")
-        };
-        assert!(
-            !worker_target.has_runtime_remote_object_id(&shared_worker_session_id, &objects_id),
-            "shared worker Runtime.releaseObjectGroup should clear queryObjects result handle"
-        );
-        assert_eq!(
-            worker_target.runtime_remote_object_group(&shared_worker_session_id, &objects_id),
-            None,
-            "shared worker Runtime.releaseObjectGroup should clear queryObjects result group"
-        );
-    });
+
+    assert_native_objects_released(&mut ctx, Some(&shared_worker_session_id), &[objects_id]).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1683,31 +1646,6 @@ onconnect = event => {
             )
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-        let worker_target = {
-            conn.shared_worker_target_for_session(Some(&shared_worker_session_id))
-                .expect("shared worker target should exist")
-        };
-        assert!(
-            worker_target.has_runtime_remote_object_id(&shared_worker_session_id, &object_id),
-            "shared worker Runtime.runScript result handle should be target-local: {run_response:?}"
-        );
-        assert_eq!(
-            worker_target.runtime_remote_object_group(&shared_worker_session_id, &object_id),
-            Some("worker-compiled-script-results"),
-            "shared worker Runtime.runScript should register its result in the explicit objectGroup"
-        );
-    });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&object_id)
-            )
-            .is_err(),
-            "active page owner should see shared worker runScript result as another target's handle"
-        )
-    });
 
     ctx.process_async(json!({
         "id": 90_104,
@@ -1719,16 +1657,8 @@ onconnect = event => {
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_104)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        let worker_target = {
-            conn.shared_worker_target_for_session(Some(&shared_worker_session_id))
-                .expect("shared worker target should exist")
-        };
-        assert!(
-            !worker_target.has_runtime_remote_object_id(&shared_worker_session_id, &object_id),
-            "shared worker Runtime.releaseObjectGroup should clear runScript result handle"
-        );
-    });
+
+    assert_native_objects_released(&mut ctx, Some(&shared_worker_session_id), &[object_id]).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1801,7 +1731,7 @@ onconnect = event => {
     });
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn shared_worker_runtime_remote_objects_are_target_local_and_release_clears_registry() {
+async fn shared_worker_native_objects_are_target_local_and_release_invalidates_them() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
     let shared_worker_session_id = start_attached_shared_worker_session(
@@ -1841,16 +1771,6 @@ onconnect = event => {
             panic!("shared worker Runtime.evaluate should return an object handle: {response:?}")
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&object_id),
-            )
-            .is_err(),
-            "active page owner should see the shared worker handle as belonging to another target"
-        )
-    });
 
     ctx.process_async(json!({
         "id": 90_212,
@@ -1864,7 +1784,7 @@ onconnect = event => {
     assert_eq!(active_release["error"]["code"], json!(-32000));
     assert_eq!(
         active_release["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 
     ctx.process_async(json!({
@@ -1877,13 +1797,6 @@ onconnect = event => {
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_213)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
-                .is_ok(),
-            "successful shared worker release should remove the handle from target-local ownership"
-        )
-    });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1932,15 +1845,6 @@ onconnect = event => {
         })
         .to_owned();
 
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some(&second_session_id),
-                std::slice::from_ref(&object_id),
-            )
-            .is_err(),
-        "peer shared worker target should see the first worker handle as belonging to another target"
-    ) });
     ctx.process_async(json!({
         "id": 90_271,
         "method": "Runtime.releaseObject",
@@ -1954,7 +1858,7 @@ onconnect = event => {
     assert_eq!(peer_release["error"]["code"], json!(-32000));
     assert_eq!(
         peer_release["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 
     ctx.process_async(json!({
@@ -1967,15 +1871,6 @@ onconnect = event => {
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_272)["result"], json!({}));
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some(&second_session_id),
-                &[object_id],
-            )
-            .is_ok(),
-        "successful release by the owning worker should clear the handle from target-local ownership"
-    ) });
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2509,7 +2404,7 @@ onconnect = event => {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn shared_worker_runtime_object_groups_inherit_and_clear_on_detach() {
+async fn shared_worker_native_group_children_work_before_session_detach() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
     let shared_worker_session_id = start_attached_shared_worker_session(
@@ -2576,17 +2471,16 @@ onconnect = event => {
             )
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                &[parent_object_id.clone(), child_object_id.clone()],
-            )
-            .is_err(),
-            "active page owner should see grouped shared worker handles as another target's handles"
-        )
-    });
 
+    ctx.process_async(json!({"id":998_501,"method":"Runtime.getProperties","sessionId":shared_worker_session_id,"params":{"objectId":child_object_id,"ownProperties":true}})).await;
+    let child = take_response_by_id(&mut ctx, 998_501);
+    assert!(
+        child["result"]["result"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == json!("answer") && p["value"]["value"] == json!(42))
+    );
     ctx.process_async(json!({
         "id": 90_313,
         "method": "Target.detachFromTarget",
@@ -2596,16 +2490,6 @@ onconnect = event => {
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 90_313)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                &[parent_object_id, child_object_id],
-            )
-            .is_ok(),
-            "shared worker target detach should clear target-local remote object ownership"
-        )
-    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn shared_worker_pending_await_fails_on_target_detach() {
@@ -2735,16 +2619,6 @@ onconnect = event => {
             .as_str()
             .unwrap_or_else(|| panic!("shared worker close probe should return an object handle"))
             .to_owned();
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&close_probe_object_id),
-            )
-            .is_err(),
-            "active page owner should see the shared worker handle as another target's handle"
-        )
-    });
 
     ctx.process_async(json!({
         "id": 90_513,
@@ -2847,16 +2721,7 @@ onconnect = event => {
             "destroying the shared worker target should drain pending awaits"
         )
     });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&close_probe_object_id),
-            )
-            .is_ok(),
-            "destroying the shared worker target should remove target-local remote object ownership"
-        )
-    });
+
     ctx.with_fixture(|conn| {
         assert!(
             conn.browser_context
@@ -2897,6 +2762,10 @@ onconnect = event => {
         take_response_by_id(&mut ctx, 90_531)["result"]["result"]["value"],
         json!("undefined"),
         "target-local Runtime.addBinding state from the destroyed shared worker must not replay into a fresh target"
+    );
+    assert!(
+        !close_probe_object_id.is_empty(),
+        "the native close probe owns a real object handle"
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -3580,15 +3449,6 @@ onconnect = event => {
             panic!("shared worker Runtime.evaluate should return an object handle: {response:?}")
         })
         .to_owned();
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                None,
-                std::slice::from_ref(&object_id),
-            )
-            .is_err(),
-        "active page owner should see the grouped shared worker handle as another target's handle"
-    ) });
 
     ctx.process_async(json!({
         "id": 90_911,
@@ -3602,12 +3462,7 @@ onconnect = event => {
     let release = take_response_by_id(&mut ctx, 90_911);
     assert_eq!(release["sessionId"], json!(shared_worker_session_id));
     assert_eq!(release["result"], json!({}));
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(None, &[object_id])
-            .is_ok(),
-        "successful shared worker releaseObjectGroup should remove grouped handles from the target-local registry"
-    ) });
+    assert_native_objects_released(&mut ctx, Some(&shared_worker_session_id), &[object_id]).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

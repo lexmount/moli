@@ -46,91 +46,6 @@ pub(super) fn runtime_object_id_from_params(params: Option<&Map<String, Value>>)
     params?.get("objectId").and_then(Value::as_str)
 }
 
-pub(super) fn runtime_promise_object_id_from_params(
-    params: Option<&Map<String, Value>>,
-) -> Option<&str> {
-    params?.get("promiseObjectId").and_then(Value::as_str)
-}
-
-pub(super) fn runtime_prototype_object_id_from_params(
-    params: Option<&Map<String, Value>>,
-) -> Option<&str> {
-    params?.get("prototypeObjectId").and_then(Value::as_str)
-}
-
-pub(super) fn runtime_object_group_for_command_result(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    action: RuntimeAction,
-) -> Option<String> {
-    match action {
-        RuntimeAction::Evaluate => runtime_object_group_from_params(cmd.params).map(str::to_owned),
-        RuntimeAction::CallFunctionOn => runtime_object_group_from_params(cmd.params)
-            .map(str::to_owned)
-            .or_else(|| {
-                conn.runtime_remote_object_group_for_session_owner(
-                    cmd.session_id,
-                    runtime_object_id_from_params(cmd.params)?,
-                )
-            }),
-        RuntimeAction::GetProperties => conn.runtime_remote_object_group_for_session_owner(
-            cmd.session_id,
-            runtime_object_id_from_params(cmd.params)?,
-        ),
-        RuntimeAction::AwaitPromise => conn.runtime_remote_object_group_for_session_owner(
-            cmd.session_id,
-            runtime_promise_object_id_from_params(cmd.params)?,
-        ),
-        RuntimeAction::RunScript => runtime_object_group_from_params(cmd.params).map(str::to_owned),
-        RuntimeAction::QueryObjects => runtime_object_group_from_params(cmd.params)
-            .map(str::to_owned)
-            .or_else(|| {
-                conn.runtime_remote_object_group_for_session_owner(
-                    cmd.session_id,
-                    runtime_prototype_object_id_from_params(cmd.params)?,
-                )
-            }),
-        _ => None,
-    }
-}
-
-pub(super) fn runtime_object_group_for_command_result_for_owner(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    owner: &CommandOwnerScope,
-    action: RuntimeAction,
-) -> Option<String> {
-    match action {
-        RuntimeAction::Evaluate => runtime_object_group_from_params(cmd.params).map(str::to_owned),
-        RuntimeAction::CallFunctionOn => runtime_object_group_from_params(cmd.params)
-            .map(str::to_owned)
-            .or_else(|| {
-                conn.runtime_remote_object_group_for_owner(
-                    owner,
-                    runtime_object_id_from_params(cmd.params)?,
-                )
-            }),
-        RuntimeAction::GetProperties => conn.runtime_remote_object_group_for_owner(
-            owner,
-            runtime_object_id_from_params(cmd.params)?,
-        ),
-        RuntimeAction::AwaitPromise => conn.runtime_remote_object_group_for_owner(
-            owner,
-            runtime_promise_object_id_from_params(cmd.params)?,
-        ),
-        RuntimeAction::RunScript => runtime_object_group_from_params(cmd.params).map(str::to_owned),
-        RuntimeAction::QueryObjects => runtime_object_group_from_params(cmd.params)
-            .map(str::to_owned)
-            .or_else(|| {
-                conn.runtime_remote_object_group_for_owner(
-                    owner,
-                    runtime_prototype_object_id_from_params(cmd.params)?,
-                )
-            }),
-        _ => None,
-    }
-}
-
 pub(super) fn runtime_command_awaits_promise(cmd: &Cmd<'_>, action: RuntimeAction) -> bool {
     action == RuntimeAction::AwaitPromise
         || cmd
@@ -169,15 +84,8 @@ pub(super) fn start_main_runtime_inspector_command_for_owner(
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
         }
     };
-    let object_group =
-        runtime_object_group_for_command_result_for_owner(conn, cmd, &owner_scope, action);
-    let release_object_ids = if action == RuntimeAction::ReleaseObject {
-        cmd.params
-            .map(runtime_remote_object_ids_in_map)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let object_group = None::<String>;
+    let release_object_ids = Vec::<String>::new();
     let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
         runtime_object_group_from_params(cmd.params).map(str::to_owned)
     } else {
@@ -1006,7 +914,7 @@ pub(super) fn start_devtools_runtime_command_for_owner(
     response_delivery: RendererInspectorResponseDelivery,
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
-    let (action, action_label, await_promise) = match &command {
+    let (_action, action_label, await_promise) = match &command {
         AutomationCommand::EvaluateScript(command) => {
             (RuntimeAction::Evaluate, "evaluate", command.await_promise)
         }
@@ -1022,8 +930,7 @@ pub(super) fn start_devtools_runtime_command_for_owner(
             ));
         }
     };
-    let object_group =
-        runtime_object_group_for_command_result_for_owner(conn, cmd, &owner_scope, action);
+    let object_group = None::<String>;
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,

@@ -151,9 +151,6 @@ impl BidiChannelDispatchIdentity {
             }
             BidiChannelDispatchKind::ReleaseObjectGroup => {
                 conn.take_renderer_call_if_correlation_matches_for_owner(owner, self.correlation);
-                if self.owner.is_current(conn) {
-                    conn.unregister_runtime_remote_object_group_for_owner(owner, &self.group);
-                }
             }
             BidiChannelDispatchKind::Listener => {}
         }
@@ -310,10 +307,7 @@ impl PreparedBidiChannelAction {
                             group,
                             "failed to prepare BiDi channel object group release"
                         );
-                        conn.unregister_runtime_remote_object_group_for_owner(
-                            owner.command_owner(),
-                            &group,
-                        );
+
                         None
                     }
                 }

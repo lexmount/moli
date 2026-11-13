@@ -6,7 +6,9 @@ use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
 use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
 use moli_shared_worker::SharedWorkerInstanceId;
-use serde_json::{Map, Value, json};
+#[cfg(test)]
+use serde_json::Map;
+use serde_json::{Value, json};
 
 use crate::automation::{
     AutomationEvent, DevToolsFrameId, DevToolsRealmId, DevToolsRemoteValue,
@@ -16,9 +18,8 @@ use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
     page::{
-        MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
-        RendererInspectorCommandRoute, RendererRuntimeCommandOutput,
-        RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+        RendererAgentAttachmentId, RendererCommandTurnOutput, RendererInspectorCommandRoute,
+        RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
     },
 };
 
@@ -43,6 +44,7 @@ pub(crate) enum RuntimeInspectorError {
     UnknownMethod,
     #[error("InvalidParams")]
     InvalidParams,
+    #[cfg(test)]
     #[error("Cannot find object with given id")]
     CannotFindObject,
     #[error("ConsoleCommandCompletionFailed: {0}")]
@@ -202,6 +204,7 @@ fn runtime_inspector_frontend_response(
     })
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 enum RuntimeRemoteObjectOwnerIdentity {
     Page {
@@ -254,7 +257,6 @@ enum BidiChannelListenerRoute {
 pub(crate) struct OwnerRuntimeResponse {
     command_id: u64,
     owner: CommandOwnerScope,
-    object_group: Option<String>,
     message: InspectorJson,
     bidi_channel_listener: Option<BidiChannelListenerResidence>,
 }
@@ -310,7 +312,6 @@ impl OwnerRuntimeResponse {
         Self {
             command_id,
             owner: owner.clone(),
-            object_group: entry.object_group().map(str::to_owned),
             message: message.into(),
             bidi_channel_listener: entry.bidi_channel_listener().cloned(),
         }
@@ -322,10 +323,6 @@ impl OwnerRuntimeResponse {
 
     fn owner(&self) -> &CommandOwnerScope {
         &self.owner
-    }
-
-    fn object_group(&self) -> Option<&str> {
-        self.object_group.as_deref()
     }
 
     fn bidi_channel_listener(&self) -> Option<&BidiChannelListenerResidence> {
@@ -959,8 +956,10 @@ pub(crate) use execution_contexts::runtime_realm_inventory_using;
 mod inspector_awaits;
 mod inspector_routing;
 mod protocol_dispatch;
+#[cfg(test)]
 mod remote_objects;
 mod replay;
+mod runtime_contexts;
 mod worker_cleanup;
 pub(crate) use replay::{
     CompletedRendererCallReplay, PendingRendererCallReplay, PreparedRendererNavigationFinish,
@@ -1021,6 +1020,7 @@ fn protocol_global_realm_id(
     format!("{owner_id}:{native_realm_id}")
 }
 
+#[cfg(test)]
 fn collect_runtime_remote_object_ids(
     mut object_ids: Vec<String>,
     mut stack: Vec<(&Value, usize)>,
@@ -1053,6 +1053,7 @@ fn collect_runtime_remote_object_ids(
     object_ids
 }
 
+#[cfg(test)]
 pub(crate) fn runtime_remote_object_ids_in_value(value: &Value) -> Vec<String> {
     collect_runtime_remote_object_ids(
         Vec::new(),
@@ -1060,6 +1061,7 @@ pub(crate) fn runtime_remote_object_ids_in_value(value: &Value) -> Vec<String> {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn runtime_remote_object_ids_in_map(map: &Map<String, Value>) -> Vec<String> {
     let mut object_ids = Vec::new();
     for key in ["objectId", "promiseObjectId", "errorObjectId"] {
@@ -1081,3 +1083,6 @@ mod tests;
 
 mod worker_scope;
 pub(crate) use worker_scope::WorkerRuntimeScope;
+
+#[cfg(test)]
+use moli_core::page::MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH;

@@ -1115,26 +1115,17 @@ pub(super) fn cache_resolved_node_snapshot(
 }
 
 pub(super) fn register_resolve_node_result(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
+    _conn: &mut CdpConnection,
+    _owner: &CommandOwnerScope,
     mut remote_object: Value,
-    object_group: Option<String>,
+    _object_group: Option<String>,
 ) -> DevToolsResolveNodeResult {
     if let Some(remote_object) = remote_object.as_object_mut() {
         remote_object
             .entry("subtype".to_owned())
             .or_insert_with(|| json!("node"));
     }
-    let result = json!({ "object": remote_object.clone() });
-    if let Some(object_group) = object_group.as_deref() {
-        conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-            owner,
-            &result,
-            object_group,
-        );
-    } else {
-        conn.register_runtime_remote_object_ids_from_value_for_owner(owner, &result);
-    }
+
     DevToolsResolveNodeResult {
         object: remote_object,
     }
@@ -1294,11 +1285,11 @@ pub(in crate::domains::dom) fn push_set_child_nodes_event_from_snapshots(
 }
 
 pub(super) fn push_resolve_node_result(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
+    _conn: &mut CdpConnection,
+    _owner: &CommandOwnerScope,
     out: &mut DomCommandOutput,
     mut remote_object: Value,
-    object_group: Option<String>,
+    _object_group: Option<String>,
 ) {
     if let Some(remote_object) = remote_object.as_object_mut() {
         remote_object
@@ -1306,15 +1297,7 @@ pub(super) fn push_resolve_node_result(
             .or_insert_with(|| json!("node"));
     }
     let result = json!({ "object": remote_object });
-    if let Some(object_group) = object_group.as_deref() {
-        conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-            owner,
-            &result,
-            object_group,
-        );
-    } else {
-        conn.register_runtime_remote_object_ids_from_value_for_owner(owner, &result);
-    }
+
     out.push_result(result);
 }
 

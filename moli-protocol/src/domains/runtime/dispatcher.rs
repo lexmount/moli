@@ -40,7 +40,6 @@ use crate::conn::{
     RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeInspectorAsyncCompletionReceiver,
     RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
     SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
-    runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
@@ -288,42 +287,6 @@ impl RuntimeInspectorRoutedOutput {
 
     fn command_response_succeeded(&self, command_id: Option<u64>) -> bool {
         command_response_succeeded_for_events(&self.events, command_id)
-    }
-
-    fn register_object_group_for_success(
-        &self,
-        conn: &mut CdpConnection,
-        owner: &CommandOwnerScope,
-        object_group: Option<&str>,
-    ) {
-        let Some(object_group) = object_group else {
-            return;
-        };
-        for event in &self.events {
-            if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
-                event.command_response_payload_ref()
-            {
-                conn.register_runtime_remote_object_ids_from_response_result_for_owner(
-                    owner,
-                    result,
-                    Some(object_group),
-                );
-            } else if let Some(message) = event.protocol_json() {
-                if message.id_u64().is_some() {
-                    conn.register_runtime_remote_object_ids_from_response_for_owner(
-                        owner,
-                        message,
-                        Some(object_group),
-                    );
-                } else {
-                    conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner,
-                        message.value(),
-                        object_group,
-                    );
-                }
-            }
-        }
     }
 
     fn push_ordered_into_plan(self, plan: &mut CommandOutputPlan, command_id: Option<u64>) {

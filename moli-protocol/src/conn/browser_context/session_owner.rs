@@ -40,6 +40,7 @@ impl CdpConnection {
             .is_some()
     }
 
+    #[cfg(test)]
     pub(super) fn target_session_owner(
         &self,
         session_id: Option<&str>,

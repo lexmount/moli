@@ -277,14 +277,8 @@ pub(super) fn start_pending_shared_worker_runtime_inspector_command(
     let await_promise = runtime_command_awaits_promise(cmd, action);
     let inspector_json =
         prepare_runtime_inspector_payload(conn, cmd, command.payload_preparation())?;
-    let object_group = runtime_object_group_for_command_result(conn, cmd, action);
-    let release_object_ids = if action == RuntimeAction::ReleaseObject {
-        cmd.params
-            .map(runtime_remote_object_ids_in_map)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let object_group = None::<String>;
+    let release_object_ids = Vec::<String>::new();
     let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
         runtime_object_group_from_params(cmd.params).map(str::to_owned)
     } else {
@@ -344,14 +338,8 @@ pub(super) fn start_pending_service_worker_runtime_inspector_command(
     let await_promise = runtime_command_awaits_promise(cmd, action);
     let inspector_json =
         prepare_runtime_inspector_payload(conn, cmd, command.payload_preparation())?;
-    let object_group = runtime_object_group_for_command_result(conn, cmd, action);
-    let release_object_ids = if action == RuntimeAction::ReleaseObject {
-        cmd.params
-            .map(runtime_remote_object_ids_in_map)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let object_group = None::<String>;
+    let release_object_ids = Vec::<String>::new();
     let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
         runtime_object_group_from_params(cmd.params).map(str::to_owned)
     } else {

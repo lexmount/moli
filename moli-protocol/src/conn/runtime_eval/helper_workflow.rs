@@ -199,29 +199,12 @@ pub(crate) async fn dispatch_runtime_helper_using(
         .response
 }
 
-fn register_helper_result(
-    conn: &mut CdpConnection,
-    identity: &RuntimeHelperIdentity,
-    object_group: Option<&str>,
-    response: &BackgroundCommandResponsePayload,
-) {
-    if let (Some(group), BackgroundCommandResponsePayload::Success { result }) =
-        (object_group, response)
-    {
-        conn.register_runtime_remote_object_ids_from_response_result_for_owner(
-            identity.scope.owner(),
-            result,
-            Some(group),
-        );
-    }
-}
-
 impl RuntimeHelperIdentity {
     pub(crate) fn finish_dispatch(
         &self,
         conn: &mut CdpConnection,
         command_id: u64,
-        object_group: Option<String>,
+        _object_group: Option<String>,
         completed: CompletedRuntimeProtocolMessageDispatch,
     ) -> Result<Option<BackgroundCommandResponsePayload>> {
         anyhow::ensure!(self.scope.is_current(conn), NoDocumentLoaded);
@@ -230,9 +213,7 @@ impl RuntimeHelperIdentity {
             .as_ref()
             .and_then(|output| renderer_command_turn_frontend_protocol_response(output, command_id))
             .map(BackgroundCommandResponsePayload::from_runtime_inspector_message);
-        if let Some(response) = &response {
-            register_helper_result(conn, self, object_group.as_deref(), response);
-        }
+
         Ok(response)
     }
 
@@ -240,7 +221,7 @@ impl RuntimeHelperIdentity {
         &self,
         conn: &mut CdpConnection,
         command_id: u64,
-        object_group: Option<String>,
+        _object_group: Option<String>,
         response: moli_core::RendererRuntimeInspectorAsyncCompletion,
     ) -> Result<BackgroundCommandResponsePayload> {
         anyhow::ensure!(self.scope.is_current(conn), NoDocumentLoaded);
@@ -250,7 +231,7 @@ impl RuntimeHelperIdentity {
             .resolve_runtime_inspector_response_ready(ready)
             .context("internal Runtime helper response lost its exact correlation")?
             .into_command_response_payload();
-        register_helper_result(conn, self, object_group.as_deref(), &response);
+
         Ok(response)
     }
 }
