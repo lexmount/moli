@@ -484,7 +484,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             }
                             self.out.attribute(attribute);
                         }
-                    } else {
+                    } else if !element.attributes().is_empty() || !overrides.is_empty() {
                         let attributes =
                             EffectiveAttributes::new(id, element.attributes(), overrides, filter);
                         let mut index = 0;
@@ -492,7 +492,7 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                             if self.out.limit_exceeded() {
                                 return Ok(());
                             }
-                            let Some(attribute) = attributes.next(&mut index, false) else {
+                            let Some((attribute, _)) = attributes.next::<false>(&mut index) else {
                                 break;
                             };
                             self.out.attribute(attribute);
@@ -579,10 +579,11 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
             if self.out.limit_exceeded() {
                 return Ok(());
             }
-            let Some(attribute) = attributes.next(&mut state.next_attribute, true) else {
+            let Some((attribute, embedded)) = attributes.next::<true>(&mut state.next_attribute)
+            else {
                 break;
             };
-            match EmbeddedAttribute::for_attribute(attribute) {
+            match embedded {
                 Some(EmbeddedAttribute::Srcdoc) => {
                     state.wrote_srcdoc = true;
                     self.start_embedded(state)?;
