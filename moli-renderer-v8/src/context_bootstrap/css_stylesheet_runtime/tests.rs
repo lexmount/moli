@@ -91,6 +91,43 @@ fn rule_pdb_safe_seed_replays_canonical_webkit_aliases_through_pdb_mutation() {
 }
 
 #[test]
+fn native_rule_seeds_preserve_declaration_list_priority_and_pending_nodes() {
+    for kind in [
+        CssRulePdbDeclarationKind::StyleRule,
+        CssRulePdbDeclarationKind::NestedDeclarations,
+    ] {
+        let mut block = css_rule_pdb_safe_declaration_block_from_declaration_text(
+            "color: red !important; color: blue; outline: var(--edge) !important; outline-color: green;",
+            kind,
+        )
+        .expect("native rule declarations should parse");
+        assert_eq!(block.property_value("color").as_deref(), Some("red"));
+        assert!(block.property_priority("color"));
+        assert_eq!(
+            block.property_value("outline").as_deref(),
+            Some("var(--edge)")
+        );
+        assert_eq!(block.property_value("outline-color").as_deref(), Some(""));
+        assert!(block.property_priority("outline-color"));
+        block.set_property("outline-color", "green", false);
+        assert_eq!(
+            block.property_value("outline-color").as_deref(),
+            Some("green")
+        );
+        assert!(!block.property_priority("outline-color"));
+        assert!(
+            block
+                .into_inner()
+                .declaration_importance_iter()
+                .any(|(declaration, _)| matches!(
+                    declaration,
+                    style::properties::PropertyDeclaration::WithVariables(_)
+                ))
+        );
+    }
+}
+
+#[test]
 fn insert_rule_order_kind_uses_stylo_or_at_keyword_boundary() {
     assert!(matches!(
         css_rule_text_order_kind("@import url(\"a.css\");"),
