@@ -188,6 +188,18 @@ async fn native_xhr_shares_one_capture_and_preserves_delivered_partial_body() {
                     }
         })
         .await;
+        if early_abort {
+            ctx.with_fixture(|conn| {
+                let cached = conn
+                    .runtime_session_owner_slot(Some("SID-1"))
+                    .unwrap()
+                    .captured_response_body(network_id.as_str().unwrap())
+                    .unwrap();
+                let body = cached.captured_body().unwrap();
+                assert_eq!(body.len(), delivered);
+                assert_eq!(body.retained_size_bytes(), PREFIX_LEN + 4);
+            });
+        }
         ctx.process_async(
             json!({"id":41510,"method":"Network.getResponseBody","sessionId":"SID-1","params":{
                 "requestId":network_id

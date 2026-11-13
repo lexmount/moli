@@ -172,6 +172,15 @@ impl CapturedBody {
         }
     }
 
+    /// Shared subresource views can keep more storage alive than they expose.
+    /// Preserve that backing charge through the protocol's body wrapper.
+    pub(crate) fn retained_size_bytes(&self) -> usize {
+        match self.inner.as_ref() {
+            CapturedBodyInner::Subresource(body) => body.retained_size_bytes(),
+            _ => self.len(),
+        }
+    }
+
     pub(crate) fn materialize_bytes_limited(&self, limit: usize) -> Result<Vec<u8>> {
         ensure_materialize_limit(self.len(), limit)?;
         self.materialize_bytes()
