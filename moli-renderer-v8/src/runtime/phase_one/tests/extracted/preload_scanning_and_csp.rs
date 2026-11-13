@@ -1836,7 +1836,7 @@ async fn parser_driver_finish_parser_blocking_pause_uses_service_worker_preload_
     let browser_context_runtime = browser_context_owner.handle();
     let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
     let client_id = browser_context_runtime.register_service_worker_client(
-        final_url.clone(),
+        final_url.clone().into(),
         moli_storage_key::MoliStorageKey::first_party_from_url(&final_url, None)
             .serialized_storage_key(),
         crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,

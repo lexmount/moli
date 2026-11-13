@@ -745,8 +745,6 @@ impl PageScriptHost {
         let parser_stop_queued = install
             .parser_stop_action
             .is_some_and(|action| self.queue_child_document_interactive_lifecycle_action(action));
-        self.promote_pending_service_worker_child_client(handle);
-        self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         let lifecycle_followup_queued = if parser_stop_queued {

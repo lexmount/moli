@@ -962,6 +962,7 @@ pub(super) struct ServiceWorkerClient {
     pub(super) id: ServiceWorkerClientId,
     pub(super) exposed_id: String,
     pub(super) creation_url: Url,
+    // Local documents with inherited control use the creator's scope matching URL.
     pub(super) document_url: Url,
     pub(super) client_type: ServiceWorkerClientType,
     pub(super) frame_type: ServiceWorkerClientFrameType,

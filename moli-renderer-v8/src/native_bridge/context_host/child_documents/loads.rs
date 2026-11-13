@@ -743,7 +743,6 @@ impl PageScriptHost {
                 entry.bind_completed_frame_owner_resource_timing(frame_owner_resource_timing);
                 entry.bind_completed_document_network(current_owner, completed_document_network);
             }
-            self.promote_pending_service_worker_child_client(handle);
         } else {
             if replaces_existing_document {
                 self.disconnect_shared_worker_clients_for_child_context(handle);
@@ -752,8 +751,8 @@ impl PageScriptHost {
             self.replace_child_custom_elements_registry_for_document_commit(scope, handle);
             self.clear_child_browsing_context_current_document(handle);
             self.clear_pending_service_worker_child_client(handle);
+            self.register_or_update_service_worker_child_client(handle);
         }
-        self.register_or_update_service_worker_child_client(handle);
         self.complete_pending_service_worker_child_client_navigation(handle);
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         if parser_stop_action.is_none() && initial_classic_ready_work.is_none() {

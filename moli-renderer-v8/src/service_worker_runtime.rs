@@ -26,7 +26,8 @@ mod version;
 pub(crate) use clients::{
     ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
     ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
-    ServiceWorkerClientSnapshot, ServiceWorkerClientType, service_worker_exposed_client_id,
+    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerWindowClientDocument,
+    service_worker_exposed_client_id,
 };
 pub(crate) use errors::{ServiceWorkerRegistrationError, ServiceWorkerRegistrationErrorKind};
 #[cfg(test)]

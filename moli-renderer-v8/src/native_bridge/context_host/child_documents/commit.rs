@@ -224,6 +224,9 @@ impl PageScriptHost {
             owner_local_window_id,
             owner_document_id,
         );
+        // Parser-discovered subresources use the committed Document's client.
+        self.promote_pending_service_worker_child_client(handle);
+        self.register_or_update_service_worker_child_client(handle);
         let parser_start = self.start_live_child_document_parser(
             scope,
             handle,
