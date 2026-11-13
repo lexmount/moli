@@ -124,6 +124,7 @@ impl PreparedProtocolCommand {
         command: crate::automation::AutomationCommand,
         params: serde_json::Value,
         id: u64,
+        cleanup_group: Option<String>,
         flush: CommandResponseFlushContext,
     ) -> (Self, Option<crate::conn::RuntimeHelperIdentity>) {
         let session = owner.session_id().map(str::to_owned);
@@ -136,7 +137,14 @@ impl PreparedProtocolCommand {
             session,
             flush,
             move |conn, context| {
-                conn.start_runtime_script_dispatch_for_owner(owner, command, params, id, context)
+                conn.start_runtime_script_dispatch_for_owner(
+                    owner,
+                    command,
+                    params,
+                    id,
+                    cleanup_group,
+                    context,
+                )
             },
         );
         prepared.runtime_host = runtime_host;
@@ -660,6 +668,7 @@ impl ProtocolWorkflowState<'_> {
         command: crate::automation::AutomationCommand,
         params: serde_json::Value,
         id: u64,
+        cleanup_group: Option<String>,
         listeners: Vec<(
             crate::conn::BidiChannelObjectGroupLease,
             crate::conn::PendingBidiChannelListener,
@@ -675,6 +684,7 @@ impl ProtocolWorkflowState<'_> {
             command,
             params,
             id,
+            cleanup_group,
             context.context_mut().response_flush().clone(),
         );
         // Proxy resources remain owned by this command until author-script

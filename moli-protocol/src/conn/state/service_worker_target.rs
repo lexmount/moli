@@ -410,67 +410,11 @@ impl ServiceWorkerTargetState {
         self.version_identity(browser_context_id)
     }
 
-    #[cfg(test)]
-    pub(crate) fn register_runtime_remote_object_ids_for_session<I>(
-        &mut self,
-        session_id: &str,
-        object_ids: I,
-    ) where
-        I: IntoIterator<Item = String>,
-    {
+    pub(crate) fn clear_runtime_context_metadata(&mut self, session_id: &str) {
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
-        state.register_runtime_remote_object_ids(object_ids);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn register_runtime_remote_object_ids_with_realm<I>(
-        &mut self,
-        session_id: &str,
-        object_ids: I,
-        realm_id: &str,
-    ) where
-        I: IntoIterator<Item = String>,
-    {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.register_runtime_remote_object_ids_with_realm(object_ids, realm_id);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn register_runtime_remote_object_ids_with_group<I>(
-        &mut self,
-        session_id: &str,
-        object_ids: I,
-        object_group: &str,
-    ) where
-        I: IntoIterator<Item = String>,
-    {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.register_runtime_remote_object_ids_with_group(object_ids, object_group);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn unregister_runtime_remote_object_group(
-        &mut self,
-        session_id: &str,
-        object_group: &str,
-    ) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.unregister_runtime_remote_object_group(object_group);
-    }
-
-    pub(crate) fn clear_runtime_remote_object_tracking(&mut self, session_id: &str) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.clear_runtime_remote_object_tracking();
+        state.clear_runtime_context_metadata();
     }
 
     pub(crate) fn record_runtime_contexts_reported_to_frontend(&mut self, session_id: &str) {
@@ -500,38 +444,11 @@ impl ServiceWorkerTargetState {
             .collect()
     }
 
-    pub(crate) fn clear_runtime_remote_objects_for_realm(
-        &mut self,
-        session_id: &str,
-        realm_id: &str,
-    ) {
+    pub(crate) fn clear_bidi_references_for_realm(&mut self, session_id: &str, realm_id: &str) {
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
-        state.clear_runtime_remote_objects_for_realm(realm_id);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn runtime_remote_object_group(
-        &self,
-        session_id: &str,
-        object_id: &str,
-    ) -> Option<&str> {
-        self.session_state(session_id)?
-            .runtime_remote_object_group(object_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_runtime_remote_object_id(&self, session_id: &str, object_id: &str) -> bool {
-        self.session_state(session_id)
-            .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn any_session_has_runtime_remote_object_id(&self, object_id: &str) -> bool {
-        self.sessions
-            .values()
-            .any(|state| state.devtools.has_runtime_remote_object_id(object_id))
+        state.clear_bidi_references_for_realm(realm_id);
     }
 
     pub(crate) fn attach_session(&mut self, session_id: String) {
@@ -884,15 +801,9 @@ impl ServiceWorkerTargetState {
         owner_session_id: &str,
         cdp_request_id: u64,
         session_id: Option<&str>,
-        object_group: Option<&str>,
     ) {
-        self.try_register_pending_inspector_await(
-            owner_session_id,
-            cdp_request_id,
-            session_id,
-            object_group,
-        )
-        .expect("pending Inspector await frontend command id must be unique per session");
+        self.try_register_pending_inspector_await(owner_session_id, cdp_request_id, session_id)
+            .expect("pending Inspector await frontend command id must be unique per session");
     }
 
     pub(crate) fn try_register_pending_inspector_await(
@@ -900,14 +811,13 @@ impl ServiceWorkerTargetState {
         owner_session_id: &str,
         cdp_request_id: u64,
         session_id: Option<&str>,
-        object_group: Option<&str>,
     ) -> Result<(), DuplicatePendingRendererCommand> {
         let Some(state) = self.session_state_mut(owner_session_id) else {
             return Ok(());
         };
         state
             .pending_inspector_awaits
-            .try_insert(cdp_request_id, session_id, object_group)
+            .try_insert(cdp_request_id, session_id)
     }
 
     pub(crate) fn try_register_renderer_call(

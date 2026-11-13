@@ -42,9 +42,7 @@ pub(super) fn start_runtime_disable_command_for_owner(
         command_id: cmd.id,
         action: "disable",
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -101,9 +99,7 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
         command_id: cmd.id,
         action: "runIfWaitingForDebugger",
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -138,9 +134,7 @@ pub(super) fn start_runtime_discard_console_entries_command(
         command_id: cmd.id,
         action: "discardConsoleEntries",
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },

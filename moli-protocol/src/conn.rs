@@ -55,6 +55,7 @@ mod activity_source;
 mod automation_command;
 mod bidi_channel_work;
 mod bidi_handles;
+pub(crate) use bidi_handles::BidiHandleRelease;
 mod body_spool;
 mod browser_context;
 mod command_owner_scope;
@@ -986,21 +987,14 @@ impl DeferredMainDocumentLoadPredecessorCandidate {
 pub(crate) struct RuntimeAwaitJob {
     command_id: u64,
     owner: CommandOwnerScope,
-    object_group: Option<String>,
     action: &'static str,
 }
 
 impl RuntimeAwaitJob {
-    pub(crate) fn new(
-        command_id: u64,
-        owner: &CommandOwnerScope,
-        object_group: Option<&str>,
-        action: &'static str,
-    ) -> Self {
+    pub(crate) fn new(command_id: u64, owner: &CommandOwnerScope, action: &'static str) -> Self {
         Self {
             command_id,
             owner: owner.clone(),
-            object_group: object_group.map(str::to_owned),
             action,
         }
     }
@@ -1010,7 +1004,6 @@ impl RuntimeAwaitJob {
             "commandId": self.command_id,
             "sessionId": self.owner.session_id(),
             "ownerRoute": self.owner.explicit_route().map(|route| format!("{route:?}")),
-            "objectGroup": self.object_group,
             "action": self.action,
         })
     }

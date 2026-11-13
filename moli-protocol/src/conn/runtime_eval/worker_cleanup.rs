@@ -1,8 +1,10 @@
 use super::*;
 use anyhow::{Context as _, Result};
 
-/// One native teardown receipt, irrespective of how many Inspector references
-/// the session owns. No Browser-side object/group enumeration is involved.
+/// Wait for the native debugger agent to stop and its frontend ingress to
+/// close. A dispatch paused by another debugger can retain the final native
+/// reference until that peer resumes; native RAII owns the remaining roots.
+/// No Browser-side object/group enumeration is involved.
 pub(crate) struct SessionWorkerCleanup {
     receipt: Option<tokio::sync::oneshot::Receiver<Result<()>>>,
 }
@@ -70,7 +72,7 @@ impl SessionWorkerCleanup {
         let result = match self.receipt {
             Some(receipt) => receipt
                 .await
-                .context("Worker Inspector teardown receipt was cancelled")
+                .context("Worker Inspector detachment receipt was cancelled")
                 .and_then(|result| result),
             // A Worker with no live renderer cannot hold a native session.
             None => Ok(()),

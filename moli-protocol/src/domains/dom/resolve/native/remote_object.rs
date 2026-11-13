@@ -1,6 +1,6 @@
 //! Resolve the remote object and its fallback node snapshot in one handler.
-//! Registration is an ordered Browser state update carried with the terminal,
-//! so later commands cannot observe an unregistered object after its response.
+//! Inspector owns the object and its group. The terminal retains only the DOM
+//! snapshot needed by the DOM domain, with its original session authority.
 
 use super::*;
 use moli_core::RendererNativeProtocolStateUpdate as Update;
@@ -118,7 +118,7 @@ fn resolve(
                                     )
                                 })
                                 .map(|node| (id, node));
-                            registered_response(result, group, cached)
+                            snapshot_response(result, cached)
                         }
                         Err(error) => Response::error(
                             -32000,
@@ -128,21 +128,14 @@ fn resolve(
                     },
                 ))
             } else {
-                Step::Complete(registered_response(result, group, None))
+                Step::Complete(snapshot_response(result, None))
             }
         },
     )
 }
 
-fn registered_response(
-    result: Value,
-    group: Option<String>,
-    cached: Option<(String, Value)>,
-) -> Response {
+fn snapshot_response(result: Value, cached: Option<(String, Value)>) -> Response {
     let mut response = Response::success(result);
-    response.state_updates.push(Update::RemoteObjects {
-        object_group: group,
-    });
     if let Some((object_id, node)) = cached {
         response
             .state_updates

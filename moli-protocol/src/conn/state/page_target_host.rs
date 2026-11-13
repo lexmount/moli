@@ -4,7 +4,6 @@ use std::sync::{Arc, Weak};
 use indexmap::IndexMap;
 use moli_core::network::SharedWebStorageStore;
 use moli_core::runtime::NavigationEngine;
-use serde_json::Value;
 
 use super::{
     devtools_session::DevToolsSessionRegistry, emulation::EffectiveTargetEmulationState,
@@ -59,7 +58,6 @@ pub struct PageTargetHost {
     pub(crate) effective_emulation_state: EffectiveTargetEmulationState,
     pub(crate) css_enabled: bool,
     pub(crate) document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    pub(crate) dom_remote_object_node_cache: HashMap<String, Value>,
     pub(crate) runtime_slot: TargetRuntimeSlot,
     pub(crate) fetch_owner: TargetFetchOwner,
     pub(crate) owner_state: TargetOwnerState,
@@ -97,7 +95,6 @@ impl PageTargetHost {
             effective_emulation_state: EffectiveTargetEmulationState::default(),
             css_enabled: false,
             document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            dom_remote_object_node_cache: HashMap::new(),
             runtime_slot,
             fetch_owner: TargetFetchOwner::default(),
             owner_state: TargetOwnerState::default(),
@@ -264,35 +261,6 @@ impl PageTargetHost {
 
     pub(crate) fn pending_inspector_await_count(&self) -> usize {
         self.devtools_sessions.pending_inspector_await_count()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_runtime_remote_object_id(&self, object_id: &str) -> bool {
-        self.devtools_sessions
-            .states()
-            .any(|session| session.has_runtime_remote_object_id(object_id))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_runtime_remote_object_id_for_different_session(
-        &self,
-        devtools_session_id: Option<&str>,
-        object_id: &str,
-    ) -> bool {
-        if devtools_session_id.is_some()
-            && self
-                .devtools_sessions
-                .primary()
-                .has_runtime_remote_object_id(object_id)
-        {
-            return true;
-        }
-        self.devtools_sessions
-            .attached_entries()
-            .any(|(session_id, session_state)| {
-                Some(session_id) != devtools_session_id
-                    && session_state.has_runtime_remote_object_id(object_id)
-            })
     }
 }
 

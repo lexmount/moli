@@ -364,7 +364,7 @@ impl RendererDevToolsSession {
     fn connect(
         backend: &mut RendererInspectorIsolateBackend,
         context_group_id: DocumentInspectorContextGroupId,
-        outbound: InspectorOutbound,
+        mut outbound: InspectorOutbound,
         state: Option<&V8InspectorSessionState>,
         frontend_session_route: Option<(
             RendererInspectorIsolateBackendHandle,
@@ -372,6 +372,7 @@ impl RendererDevToolsSession {
             DevToolsSessionKey,
         )>,
     ) -> Self {
+        let native_binding = outbound.prepare_native_session_binding();
         let first_attach_state = b"{}";
         let first_attach = state.is_none();
         let state = state.map_or(
@@ -391,6 +392,7 @@ impl RendererDevToolsSession {
             session.set_skip_all_pauses(!outbound.debugger_pauses_enabled());
         }
         let session = Rc::new(session);
+        *native_binding.borrow_mut() = Rc::downgrade(&session);
         let executor_registration =
             frontend_session_route.map(|(page_backend, agent_token, session_key)| {
                 page_backend.register_session_executor_route(

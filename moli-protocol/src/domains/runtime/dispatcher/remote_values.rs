@@ -36,37 +36,6 @@ pub(super) fn cdp_value_from_devtools_argument(argument: &Value) -> Option<Value
     }
 }
 
-#[cfg(test)]
-pub(super) fn collect_devtools_remote_object_ids(value: &Value, out: &mut Vec<String>) {
-    let mut stack = vec![(value, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
-    while let Some((value, remaining_tree_depth)) = stack.pop() {
-        let Some(next_tree_depth) = remaining_tree_depth.checked_sub(1) else {
-            continue;
-        };
-        match value {
-            Value::Object(map) => {
-                for key in ["objectId", "promiseObjectId"] {
-                    if let Some(object_id) = map.get(key).and_then(Value::as_str) {
-                        out.push(object_id.to_owned());
-                    }
-                }
-                if let Some(object_id) = bidi_remote_reference_object_id(map) {
-                    out.push(object_id.to_owned());
-                }
-                for child in map.values() {
-                    stack.push((child, next_tree_depth));
-                }
-            }
-            Value::Array(values) => {
-                for child in values {
-                    stack.push((child, next_tree_depth));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
-}
-
 pub(super) fn devtools_script_result_from_response(
     response: Value,
     result_ownership: DevToolsResultOwnership,
@@ -210,6 +179,7 @@ pub(crate) fn export_devtools_script_result_handles(
     owner: &CommandOwnerScope,
     result: &mut AutomationResult,
     realm: Option<&DevToolsRealmId>,
+    group: Option<&str>,
 ) {
     let Some(value) = devtools_script_result_remote_value_mut(result) else {
         return;
@@ -220,14 +190,15 @@ pub(crate) fn export_devtools_script_result_handles(
     if value.remote_subtype.as_deref() == Some("node")
         && let Some(shared) = &mut value.shared_id
         && !is_webdriver_bidi_node_shared_id(shared.as_str())
+        && conn.bidi_node_alias(owner, shared.as_str()).is_none()
     {
         *shared = conn
-            .export_bidi_node_reference(owner, shared.as_str().to_owned(), realm.as_str())
+            .export_bidi_node_reference(owner, shared.as_str().to_owned(), realm.as_str(), group)
             .into();
     }
     if let Some(native) = value.handle.take() {
         value.handle = conn
-            .export_bidi_handle(owner, native.as_str().to_owned(), realm.as_str())
+            .export_bidi_handle(owner, native.as_str().to_owned(), realm.as_str(), group)
             .map(Into::into);
     }
 }

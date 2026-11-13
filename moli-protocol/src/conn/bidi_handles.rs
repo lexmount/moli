@@ -41,6 +41,7 @@ impl Binding {
 struct Export {
     native: String,
     realm: String,
+    group: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,10 +49,18 @@ pub(crate) struct BidiHandles {
     binding: Option<Binding>,
     exports: HashMap<String, Export>,
     references: HashMap<String, usize>,
-    // Node sharedIds are Document identities, not exported object handles.
-    // This lookup only supports native node probes; stale-node history lives
-    // separately in webdriver_node_references.
+    groups: HashMap<String, usize>,
+    // Only raw wrapper-backed node aliases need Inspector storage here.
+    // Canonical sharedIds and stale-node history have their own renderer and
+    // webdriver_node_references bindings.
     nodes: HashMap<String, Export>,
+}
+
+/// Cleanup authority exists only for references actually exported by BiDi.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BidiHandleRelease {
+    Object(String),
+    Group(String),
 }
 
 fn next_reference(kind: &str) -> String {
@@ -72,11 +81,44 @@ impl BidiHandles {
         }
     }
 
-    fn export(&mut self, native: String, realm: String) -> String {
+    fn retain(&mut self, entry: &Export) {
+        *self.references.entry(entry.native.clone()).or_default() += 1;
+        if let Some(group) = &entry.group {
+            *self.groups.entry(group.clone()).or_default() += 1;
+        }
+    }
+
+    fn release(&mut self, entry: Export) -> Option<BidiHandleRelease> {
+        let count = self
+            .references
+            .get_mut(&entry.native)
+            .expect("export reference count");
+        *count -= 1;
+        let last_native = *count == 0;
+        if last_native {
+            self.references.remove(&entry.native);
+        }
+        if let Some(group) = entry.group {
+            let count = self.groups.get_mut(&group).expect("export group count");
+            *count -= 1;
+            if *count != 0 {
+                return None;
+            }
+            self.groups.remove(&group);
+            return Some(BidiHandleRelease::Group(group));
+        }
+        last_native.then_some(BidiHandleRelease::Object(entry.native))
+    }
+
+    fn export(&mut self, native: String, realm: String, group: Option<String>) -> String {
         let handle = next_reference("handle");
-        *self.references.entry(native.clone()).or_default() += 1;
-        self.exports
-            .insert(handle.clone(), Export { native, realm });
+        let entry = Export {
+            native,
+            realm,
+            group,
+        };
+        self.retain(&entry);
+        self.exports.insert(handle.clone(), entry);
         handle
     }
 
@@ -89,19 +131,10 @@ impl BidiHandles {
 
     /// Remove one exported reference. Only its last alias releases the native
     /// reference; state snapshots do not participate in this count.
-    fn disown(&mut self, handle: &str, realm: Option<&str>) -> Option<String> {
+    fn disown(&mut self, handle: &str, realm: Option<&str>) -> Option<BidiHandleRelease> {
         self.resolve(handle, realm)?;
         let entry = self.exports.remove(handle)?;
-        let count = self
-            .references
-            .get_mut(&entry.native)
-            .expect("export reference count");
-        *count -= 1;
-        if *count != 0 {
-            return None;
-        }
-        self.references.remove(&entry.native);
-        Some(entry.native)
+        self.release(entry)
     }
 
     pub(crate) fn clear(&mut self) {
@@ -118,7 +151,16 @@ impl BidiHandles {
         for handle in handles {
             self.disown(&handle, Some(realm));
         }
-        self.nodes.retain(|_, entry| entry.realm != realm);
+        let ids = self
+            .nodes
+            .iter()
+            .filter(|(_, entry)| entry.realm == realm)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            let entry = self.nodes.remove(&id).unwrap();
+            self.release(entry);
+        }
     }
 }
 
@@ -162,11 +204,14 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         native: String,
         realm: &str,
+        group: Option<&str>,
     ) -> Option<String> {
         let binding = Binding::capture(self, owner)?;
         self.with_bidi_session(owner, |state| {
             state.bidi_handles.bind(binding);
-            state.bidi_handles.export(native, realm.to_owned())
+            state
+                .bidi_handles
+                .export(native, realm.to_owned(), group.map(str::to_owned))
         })
     }
 
@@ -186,7 +231,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         handle: &str,
         realm: Option<&str>,
-    ) -> Option<String> {
+    ) -> Option<BidiHandleRelease> {
         self.resolve_bidi_handle(owner, handle, realm)?;
         self.with_bidi_session(owner, |state| state.bidi_handles.disown(handle, realm))
             .flatten()
@@ -197,9 +242,10 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         native: String,
         realm: &str,
+        group: Option<&str>,
     ) -> String {
         let alias = next_reference("node");
-        self.register_bidi_node_alias(owner, alias.clone(), native, realm.to_owned());
+        self.register_bidi_node_alias(owner, alias.clone(), native, realm.to_owned(), group);
         alias
     }
 
@@ -209,17 +255,36 @@ impl CdpConnection {
         shared_id: String,
         native: String,
         realm: String,
+        group: Option<&str>,
     ) {
         let Some(binding) = Binding::capture(self, owner) else {
             return;
         };
         self.with_bidi_session(owner, |state| {
             state.bidi_handles.bind(binding);
+            let handles = &mut state.bidi_handles;
+            if handles.nodes.contains_key(&shared_id) {
+                return;
+            }
+            let entry = Export {
+                native,
+                realm,
+                group: group.map(str::to_owned),
+            };
+            handles.retain(&entry);
+            handles.nodes.insert(shared_id, entry);
+        });
+    }
+
+    pub(crate) fn bidi_retains_object_group(&self, owner: &CommandOwnerScope, group: &str) -> bool {
+        self.bidi_session(owner).is_some_and(|state| {
             state
                 .bidi_handles
-                .nodes
-                .insert(shared_id, Export { native, realm });
-        });
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.is_current(self))
+                && state.bidi_handles.groups.contains_key(group)
+        })
     }
 
     pub(crate) fn bidi_node_alias(
@@ -238,14 +303,14 @@ impl CdpConnection {
 
 #[cfg(test)]
 mod tests {
-    use super::BidiHandles;
+    use super::{BidiHandleRelease, BidiHandles};
 
     #[test]
     fn exports_are_explicit_unique_realm_checked_and_reference_counted() {
         let mut handles = BidiHandles::default();
         assert_eq!(handles.resolve("native-id", None), None);
-        let first = handles.export("native-id".into(), "realm-A".into());
-        let second = handles.export("native-id".into(), "realm-A".into());
+        let first = handles.export("native-id".into(), "realm-A".into(), None);
+        let second = handles.export("native-id".into(), "realm-A".into(), None);
         assert_ne!(first, second);
         assert_eq!(handles.resolve(&first, Some("realm-B")), None);
         assert_eq!(handles.disown(&first, Some("realm-B")), None);
@@ -253,7 +318,7 @@ mod tests {
         assert_eq!(handles.resolve(&second, Some("realm-A")), Some("native-id"));
         assert_eq!(
             handles.disown(&second, Some("realm-A")),
-            Some("native-id".into())
+            Some(BidiHandleRelease::Object("native-id".into()))
         );
         assert!(handles.references.is_empty());
         assert!(handles.exports.is_empty());
@@ -262,14 +327,45 @@ mod tests {
     #[test]
     fn clear_and_realm_retirement_cannot_revive_reused_native_ids() {
         let mut handles = BidiHandles::default();
-        let old = handles.export("same-native-id".into(), "realm-A".into());
-        let retained = handles.export("other-id".into(), "realm-B".into());
+        let old = handles.export("same-native-id".into(), "realm-A".into(), None);
+        let retained = handles.export("other-id".into(), "realm-B".into(), None);
         handles.clear_realm("realm-A");
         assert_eq!(handles.resolve(&old, None), None);
         assert_eq!(handles.resolve(&retained, None), Some("other-id"));
         handles.clear();
-        let new = handles.export("same-native-id".into(), "realm-A".into());
+        let new = handles.export("same-native-id".into(), "realm-A".into(), None);
         assert_ne!(old, new);
         assert_eq!(handles.resolve(&old, None), None);
+    }
+    #[test]
+    fn private_groups_outlive_all_exported_handles_and_raw_node_aliases() {
+        let mut handles = BidiHandles::default();
+        let first = handles.export("first".into(), "realm".into(), Some("operation".into()));
+        let second = handles.export("second".into(), "realm".into(), Some("operation".into()));
+        assert_eq!(handles.disown(&first, Some("realm")), None);
+        assert_eq!(
+            handles.disown(&second, Some("realm")),
+            Some(BidiHandleRelease::Group("operation".into()))
+        );
+        assert!(handles.groups.is_empty());
+        assert!(handles.references.is_empty());
+        let handle = handles.export("node".into(), "realm".into(), Some("node-operation".into()));
+        let entry = super::Export {
+            native: "node".into(),
+            realm: "realm".into(),
+            group: Some("node-operation".into()),
+        };
+        handles.retain(&entry);
+        handles.nodes.insert("node-alias".into(), entry);
+        assert_eq!(
+            handles.disown(&handle, Some("realm")),
+            None,
+            "disown cannot release a still-exported raw node sharedId"
+        );
+        assert_eq!(handles.groups.get("node-operation"), Some(&1));
+        handles.clear_realm("realm");
+        assert!(handles.groups.is_empty());
+        assert!(handles.references.is_empty());
+        assert!(handles.nodes.is_empty());
     }
 }

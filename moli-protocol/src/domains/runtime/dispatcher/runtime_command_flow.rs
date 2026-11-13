@@ -2,24 +2,6 @@ use anyhow::Result;
 
 use super::*;
 
-pub(super) fn prepare_runtime_inspector_payload(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    preparation: RuntimeInspectorPayloadPreparation,
-) -> Result<String> {
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    prepare_runtime_inspector_payload_for_owner(conn, cmd, &owner, preparation)
-}
-
-pub(super) fn prepare_runtime_inspector_payload_for_owner(
-    _conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    _owner: &CommandOwnerScope,
-    _preparation: RuntimeInspectorPayloadPreparation,
-) -> Result<String> {
-    Ok(cmd.json.to_owned())
-}
-
 pub(super) fn build_cdp_evaluate_script_command(
     cmd: &Cmd<'_>,
     target_id: Option<&str>,
@@ -154,15 +136,6 @@ pub(super) fn cdp_call_function_arguments_from_params(
         .unwrap_or_default()
 }
 
-pub(super) fn prepare_pending_devtools_call_function_json_for_owner(
-    _conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    _owner: &CommandOwnerScope,
-    _command: &DevToolsCallFunctionCommand,
-) -> Result<String> {
-    Ok(cmd.json.to_owned())
-}
-
 pub(super) fn start_pending_runtime_binding_context_lookup_phase(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
@@ -178,9 +151,7 @@ pub(super) fn start_pending_runtime_binding_context_lookup_phase(
             command_id,
             action: task.action.label(),
             owner_scope,
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::BindingContextLookup { task, pending },
@@ -246,9 +217,7 @@ pub(super) fn start_pending_runtime_binding_inspector_phase(
             command_id: completed.command_id,
             action: task.action.label(),
             owner_scope: completed.owner_scope.clone(),
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::BindingInspector { task, pending },
@@ -300,9 +269,7 @@ pub(super) fn start_pending_runtime_binding_page_phase(
         command_id,
         action: task.action.label(),
         owner_scope,
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::BindingPage { task, pending },
@@ -616,9 +583,7 @@ pub(super) fn pending_runtime_deferred_inspector_reply_command(
         command_id: completed.command_id,
         action: completed.action,
         owner_scope: completed.owner_scope,
-        object_group: completed.object_group,
-        release_object_ids: completed.release_object_ids,
-        release_object_group: completed.release_object_group,
+
         await_promise: completed.await_promise,
         wait_for_deferred_reply: completed.wait_for_deferred_reply,
         pending: PendingRuntimeCommandKind::InspectorDeferredReply {

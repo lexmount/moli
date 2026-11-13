@@ -2111,12 +2111,7 @@ fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
     target.set_runtime_frontend_enabled(&attached_session_id, true);
     target.set_inspector_enabled(&attached_session_id, true);
     target.record_runtime_contexts_reported_to_frontend(&attached_session_id);
-    target.register_pending_inspector_await(
-        &attached_session_id,
-        917,
-        Some(&attached_session_id),
-        None,
-    );
+    target.register_pending_inspector_await(&attached_session_id, 917, Some(&attached_session_id));
 
     let renderer_run = renderer_run();
     let outputs = record_service_worker_target_stopped(
@@ -3390,7 +3385,6 @@ async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
             &attached_session_id,
             901,
             Some(&attached_session_id),
-            None,
         );
 
         target

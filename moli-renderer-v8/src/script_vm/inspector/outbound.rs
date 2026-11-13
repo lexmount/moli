@@ -18,8 +18,8 @@ use moli_page_types::{
 use serde_json::Value;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
-    rc::Rc,
+    collections::{HashMap, VecDeque},
+    rc::{Rc, Weak},
 };
 
 /// Push-based ordered outbound handling for inspector messages.
@@ -50,7 +50,7 @@ struct InspectorResponseRoutingState {
     // These fields belong to one agent-local V8 session channel and never
     // cross a renderer agent boundary.
     pending_response_callbacks: HashMap<i32, RendererRuntimeInspectorResponseSender>,
-    canceled_response_callbacks: HashSet<i32>,
+    canceled_response_callbacks: HashMap<i32, Option<String>>,
     dispatch_response_capture_depth: usize,
     internal_dispatch_response_call_ids: Vec<i32>,
     runtime_command_output: Option<RendererRuntimeCommandOutputRecorder>,
@@ -64,6 +64,7 @@ type SharedInspectorResponseRoutingState = Rc<RefCell<InspectorResponseRoutingSt
 
 #[derive(Clone)]
 pub(in crate::script_vm) struct InspectorOutbound {
+    native_session: Rc<RefCell<Weak<v8::inspector::V8InspectorSession>>>,
     debugger_pauses_enabled: bool,
     agent_token: RendererDevToolsAgentToken,
     session: Option<DevToolsSessionKey>,
@@ -92,8 +93,26 @@ impl InspectorSessionOutput for InspectorOutbound {
 }
 
 impl InspectorOutbound {
+    pub(super) fn prepare_native_session_binding(
+        &mut self,
+    ) -> Rc<RefCell<Weak<v8::inspector::V8InspectorSession>>> {
+        // Reattach may reuse the message store, but an old native channel must
+        // retain its own binding and can never clean a successor's groups.
+        self.native_session = Default::default();
+        self.native_session.clone()
+    }
+
+    fn release_abandoned_group(&self, group: Option<&str>) {
+        if let Some(group) = group
+            && let Some(session) = self.native_session.borrow().upgrade()
+        {
+            session.release_object_group(v8::inspector::StringView::from(group.as_bytes()));
+        }
+    }
+
     pub(super) fn for_agent(agent_token: RendererDevToolsAgentToken) -> Self {
         Self {
+            native_session: Default::default(),
             debugger_pauses_enabled: false,
             agent_token,
             session: None,
@@ -390,6 +409,12 @@ impl InspectorOutbound {
         }
         let callback = guard.pending_response_callbacks.remove(&call_id);
         if let Some(callback) = callback {
+            let cleanup_group = callback.abandoned_object_group().map(str::to_owned);
+            if cleanup_group.is_some() && !callback.is_open() {
+                drop(guard);
+                self.release_abandoned_group(cleanup_group.as_deref());
+                return;
+            }
             let recorder = (guard.runtime_command_output_suppression_depth == 0)
                 .then(|| guard.runtime_command_output.clone())
                 .flatten();
@@ -399,6 +424,7 @@ impl InspectorOutbound {
                 return;
             }
             if let Err(message) = callback.send(value) {
+                self.release_abandoned_group(cleanup_group.as_deref());
                 tracing::debug!(
                     call_id,
                     message = ?message,
@@ -407,7 +433,9 @@ impl InspectorOutbound {
             }
             return;
         }
-        if guard.canceled_response_callbacks.remove(&call_id) {
+        if let Some(cleanup_group) = guard.canceled_response_callbacks.remove(&call_id) {
+            drop(guard);
+            self.release_abandoned_group(cleanup_group.as_deref());
             tracing::debug!(
                 call_id,
                 message = ?value,
@@ -487,8 +515,17 @@ impl InspectorOutbound {
 
     pub(in crate::script_vm) fn cancel_response_callback(&self, call_id: i32) {
         let mut guard = self.response_routing.borrow_mut();
-        guard.pending_response_callbacks.remove(&call_id);
-        guard.canceled_response_callbacks.insert(call_id);
+        if let Some(callback) = guard.pending_response_callbacks.remove(&call_id) {
+            guard.canceled_response_callbacks.insert(
+                call_id,
+                callback.abandoned_object_group().map(str::to_owned),
+            );
+        } else {
+            guard
+                .canceled_response_callbacks
+                .entry(call_id)
+                .or_insert(None);
+        }
     }
 
     pub(in crate::script_vm) fn len(&self) -> usize {
@@ -587,7 +624,7 @@ impl InspectorOutbound {
         let routing_available = {
             let routing = self.response_routing.borrow();
             !routing.pending_response_callbacks.contains_key(&call_id)
-                && !routing.canceled_response_callbacks.contains(&call_id)
+                && !routing.canceled_response_callbacks.contains_key(&call_id)
                 && !routing
                     .internal_dispatch_response_call_ids
                     .contains(&call_id)

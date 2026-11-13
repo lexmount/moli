@@ -80,6 +80,7 @@ async fn native_dom_commands_preserve_remote_object_aliases() {
             "native-node-alias".to_owned(),
             object,
             "alias-realm".into(),
+            None,
         )
     });
     ctx.process_async(json!({"id": 9, "method": "DOM.getDocument"}))

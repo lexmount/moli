@@ -91,11 +91,7 @@ pub enum RendererNativeProtocolStateUpdate {
         output: Box<crate::runtime::RendererRuntimeCommandOutput>,
     },
     WebMcpEnabled(bool),
-    /// Register object IDs from the successful terminal result before delivery.
-    /// The reply already owns the payload; this update only retains its group.
-    RemoteObjects {
-        object_group: Option<String>,
-    },
+    /// A DOM-domain fallback snapshot, scoped to the producing session.
     DomRemoteObjectNode {
         object_id: String,
         node: serde_json::Value,

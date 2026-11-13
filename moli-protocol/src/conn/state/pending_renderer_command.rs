@@ -22,6 +22,7 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RendererCommandDescriptor {
+    abandoned_object_group: Option<String>,
     replacement: CdpRendererCommandReplacement,
     replay: RendererCommandReplay,
     response_delivery: RendererInspectorResponseDelivery,
@@ -36,6 +37,11 @@ pub(crate) enum RendererCommandReplay {
 }
 
 impl RendererCommandDescriptor {
+    pub(crate) fn with_abandoned_object_group_cleanup(mut self, group: Option<String>) -> Self {
+        self.abandoned_object_group = group;
+        self
+    }
+
     /// Builds a replay descriptor from the policy already derived at typed CDP
     /// ingress. Production frontend commands must use this constructor.
     pub(crate) fn from_frontend_policy(
@@ -44,6 +50,7 @@ impl RendererCommandDescriptor {
         response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         Self {
+            abandoned_object_group: None,
             replacement: policy.replacement(),
             replay: RendererCommandReplay::Inspector(policy.replay_dispatch()),
             response_delivery,
@@ -57,6 +64,7 @@ impl RendererCommandDescriptor {
         response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         Self {
+            abandoned_object_group: None,
             replacement: policy.replacement(),
             replay: RendererCommandReplay::PerformanceGetMetrics,
             response_delivery,
@@ -71,6 +79,7 @@ impl RendererCommandDescriptor {
         response_delivery: RendererInspectorResponseDelivery,
     ) -> Self {
         Self {
+            abandoned_object_group: None,
             replacement: policy.replacement(),
             replay: RendererCommandReplay::SetScriptExecutionDisabled { disabled },
             response_delivery,
@@ -89,6 +98,7 @@ impl RendererCommandDescriptor {
             .context("invalid renderer Inspector command JSON")?;
         let policy = command.renderer_policy();
         Ok(Self {
+            abandoned_object_group: None,
             replacement: policy.replacement(),
             replay: RendererCommandReplay::Inspector(policy.replay_dispatch()),
             // Internal Classic/BiDi adapters own their reply channel. A
@@ -105,6 +115,7 @@ impl RendererCommandDescriptor {
         let command = ParsedCdpCommand::parse_str(&frontend_payload)
             .context("invalid internal renderer Inspector command")?;
         Ok(Self {
+            abandoned_object_group: None,
             replacement: CdpRendererCommandReplacement::Terminate,
             replay: RendererCommandReplay::Inspector(command.renderer_policy().replay_dispatch()),
             response_delivery: RendererInspectorResponseDelivery::AdapterReply,
@@ -360,8 +371,9 @@ impl<T> PendingRendererCommandRegistry<T> {
         let response_delivery = descriptor.response_delivery();
         let (response_channel, response_receiver) =
             RendererRuntimeInspectorResponseChannel::new_for_delivery(response_delivery);
-        let response_sender =
-            response_channel.activate_sender(renderer_call_id.get(), dispatched_attachment_id);
+        let response_sender = response_channel
+            .activate_sender(renderer_call_id.get(), dispatched_attachment_id)
+            .with_abandoned_object_group_cleanup(descriptor.abandoned_object_group.clone());
         let previous_renderer_call = self.renderer_calls_by_frontend.insert(
             frontend_command_id,
             RegisteredRendererCall {

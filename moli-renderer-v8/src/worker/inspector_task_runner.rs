@@ -88,13 +88,36 @@ pub(crate) struct WorkerInspectorSessionLifetime(Arc<WorkerInspectorSessionLifet
 struct WorkerInspectorSessionLifetimeState {
     active: AtomicBool,
     native_created: AtomicBool,
-    retirement: Mutex<WorkerInspectorSessionRetirement>,
+    detachment: Mutex<WorkerInspectorSessionCompletion>,
+    retirement: Mutex<WorkerInspectorSessionCompletion>,
 }
 
 #[derive(Default)]
-struct WorkerInspectorSessionRetirement {
+struct WorkerInspectorSessionCompletion {
     result: Option<std::result::Result<(), WorkerInspectorError>>,
     waiters: Vec<oneshot::Sender<Result<()>>>,
+}
+
+impl WorkerInspectorSessionCompletion {
+    fn complete(&mut self, result: std::result::Result<(), WorkerInspectorError>) {
+        if self.result.is_some() {
+            return;
+        }
+        self.result = Some(result);
+        for waiter in self.waiters.drain(..) {
+            let _ = waiter.send(result.map_err(Into::into));
+        }
+    }
+
+    fn subscribe(&mut self) -> oneshot::Receiver<Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some(result) = self.result {
+            let _ = tx.send(result.map_err(Into::into));
+        } else {
+            self.waiters.push(tx);
+        }
+        rx
+    }
 }
 
 impl WorkerInspectorSessionLifetime {
@@ -102,7 +125,8 @@ impl WorkerInspectorSessionLifetime {
         Self(Arc::new(WorkerInspectorSessionLifetimeState {
             active: AtomicBool::new(true),
             native_created: AtomicBool::new(false),
-            retirement: Mutex::new(WorkerInspectorSessionRetirement::default()),
+            detachment: Mutex::new(WorkerInspectorSessionCompletion::default()),
+            retirement: Mutex::new(WorkerInspectorSessionCompletion::default()),
         }))
     }
 
@@ -123,25 +147,23 @@ impl WorkerInspectorSessionLifetime {
         &self,
         result: std::result::Result<(), WorkerInspectorError>,
     ) {
-        let mut retirement = self.0.retirement.lock();
-        if retirement.result.is_some() {
-            return;
-        }
-        retirement.result = Some(result);
-        for waiter in retirement.waiters.drain(..) {
-            let _ = waiter.send(result.map_err(Into::into));
-        }
+        self.0.retirement.lock().complete(result);
     }
 
+    #[cfg(test)]
     pub(crate) fn retirement(&self) -> oneshot::Receiver<Result<()>> {
-        let (tx, rx) = oneshot::channel();
-        let mut retirement = self.0.retirement.lock();
-        if let Some(result) = retirement.result {
-            let _ = tx.send(result.map_err(Into::into));
-        } else {
-            retirement.waiters.push(tx);
-        }
-        rx
+        self.0.retirement.lock().subscribe()
+    }
+
+    pub(crate) fn complete_detachment(
+        &self,
+        result: std::result::Result<(), WorkerInspectorError>,
+    ) {
+        self.0.detachment.lock().complete(result);
+    }
+
+    fn detachment(&self) -> oneshot::Receiver<Result<()>> {
+        self.0.detachment.lock().subscribe()
     }
 }
 
@@ -168,6 +190,7 @@ pub(crate) enum WorkerInspectorTask {
 impl WorkerInspectorTask {
     fn fail(self, error: WorkerInspectorError) {
         if let Self::DetachSession { lifetime, .. } = &self {
+            lifetime.complete_detachment(Err(error));
             lifetime.complete_retirement(Err(error));
         }
         let Self::DispatchProtocolMessage {
@@ -388,7 +411,10 @@ impl WorkerInspectorTaskRunner {
         inspector_session_id: Option<String>,
     ) -> oneshot::Receiver<Result<()>> {
         let lifetime = self.retire_lifetime(inspector_session_id.as_deref());
-        let receipt = lifetime.retirement();
+        // A synchronous Inspector dispatch can retain its native session on
+        // a pause stack owned by another debugger. The frontend waits until
+        // its agent is stopped, not until that unrelated pause is resumed.
+        let receipt = lifetime.detachment();
         self.append(
             WorkerInspectorTaskMode::Interrupt,
             WorkerInspectorTask::DetachSession {
@@ -932,14 +958,14 @@ mod tests {
         assert!(!old.matches(&new));
         assert!(
             matches!(retired.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
-            "enqueueing detach is not native teardown"
+            "enqueueing detach has not stopped the native debugger agent"
         );
         let Some(WorkerInspectorTask::DetachSession { lifetime, .. }) =
             runner.claim_task(WorkerInspectorTaskMode::Interrupt)
         else {
             panic!("detach owner task")
         };
-        lifetime.complete_retirement(Ok(()));
+        lifetime.complete_detachment(Ok(()));
         retired.try_recv().unwrap().unwrap();
     }
 }

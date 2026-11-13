@@ -28,15 +28,20 @@ pub(super) async fn release_devtools_objects_for_owner_using(
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
     for handle in handles {
-        let Some(object_id) = workflow
+        let Some(release) = workflow
             .state(|state| state.disown_runtime_handle(owner, handle.as_str(), target_realm))?
         else {
             continue;
         };
-        let params = json!({ "objectId": object_id });
-        let response = workflow
-            .helper(owner.clone(), "Runtime.releaseObject", params)
-            .await?;
+        let (method, params) = match release {
+            crate::conn::BidiHandleRelease::Object(id) => {
+                ("Runtime.releaseObject", json!({"objectId":id}))
+            }
+            crate::conn::BidiHandleRelease::Group(group) => {
+                ("Runtime.releaseObjectGroup", json!({"objectGroup":group}))
+            }
+        };
+        let response = workflow.helper(owner.clone(), method, params).await?;
         if let BackgroundCommandResponsePayload::Error { code, message, .. } = response {
             let error = devtools_error_from_cdp_error_parts(Some(i64::from(code)), &message);
             if !matches!(error.kind, DevToolsErrorKind::NoSuchHandle) {

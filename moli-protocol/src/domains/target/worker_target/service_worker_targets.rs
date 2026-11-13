@@ -291,7 +291,7 @@ pub(super) fn record_service_worker_target_stopped(
         {
             for session_id in context_reported_session_ids {
                 if target.is_session(&session_id) {
-                    target.clear_runtime_remote_object_tracking(&session_id);
+                    target.clear_runtime_context_metadata(&session_id);
                     target.record_runtime_contexts_cleared_for_frontend(&session_id);
                     if let Some((_, runtime)) = session_runtimes
                         .iter()

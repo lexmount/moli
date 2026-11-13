@@ -34,6 +34,14 @@ impl BidiChannelObjectGroupLease {
         }
     }
 
+    pub(crate) fn transfer_to_exports(mut self) {
+        self.access.take();
+    }
+
+    pub(crate) fn owner(&self) -> &BidiChannelPageOwner {
+        &self.owner
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.group
     }
@@ -75,7 +83,9 @@ impl Drop for BidiChannelObjectGroupLease {
             let group = self.group.clone();
             access.defer_cleanup(Box::new(move |conn| {
                 if owner.is_current(conn) {
-                    conn.publish_bidi_channel_object_group_release(owner, group);
+                    conn.publish_bidi_channel_owner_action(
+                        BidiChannelOwnerAction::release_object_group_after_owner(owner, group),
+                    );
                 }
             }));
         }
@@ -100,6 +110,12 @@ impl BidiChannelOutput {
     }
 
     pub(crate) fn publish(self, conn: &mut CdpConnection) -> Vec<BackgroundProtocolEvent> {
+        // A resource-only terminal has no frontend output to order. Its native
+        // completion already settles the supervised cleanup; publishing an
+        // empty fenced observation only creates another scheduler dependency.
+        if self.events.is_empty() {
+            return Vec::new();
+        }
         if let Some(predecessor) = self.predecessor {
             conn.publish_renderer_fenced_protocol_output(self.events, predecessor, self.target_id);
             Vec::new()
@@ -121,6 +137,7 @@ pub(crate) struct BidiChannelDispatchIdentity {
     correlation: RendererCommandCorrelation,
     group: String,
     kind: BidiChannelDispatchKind,
+    reply_group: Option<String>,
     settled: Rc<Cell<bool>>,
 }
 
@@ -147,6 +164,12 @@ impl BidiChannelDispatchIdentity {
                         self.owner.clone(),
                         self.group.clone(),
                     );
+                    if let Some(group) = &self.reply_group {
+                        conn.publish_bidi_channel_object_group_release(
+                            self.owner.clone(),
+                            group.clone(),
+                        );
+                    }
                 }
             }
             BidiChannelDispatchKind::ReleaseObjectGroup => {
@@ -274,9 +297,14 @@ pub(crate) struct BidiChannelDispatchOutput {
 /// The initial native dispatch is finite. Listener promise replies continue
 /// through the original response-ready lane; only object-group release waits
 /// for its own private reply here.
-pub(crate) struct PreparedBidiChannelAction {
-    pending: Option<PendingRuntimeProtocolMessageDispatch>,
-    cancellation: BidiChannelDispatchCancellation,
+pub(crate) enum PreparedBidiChannelAction {
+    Dispatch(Box<PreparedBidiChannelDispatch>),
+    AfterOwner(Box<PendingBidiGroupCleanup>),
+}
+
+pub(crate) struct PendingBidiGroupCleanup {
+    barrier: crate::conn::PreparedRuntimePageQuery<Option<i64>>,
+    lease: BidiChannelObjectGroupLease,
 }
 
 impl PreparedBidiChannelAction {
@@ -298,23 +326,97 @@ impl PreparedBidiChannelAction {
                 Self::prepare_listener(conn, lease, *listener)
             }
             BidiChannelOwnerActionBody::ReleaseObjectGroup(group) => {
-                let result = Self::prepare_dispatch(conn, owner.clone(), group.clone(), None);
-                match result {
-                    Ok(prepared) => Some(prepared),
-                    Err(error) => {
-                        tracing::debug!(
-                            ?error,
-                            group,
-                            "failed to prepare BiDi channel object group release"
-                        );
-
-                        None
-                    }
-                }
+                PreparedBidiChannelDispatch::prepare_dispatch(conn, owner, group, None)
+                    .ok()
+                    .map(|prepared| Self::Dispatch(Box::new(prepared)))
+            }
+            BidiChannelOwnerActionBody::ReleaseObjectGroupAfterOwner(group) => {
+                let barrier = crate::conn::PreparedRuntimePageQuery::prepare_resident(
+                    conn,
+                    owner.command_owner(),
+                    "helper cleanup owner barrier failed",
+                    |page| page.start_default_or_initial_execution_context_id(),
+                    moli_core::page::Page::finish_default_or_initial_execution_context_id,
+                )
+                .ok()?;
+                Some(Self::AfterOwner(Box::new(PendingBidiGroupCleanup {
+                    barrier,
+                    lease: BidiChannelObjectGroupLease::capture(conn, owner, group),
+                })))
             }
         }
     }
 
+    pub(crate) fn prepare_listener(
+        conn: &mut CdpConnection,
+        lease: BidiChannelObjectGroupLease,
+        listener: PendingBidiChannelListener,
+    ) -> Option<Self> {
+        PreparedBidiChannelDispatch::prepare_listener(conn, lease, listener)
+            .map(|prepared| Self::Dispatch(Box::new(prepared)))
+    }
+
+    pub(crate) async fn run(self, driver: &mut ProtocolWorkflowDriver) -> BidiChannelOutput {
+        match self {
+            Self::Dispatch(prepared) => prepared.run(driver).await,
+            Self::AfterOwner(cleanup) => {
+                let PendingBidiGroupCleanup { barrier, mut lease } = *cleanup;
+                let mut predecessor = None;
+                if let Err(error) = barrier.run(driver, &mut predecessor).await {
+                    // A closed original Page/session destroys its native roots.
+                    // Never retry this cleanup against a replacement binding.
+                    tracing::debug!(?error, "helper cleanup owner retired");
+                    lease.access.take();
+                    return BidiChannelOutput {
+                        predecessor,
+                        ..Default::default()
+                    };
+                }
+                let owner = lease.owner.clone();
+                let group = lease.group.clone();
+                let prepared = driver
+                    .with_state(move |state| {
+                        state.prepare_bidi_channel_owner_action(
+                            BidiChannelOwnerAction::release_object_group(owner, group),
+                        )
+                    })
+                    .ok()
+                    .flatten();
+                let mut output = BidiChannelOutput {
+                    predecessor,
+                    ..Default::default()
+                };
+                if let Some(prepared) = prepared {
+                    lease.access.take();
+                    output.append(Box::pin(prepared.run(driver)).await);
+                }
+                output
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn dispatch(&self) -> &PreparedBidiChannelDispatch {
+        match self {
+            Self::Dispatch(prepared) => prepared,
+            _ => panic!("expected an admitted native dispatch"),
+        }
+    }
+    #[cfg(test)]
+    fn dispatch_mut(&mut self) -> &mut PreparedBidiChannelDispatch {
+        match self {
+            Self::Dispatch(prepared) => prepared,
+            _ => panic!("expected an admitted native dispatch"),
+        }
+    }
+}
+
+pub(crate) struct PreparedBidiChannelDispatch {
+    pending: Option<PendingRuntimeProtocolMessageDispatch>,
+    cancellation: BidiChannelDispatchCancellation,
+}
+
+impl PreparedBidiChannelDispatch {
     pub(crate) fn prepare_listener(
         conn: &mut CdpConnection,
         mut lease: BidiChannelObjectGroupLease,
@@ -356,13 +458,20 @@ impl PreparedBidiChannelAction {
     ) -> Result<Self> {
         anyhow::ensure!(owner.is_current(conn), NoDocumentLoaded);
         let command_id = conn.next_internal_runtime_command_id();
+        let reply_group = listener
+            .as_ref()
+            .map(|_| format!("{group}-reply-{command_id}"));
         let (raw, action, kind) = if let Some(listener) = listener.as_ref() {
             anyhow::ensure!(
                 conn.runtime_inspector_response_ready_sender().is_some(),
                 BidiChannelResponseHookUnavailable
             );
             (
-                bidi_channel_listener_call_function_json(command_id, listener),
+                bidi_channel_listener_call_function_json(
+                    command_id,
+                    listener,
+                    reply_group.as_deref().unwrap(),
+                ),
                 "callFunctionOn",
                 BidiChannelDispatchKind::Listener,
             )
@@ -379,7 +488,8 @@ impl PreparedBidiChannelAction {
                 BidiChannelDispatchKind::ReleaseObjectGroup,
             )
         };
-        let descriptor = RendererCommandDescriptor::for_document_helper(raw)?;
+        let descriptor = RendererCommandDescriptor::for_document_helper(raw)?
+            .with_abandoned_object_group_cleanup(reply_group.clone());
         let command_owner = owner.command_owner();
         let pending = conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
             command_owner, action, descriptor, command_id,
@@ -392,7 +502,8 @@ impl PreparedBidiChannelAction {
             conn.register_pending_bidi_channel_listener_for_owner(
                 command_id,
                 command_owner,
-                BidiChannelListenerResidence::new(owner.clone(), listener),
+                BidiChannelListenerResidence::new(owner.clone(), listener)
+                    .with_reply_group(reply_group.clone().unwrap()),
             );
         }
         Ok(Self {
@@ -403,6 +514,7 @@ impl PreparedBidiChannelAction {
                     correlation,
                     group,
                     kind,
+                    reply_group,
                     settled: Rc::new(Cell::new(false)),
                 },
                 access: Some(conn.protocol_state_access()),

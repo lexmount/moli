@@ -155,6 +155,19 @@ impl<C, S> std::fmt::Debug for RendererCommandResponseLease<C, S> {
 }
 
 impl<C, S> RendererCommandResponseLease<C, S> {
+    /// A native response can arrive after its adapter has cancelled. Check
+    /// before deferring publication: the parent queue must not hide a closed
+    /// receiver from the helper's native terminal cleanup.
+    pub(crate) fn is_open(&self) -> bool {
+        let state = self.lifetime.authority.state.lock();
+        state.active_lease_id == Some(self.lifetime.lease_id)
+            && match state.destination.as_ref() {
+                Some(Destination::Adapter(tx)) => !tx.is_closed(),
+                Some(Destination::Session(_)) => true,
+                None => false,
+            }
+    }
+
     pub(crate) fn send_adapter_reply(self, completion: C) -> Result<(), C> {
         let tx = {
             let mut state = self.lifetime.authority.state.lock();

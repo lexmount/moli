@@ -4374,7 +4374,7 @@ async fn object_snapshot_producers_register_renderer_frontend_bindings() {
         .and_then(|id| u32::try_from(id).ok())
         .expect("requestNode should return frontend node id");
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
     let request_backend_node_id =
         match renderer_frontend_binding_for_test(&mut ctx, request_frontend_node_id).await {
             moli_core::page::RendererDomFrontendNodeBindingResolution::BackendNodeId(
@@ -4420,7 +4420,7 @@ async fn object_snapshot_producers_register_renderer_frontend_bindings() {
         "describeNode producer should return renderer-owned backend id"
     );
 
-    ctx.with_fixture(|conn| conn.clear_runtime_remote_object_tracking_for_session_owner(None));
+    ctx.with_fixture(|conn| conn.clear_runtime_context_metadata_for_session_owner(None));
     let bound_describe_backend_node_id =
         match renderer_frontend_binding_for_test(&mut ctx, describe_frontend_node_id).await {
             moli_core::page::RendererDomFrontendNodeBindingResolution::BackendNodeId(

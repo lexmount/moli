@@ -425,7 +425,6 @@ async fn worker_close_settles_original_calls_at_admission_before_cleanup_is_poll
             "SID-retiring-worker",
             301,
             Some("SID-retiring-worker"),
-            None,
         );
         let descriptor = crate::conn::RendererCommandDescriptor::from_synthesized_payload(
             json!({"id":302,"method":"Console.clearMessages","params":{}}).to_string(),

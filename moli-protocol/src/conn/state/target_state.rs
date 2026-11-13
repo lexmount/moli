@@ -95,7 +95,6 @@ impl PendingBidiChannelListener {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingInspectorAwait {
     session_id: Option<String>,
-    object_group: Option<String>,
     bidi_channel_listener: Option<crate::conn::BidiChannelListenerResidence>,
     renderer_correlation: Option<RendererCommandCorrelation>,
 }
@@ -103,11 +102,6 @@ pub(crate) struct PendingInspectorAwait {
 impl PendingInspectorAwait {
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn object_group(&self) -> Option<&str> {
-        self.object_group.as_deref()
     }
 
     pub(crate) fn bidi_channel_listener(
@@ -131,14 +125,12 @@ impl TargetPendingInspectorAwaitRegistry {
         &mut self,
         cdp_request_id: u64,
         session_id: Option<&str>,
-        object_group: Option<&str>,
     ) -> Result<(), DuplicatePendingRendererCommand> {
         let frontend_command_id = FrontendCommandId::new(cdp_request_id);
         self.entries.try_insert(
             frontend_command_id,
             PendingInspectorAwait {
                 session_id: session_id.map(str::to_owned),
-                object_group: object_group.map(str::to_owned),
                 bidi_channel_listener: None,
                 renderer_correlation: None,
             },
@@ -149,7 +141,7 @@ impl TargetPendingInspectorAwaitRegistry {
         &mut self,
         cdp_request_id: u64,
         session_id: Option<&str>,
-        object_group: Option<&str>,
+
         listener: crate::conn::BidiChannelListenerResidence,
     ) -> Result<(), DuplicatePendingRendererCommand> {
         let frontend_command_id = FrontendCommandId::new(cdp_request_id);
@@ -158,7 +150,6 @@ impl TargetPendingInspectorAwaitRegistry {
             frontend_command_id,
             PendingInspectorAwait {
                 session_id: session_id.map(str::to_owned),
-                object_group: object_group.map(str::to_owned),
                 bidi_channel_listener: Some(listener),
                 renderer_correlation,
             },
@@ -169,10 +160,10 @@ impl TargetPendingInspectorAwaitRegistry {
         &mut self,
         cdp_request_id: u64,
         session_id: Option<&str>,
-        object_group: Option<&str>,
+
         listener: crate::conn::BidiChannelListenerResidence,
     ) {
-        self.try_insert_bidi_channel_listener(cdp_request_id, session_id, object_group, listener)
+        self.try_insert_bidi_channel_listener(cdp_request_id, session_id, listener)
             .expect("pending BiDi listener frontend command id must be unique per session");
     }
 
@@ -974,7 +965,7 @@ mod tests {
                 let frontend = FrontendCommandId::new(902_000_042);
                 let old_attachment = RendererAgentAttachmentId::allocate();
                 let next_attachment = RendererAgentAttachmentId::allocate();
-                registry.try_insert(frontend.get(), None, None).unwrap();
+                registry.try_insert(frontend.get(), None).unwrap();
                 let raw = json!({"id":frontend.get(),"method":method,"params":{}}).to_string();
                 let parsed = crate::conn::ParsedCdpCommand::parse_str(raw.clone()).unwrap();
                 let dispatch = registry

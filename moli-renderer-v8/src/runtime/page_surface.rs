@@ -3247,6 +3247,7 @@ impl RendererRuntimeInspectorResponseChannel {
             }
         };
         Some(RendererRuntimeInspectorResponseSender {
+            abandoned_object_group: None,
             call_id,
             attachment_id,
             destination,
@@ -3431,6 +3432,7 @@ enum RendererRuntimeInspectorResponsePublicationBoundary {
 
 #[derive(Clone)]
 pub struct RendererRuntimeInspectorResponseSender {
+    abandoned_object_group: Option<String>,
     call_id: i32,
     attachment_id: Option<RendererAgentAttachmentId>,
     destination: RendererRuntimeInspectorResponseDestination,
@@ -3446,6 +3448,27 @@ impl std::fmt::Debug for RendererRuntimeInspectorResponseSender {
 }
 
 impl RendererRuntimeInspectorResponseSender {
+    /// Only an internal operation which owns this private group may opt in.
+    /// Frontend CDP object groups are never inferred from request JSON here.
+    pub fn with_abandoned_object_group_cleanup(mut self, group: Option<String>) -> Self {
+        self.abandoned_object_group = group;
+        self
+    }
+
+    pub(crate) fn abandoned_object_group(&self) -> Option<&str> {
+        self.abandoned_object_group.as_deref()
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        match &self.destination {
+            RendererRuntimeInspectorResponseDestination::AdapterReply(lease)
+            | RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease)
+            | RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, .. } => {
+                lease.is_open()
+            }
+        }
+    }
+
     pub fn new(call_id: i32, tx: oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>) -> Self {
         RendererRuntimeInspectorResponseChannel {
             delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
@@ -3559,6 +3582,7 @@ impl RendererRuntimeInspectorResponseSender {
             attachment_id,
             destination,
             publication_boundary,
+            abandoned_object_group: _,
         } = self;
         if let Some(attachment_id) = attachment_id {
             output.bind_renderer_agent_attachment(attachment_id);
@@ -3606,6 +3630,7 @@ impl RendererRuntimeInspectorResponseSender {
             attachment_id: _,
             destination,
             publication_boundary: _,
+            abandoned_object_group: _,
         } = self;
         match destination {
             RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
@@ -3902,6 +3927,7 @@ mod renderer_runtime_inspector_response_channel_tests {
             attachment_id,
             destination,
             publication_boundary: _,
+            abandoned_object_group: _,
         } = sender;
         let mut output = output(1);
         if let Some(attachment_id) = attachment_id {

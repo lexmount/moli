@@ -73,30 +73,12 @@ pub(super) fn start_main_runtime_inspector_command_for_owner(
     let action = command.action();
     let action_label = action.label();
     let await_promise = runtime_command_awaits_promise(cmd, action);
-    let inspector_json = match prepare_runtime_inspector_payload_for_owner(
-        conn,
-        cmd,
-        &owner_scope,
-        command.payload_preparation(),
-    ) {
-        Ok(json) => json,
-        Err(message) => {
-            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
-        }
-    };
-    let object_group = None::<String>;
-    let release_object_ids = Vec::<String>::new();
-    let release_object_group = if action == RuntimeAction::ReleaseObjectGroup {
-        runtime_object_group_from_params(cmd.params).map(str::to_owned)
-    } else {
-        None
-    };
+    let inspector_json = cmd.json.to_owned();
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
         &owner_scope,
-        object_group.as_deref(),
         action_label,
     ) {
         Ok(command_id) => command_id,
@@ -124,9 +106,7 @@ pub(super) fn start_main_runtime_inspector_command_for_owner(
         command_id: cmd.id,
         action: action_label,
         owner_scope,
-        object_group,
-        release_object_ids,
-        release_object_group,
+
         await_promise,
         wait_for_deferred_reply: await_promise,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -181,14 +161,11 @@ pub(super) fn start_heap_profiler_inspector_shared_worker_command_dispatch(
         }
     };
 
-    let object_group = heap_profiler_object_group_for_command_result(cmd, action);
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: heap_profiler_action_protocol_method(action),
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        object_group,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: true,
         pending: PendingRuntimeCommandKind::SharedWorkerInspector {
@@ -215,18 +192,6 @@ pub(super) fn heap_profiler_action_protocol_method(action: HeapProfilerAction) -
         HeapProfilerAction::MoliDiagnostics | HeapProfilerAction::MoliResetIdleEngine => {
             "HeapProfiler.moliExtension"
         }
-    }
-}
-
-pub(super) fn heap_profiler_object_group_for_command_result(
-    cmd: &Cmd<'_>,
-    action: HeapProfilerAction,
-) -> Option<String> {
-    match action {
-        HeapProfilerAction::GetObjectByHeapObjectId => {
-            runtime_object_group_from_params(cmd.params).map(str::to_owned)
-        }
-        _ => None,
     }
 }
 
@@ -275,9 +240,7 @@ pub(super) fn start_profiler_inspector_shared_worker_command_dispatch(
         command_id: cmd.id,
         action,
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::SharedWorkerInspector {
@@ -355,9 +318,7 @@ pub(super) fn start_console_inspector_shared_worker_command_dispatch(
         command_id: cmd.id,
         action: console_action_protocol_method(action),
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::SharedWorkerInspector {
@@ -418,9 +379,7 @@ pub(super) fn start_console_inspector_service_worker_command_dispatch(
         command_id: cmd.id,
         action: console_action_protocol_method(action),
         owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
-        object_group: None,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise: false,
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::ServiceWorkerInspector { pending },
@@ -496,9 +455,7 @@ pub(super) fn start_pending_runtime_enable_events_phase(
             command_id,
             action: "enable",
             owner_scope,
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::Enable(pending),
@@ -601,9 +558,7 @@ pub(super) fn try_start_pending_runtime_binding_command(
             command_id: cmd.id,
             action: task.action.label(),
             owner_scope: owner_scope.clone(),
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
         };
@@ -657,9 +612,7 @@ pub(super) fn try_start_pending_runtime_binding_command(
             command_id: cmd.id,
             action: action_label,
             owner_scope,
-            object_group: None,
-            release_object_ids: Vec::new(),
-            release_object_group: None,
+
             await_promise: false,
             wait_for_deferred_reply: false,
             pending: PendingRuntimeCommandKind::BindingInspector { task, pending },
@@ -705,11 +658,7 @@ pub(super) fn start_pending_runtime_io_inspector_dispatch(
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
+        let descriptor = cmd.renderer_command_descriptor(inspector_json, response_delivery);
         conn.start_runtime_io_protocol_message_for_owner_with_deferred_response(
             owner, descriptor, command_id,
         )
@@ -727,11 +676,7 @@ pub(super) fn start_pending_runtime_context_resolved_inspector_dispatch_with_del
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
+        let descriptor = cmd.renderer_command_descriptor(inspector_json, response_delivery);
         conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
             owner,
             action,
@@ -755,11 +700,7 @@ pub(super) fn start_pending_runtime_inspector_dispatch_with_delivery(
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
+        let descriptor = cmd.renderer_command_descriptor(inspector_json, response_delivery);
         conn.start_runtime_protocol_message_for_owner_with_deferred_response(
             owner, descriptor, command_id,
         )
@@ -775,11 +716,7 @@ pub(super) fn start_shared_worker_frontend_inspector_dispatch(
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
+        let descriptor = cmd.renderer_command_descriptor(inspector_json, response_delivery);
         conn.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -800,11 +737,7 @@ pub(super) fn start_service_worker_frontend_inspector_dispatch(
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch> {
     if let Some(command_id) = cmd.id {
-        let descriptor = RendererCommandDescriptor::from_frontend_policy(
-            inspector_json,
-            cmd.renderer_policy(),
-            response_delivery,
-        );
+        let descriptor = cmd.renderer_command_descriptor(inspector_json, response_delivery);
         conn.start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
             descriptor,
@@ -844,13 +777,7 @@ pub(super) fn start_cdp_devtools_script_runtime_command(
             ))
         }
     };
-    let inspector_json = match prepare_pending_devtools_runtime_inspector_json(conn, cmd, &command)
-    {
-        Ok(json) => json,
-        Err(message) => {
-            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
-        }
-    };
+    let inspector_json = cmd.json.to_owned();
     start_devtools_runtime_command(
         conn,
         cmd,
@@ -859,30 +786,6 @@ pub(super) fn start_cdp_devtools_script_runtime_command(
         await_promise,
         cmd.terminal_response_delivery(),
     )
-}
-
-pub(super) fn prepare_pending_devtools_runtime_inspector_json(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    command: &AutomationCommand,
-) -> Result<String> {
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    prepare_pending_devtools_runtime_inspector_json_for_owner(conn, cmd, &owner, command)
-}
-
-pub(super) fn prepare_pending_devtools_runtime_inspector_json_for_owner(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-    owner: &CommandOwnerScope,
-    command: &AutomationCommand,
-) -> Result<String> {
-    match command {
-        AutomationCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
-        AutomationCommand::CallFunction(command) => {
-            prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, command)
-        }
-        _ => Err(crate::conn::RuntimeInspectorError::UnknownMethod.into()),
-    }
 }
 
 pub(super) fn start_devtools_runtime_command(
@@ -930,13 +833,11 @@ pub(super) fn start_devtools_runtime_command_for_owner(
             ));
         }
     };
-    let object_group = None::<String>;
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
         &owner_scope,
-        object_group.as_deref(),
         action_label,
     ) {
         Ok(command_id) => command_id,
@@ -965,9 +866,7 @@ pub(super) fn start_devtools_runtime_command_for_owner(
         command_id: cmd.id,
         action: action_label,
         owner_scope,
-        object_group,
-        release_object_ids: Vec::new(),
-        release_object_group: None,
+
         await_promise,
         wait_for_deferred_reply,
         pending: PendingRuntimeCommandKind::Inspector { pending },
@@ -979,7 +878,7 @@ pub(super) fn pre_register_runtime_await_if_needed(
     await_promise: bool,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    object_group: Option<&str>,
+
     action: &'static str,
 ) -> Result<Option<u64>, DuplicatePendingRendererCommand> {
     if !await_promise {
@@ -988,12 +887,8 @@ pub(super) fn pre_register_runtime_await_if_needed(
     let Some(command_id) = command_id else {
         return Ok(None);
     };
-    conn.try_register_pending_inspector_await_with_object_group_for_owner(
-        command_id,
-        owner,
-        object_group,
-    )?;
-    conn.register_runtime_await_job_for_owner(command_id, owner, object_group, action);
+    conn.try_register_pending_inspector_await_for_owner(command_id, owner)?;
+    conn.register_runtime_await_job_for_owner(command_id, owner, action);
     conn.trace_runtime_await_pending_registered(command_id, owner.session_id());
     Ok(Some(command_id))
 }

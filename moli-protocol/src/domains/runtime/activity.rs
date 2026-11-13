@@ -354,7 +354,6 @@ impl RuntimePreparedOutputs {
                         &response_owner,
                         renderer_agent_attachment_id,
                         &mut response,
-                        can_project_observations,
                     );
                     let Some(response) = response.pop() else {
                         continue;
@@ -420,7 +419,6 @@ impl RuntimePreparedOutputs {
                     &response_owner,
                     None,
                     &mut response,
-                    true,
                 );
                 let Some(response) = response.pop() else {
                     continue;
@@ -836,14 +834,6 @@ mod tests {
                     .is_none(),
                 "the accepted terminal response must consume its exact correlation"
             )
-        });
-        ctx.with_fixture(|conn| {
-            assert_eq!(
-            conn
-                .runtime_remote_object_group_for_session_owner(Some("SID-1"), "retired-object",),
-            None,
-            "a retired document response must not register objects on the replacement document"
-        )
         });
 
         ctx.with_fixture(|conn| {

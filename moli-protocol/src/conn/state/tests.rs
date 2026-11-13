@@ -1334,7 +1334,7 @@ fn committed_document_navigation_state_clears_document_local_runtime_state() {
 fn devtools_session_runtime_context_clear_resets_child_default_emission_cursor() {
     let mut state = DevToolsSessionState::default();
     state.mark_child_default_execution_context_id_emitted(99);
-    state.clear_runtime_remote_object_tracking();
+    state.clear_runtime_context_metadata();
 
     assert!(
         !state.has_emitted_child_default_execution_context_id(99),

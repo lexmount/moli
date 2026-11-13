@@ -179,15 +179,6 @@ mod workflow_tests {
                     .unwrap();
             }
             fixture.with_fixture(|conn| {
-                for handle in &handles {
-                    assert!(
-                        conn.runtime_remote_object_group_for_session_owner(
-                            Some("SID-staged-runtime"),
-                            handle
-                        )
-                        .is_none()
-                    );
-                }
                 assert!(
                     !conn
                         .has_pending_inspector_awaits_for_session_owner(Some("SID-staged-runtime"))

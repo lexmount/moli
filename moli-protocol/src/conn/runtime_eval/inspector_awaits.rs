@@ -1,52 +1,6 @@
 use super::*;
 
 impl CdpConnection {
-    #[cfg(test)]
-    pub(super) fn apply_completed_pending_inspector_await_entry(
-        &mut self,
-        owner: &CommandOwnerScope,
-        entry: PendingInspectorAwait,
-        protocol_events: &[BackgroundProtocolEvent],
-    ) {
-        let object_group = entry.object_group();
-        for event in protocol_events {
-            if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
-                event.command_response_payload_ref()
-            {
-                self.register_runtime_remote_object_ids_from_response_result_for_owner(
-                    owner,
-                    result,
-                    object_group,
-                );
-            } else if let Some(message) = event.protocol_json() {
-                if message.id_u64().is_some() {
-                    self.register_runtime_remote_object_ids_from_response_for_owner(
-                        owner,
-                        message,
-                        object_group,
-                    );
-                } else if let Some(group) = object_group {
-                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner,
-                        message.value(),
-                        group,
-                    );
-                } else {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(
-                        owner,
-                        message.value(),
-                    );
-                }
-            }
-        }
-        if let Some(listener) = entry.bidi_channel_listener() {
-            self.unregister_runtime_remote_object_group_for_owner(
-                owner,
-                listener.channel_object_group(),
-            );
-        }
-    }
-
     /// Registers a CDP request as awaiting a deferred V8 inspector reply.
     /// Used by `Runtime.evaluate`/`Runtime.callFunctionOn` when `awaitPromise=true`
     /// is dispatched directly to V8 inspector. V8 calls back after the promise
@@ -58,19 +12,14 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.try_register_pending_inspector_await_with_object_group_for_owner(
-            cdp_request_id,
-            &owner,
-            None,
-        )
-        .expect("pending Inspector await frontend command id must be unique per session");
+        self.try_register_pending_inspector_await_for_owner(cdp_request_id, &owner)
+            .expect("pending Inspector await frontend command id must be unique per session");
     }
 
-    pub(crate) fn try_register_pending_inspector_await_with_object_group_for_owner(
+    pub(crate) fn try_register_pending_inspector_await_for_owner(
         &mut self,
         cdp_request_id: u64,
         owner: &CommandOwnerScope,
-        object_group: Option<&str>,
     ) -> Result<(), DuplicatePendingRendererCommand> {
         let session_id = owner.session_id();
         if let Some(owner_session_id) = session_id
@@ -80,7 +29,6 @@ impl CdpConnection {
                 owner_session_id,
                 cdp_request_id,
                 session_id,
-                object_group,
             );
         }
         if let Some(owner_session_id) = session_id
@@ -90,11 +38,10 @@ impl CdpConnection {
                 owner_session_id,
                 cdp_request_id,
                 session_id,
-                object_group,
             );
         }
         self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            state.try_register_pending_inspector_await(cdp_request_id, session_id, object_group)
+            state.try_register_pending_inspector_await(cdp_request_id, session_id)
         })
         .unwrap_or(Ok(()))
     }
@@ -539,11 +486,11 @@ impl CdpConnection {
         &mut self,
         cdp_request_id: u64,
         owner: &CommandOwnerScope,
-        object_group: Option<&str>,
+
         action: &'static str,
     ) {
         let session_id = owner.session_id();
-        let job = RuntimeAwaitJob::new(cdp_request_id, owner, object_group, action);
+        let job = RuntimeAwaitJob::new(cdp_request_id, owner, action);
         let trace_fields = job.trace_fields();
         let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
         match self.pending_runtime_await_jobs.entry(key) {
@@ -701,12 +648,7 @@ impl CdpConnection {
             "BiDi listener residence must be registered under its exact Page attachment"
         );
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.register_pending_bidi_channel_listener(
-                cdp_request_id,
-                session_id,
-                Some(BIDI_SCRIPT_RESULT_OBJECT_GROUP),
-                listener,
-            );
+            state.register_pending_bidi_channel_listener(cdp_request_id, session_id, listener);
         });
     }
 
@@ -725,7 +667,6 @@ impl CdpConnection {
             state.register_pending_bidi_channel_listener(
                 cdp_request_id,
                 owner.session_id(),
-                Some(BIDI_SCRIPT_RESULT_OBJECT_GROUP),
                 listener,
             );
         });

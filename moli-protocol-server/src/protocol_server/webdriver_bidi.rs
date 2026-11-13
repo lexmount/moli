@@ -17,8 +17,7 @@ use moli_core::{RendererOutputTransportMessage, runtime::NavigationRuntimeConfig
 use moli_protocol::{
     BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpInitialStoragePartition,
     automation::{
-        AutomationCommand, AutomationContext, AutomationEvent, AutomationResult,
-        DevToolsDomObjectReferenceCommand, DevToolsDomObjectReferenceOperation, DevToolsError,
+        AutomationCommand, AutomationContext, AutomationEvent, AutomationResult, DevToolsError,
         DevToolsErrorKind, DevToolsGetBrowserContextsCommand, DevToolsGetLayoutMetricsCommand,
         DevToolsGetRealmsCommand, DevToolsGetTargetInfoCommand, DevToolsNavigationWait,
         DevToolsRemoteHandleId, DevToolsSessionId, DevToolsSetFileInputFilesCommand,
