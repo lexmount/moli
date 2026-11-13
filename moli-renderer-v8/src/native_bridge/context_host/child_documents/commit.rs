@@ -31,6 +31,17 @@ pub(in crate::native_bridge::context_host) struct ChildDocumentWindowCommit {
     origin: String,
     creation_kind: DocumentCreationKind,
     local_window_transition: FrameDocumentLocalWindowTransition,
+    document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot>,
+}
+
+impl ChildDocumentWindowCommit {
+    pub(super) fn with_document_network(
+        mut self,
+        network: Option<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot>,
+    ) -> Self {
+        self.document_network = network;
+        self
+    }
 }
 
 impl ChildDocumentWindowCommitPreflight {
@@ -102,6 +113,7 @@ impl PageScriptHost {
             origin,
             creation_kind,
             local_window_transition,
+            document_network: None,
         }
     }
 
@@ -165,7 +177,7 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         snapshot: &ChildBrowsingContextSnapshot,
-        window_commit: ChildDocumentWindowCommit,
+        mut window_commit: ChildDocumentWindowCommit,
         preserve_window_event_state: bool,
         navigation_loader: Option<crate::network::navigation::NavigationResourceLoader>,
         is_xml_document: bool,
@@ -200,6 +212,7 @@ impl PageScriptHost {
         let referrer_policy = self
             .child_browsing_context_referrer_policy_for_document_handle(document_handle)
             .map(str::to_owned);
+        let document_network = window_commit.document_network.take();
         let owner_transition = self.commit_child_document_owner(
             scope,
             handle,
@@ -226,7 +239,7 @@ impl PageScriptHost {
         );
         // Parsing can attach descendant Frames. Their client identities must
         // belong to this committed Document, rather than the one it replaces.
-        self.publish_child_frame_navigation_commit(handle);
+        self.publish_child_frame_navigation_commit(handle, document_network);
         let parser_start = self.start_live_child_document_parser(
             scope,
             handle,
@@ -266,6 +279,7 @@ impl PageScriptHost {
             origin,
             creation_kind,
             local_window_transition,
+            document_network: _,
         } = window_commit;
         let resource_context_origin = origin.clone();
         let current_document_handle = self

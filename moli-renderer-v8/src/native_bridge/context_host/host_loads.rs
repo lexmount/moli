@@ -40,8 +40,6 @@ pub(crate) struct ChildFrameNavigationSnapshot {
     pub(crate) security_origin_inherited: bool,
     #[serde(default)]
     pub(crate) security_origin_opaque: bool,
-    #[serde(default)]
-    pub(crate) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
 }
 
 impl ChildFrameNavigationSnapshot {
@@ -55,7 +53,6 @@ impl ChildFrameNavigationSnapshot {
             document_open_replacement: self.document_open_replacement,
             security_origin_inherited: self.security_origin_inherited,
             security_origin_opaque: self.security_origin_opaque,
-            document_network: self.document_network,
         }
     }
 }
@@ -508,6 +505,7 @@ impl PageScriptHost {
     pub(in crate::native_bridge::context_host) fn publish_child_frame_navigation_commit(
         &self,
         handle: DomHandle,
+        document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot>,
     ) {
         let parent_frame_id = self.child_browsing_context_parent_frame_id(handle);
         let Some(url) = self.child_browsing_context_current_url(handle) else {
@@ -526,7 +524,6 @@ impl PageScriptHost {
             document_open_replacement: false,
             security_origin_inherited: identity.security_origin_inherited,
             security_origin_opaque: self.child_browsing_context_has_opaque_origin(handle),
-            document_network: None,
         };
         let published = self
             .root_document_lifecycle_identity()
@@ -535,6 +532,7 @@ impl PageScriptHost {
                     crate::runtime::RendererOwnerAction::ChildFrameCommit {
                         source_document,
                         event,
+                        document_network: document_network.map(Box::new),
                     },
                 )
             });
@@ -633,7 +631,6 @@ impl PageScriptHost {
             document_open_replacement,
             security_origin_inherited: identity.security_origin_inherited,
             security_origin_opaque,
-            document_network: entry.take_completed_document_network_for_owner(finish.owner),
         })
     }
 

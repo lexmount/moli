@@ -317,6 +317,7 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
+        document_network: Option<ChildFrameDocumentNetworkActivitySnapshot>,
     ) -> Self {
         let Some(binding) =
             conn.target_root_document_output_identity_for_owner(owner, source_document)
@@ -331,17 +332,20 @@ impl PagePreparedOutputs {
         if event.parent_frame_id.is_none() {
             event.parent_frame_id = Some(root_frame_id);
         }
-        let document = PagePreparedChildFrameDocumentActivity {
-            timestamp: monotonic_timestamp_seconds(),
-            commits: vec![
-                super::child_frame_activity::PagePreparedChildFrameNavigationCommit::from_snapshot(
-                    event,
-                ),
-            ],
+        let mut document = PagePreparedChildFrameDocumentActivity::from_parts(
+            monotonic_timestamp_seconds(),
+            Vec::new(),
+            Vec::new(),
+            document_network.into_iter().collect(),
+            Vec::new(),
             security_origin,
             secure_context_type,
-            ..Default::default()
-        };
+        );
+        document.commits.push(
+            super::child_frame_activity::PagePreparedChildFrameNavigationCommit::from_snapshot(
+                event,
+            ),
+        );
         Self {
             child_frame_activities: vec![PagePreparedChildFrameActivity::from_document(
                 binding, document,
@@ -611,7 +615,6 @@ impl PagePreparedOutputs {
                 document_open_replacement: false,
                 security_origin_inherited: false,
                 security_origin_opaque: false,
-                document_network: None,
             }],
             "https://example.test".to_owned(),
             "Secure".to_owned(),

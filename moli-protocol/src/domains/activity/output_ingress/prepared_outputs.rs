@@ -488,12 +488,14 @@ impl PreparedProtocolOutputs {
             RendererOwnerAction::ChildFrameCommit {
                 source_document,
                 event,
+                document_network,
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_commit(
                     conn,
                     owner,
                     source_document,
                     event,
+                    document_network.map(|network| *network),
                 )
                 .append_to_child_frame_output_sink(&mut prepared);
             }
