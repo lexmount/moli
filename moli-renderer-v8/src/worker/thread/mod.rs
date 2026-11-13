@@ -109,8 +109,7 @@ use super::module_runtime::{
     WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
     WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
     complete_worker_module_graph_fetch, evaluate_module_worker_bootstrap_source,
-    install_classic_worker_dynamic_module_runtime, register_worker_module_graph_fetches,
-    resume_worker_dynamic_module_evaluation, resume_worker_dynamic_module_fetch,
+    install_classic_worker_dynamic_module_runtime, resume_worker_dynamic_module_evaluation,
     run_next_worker_dynamic_module_import, worker_has_pending_dynamic_module_imports,
     worker_has_runnable_dynamic_module_imports,
 };
@@ -758,14 +757,10 @@ fn start_worker_module_graph_fetch(
 }
 
 fn start_worker_module_graph_fetch_batch(
-    scope: &mut v8::PinScope<'_, '_>,
     requests: WorkerModuleGraphFetchBatch,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
-    let Some(requests) = register_worker_module_graph_fetches(scope, requests) else {
-        return;
-    };
     for request in requests.iter().cloned() {
         start_worker_module_graph_fetch(
             request,
@@ -847,7 +842,6 @@ fn flush_one_worker_indexed_db_task(
 }
 
 fn handle_worker_dynamic_module_import_advance(
-    scope: &mut v8::PinScope<'_, '_>,
     advance: WorkerDynamicModuleImportAdvance,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
@@ -857,7 +851,7 @@ fn handle_worker_dynamic_module_import_advance(
         | WorkerDynamicModuleImportAdvance::WaitingFetches
         | WorkerDynamicModuleImportAdvance::WaitingEvaluation { .. } => {}
         WorkerDynamicModuleImportAdvance::NeedFetches(requests) => {
-            start_worker_module_graph_fetch_batch(scope, requests, state, module_graph_fetch_tx);
+            start_worker_module_graph_fetch_batch(requests, state, module_graph_fetch_tx);
         }
     }
 }
@@ -874,7 +868,7 @@ fn drain_worker_dynamic_module_imports(
         let Some(advance) = run_next_worker_dynamic_module_import(scope) else {
             break;
         };
-        handle_worker_dynamic_module_import_advance(scope, advance, state, module_graph_fetch_tx);
+        handle_worker_dynamic_module_import_advance(advance, state, module_graph_fetch_tx);
     }
 }
 
@@ -1812,16 +1806,14 @@ async fn worker_main(
             WorkerBootstrapStart::Complete => {
                 bootstrap_completion.mark_success(worker_bootstrap_success(scope, global, &state));
             }
-            WorkerBootstrapStart::Pending(pending) => {
-                if let Some(requests) = pending.pending_requests().cloned() {
-                    start_worker_module_graph_fetch_batch(
-                        scope,
-                        requests,
-                        &state,
-                        &module_graph_fetch_tx,
-                    );
+            WorkerBootstrapStart::Pending {
+                bootstrap,
+                requests,
+            } => {
+                if let Some(requests) = requests {
+                    start_worker_module_graph_fetch_batch(requests, &state, &module_graph_fetch_tx);
                 }
-                pending_module_bootstrap = Some(pending);
+                pending_module_bootstrap = Some(bootstrap);
             }
             WorkerBootstrapStart::Failed { error, phase } => {
                 let (report, exception, parent_event_kind) = *error;
@@ -3077,33 +3069,18 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 let global = ctx.global(scope);
-                if complete_worker_module_graph_fetch(scope, &completion) {
+                if let Some(outcome) = complete_worker_module_graph_fetch(scope, &completion) {
                     for violation in completion.csp_violations() {
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
-                    while let Some(advance) = resume_worker_dynamic_module_fetch(scope, &completion)
+                    if let Some(resume) =
+                        outcome.resume_bootstrap(scope, pending_module_bootstrap.as_deref_mut())
                     {
-                        handle_worker_dynamic_module_import_advance(
-                            scope,
-                            advance,
-                            &state,
-                            &module_graph_fetch_tx,
-                        );
-                    }
-                    let bootstrap_fetch_matches = pending_module_bootstrap
-                        .as_ref()
-                        .and_then(|bootstrap| bootstrap.pending_requests())
-                        .is_some_and(|requests| requests.contains_fetch_id(completion.fetch_id()));
-                    if bootstrap_fetch_matches {
                         let module_script_resource = completion
                             .result()
                             .ok()
                             .and_then(|source| source.resource().cloned());
-                        let resume = pending_module_bootstrap
-                            .as_mut()
-                            .expect("checked pending module bootstrap")
-                            .resume(scope, &completion);
                         if let Some(resource) = module_script_resource {
                             report_service_worker_module_script_resource(&state, resource);
                         }
@@ -3122,7 +3099,6 @@ async fn worker_main(
                             }
                             WorkerModuleBootstrapResume::NeedFetches(requests) => {
                                 start_worker_module_graph_fetch_batch(
-                                    scope,
                                     requests,
                                     &state,
                                     &module_graph_fetch_tx,
@@ -3210,7 +3186,6 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::NeedFetches(requests) => {
                             start_worker_module_graph_fetch_batch(
-                                scope,
                                 requests,
                                 &state,
                                 &module_graph_fetch_tx,
@@ -3476,7 +3451,10 @@ fn worker_bootstrap_success<'s>(
 
 enum WorkerBootstrapStart {
     Complete,
-    Pending(Box<WorkerModulePendingBootstrap>),
+    Pending {
+        bootstrap: Box<WorkerModulePendingBootstrap>,
+        requests: Option<WorkerModuleGraphFetchBatch>,
+    },
     Failed {
         error: Box<WorkerBootstrapError>,
         phase: WorkerErrorPhase,
@@ -3535,7 +3513,13 @@ impl From<WorkerModuleBootstrapStart> for WorkerBootstrapStart {
     fn from(start: WorkerModuleBootstrapStart) -> Self {
         match start {
             WorkerModuleBootstrapStart::Complete => Self::Complete,
-            WorkerModuleBootstrapStart::Pending(pending) => Self::Pending(pending),
+            WorkerModuleBootstrapStart::Pending {
+                bootstrap,
+                requests,
+            } => Self::Pending {
+                bootstrap,
+                requests,
+            },
             WorkerModuleBootstrapStart::Failed(error) => Self::Failed {
                 error,
                 phase: WorkerErrorPhase::Bootstrap,
