@@ -171,17 +171,6 @@ fn set_field<'s>(
     let Some((name, slot)) = field_for_receiver(scope, &args) else {
         return;
     };
-    if get_private_value(scope, args.this(), READ_ONLY)
-        .is_some_and(|value| value.boolean_value(scope))
-    {
-        throw_dom_exception(
-            scope,
-            "NoModificationAllowedError",
-            7,
-            "The SVG rectangle is read-only.",
-        );
-        return;
-    }
     let value = match webidl::convert::<webidl::Double>(
         scope,
         args.get(0),
@@ -197,6 +186,18 @@ fn set_field<'s>(
     // non-finite input and finite doubles which overflow that representation.
     if !value.is_finite() {
         webidl::throw_type_error(scope, "SVGRect value is outside the finite float range.");
+        return;
+    }
+    // WebIDL conversion runs before the implementation checks mutability.
+    if get_private_value(scope, args.this(), READ_ONLY)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG rectangle is read-only.",
+        );
         return;
     }
     // ToNumber may re-enter JS and change the owner's viewBox. Preserve those
