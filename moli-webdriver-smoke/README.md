@@ -377,11 +377,19 @@ the Classic request is sent, and with no prompt. The existing/arriving cases
 must return the actual JavaScript prompt value before the navigation response
 is released. Without a prompt, Classic still waits for navigation and then
 returns `no such alert`. This differs from BiDi's finite prompt handling.
-The same 16 cases run against Moli and ChromeDriver. Absence is observed for a
+The same 16 prompt-state cases run against Moli and ChromeDriver. Absence is observed for a
 bounded 250 ms after the HTTP request is written; deterministic Rust tests also
 poll the actual wait before installing a prompt. The navigation response gate
 opens only after the verdict, never to rescue a blocked alert operation. The
 separate prompt trigger opens after the navigation request arrives.
+
+Four additional alert cases set `pageLoad` to 200 ms and keep the navigation
+response withheld through the timeout and recovery checks. Get/Set/accept/dismiss
+must return HTTP 500 `timeout`, stop the pending navigation, and leave the old Document
+and subsequent Classic commands usable. The Get case also keeps a second Page
+navigating and verifies it still loads normally. Deterministic Native tests use
+a paused clock for zero and 200 ms deadlines; admitted scheduler inputs finish
+outside the receive/deadline race.
 
 The release/old/new input-generation case is calibrated against
 Chrome/ChromeDriver 156.0.8078.73. Upstream mapper commit

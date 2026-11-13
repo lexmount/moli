@@ -88,7 +88,7 @@ async def _run_bidi_group(
 MOLI_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
         "classic-alert-progress",
-        "Classic alert Get/Set/Handle during held navigation; existing, arriving and absent prompts.",
+        "Classic alert interruption, pageLoad deadlines and recovery during held navigation.",
         run_classic_alert_progress_group,
     ),
     SmokeGroup(
