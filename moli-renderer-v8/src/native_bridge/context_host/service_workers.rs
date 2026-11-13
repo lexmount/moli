@@ -67,6 +67,7 @@ impl ServiceWorkerWindowRequestContext {
 
 pub(crate) struct PendingServiceWorkerRegister {
     pub(crate) owner: ServiceWorkerWindowOwner,
+    pub(crate) scope_url: Url,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) resolver: v8::Global<v8::PromiseResolver>,
 }
@@ -512,6 +513,7 @@ impl PageScriptHost {
     pub(crate) fn register_pending_service_worker_register(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        scope_url: Url,
         resolver: v8::Local<'_, v8::PromiseResolver>,
         owner: ServiceWorkerWindowOwner,
     ) -> (
@@ -524,6 +526,7 @@ impl PageScriptHost {
             request_id,
             PendingServiceWorkerRegister {
                 owner,
+                scope_url,
                 context: v8::Global::new(scope, scope.get_current_context()),
                 resolver: v8::Global::new(scope, resolver),
             },
