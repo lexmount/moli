@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+pub(crate) mod object_lifecycle;
+
 pub(crate) fn assert_debugger_defaults(mut dispatch: impl FnMut(&str) -> Vec<Value>) {
     let request = json!({"id": -2, "method": "Debugger.enable"});
     let enabled = dispatch(&request.to_string());
