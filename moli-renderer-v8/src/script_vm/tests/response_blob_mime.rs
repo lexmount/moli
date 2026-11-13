@@ -142,7 +142,7 @@ async fn body_blob_mime_uses_combined_lowercase_header_values() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn body_blob_type_normalizes_pending_response_streams() {
+async fn body_blob_type_normalizes_pending_request_and_response_streams() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm =
         new_page_task_executor_test_vm_with_loader("https://pending-blob-mime.test/", &loader);
@@ -152,14 +152,19 @@ async fn body_blob_type_normalizes_pending_response_streams() {
         const getHeader = Headers.prototype.get;
         const originalBlob = globalThis.Blob;
         const type = 'Text/Plain ; Charset="UTF-8"; X-Label="Aa B"';
-        for (const kind of ['Request', 'Response']) {
+        for (const kind of ['Request', 'RequestStream', 'Response']) {
           let controller;
           const options = {headers: {'Content-Type': type}};
           const body = kind === 'Request'
             ? new Request('https://pending-blob-mime.test/', {
                 ...options, method: 'POST', body: new Uint8Array([0,65,255])
               })
-            : new Response(new ReadableStream({start(value) { controller = value; }}), options);
+            : kind === 'RequestStream'
+              ? new Request('https://pending-blob-mime.test/', {
+                  ...options, method: 'POST', duplex: 'half',
+                  body: new ReadableStream({start(value) { controller = value; }})
+                })
+              : new Response(new ReadableStream({start(value) { controller = value; }}), options);
           body.headers.get = () => { throw new Error('author Headers.get'); };
           body.headers.entries = () => { throw new Error('author Headers.entries'); };
           globalThis.Blob = function() { throw new Error('author Blob constructor'); };
