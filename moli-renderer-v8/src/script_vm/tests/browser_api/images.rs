@@ -1,4 +1,5 @@
 use super::*;
+mod picture_types;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
