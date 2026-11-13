@@ -486,7 +486,8 @@ impl ModuleScriptTreeJob {
         };
         self.state = ModuleTreeState::Linking;
         match host.link_module_graph(root_entry, &self.entries, &self.dependency_edges) {
-            Ok(graph) => {
+            Ok(mut graph) => {
+                graph.entry_phases = self.entry_phases.clone();
                 self.state = ModuleTreeState::Finished;
                 self.terminal = Some(ModuleTreeTerminalState::Complete(graph.clone()));
                 ModuleScriptTreePoll::Complete(graph)

@@ -104,13 +104,14 @@ use super::inspector_task_runner::{
     WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
 };
 use super::module_runtime::{
-    WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
-    WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
-    WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
-    WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
-    complete_worker_module_graph_fetch, evaluate_module_worker_bootstrap_source,
-    install_classic_worker_dynamic_module_runtime, resume_worker_dynamic_module_evaluation,
-    run_next_worker_dynamic_module_import, worker_has_pending_dynamic_module_imports,
+    WorkerBootstrapError, WorkerModuleBootstrapResume, WorkerModuleBootstrapStart,
+    WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource, WorkerModuleGraphFetchCompletion,
+    WorkerModuleGraphFetchCspSource, WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap,
+    WorkerModuleSource, complete_worker_module_graph_fetch,
+    evaluate_module_worker_bootstrap_source, install_classic_worker_dynamic_module_runtime,
+    resume_worker_dynamic_module_evaluation, resume_worker_module_trees,
+    retire_worker_module_runtime, run_next_worker_dynamic_module_import,
+    take_worker_module_graph_fetches, worker_has_pending_dynamic_module_imports,
     worker_has_runnable_dynamic_module_imports,
 };
 
@@ -601,6 +602,7 @@ fn start_worker_module_graph_fetch(
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
+    let completion_key = request.module_key();
     let (enforce, report, endpoints, resource_kind) = match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
             module_static_import_content_security_policies,
@@ -635,8 +637,12 @@ fn start_worker_module_graph_fetch(
     );
     if let Err(error) = csp_context.check_initial_request(request.url()) {
         let _ = completion_tx.send(
-            WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
-                .with_csp_violations(csp_context.take_violations()),
+            WorkerModuleGraphFetchCompletion::new(
+                fetch_id,
+                request.module_key(),
+                Err(error.to_string()),
+            )
+            .with_csp_violations(csp_context.take_violations()),
         );
         return;
     }
@@ -649,8 +655,12 @@ fn start_worker_module_graph_fetch(
                 .with_browser_request_metadata(browser_request_metadata),
             Err(error) => {
                 let _ = completion_tx.send(
-                    WorkerModuleGraphFetchCompletion::new(fetch_id, Err(error.to_string()))
-                        .with_csp_violations(csp_context.take_violations()),
+                    WorkerModuleGraphFetchCompletion::new(
+                        fetch_id,
+                        request.module_key(),
+                        Err(error.to_string()),
+                    )
+                    .with_csp_violations(csp_context.take_violations()),
                 );
                 return;
             }
@@ -721,7 +731,7 @@ fn start_worker_module_graph_fetch(
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
             });
-        let completion = WorkerModuleGraphFetchCompletion::new(fetch_id, result)
+        let completion = WorkerModuleGraphFetchCompletion::new(fetch_id, completion_key, result)
             .with_csp_violations(response_csp_context.take_violations());
         let _ = completion_tx_for_callback.send(completion);
     };
@@ -733,6 +743,7 @@ fn start_worker_module_graph_fetch(
         let _ = completion_tx.send(
             WorkerModuleGraphFetchCompletion::new(
                 fetch_id,
+                request.module_key(),
                 Err("worker module dependency fetch rejected during shutdown".to_owned()),
             )
             .with_csp_violations(csp_context.take_violations()),
@@ -746,34 +757,13 @@ fn start_worker_module_graph_fetch(
         let _ = completion_tx.send(
             WorkerModuleGraphFetchCompletion::new(
                 fetch_id,
+                request.module_key(),
                 Err(format!(
                     "failed to start module worker dependency fetch `{}`: {error}",
                     request.url()
                 )),
             )
             .with_csp_violations(csp_context.take_violations()),
-        );
-    }
-}
-
-fn start_worker_module_graph_fetch_batch(
-    requests: WorkerModuleGraphFetchBatch,
-    state: &Rc<RefCell<WorkerGlobalState>>,
-    module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
-) {
-    for request in requests.iter().cloned() {
-        start_worker_module_graph_fetch(
-            request,
-            state.borrow().loader.clone(),
-            state.borrow().network_partition_key.clone(),
-            state
-                .borrow()
-                .module_static_import_content_security_policies
-                .clone(),
-            state.borrow().content_security_policies.clone(),
-            state.borrow().content_security_report_only_policies.clone(),
-            state.borrow().content_security_reporting_endpoints.clone(),
-            module_graph_fetch_tx.clone(),
         );
     }
 }
@@ -841,18 +831,25 @@ fn flush_one_worker_indexed_db_task(
     drain_worker_dynamic_module_imports(scope, state, module_graph_fetch_tx);
 }
 
-fn handle_worker_dynamic_module_import_advance(
-    advance: WorkerDynamicModuleImportAdvance,
+fn flush_worker_module_fetches(
+    scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
     module_graph_fetch_tx: &mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
-    match advance {
-        WorkerDynamicModuleImportAdvance::Complete
-        | WorkerDynamicModuleImportAdvance::WaitingFetches
-        | WorkerDynamicModuleImportAdvance::WaitingEvaluation { .. } => {}
-        WorkerDynamicModuleImportAdvance::NeedFetches(requests) => {
-            start_worker_module_graph_fetch_batch(requests, state, module_graph_fetch_tx);
-        }
+    for request in take_worker_module_graph_fetches(scope) {
+        start_worker_module_graph_fetch(
+            request,
+            state.borrow().loader.clone(),
+            state.borrow().network_partition_key.clone(),
+            state
+                .borrow()
+                .module_static_import_content_security_policies
+                .clone(),
+            state.borrow().content_security_policies.clone(),
+            state.borrow().content_security_report_only_policies.clone(),
+            state.borrow().content_security_reporting_endpoints.clone(),
+            module_graph_fetch_tx.clone(),
+        );
     }
 }
 
@@ -865,10 +862,10 @@ fn drain_worker_dynamic_module_imports(
 ) {
     const MAX_DYNAMIC_IMPORT_DRAIN_STEPS: usize = 1_000;
     for _ in 0..MAX_DYNAMIC_IMPORT_DRAIN_STEPS {
-        let Some(advance) = run_next_worker_dynamic_module_import(scope) else {
+        if !run_next_worker_dynamic_module_import(scope) {
             break;
-        };
-        handle_worker_dynamic_module_import_advance(advance, state, module_graph_fetch_tx);
+        }
+        flush_worker_module_fetches(scope, state, module_graph_fetch_tx);
     }
 }
 
@@ -1793,7 +1790,7 @@ async fn worker_main(
         let referrer_policy = { state.borrow().referrer_policy.clone() };
 
         // ── Evaluate the worker script ─────────────────────────────────────
-        match evaluate_worker_bootstrap_script(
+        let start = evaluate_worker_bootstrap_script(
             scope,
             &script_source,
             &script_url,
@@ -1802,17 +1799,13 @@ async fn worker_main(
             module_credentials_mode,
             referrer_policy,
             module_evaluation_tx.clone(),
-        ) {
+        );
+        flush_worker_module_fetches(scope, &state, &module_graph_fetch_tx);
+        match start {
             WorkerBootstrapStart::Complete => {
                 bootstrap_completion.mark_success(worker_bootstrap_success(scope, global, &state));
             }
-            WorkerBootstrapStart::Pending {
-                bootstrap,
-                requests,
-            } => {
-                if let Some(requests) = requests {
-                    start_worker_module_graph_fetch_batch(requests, &state, &module_graph_fetch_tx);
-                }
+            WorkerBootstrapStart::Pending(bootstrap) => {
                 pending_module_bootstrap = Some(bootstrap);
             }
             WorkerBootstrapStart::Failed { error, phase } => {
@@ -3074,16 +3067,16 @@ async fn worker_main(
                         let loader = state.borrow().loader.clone();
                         dispatch_worker_csp_violation_event(scope, &loader, violation);
                     }
-                    if let Some(resume) =
-                        outcome.resume_bootstrap(scope, pending_module_bootstrap.as_deref_mut())
+                    let resume =
+                        resume_worker_module_trees(scope, pending_module_bootstrap.as_deref_mut());
+                    flush_worker_module_fetches(scope, &state, &module_graph_fetch_tx);
+                    if outcome.bootstrap_client
+                        && let Ok(source) = completion.result()
+                        && let Some(resource) = source.resource().cloned()
                     {
-                        let module_script_resource = completion
-                            .result()
-                            .ok()
-                            .and_then(|source| source.resource().cloned());
-                        if let Some(resource) = module_script_resource {
-                            report_service_worker_module_script_resource(&state, resource);
-                        }
+                        report_service_worker_module_script_resource(&state, resource);
+                    }
+                    if let Some(resume) = resume {
                         match resume {
                             WorkerModuleBootstrapResume::Complete => {
                                 pending_module_bootstrap = None;
@@ -3097,14 +3090,6 @@ async fn worker_main(
                                 );
                                 forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                             }
-                            WorkerModuleBootstrapResume::NeedFetches(requests) => {
-                                start_worker_module_graph_fetch_batch(
-                                    requests,
-                                    &state,
-                                    &module_graph_fetch_tx,
-                                );
-                            }
-                            WorkerModuleBootstrapResume::WaitingFetches => {}
                             WorkerModuleBootstrapResume::WaitingEvaluation => {}
                             WorkerModuleBootstrapResume::Failed(error) => {
                                 let (report, exception, parent_event_kind) = *error;
@@ -3144,7 +3129,7 @@ async fn worker_main(
                                 source.source().len()
                             )
                         })
-                        .unwrap_or_else(|error| format!("error {error}"));
+                        .unwrap_or_else(|error| format!("error {}", error.message));
                     trace!(
                         url = %script_url,
                         fetch_id = completion.fetch_id(),
@@ -3184,14 +3169,6 @@ async fn worker_main(
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
                         }
-                        WorkerModuleBootstrapResume::NeedFetches(requests) => {
-                            start_worker_module_graph_fetch_batch(
-                                requests,
-                                &state,
-                                &module_graph_fetch_tx,
-                            );
-                        }
-                        WorkerModuleBootstrapResume::WaitingFetches => {}
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
                         WorkerModuleBootstrapResume::Failed(error) => {
                             let (report, exception, parent_event_kind) = *error;
@@ -3308,6 +3285,10 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
+    // Drop persistent rejection values while their isolate is alive, including
+    // completions queued by a module that called close() before rejecting.
+    module_evaluation_rx.close();
+    while module_evaluation_rx.try_recv().is_ok() {}
     inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
@@ -3319,6 +3300,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        retire_worker_module_runtime(ctx);
         crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
@@ -3451,10 +3433,7 @@ fn worker_bootstrap_success<'s>(
 
 enum WorkerBootstrapStart {
     Complete,
-    Pending {
-        bootstrap: Box<WorkerModulePendingBootstrap>,
-        requests: Option<WorkerModuleGraphFetchBatch>,
-    },
+    Pending(Box<WorkerModulePendingBootstrap>),
     Failed {
         error: Box<WorkerBootstrapError>,
         phase: WorkerErrorPhase,
@@ -3513,13 +3492,7 @@ impl From<WorkerModuleBootstrapStart> for WorkerBootstrapStart {
     fn from(start: WorkerModuleBootstrapStart) -> Self {
         match start {
             WorkerModuleBootstrapStart::Complete => Self::Complete,
-            WorkerModuleBootstrapStart::Pending {
-                bootstrap,
-                requests,
-            } => Self::Pending {
-                bootstrap,
-                requests,
-            },
+            WorkerModuleBootstrapStart::Pending(bootstrap) => Self::Pending(bootstrap),
             WorkerModuleBootstrapStart::Failed(error) => Self::Failed {
                 error,
                 phase: WorkerErrorPhase::Bootstrap,
