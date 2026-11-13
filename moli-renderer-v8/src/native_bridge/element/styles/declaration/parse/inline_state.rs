@@ -514,6 +514,8 @@ pub(super) fn inline_state_pdb_supplemental_side_entry(
                 && style_entry_is_pdb_supplemental_side_entry(entry)
                 && entry.priority == (priority == PdbQueryPriority::Important)
         })
+        // A winning longhand override cannot supply an entire shorthand.
+        .filter(|entry| entry.name == property || affected_names.len() == 1)
         .cloned()
 }
 
