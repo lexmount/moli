@@ -61,7 +61,7 @@ impl SharedWorkerRemovedHost {
         }
     }
 
-    pub(super) fn terminate_for_context_shutdown(self) {
+    pub(super) fn terminate_and_join(self) {
         match self {
             Self::Running { host, clients } => {
                 host.publish_destroyed_target_event();
@@ -94,7 +94,14 @@ impl SharedWorkerRuntimeService {
         &self,
         instance_id: SharedWorkerInstanceId,
     ) -> SharedWorkerRemovedHost {
-        match self.remove_matching_instance(instance_id) {
+        self.take_removed_host(self.remove_matching_instance(instance_id))
+    }
+
+    pub(super) fn take_removed_host(
+        &self,
+        removed: SharedWorkerInstanceRemoval<SharedRendererSharedWorkerHost>,
+    ) -> SharedWorkerRemovedHost {
+        match removed {
             SharedWorkerInstanceRemoval::Removed {
                 clients,
                 instance: Some(host),

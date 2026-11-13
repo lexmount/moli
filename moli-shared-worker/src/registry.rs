@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use parking_lot::Mutex;
 
@@ -19,12 +22,21 @@ enum SharedWorkerEntryState<I> {
     Running { instance: I },
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SharedWorkerLifetime {
+    Active,
+    // A timeout is already queued or scheduled from an earlier ownerless period.
+    ActiveWithTimeout,
+    IdleUntil(Instant),
+}
+
 #[derive(Debug)]
 struct SharedWorkerEntry<I> {
     instance_id: SharedWorkerInstanceId,
     descriptor: SharedWorkerDescriptor,
     clients: Vec<SharedWorkerClientRecord>,
     state: SharedWorkerEntryState<I>,
+    lifetime: SharedWorkerLifetime,
 }
 
 impl<I> SharedWorkerEntry<I> {
@@ -36,6 +48,9 @@ impl<I> SharedWorkerEntry<I> {
     }
 
     fn add_client(&mut self, client: SharedWorkerClientRecord) {
+        if matches!(self.lifetime, SharedWorkerLifetime::IdleUntil(_)) {
+            self.lifetime = SharedWorkerLifetime::ActiveWithTimeout;
+        }
         self.clients.push(client);
     }
 
@@ -185,6 +200,14 @@ pub enum SharedWorkerClientRemoval<I> {
         instance_id: SharedWorkerInstanceId,
         instance: I,
     },
+    /// The last client left an extended-lifetime worker. Close the client
+    /// endpoint and schedule a timeout if there is none already pending.
+    Retain {
+        instance_id: SharedWorkerInstanceId,
+        key: SharedWorkerKey,
+        instance: Option<I>,
+        schedule_timeout_at: Option<Instant>,
+    },
     CancelLoading {
         instance_id: SharedWorkerInstanceId,
         key: SharedWorkerKey,
@@ -234,6 +257,7 @@ pub struct SharedWorkerObservedAction<T> {
 #[derive(Debug)]
 pub struct SharedWorkerRegistry<I> {
     state: Mutex<SharedWorkerRegistryState<I>>,
+    extended_lifetime_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -246,6 +270,13 @@ pub struct SharedWorkerRegistryDiagnostics {
 
 impl<I> Default for SharedWorkerRegistry<I> {
     fn default() -> Self {
+        Self::with_extended_lifetime_timeout(Duration::ZERO)
+    }
+}
+
+impl<I> SharedWorkerRegistry<I> {
+    /// Create a registry with the embedder's extended-lifetime timeout.
+    pub fn with_extended_lifetime_timeout(extended_lifetime_timeout: Duration) -> Self {
         Self {
             state: Mutex::new(SharedWorkerRegistryState {
                 next_client_id: 0,
@@ -253,11 +284,10 @@ impl<I> Default for SharedWorkerRegistry<I> {
                 entries: HashMap::new(),
                 client_keys: HashMap::new(),
             }),
+            extended_lifetime_timeout,
         }
     }
-}
 
-impl<I> SharedWorkerRegistry<I> {
     pub fn diagnostics(&self) -> SharedWorkerRegistryDiagnostics {
         let state = self.state.lock();
         let mut diagnostics = SharedWorkerRegistryDiagnostics {
@@ -385,6 +415,7 @@ where
                 descriptor,
                 clients,
                 state: SharedWorkerEntryState::Loading,
+                lifetime: SharedWorkerLifetime::Active,
             },
         );
         SharedWorkerObservedAction {
@@ -414,7 +445,9 @@ where
         if entry.instance_id != instance_id {
             return SharedWorkerLoadReady::Stale;
         }
-        if !matches!(entry.state, SharedWorkerEntryState::Loading) || entry.clients.is_empty() {
+        if !matches!(entry.state, SharedWorkerEntryState::Loading)
+            || matches!(entry.lifetime, SharedWorkerLifetime::IdleUntil(deadline) if deadline <= Instant::now())
+        {
             return SharedWorkerLoadReady::Stale;
         }
         entry.state = SharedWorkerEntryState::Running {
@@ -499,6 +532,7 @@ where
         let owner_id = entry.client_owner_id(client_id);
         let last_client_for_owner =
             owner_id.is_some_and(|owner_id| entry.client_count_for_owner(owner_id) == 1);
+        let owner_events = last_client_removed_event(instance_id, owner_id, last_client_for_owner);
         if !entry.remove_client(client_id) {
             let action = match &entry.state {
                 SharedWorkerEntryState::Loading => {
@@ -513,11 +547,26 @@ where
             };
             return SharedWorkerObservedAction {
                 action,
-                owner_events: last_client_removed_event(
+                owner_events,
+            };
+        }
+        if entry.descriptor.extended_lifetime() && !self.extended_lifetime_timeout.is_zero() {
+            let deadline = Instant::now() + self.extended_lifetime_timeout;
+            let schedule_timeout_at =
+                matches!(entry.lifetime, SharedWorkerLifetime::Active).then_some(deadline);
+            entry.lifetime = SharedWorkerLifetime::IdleUntil(deadline);
+            let instance = match &entry.state {
+                SharedWorkerEntryState::Loading => None,
+                SharedWorkerEntryState::Running { instance } => Some(instance.clone()),
+            };
+            return SharedWorkerObservedAction {
+                action: SharedWorkerClientRemoval::Retain {
                     instance_id,
-                    owner_id,
-                    last_client_for_owner,
-                ),
+                    key,
+                    instance,
+                    schedule_timeout_at,
+                },
+                owner_events,
             };
         }
         let entry = state.entries.remove(&key).expect("entry checked above");
@@ -533,7 +582,51 @@ where
         };
         SharedWorkerObservedAction {
             action,
-            owner_events: last_client_removed_event(instance_id, owner_id, last_client_for_owner),
+            owner_events,
+        }
+    }
+
+    /// Discard an expired ownerless instance before matching a constructor,
+    /// even if the owner has not drained its timeout event yet.
+    pub fn remove_expired_idle_instance(
+        &self,
+        key: &SharedWorkerKey,
+        now: Instant,
+    ) -> SharedWorkerInstanceRemoval<I> {
+        let mut state = self.state.lock();
+        let expired = state.entries.get(key).is_some_and(|entry| {
+            matches!(entry.lifetime, SharedWorkerLifetime::IdleUntil(deadline) if deadline <= now)
+        });
+        if !expired {
+            return SharedWorkerInstanceRemoval::Missing;
+        }
+        Self::remove_instance_locked(&mut state, key.clone()).action
+    }
+
+    /// Handle a scheduled timeout. Reattachment disarms it or, after another
+    /// last-client removal, moves it to the current ownerless deadline.
+    pub fn handle_idle_timeout(
+        &self,
+        key: &SharedWorkerKey,
+        instance_id: SharedWorkerInstanceId,
+        now: Instant,
+    ) -> Result<SharedWorkerInstanceRemoval<I>, Instant> {
+        let mut state = self.state.lock();
+        let Some(entry) = state.entries.get_mut(key) else {
+            return Ok(SharedWorkerInstanceRemoval::Missing);
+        };
+        if entry.instance_id != instance_id {
+            return Ok(SharedWorkerInstanceRemoval::Missing);
+        }
+        match entry.lifetime {
+            SharedWorkerLifetime::IdleUntil(deadline) if deadline <= now => {
+                Ok(Self::remove_instance_locked(&mut state, key.clone()).action)
+            }
+            SharedWorkerLifetime::IdleUntil(deadline) => Err(deadline),
+            SharedWorkerLifetime::ActiveWithTimeout | SharedWorkerLifetime::Active => {
+                entry.lifetime = SharedWorkerLifetime::Active;
+                Ok(SharedWorkerInstanceRemoval::Missing)
+            }
         }
     }
 
@@ -634,7 +727,15 @@ where
                 owner_events: Vec::new(),
             };
         };
+        Self::remove_instance_locked(&mut state, key)
+    }
+
+    fn remove_instance_locked(
+        state: &mut SharedWorkerRegistryState<I>,
+        key: SharedWorkerKey,
+    ) -> SharedWorkerObservedAction<SharedWorkerInstanceRemoval<I>> {
         let entry = state.entries.remove(&key).expect("entry checked above");
+        let instance_id = entry.instance_id;
         let owner_events = last_client_removed_events(instance_id, &entry);
         let clients = entry.client_ids();
         for client_id in &clients {
@@ -998,6 +1099,120 @@ mod tests {
             SharedWorkerClientRemoval::Terminate { instance: 9, .. }
         ));
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn extended_lifetime_allows_loading_and_reattachment_without_an_owner() {
+        let registry =
+            SharedWorkerRegistry::with_extended_lifetime_timeout(Duration::from_secs(30));
+        let key = key("extended");
+        let descriptor = SharedWorkerDescriptor::new(
+            SharedWorkerScriptType::Module,
+            SharedWorkerCredentialsMode::SameOrigin,
+            true,
+            SharedWorkerCreationContextType::Secure,
+        );
+        let SharedWorkerConnectAction::StartLoading {
+            instance_id,
+            client_id,
+        } = registry.connect_with_owner(key.clone(), descriptor.clone(), owner(1))
+        else {
+            panic!("expected StartLoading");
+        };
+
+        let removal = registry.remove_client_observed(client_id);
+        assert_eq!(
+            removal.owner_events,
+            vec![SharedWorkerClientOwnerEvent::LastClientRemoved {
+                instance_id,
+                owner_id: owner(1),
+            }]
+        );
+        let SharedWorkerClientRemoval::Retain {
+            instance: None,
+            schedule_timeout_at: Some(deadline),
+            ..
+        } = removal.action
+        else {
+            panic!("expected ownerless loading instance with a scheduled timeout");
+        };
+        assert!(matches!(
+            registry.finish_loading(&key, instance_id, 9),
+            SharedWorkerLoadReady::Running { clients, .. } if clients.is_empty()
+        ));
+        let SharedWorkerConnectAction::ConnectToRunning {
+            instance_id: reconnected_id,
+            client_id: reconnected_client,
+            instance: 9,
+        } = registry.connect_with_owner(key.clone(), descriptor, owner(2))
+        else {
+            panic!("expected the retained running instance");
+        };
+        assert_eq!(reconnected_id, instance_id);
+        assert_eq!(
+            registry.handle_idle_timeout(&key, instance_id, deadline),
+            Ok(SharedWorkerInstanceRemoval::Missing)
+        );
+        assert_eq!(
+            registry.clients_for_instance(instance_id),
+            vec![reconnected_client]
+        );
+        assert!(matches!(
+            registry.remove_client(reconnected_client),
+            SharedWorkerClientRemoval::Retain {
+                schedule_timeout_at: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn extended_lifetime_timeout_only_removes_the_expired_instance() {
+        let registry =
+            SharedWorkerRegistry::<u64>::with_extended_lifetime_timeout(Duration::from_secs(30));
+        let key = key("extended");
+        let descriptor = SharedWorkerDescriptor::new(
+            SharedWorkerScriptType::Classic,
+            SharedWorkerCredentialsMode::SameOrigin,
+            true,
+            SharedWorkerCreationContextType::Secure,
+        );
+        let SharedWorkerConnectAction::StartLoading {
+            instance_id,
+            client_id,
+        } = registry.connect(key.clone(), descriptor.clone())
+        else {
+            panic!("expected StartLoading");
+        };
+        let SharedWorkerClientRemoval::Retain {
+            schedule_timeout_at: Some(deadline),
+            ..
+        } = registry.remove_client(client_id)
+        else {
+            panic!("expected scheduled idle timeout");
+        };
+        assert_eq!(
+            registry.handle_idle_timeout(&key, instance_id, deadline - Duration::from_millis(1)),
+            Err(deadline)
+        );
+        assert!(matches!(
+            registry.remove_expired_idle_instance(&key, deadline),
+            SharedWorkerInstanceRemoval::Removed { instance_id: removed, clients, instance: None, .. }
+                if removed == instance_id && clients.is_empty()
+        ));
+        let SharedWorkerConnectAction::StartLoading {
+            instance_id: replacement,
+            ..
+        } = registry.connect(key.clone(), descriptor)
+        else {
+            panic!("expected a new instance");
+        };
+        assert_ne!(replacement, instance_id);
+        assert_eq!(
+            registry.handle_idle_timeout(&key, instance_id, deadline),
+            Ok(SharedWorkerInstanceRemoval::Missing)
+        );
+        assert_eq!(registry.loading_clients_for_instance(replacement).len(), 1);
     }
 
     #[test]

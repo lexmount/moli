@@ -1,8 +1,8 @@
 use std::fmt;
 
 use moli_shared_worker::{
-    SharedWorkerClientId, SharedWorkerInstanceId, SharedWorkerInstanceRemoval,
-    SharedWorkerLoadFailure, SharedWorkerLoadReady,
+    SharedWorkerInstanceId, SharedWorkerInstanceRemoval, SharedWorkerLoadFailure,
+    SharedWorkerLoadReady,
 };
 
 use crate::worker::WorkerParentErrorEventKind;
@@ -51,13 +51,7 @@ fn finish_loading_with_runtime_service(
                 params.unregister_reserved_service_worker_client();
                 return;
             };
-            let live_clients =
-                runtime_service.prune_disconnected_loading_clients(&host, instance_id);
-            if live_clients.is_empty() {
-                params.unregister_reserved_service_worker_client();
-                runtime_service.close_unstarted_loading_entry(&host, &params, instance_id);
-                return;
-            }
+            runtime_service.prune_disconnected_loading_clients(&host, instance_id);
             match runtime_service.finish_loading_registry_entry(&params, instance_id, host.clone())
             {
                 SharedWorkerLoadReady::Running { clients, .. } => {
@@ -119,16 +113,12 @@ impl SharedWorkerRuntimeService {
         &self,
         host: &RendererSharedWorkerHost,
         instance_id: SharedWorkerInstanceId,
-    ) -> Vec<SharedWorkerClientId> {
-        let mut live_clients = Vec::new();
+    ) {
         for client_id in self.loading_clients_for_instance(instance_id) {
-            if host.has_client_endpoint(client_id) {
-                live_clients.push(client_id);
-            } else {
-                self.remove_matching_client(client_id);
+            if !host.has_client_endpoint(client_id) {
+                self.remove_client(client_id);
             }
         }
-        live_clients
     }
 
     fn finish_loading_registry_entry(
@@ -146,23 +136,6 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
     ) -> SharedWorkerLoadFailure {
         self.fail_loading_matching(&params.key, instance_id)
-    }
-
-    fn close_unstarted_loading_entry(
-        &self,
-        host: &RendererSharedWorkerHost,
-        params: &SharedWorkerLaunchParams,
-        instance_id: SharedWorkerInstanceId,
-    ) {
-        host.close_completed_loading();
-        match self.fail_loading_registry_entry(params, instance_id) {
-            SharedWorkerLoadFailure::Failed { clients, .. } => {
-                host.close_worker_ports_and_send_closed(clients);
-            }
-            SharedWorkerLoadFailure::Stale => {
-                host.close_all_worker_ports_and_send_closed();
-            }
-        }
     }
 
     fn close_started_registry_entry_after_worker_start_failure(
@@ -375,6 +348,7 @@ mod tests {
             key.script_url().to_owned(),
             "loader".to_owned(),
             runtime_service.open_target_output_stream(instance_id),
+            None,
         ));
         host.add_client(
             client_id,
