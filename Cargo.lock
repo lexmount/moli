@@ -3318,7 +3318,6 @@ name = "moli-protocol-cdp"
 version = "0.1.0"
 dependencies = [
  "brotlic",
- "moli-inspector-json",
  "moli-page-types",
  "moli-protocol-cdp-defs",
  "moli-time",

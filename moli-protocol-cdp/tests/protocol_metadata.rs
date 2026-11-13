@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, io::Read};
 
-use moli_protocol_cdp::{CDP_PROTOCOL_BROTLI, advertised_protocol_json, is_advertised_event};
+use moli_protocol_cdp::{CDP_PROTOCOL_BROTLI, advertised_protocol_json};
 use moli_protocol_cdp_defs::{
     FORWARDED_EVENT_DOMAINS, IMPLEMENTED_COMMANDS, LocalCdpEvent, SERVER_COMMANDS,
 };
@@ -300,18 +300,6 @@ fn advertised_events_match_the_browser_catalog_and_v8_forwarding() {
         })
         .collect();
     assert_eq!(actual, expected);
-    for method in &actual {
-        assert!(is_advertised_event(method), "{method}");
-    }
-    for method in [
-        "Runtime.someUnknownEvent",
-        "Runtime.consoleAPICalled.extra",
-        "Page.LoadEventFired",
-        "Page.navigate",
-        "",
-    ] {
-        assert!(!is_advertised_event(method), "{method}");
-    }
 }
 
 fn domain_mut<'a>(protocol: &'a mut Value, name: &str) -> &'a mut Value {

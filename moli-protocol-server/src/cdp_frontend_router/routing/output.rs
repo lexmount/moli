@@ -1,13 +1,10 @@
-use crate::cdp_writer::CheckedCdpMessage;
 use moli_inspector_json::InspectorJson;
-use moli_protocol_cdp::CdpEventContractError;
 use serde_json::Value;
 
 use super::{
     CdpFrontendRoutingState, CdpRoutedFrontend,
     frontend_registry::FrontendSessionKind,
     pending_commands::{CdpCommandFrontend, PendingCommandEffect},
-    session_output::SessionOutputRoute,
 };
 
 impl CdpFrontendRoutingState {
@@ -16,25 +13,19 @@ impl CdpFrontendRoutingState {
         message: impl Into<InspectorJson>,
         wire_session_id: Option<&str>,
         attachment_flattened_protocol: Option<bool>,
-    ) -> Result<Option<(CdpRoutedFrontend, CheckedCdpMessage)>, CdpEventContractError> {
+    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
         let message = message.into();
-        let routed = if let Some(internal_command_id) = message.id_u64() {
-            self.route_response(message, internal_command_id)
-        } else {
-            self.route_event(message, wire_session_id, attachment_flattened_protocol)
-        };
-        let Some((frontend, output, message)) = routed else {
-            return Ok(None);
-        };
-        let message = self.encode_for_frontend(frontend.frontend_id, &output, message)?;
-        Ok(Some((frontend, message)))
+        if let Some(internal_command_id) = message.id_u64() {
+            return self.route_response(message, internal_command_id);
+        }
+        self.route_event(message, wire_session_id, attachment_flattened_protocol)
     }
 
     fn route_response(
         &mut self,
         mut message: InspectorJson,
         internal_command_id: u64,
-    ) -> Option<(CdpRoutedFrontend, SessionOutputRoute, InspectorJson)> {
+    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
         let pending = self.pending_commands.take(internal_command_id)?;
         message.set_id(pending.client_command_id);
         let CdpCommandFrontend {
@@ -68,8 +59,7 @@ impl CdpFrontendRoutingState {
         }
         Some((
             CdpRoutedFrontend { frontend_id, sink },
-            pending.output,
-            message,
+            pending.output.encode(message),
         ))
     }
 
@@ -78,7 +68,7 @@ impl CdpFrontendRoutingState {
         message: InspectorJson,
         wire_session_id: Option<&str>,
         attachment_flattened_protocol: Option<bool>,
-    ) -> Option<(CdpRoutedFrontend, SessionOutputRoute, InspectorJson)> {
+    ) -> Option<(CdpRoutedFrontend, InspectorJson)> {
         let method = message.method().map(str::to_owned);
         debug_assert_eq!(
             message.session_id(),
@@ -114,7 +104,10 @@ impl CdpFrontendRoutingState {
                 .and_then(|id| self.frontends.session(id))
                 .map(|parent| parent.output.clone())
                 .unwrap_or_default();
-            return Some((CdpRoutedFrontend { frontend_id, sink }, output, message));
+            return Some((
+                CdpRoutedFrontend { frontend_id, sink },
+                output.encode(message),
+            ));
         }
         if method.as_deref() == Some("Target.attachedToTarget")
             && let Some(child_session_id) = target_event_session_id.as_deref()
@@ -156,8 +149,7 @@ impl CdpFrontendRoutingState {
                     frontend_id: session.frontend_id,
                     sink,
                 },
-                session.output,
-                message,
+                session.output.encode(message),
             ));
         }
         if wire_session_id.is_some() {
@@ -193,8 +185,7 @@ impl CdpFrontendRoutingState {
                                 frontend_id: session.frontend_id,
                                 sink,
                             },
-                            output,
-                            message,
+                            output.encode(message),
                         ));
                     }
                 }
