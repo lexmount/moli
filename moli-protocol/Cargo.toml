@@ -24,6 +24,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-encoding = { path = "../moli-encoding" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
 moli-fetch = { path = "../moli-fetch" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-shared-worker = { path = "../moli-shared-worker" }

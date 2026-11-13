@@ -50,7 +50,7 @@ pub(super) async fn json_list(State(state): State<AppState>, uri: Uri) -> impl I
 pub(super) async fn json_protocol() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
-        super::cdp_schema::advertised_protocol_json(),
+        moli_protocol_cdp::advertised_protocol_json(),
     )
 }
 

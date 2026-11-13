@@ -3282,6 +3282,7 @@ dependencies = [
  "moli-page-types",
  "moli-paint",
  "moli-protocol-cdp",
+ "moli-protocol-cdp-defs",
  "moli-session-history",
  "moli-shared-worker",
  "moli-site",
@@ -3318,9 +3319,17 @@ version = "0.1.0"
 dependencies = [
  "brotlic",
  "moli-page-types",
+ "moli-protocol-cdp-defs",
  "moli-time",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "moli-protocol-cdp-defs"
+version = "0.1.0"
+dependencies = [
+ "strum",
 ]
 
 [[package]]

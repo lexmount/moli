@@ -1,6 +1,6 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum AccessibilityAction {
+pub enum AccessibilityAction {
     Enable,
     Disable,
     #[strum(serialize = "getFullAXTree")]
@@ -18,7 +18,7 @@ pub(crate) enum AccessibilityAction {
 }
 
 impl AccessibilityAction {
-    pub(crate) fn queries_tree(self) -> bool {
+    pub fn queries_tree(self) -> bool {
         matches!(
             self,
             Self::GetFullAxTree
@@ -33,20 +33,20 @@ impl AccessibilityAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum AuditsAction {
+pub enum AuditsAction {
     Enable,
     Disable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum AutofillAction {
+pub enum AutofillAction {
     Trigger,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum BrowserAction {
+pub enum BrowserAction {
     GetVersion,
     GetWindowForTarget,
     SetWindowBounds,
@@ -60,7 +60,7 @@ pub(crate) enum BrowserAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum ConsoleAction {
+pub enum ConsoleAction {
     Enable,
     Disable,
     ClearMessages,
@@ -68,7 +68,7 @@ pub(crate) enum ConsoleAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum CssAction {
+pub enum CssAction {
     Enable,
     Disable,
     GetStyleSheet,
@@ -78,9 +78,15 @@ pub(crate) enum CssAction {
     GetMatchedStylesForNode,
 }
 
+impl CssAction {
+    pub fn requires_document_access(self) -> bool {
+        !matches!(self, Self::Enable | Self::Disable)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum DomAction {
+pub enum DomAction {
     Enable,
     Disable,
     GetDocument,
@@ -120,7 +126,7 @@ pub(crate) enum DomAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum DomDebuggerAction {
+pub enum DomDebuggerAction {
     GetEventListeners,
     #[strum(serialize = "removeDOMBreakpoint")]
     RemoveDOMBreakpoint,
@@ -135,7 +141,7 @@ pub(crate) enum DomDebuggerAction {
 }
 
 impl DomAction {
-    pub(crate) fn requires_document_access(self) -> bool {
+    pub fn requires_document_access(self) -> bool {
         !matches!(
             self,
             Self::Enable | Self::Disable | Self::DiscardSearchResults | Self::GetNodeForLocation
@@ -145,7 +151,7 @@ impl DomAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum DomSnapshotAction {
+pub enum DomSnapshotAction {
     Enable,
     Disable,
     CaptureSnapshot,
@@ -153,7 +159,7 @@ pub(crate) enum DomSnapshotAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum DomStorageAction {
+pub enum DomStorageAction {
     Enable,
     Disable,
     Clear,
@@ -167,7 +173,7 @@ pub(crate) enum DomStorageAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum EmulationAction {
+pub enum EmulationAction {
     Enable,
     Disable,
     SetFocusEmulationEnabled,
@@ -195,7 +201,7 @@ pub(crate) enum EmulationAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum FetchAction {
+pub enum FetchAction {
     Enable,
     Disable,
     ContinueRequest,
@@ -211,7 +217,7 @@ pub(crate) enum FetchAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum HeapProfilerAction {
+pub enum HeapProfilerAction {
     AddInspectedHeapObject,
     Enable,
     Disable,
@@ -230,7 +236,7 @@ pub(crate) enum HeapProfilerAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum InputAction {
+pub enum InputAction {
     CancelDragging,
     SetInterceptDrags,
     SetIgnoreInputEvents,
@@ -244,7 +250,7 @@ pub(crate) enum InputAction {
 }
 
 impl InputAction {
-    pub(crate) fn requires_document_access(self) -> bool {
+    pub fn requires_document_access(self) -> bool {
         matches!(
             self,
             Self::DispatchDragEvent
@@ -260,14 +266,14 @@ impl InputAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum InspectorAction {
+pub enum InspectorAction {
     Enable,
     Disable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum IoAction {
+pub enum IoAction {
     Read,
     Close,
     ResolveBlob,
@@ -275,7 +281,7 @@ pub(crate) enum IoAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum LogAction {
+pub enum LogAction {
     Clear,
     Enable,
     Disable,
@@ -285,7 +291,7 @@ pub(crate) enum LogAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum NetworkAction {
+pub enum NetworkAction {
     Enable,
     Disable,
     SetCacheDisabled,
@@ -310,7 +316,7 @@ pub(crate) enum NetworkAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum PageAction {
+pub enum PageAction {
     Enable,
     Disable,
     SetLifecycleEventsEnabled,
@@ -349,7 +355,7 @@ pub(crate) enum PageAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum PerformanceAction {
+pub enum PerformanceAction {
     Enable,
     Disable,
     GetMetrics,
@@ -360,7 +366,7 @@ pub(crate) enum PerformanceAction {
     Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr, strum::VariantNames,
 )]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum RuntimeAction {
+pub enum RuntimeAction {
     Enable,
     Disable,
     AddBinding,
@@ -387,14 +393,14 @@ pub(crate) enum RuntimeAction {
 }
 
 impl RuntimeAction {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         self.into()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum SecurityAction {
+pub enum SecurityAction {
     Enable,
     Disable,
     HandleCertificateError,
@@ -404,7 +410,7 @@ pub(crate) enum SecurityAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum ServiceWorkerAction {
+pub enum ServiceWorkerAction {
     DeliverPushMessage,
     Disable,
     DispatchPeriodicSyncEvent,
@@ -421,7 +427,7 @@ pub(crate) enum ServiceWorkerAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum StorageAction {
+pub enum StorageAction {
     ClearDataForOrigin,
     ClearDataForStorageKey,
     GetUsageAndQuota,
@@ -436,14 +442,14 @@ pub(crate) enum StorageAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum SystemInfoAction {
+pub enum SystemInfoAction {
     GetInfo,
     GetProcessInfo,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum TargetAction {
+pub enum TargetAction {
     GetTargets,
     GetBrowserContexts,
     CreateBrowserContext,
@@ -463,7 +469,7 @@ pub(crate) enum TargetAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum TracingAction {
+pub enum TracingAction {
     Start,
     End,
     GetCategories,
@@ -472,81 +478,30 @@ pub(crate) enum TracingAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum WebAuthnAction {
+pub enum WebAuthnAction {
     Enable,
     Disable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
 #[strum(serialize_all = "camelCase")]
-pub(crate) enum WebMcpAction {
+pub enum WebMcpAction {
     Enable,
     Disable,
     InvokeTool,
     CancelInvocation,
 }
 
-/// Domain -> command names the dispatcher accepts, generated from the action
-/// enums (they are what `EnumString` parses incoming methods against).
-/// Debugger commands are forwarded to V8; Browser.close is handled by the server.
-///
-/// `/json/protocol` used to serve only V8's `js_protocol` (Runtime, Debugger,
-/// Profiler, HeapProfiler, Console, Schema), so clients that gate calls on the
-/// advertised protocol refused Page / DOM / Network commands Moli implements.
-pub fn implemented_cdp_commands() -> Vec<(&'static str, &'static [&'static str])> {
-    use strum::VariantNames;
-    vec![
-        ("Accessibility", AccessibilityAction::VARIANTS),
-        ("Audits", AuditsAction::VARIANTS),
-        ("Autofill", AutofillAction::VARIANTS),
-        ("Browser", BrowserAction::VARIANTS),
-        ("Console", ConsoleAction::VARIANTS),
-        ("CSS", CssAction::VARIANTS),
-        ("DOM", DomAction::VARIANTS),
-        ("DOMDebugger", DomDebuggerAction::VARIANTS),
-        ("DOMSnapshot", DomSnapshotAction::VARIANTS),
-        ("DOMStorage", DomStorageAction::VARIANTS),
-        ("Emulation", EmulationAction::VARIANTS),
-        ("Fetch", FetchAction::VARIANTS),
-        ("HeapProfiler", HeapProfilerAction::VARIANTS),
-        ("Input", InputAction::VARIANTS),
-        ("Inspector", InspectorAction::VARIANTS),
-        ("IO", IoAction::VARIANTS),
-        ("Log", LogAction::VARIANTS),
-        ("Network", NetworkAction::VARIANTS),
-        ("Page", PageAction::VARIANTS),
-        ("Performance", PerformanceAction::VARIANTS),
-        ("Profiler", crate::conn::ProfilerAction::VARIANTS),
-        ("Runtime", RuntimeAction::VARIANTS),
-        ("Security", SecurityAction::VARIANTS),
-        ("ServiceWorker", ServiceWorkerAction::VARIANTS),
-        ("Storage", StorageAction::VARIANTS),
-        ("SystemInfo", SystemInfoAction::VARIANTS),
-        ("Target", TargetAction::VARIANTS),
-        ("Tracing", TracingAction::VARIANTS),
-        ("WebAuthn", WebAuthnAction::VARIANTS),
-        ("WebMCP", WebMcpAction::VARIANTS),
-    ]
-}
-
-#[cfg(test)]
-mod implemented_commands_tests {
-    use super::implemented_cdp_commands;
-
-    #[test]
-    fn variant_names_are_wire_method_names() {
-        let all = implemented_cdp_commands();
-        let get = |domain: &str| {
-            all.iter()
-                .find(|(d, _)| *d == domain)
-                .map(|(_, c)| *c)
-                .unwrap()
-        };
-        // Explicit `serialize` overrides and camelCase defaults must both come out as the CDP wire names.
-        assert!(get("Accessibility").contains(&"getFullAXTree"));
-        assert!(get("DOMStorage").contains(&"getDOMStorageItems"));
-        assert!(get("Page").contains(&"navigate"));
-        assert!(get("Profiler").contains(&"startPreciseCoverage"));
-        assert_eq!(all.len(), 30);
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
+#[strum(serialize_all = "camelCase")]
+pub enum ProfilerAction {
+    Enable,
+    Disable,
+    SetSamplingInterval,
+    Start,
+    Stop,
+    StartPreciseCoverage,
+    TakePreciseCoverage,
+    StopPreciseCoverage,
+    GetBestEffortCoverage,
 }

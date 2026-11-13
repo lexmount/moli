@@ -1,0 +1,11 @@
+[package]
+license.workspace = true
+name = "moli-protocol-cdp-defs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+strum = { version = "0.28.0", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -130,12 +130,6 @@ impl PendingCssCommandStartError {
     }
 }
 
-impl CssAction {
-    fn requires_document_access(self) -> bool {
-        !matches!(self, Self::Enable | Self::Disable)
-    }
-}
-
 pub(crate) fn try_start_css_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

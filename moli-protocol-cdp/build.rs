@@ -2,6 +2,9 @@ use std::{env, fs, io::Write, path::PathBuf};
 
 use brotlic::{BrotliEncoderOptions, CompressorWriter, Quality};
 
+#[path = "build/schema.rs"]
+mod schema;
+
 const PROTOCOL_SOURCES: &[&str] = &[
     "protocol/browser_protocol.json",
     "protocol/js_protocol.json",
@@ -20,6 +23,12 @@ fn main() {
             .expect("protocol domains")
             .append(source["domains"].as_array_mut().expect("source domains"));
     }
+    println!("cargo:rerun-if-changed=protocol/protocol_extensions.json");
+    let extensions =
+        fs::read("protocol/protocol_extensions.json").expect("read Moli CDP protocol extensions");
+    let extensions =
+        serde_json::from_slice(&extensions).expect("parse Moli CDP protocol extensions");
+    schema::prepare_protocol(&mut protocol, &extensions);
     let compact = serde_json::to_vec(&protocol).expect("serialize compact CDP protocol metadata");
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build output directory"));
     // Keep the input as a build artifact for the byte-for-byte round-trip test.

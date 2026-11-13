@@ -1,20 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::inspector::InspectorCommandDispatch;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::VariantNames)]
-#[strum(serialize_all = "camelCase")]
-pub(crate) enum ProfilerAction {
-    Enable,
-    Disable,
-    SetSamplingInterval,
-    Start,
-    Stop,
-    StartPreciseCoverage,
-    TakePreciseCoverage,
-    StopPreciseCoverage,
-    GetBestEffortCoverage,
-}
+use super::{ProfilerAction, inspector::InspectorCommandDispatch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProfilerInspectorCommand {

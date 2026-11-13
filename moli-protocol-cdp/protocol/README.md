@@ -9,12 +9,17 @@ stable snapshot and does not describe all current Runtime commands and types.
 
 Keep these files unchanged from upstream. When upgrading V8, update both from a
 matching pinned protocol revision and recheck the JS schema against the vendored
-PDL. Builds compact them, compress with the existing `brotlic` dependency at
-quality 11, and embed only the `.json.br` bytes, without a network dependency.
-The server decodes and filters the schema on its first discovery request, then
-caches the final response with `OnceLock`. All types remain available for
-cross-domain references. The uncompressed build artifact is used only by the
-byte-for-byte round-trip test. Moli-only definitions live in
-`moli-protocol-server/src/protocol_server/protocol_extensions.json`.
+PDL. The build merges `protocol_extensions.json`, selects commands and events
+using `moli-protocol-cdp-defs`, and validates definitions, type references, and
+domain dependencies. The dispatcher uses the same action enum types as this
+catalog. Browser events and V8 forwarding rules are explicit static lists;
+adding an emitted event still requires updating the catalog.
+
+All types remain available for cross-domain references. The final advertised
+schema is compacted and compressed with the existing `brotlic` dependency at
+quality 11. Only the `.json.br` bytes are embedded, without a network dependency.
+The server decodes this final response once through `BufReader` and caches it
+with `OnceLock`; it does not parse, merge, or filter schema JSON at runtime. The
+uncompressed build artifact is used only by the byte-for-byte round-trip test.
 
 Upstream licensing is preserved in `LICENSE`.
