@@ -77,6 +77,7 @@ from .groups.puppeteer import run_puppeteer_group
 from .groups.protocol_schema import run_protocol_schema_group
 from .groups.stagehand import run_stagehand_group
 from .groups.svg_rect import run_svg_rect_group
+from .groups.text_input import run_text_input_group
 from .groups.target_semantics import run_target_semantics_group
 from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
@@ -404,6 +405,12 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "text-input",
+        "Native legacy TextEvent order, cancellation, payload, focus and target lifetime.",
+        "browser",
+        run_text_input_group,
+    ),
     SmokeGroup(
         "fetch-resource-dispatch",
         "SW routing and page policy after automatic and explicit resource continuation.",
