@@ -26,9 +26,6 @@ pub(crate) fn perform_text_input(
     input_type: TextEditInputType,
     source: TextInputSource,
 ) -> bool {
-    if text.is_empty() {
-        return true;
-    }
     let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
         scope,
         runtime_ptr,
@@ -47,6 +44,21 @@ pub(crate) fn perform_text_input(
     let editing_host = contenteditable_editing_host(runtime, initial_target);
     if !is_text_control(runtime, initial_target) && editing_host.is_none() {
         return false;
+    }
+    if text.is_empty() {
+        let collapsed = if is_text_control(runtime, initial_target) {
+            runtime
+                .dom_host()
+                .node(initial_target)
+                .and_then(|node| node.as_element())
+                .is_none_or(|element| element.selection_start() == element.selection_end())
+        } else {
+            let window = scope.get_current_context().global(scope);
+            crate::context_bootstrap::window_selection_is_collapsed(scope, window)
+        };
+        if collapsed {
+            return true;
+        }
     }
     let beforeinput_target = editing_host.unwrap_or(initial_target);
     if !dispatch_beforeinput(

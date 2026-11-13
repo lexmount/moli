@@ -198,6 +198,15 @@ fn new_selection_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v
     new_selection_runtime_object(scope)
 }
 
+/// Read native Selection state without consulting author-replaced accessors.
+pub(crate) fn window_selection_is_collapsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    selection_value_for_window(scope, window)
+        .is_none_or(|selection| super::selection::selection_is_collapsed_internal(scope, selection))
+}
+
 pub(crate) fn selection_value_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,

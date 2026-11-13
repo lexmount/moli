@@ -221,7 +221,7 @@ pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;
 pub(crate) use selection_surface::{
     bind_isolated_window_selection_owner, selection_value_for_window,
-    sync_selection_owner_document_for_window,
+    sync_selection_owner_document_for_window, window_selection_is_collapsed,
 };
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
 mod specs;

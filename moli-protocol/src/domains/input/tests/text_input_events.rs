@@ -334,3 +334,44 @@ async fn cdp_text_input_line_breaks_and_non_editable_targets_match_chromium() {
     command(&mut ctx, "Input.insertText", json!({"text":""})).await;
     assert_eq!(read(&mut ctx).await["events"], json!([]));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn empty_insert_text_replaces_selection_and_remains_cancelable() {
+    for kind in ["input", "textarea", "div"] {
+        for canceled in [false, true] {
+            let mut ctx = TestContext::new();
+            let html = match kind {
+                "input" => "<input id=editor value=abc>",
+                "textarea" => "<textarea id=editor>abc</textarea>",
+                _ => "<div id=editor contenteditable=true>abc</div>",
+            };
+            with_loaded_document(&mut ctx, html).await;
+            let setup = format!(
+                r#"(() => {{
+                const editor=document.getElementById('editor'); editor.focus();
+                if ('{kind}'==='div') {{const r=document.createRange();r.setStart(editor.firstChild,1);r.setEnd(editor.firstChild,2);getSelection().removeAllRanges();getSelection().addRange(r);}}
+                else editor.setSelectionRange(1,2);
+                window.emptyEvents=[];
+                for(const t of ['beforeinput','textInput','input']) editor.addEventListener(t,e=>{{emptyEvents.push([e.type,e.data]);if({canceled}&&t==='beforeinput')e.preventDefault();}});
+                return 'ready';
+            }})()"#
+            );
+            assert_eq!(evaluate_string(&mut ctx, &setup).await, "ready");
+            command(&mut ctx, "Input.insertText", json!({"text":""})).await;
+            let result: serde_json::Value = serde_json::from_str(&evaluate_string(&mut ctx,
+                "JSON.stringify([document.getElementById('editor').value??document.getElementById('editor').textContent,emptyEvents])").await).unwrap();
+            assert_eq!(
+                result,
+                if canceled {
+                    json!(["abc", [["beforeinput", ""]]])
+                } else {
+                    json!([
+                        "ac",
+                        [["beforeinput", ""], ["textInput", ""], ["input", ""]]
+                    ])
+                },
+                "{kind}, canceled={canceled}"
+            );
+        }
+    }
+}
