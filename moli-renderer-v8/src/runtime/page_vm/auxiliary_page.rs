@@ -133,7 +133,6 @@ impl PageVm {
         self.blocked_url_patterns = env.blocked_url_patterns.clone();
         self.indexed_db_manager = env.indexed_db_manager.clone();
         self.storage_bucket_store = env.storage_bucket_store.clone();
-        self.fetch_subresource_interception_classes = env.fetch_subresource_interception_classes;
         self.layout_configuration = env.layout_configuration;
         self.wpt_extensions_enabled = env.wpt_extensions_enabled;
         self.vm_mut()

@@ -16,6 +16,62 @@ fn bind_native_xhr_output(vm: &mut ScriptVm) {
 }
 
 #[test]
+fn interception_uses_live_target_policy_after_document_loader_retirement() {
+    use crate::SubresourceInterceptionClasses as Classes;
+    use crate::types::SubresourceResourceType as Resource;
+
+    let vm = new_storage_test_vm("https://xhr-route.test/");
+    let mut host = vm._context_host.borrow_mut();
+    let policy = host
+        .current_main_document_resource_loader()
+        .unwrap()
+        .request_client()
+        .page_network_policy()
+        .clone();
+    policy.set_subresource_interception(Classes::IMAGE);
+    assert!(host.should_intercept_subresource(Resource::Image));
+    host.retire_all_document_resource_loaders();
+    assert!(host.current_main_document_resource_loader().is_none());
+
+    policy.set_subresource_interception(Classes::FETCH_LIKE);
+    assert!(host.should_intercept_subresource(Resource::Xhr));
+    assert!(!host.should_intercept_subresource(Resource::Image));
+    policy.set_subresource_interception(Classes::NONE);
+    assert!(!host.should_intercept_subresource(Resource::Xhr));
+}
+
+#[test]
+fn reused_window_adopts_the_new_document_interception_policy() {
+    use crate::SubresourceInterceptionClasses as Classes;
+    use crate::network::{ResourceRequestClient, context::DocumentResourceLoader};
+    use crate::types::SubresourceResourceType as Resource;
+
+    let vm = new_storage_test_vm("https://xhr-route.test/");
+    let mut host = vm._context_host.borrow_mut();
+    let original = host.current_main_document_resource_loader().unwrap();
+    let old_policy = original.request_client().page_network_policy().clone();
+    old_policy.set_subresource_interception(Classes::IMAGE);
+    let replacement_client =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let replacement_policy = replacement_client.page_network_policy().clone();
+    replacement_policy.set_subresource_interception(Classes::FETCH_LIKE);
+    let replacement = DocumentResourceLoader::new(
+        replacement_client.handle(),
+        original.task_runner(),
+        original.fetch_context(),
+    );
+
+    host.retire_all_document_resource_loaders();
+    host.register_main_document_resource_loader(&replacement);
+    assert!(host.should_intercept_subresource(Resource::Xhr));
+    assert!(!host.should_intercept_subresource(Resource::Image));
+    old_policy.set_subresource_interception(Classes::ALL);
+    replacement_policy.set_subresource_interception(Classes::NONE);
+    assert!(!host.should_intercept_subresource(Resource::Xhr));
+    assert!(!host.should_intercept_subresource(Resource::Image));
+}
+
+#[test]
 fn unrelated_classes_do_not_create_a_native_xhr_controller() {
     use crate::SubresourceInterceptionClasses as Classes;
 

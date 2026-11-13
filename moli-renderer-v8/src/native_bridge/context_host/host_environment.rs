@@ -421,6 +421,10 @@ impl PageScriptHost {
         loader: &DocumentResourceLoader,
     ) {
         let loader = loader.clone();
+        // Initial Window reuse installs a new Document authority in an
+        // existing host. Its target policy must replace the retired binding;
+        // a transport-only replacement instead retains the same policy.
+        self.page_network_policy = loader.request_client().page_network_policy().clone();
         self.apply_page_network_policy_to_document_loader(&loader);
         let owner = self
             .current_main_document_task_owner()
@@ -2751,45 +2755,16 @@ impl PageScriptHost {
         &mut self,
         classes: SubresourceInterceptionClasses,
     ) {
-        if let Some(loader) = self.current_main_document_resource_loader() {
-            loader
-                .request_client()
-                .page_network_policy()
-                .set_subresource_interception(classes);
-        }
-        self.fetch_subresource_interception_classes = classes;
-        for worker in self.workers.values() {
-            if let super::workers::WorkerExecutionState::Running { handle } = &worker.execution {
-                handle.set_fetch_subresource_interception(classes);
-            }
-        }
+        self.page_network_policy
+            .set_subresource_interception(classes);
     }
 
     pub(crate) fn should_intercept_subresource(
         &self,
         resource_type: SubresourceResourceType,
     ) -> bool {
-        let fallback = self
-            .fetch_subresource_interception_classes
-            .intercepts(resource_type);
-        self.current_main_document_resource_loader()
-            .map_or(fallback, |loader| {
-                loader
-                    .request_client()
-                    .page_network_policy()
-                    .should_intercept_subresource(resource_type, fallback)
-            })
-    }
-
-    pub(crate) fn fetch_subresource_interception_classes(&self) -> SubresourceInterceptionClasses {
-        let fallback = self.fetch_subresource_interception_classes;
-        self.current_main_document_resource_loader()
-            .map_or(fallback, |loader| {
-                loader
-                    .request_client()
-                    .page_network_policy()
-                    .subresource_interception_config(fallback)
-            })
+        self.page_network_policy
+            .should_intercept_subresource(resource_type)
     }
 }
 

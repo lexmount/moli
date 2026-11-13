@@ -2171,6 +2171,7 @@ impl ScriptVmPageRealmBootstrap {
             page_context_cancel_rx,
             top_level_storage_key,
             reserved_service_worker_client_id,
+            initial_document_loader_bootstrap.page_network_policy(),
         )));
         if let Some(domain) = inherited_document_domain {
             context_host

@@ -134,7 +134,6 @@ impl PageVm {
         self.request_client
             .page_network_policy()
             .set_subresource_interception(classes);
-        self.vm_mut().set_fetch_subresource_interception(classes);
     }
 
     pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {

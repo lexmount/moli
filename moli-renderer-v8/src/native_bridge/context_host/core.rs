@@ -313,6 +313,7 @@ impl PageScriptHost {
         page_context_cancel_rx: RendererPageContextCancelReceiver,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+        page_network_policy: crate::network::PageNetworkPolicy,
     ) -> Self {
         let message_port_registry = browser_context_runtime.message_port_registry();
         let broadcast_channel_registry = browser_context_runtime.broadcast_channel_registry();
@@ -589,7 +590,7 @@ impl PageScriptHost {
             focus_change_epoch: 0,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),
-            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
+            page_network_policy,
             active_subresource_requests: 0,
             pending_subresource_fetches: HashMap::new(),
             pending_subresource_auths: HashMap::new(),

@@ -40,7 +40,7 @@ use crate::{
             PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
-            StreamingSubresourceFetchState, SubresourceInterceptionClasses,
+            StreamingSubresourceFetchState,
         },
         util::{
             string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
@@ -1093,7 +1093,10 @@ pub(crate) struct PageScriptHost {
     focus_change_epoch: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
-    fetch_subresource_interception_classes: SubresourceInterceptionClasses,
+    /// The target policy remains available even when the current Document
+    /// loader has been retired. Documents and dedicated Workers share its
+    /// live interception eligibility, without local fallback values.
+    page_network_policy: crate::network::PageNetworkPolicy,
     active_subresource_requests: usize,
     pending_subresource_fetches: HashMap<u64, PendingSubresourceFetchState>,
     pending_subresource_auths: HashMap<u64, PendingSubresourceAuthState>,
