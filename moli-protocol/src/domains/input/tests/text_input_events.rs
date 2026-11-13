@@ -334,3 +334,131 @@ async fn cdp_text_input_line_breaks_and_non_editable_targets_match_chromium() {
     command(&mut ctx, "Input.insertText", json!({"text":""})).await;
     assert_eq!(read(&mut ctx).await["events"], json!([]));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn empty_insert_text_replaces_selection_and_remains_cancelable() {
+    for kind in ["input", "textarea", "div"] {
+        for canceled in [false, true] {
+            let mut ctx = TestContext::new();
+            let html = match kind {
+                "input" => "<input id=editor value=abc>",
+                "textarea" => "<textarea id=editor>abc</textarea>",
+                _ => "<div id=editor contenteditable=true>abc</div>",
+            };
+            with_loaded_document(&mut ctx, html).await;
+            let setup = format!(
+                r#"(() => {{
+                const editor=document.getElementById('editor'); editor.focus();
+                if ('{kind}'==='div') {{const r=document.createRange();r.setStart(editor.firstChild,1);r.setEnd(editor.firstChild,2);getSelection().removeAllRanges();getSelection().addRange(r);}}
+                else editor.setSelectionRange(1,2);
+                window.emptyEvents=[];
+                for(const t of ['beforeinput','textInput','input']) editor.addEventListener(t,e=>{{emptyEvents.push([e.type,e.data]);if({canceled}&&t==='beforeinput')e.preventDefault();}});
+                return 'ready';
+            }})()"#
+            );
+            assert_eq!(evaluate_string(&mut ctx, &setup).await, "ready");
+            command(&mut ctx, "Input.insertText", json!({"text":""})).await;
+            let result: serde_json::Value = serde_json::from_str(&evaluate_string(&mut ctx,
+                "JSON.stringify([document.getElementById('editor').value??document.getElementById('editor').textContent,emptyEvents])").await).unwrap();
+            assert_eq!(
+                result,
+                if canceled {
+                    json!(["abc", [["beforeinput", ""]]])
+                } else {
+                    json!([
+                        "ac",
+                        [["beforeinput", ""], ["textInput", ""], ["input", ""]]
+                    ])
+                },
+                "{kind}, canceled={canceled}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ime_retains_caret_captured_before_beforeinput() {
+    for tag in ["input", "textarea"] {
+        for move_focus in [false, true] {
+            let mut ctx = TestContext::new();
+            let html = if tag == "input" {
+                "<input id=first value=abcd><input id=second value=wxyz>"
+            } else {
+                "<textarea id=first>abcd</textarea><textarea id=second>wxyz</textarea>"
+            };
+            with_loaded_document(&mut ctx, html).await;
+            let setup = format!(
+                r#"(() => {{const first=document.getElementById('first'),second=document.getElementById('second');first.focus();first.setSelectionRange(1,2);second.setSelectionRange(2,3);first.addEventListener('beforeinput',()=>{{if({move_focus})second.focus();else first.setSelectionRange(3,4);}});return 'ready';}})()"#
+            );
+            assert_eq!(evaluate_string(&mut ctx, &setup).await, "ready");
+            command(&mut ctx, "Input.insertText", json!({"text":"X"})).await;
+            let observed:serde_json::Value=serde_json::from_str(&evaluate_string(&mut ctx,"JSON.stringify(['first','second'].map(id=>{const e=document.getElementById(id);return [e.value,e.selectionStart,e.selectionEnd]}))").await).unwrap();
+            assert_eq!(
+                observed,
+                if move_focus {
+                    json!([["abcd", 1, 2], ["wxXz", 2, 2]])
+                } else {
+                    json!([["abcX", 2, 2], ["wxyz", 2, 3]])
+                },
+                "tag={tag}, move_focus={move_focus}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn iframe_contenteditable_ime_revalidates_selection_focus_and_owner_after_callbacks() {
+    for phase in ["beforeinput", "textInput"] {
+        for effect in ["selection", "focus", "remove", "adopt"] {
+            let mut ctx = TestContext::new();
+            with_loaded_document(&mut ctx, "<html><body></body></html>").await;
+            assert_eq!(evaluate_string(&mut ctx,&format!(r#"(() => {{
+                const frame=document.createElement('iframe');document.body.append(frame);
+                const owner=frame.contentDocument;
+                owner.body.innerHTML='<div id=first contenteditable>abcd</div><div id=second contenteditable>wxyz</div>';
+                const first=owner.getElementById('first'),second=owner.getElementById('second');
+                const s=owner.defaultView.getSelection();first.focus();
+                s.setBaseAndExtent(first.firstChild,1,first.firstChild,2);
+                globalThis.editProbe={{owner,first,second,events:[]}};
+                for(const node of [first,second])for(const type of ['beforeinput','textInput','input'])
+                    node.addEventListener(type,e=>editProbe.events.push([type,e.target.id,e.data]));
+                first.addEventListener({phase:?},()=>{{
+                    if({effect:?}==='selection')s.setBaseAndExtent(first.firstChild,3,first.firstChild,4);
+                    if({effect:?}==='focus')second.focus();
+                    if({effect:?}==='remove')first.remove();
+                    if({effect:?}==='adopt')document.body.append(document.adoptNode(first));
+                }},{{once:true}});return 'ready';
+            }})()"#)).await,"ready");
+            type_text(&mut ctx, "insertText", "X").await;
+            let actual: serde_json::Value=serde_json::from_str(&evaluate_string(&mut ctx,r#"JSON.stringify({first:editProbe.first.textContent,second:editProbe.second.textContent,events:editProbe.events,childOwner:editProbe.first.ownerDocument===editProbe.owner})"#).await).unwrap();
+            let mut events = vec![json!(["beforeinput", "first", "X"])];
+            if phase == "textInput" || !matches!(effect, "remove" | "adopt") {
+                events.push(json!([
+                    "textInput",
+                    if effect == "focus" && phase == "beforeinput" {
+                        "second"
+                    } else {
+                        "first"
+                    },
+                    "X"
+                ]));
+            }
+            if !matches!(effect, "remove" | "adopt") {
+                events.push(json!([
+                    "input",
+                    if effect == "focus" { "second" } else { "first" },
+                    "X"
+                ]));
+            }
+            assert_eq!(
+                actual,
+                json!({
+                    "first":if effect=="selection" {"abcX"} else {"abcd"},
+                    "second":if effect=="focus" {"Xwxyz"} else {"wxyz"},
+                    "events":events,"childOwner":effect!="adopt",
+                }),
+                "{phase}/{effect}"
+            );
+        }
+    }
+}

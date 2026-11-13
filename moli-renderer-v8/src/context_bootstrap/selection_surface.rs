@@ -1,7 +1,8 @@
 use super::range_algorithms::range_selection_string_contents;
 use super::selection::{
-    new_selection_runtime_object, selection_bind_owner_document, selection_owner_document,
-    selection_range,
+    new_selection_runtime_object, selection_anchor_node, selection_bind_owner_document,
+    selection_dispatch_change, selection_focus_node, selection_owner_document, selection_range,
+    selection_store,
 };
 use super::selection_callbacks::{
     selection_add_range_callback, selection_attribute_getter_callback, selection_collapse_callback,
@@ -196,6 +197,51 @@ pub(super) fn document_get_selection_callback<'s>(
 
 fn new_selection_object<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
     new_selection_runtime_object(scope)
+}
+
+/// Read native Selection state without consulting author-replaced accessors.
+pub(crate) fn window_selection_is_collapsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    selection_value_for_window(scope, window)
+        .is_none_or(|selection| super::selection::selection_is_collapsed_internal(scope, selection))
+}
+
+/// Focus preserves a selection already inside this host; otherwise editing
+/// starts at its beginning. Use native state so author accessors cannot run.
+pub(crate) fn focus_editing_host_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: crate::document_runtime::DomHandle,
+) {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let window = scope.get_current_context().global(scope);
+    let Some(selection) = selection_value_for_window(scope, window) else {
+        return;
+    };
+    let anchor = selection_anchor_node(scope, selection)
+        .and_then(|node| crate::native_bridge::callback_value_dom_handle(scope, node.into()));
+    let focus = selection_focus_node(scope, selection)
+        .and_then(|node| crate::native_bridge::callback_value_dom_handle(scope, node.into()));
+    let host = unsafe { &*host_ptr };
+    let dom = host.dom_host().dom();
+    if dom.node(target).is_some_and(|node| {
+        anchor.is_some_and(|anchor| node.contains(dom, anchor))
+            && focus.is_some_and(|focus| node.contains(dom, focus))
+    }) {
+        return;
+    }
+    let (start, offset) =
+        crate::native_bridge::element::initial_contenteditable_caret(host, target);
+    if let Some(node) = crate::util::node_wrapper_from_handle(scope, start)
+        && let Some(document) = selection_owner_document(scope, selection)
+        && let Some(range) = super::range::new_range_for_document(scope, document)
+    {
+        selection_store(scope, selection, range, node, offset, node, offset, "none");
+        selection_dispatch_change(scope);
+    }
 }
 
 pub(crate) fn selection_value_for_window<'s>(

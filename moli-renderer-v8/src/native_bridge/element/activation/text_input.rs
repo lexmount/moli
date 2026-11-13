@@ -26,9 +26,6 @@ pub(crate) fn perform_text_input(
     input_type: TextEditInputType,
     source: TextInputSource,
 ) -> bool {
-    if text.is_empty() {
-        return true;
-    }
     let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
         scope,
         runtime_ptr,
@@ -48,6 +45,34 @@ pub(crate) fn perform_text_input(
     if !is_text_control(runtime, initial_target) && editing_host.is_none() {
         return false;
     }
+    if text.is_empty() {
+        let collapsed = if is_text_control(runtime, initial_target) {
+            runtime
+                .dom_host()
+                .node(initial_target)
+                .and_then(|node| node.as_element())
+                .is_none_or(|element| element.selection_start() == element.selection_end())
+        } else {
+            let window = scope.get_current_context().global(scope);
+            crate::context_bootstrap::window_selection_is_collapsed(scope, window)
+        };
+        if collapsed {
+            return true;
+        }
+    }
+    // IME keeps its original composition caret across beforeinput and legacy
+    // listeners, even when beforeinput changes focus within this Document.
+    let caret_start = if is_text_control(runtime, initial_target)
+        && matches!(source, TextInputSource::InputMethod)
+    {
+        runtime
+            .dom_host()
+            .node(initial_target)
+            .and_then(|node| node.as_element())
+            .map(|element| element.selection_start())
+    } else {
+        None
+    };
     let beforeinput_target = editing_host.unwrap_or(initial_target);
     if !dispatch_beforeinput(
         scope,
@@ -76,17 +101,6 @@ pub(crate) fn perform_text_input(
         return false;
     };
     let was_text_control = is_text_control(runtime, target);
-    // IME commits retain their composition caret across legacy listeners,
-    // while physical character insertion uses the live selection afterwards.
-    let caret_start = if was_text_control && matches!(source, TextInputSource::InputMethod) {
-        runtime
-            .dom_host()
-            .node(target)
-            .and_then(|node| node.as_element())
-            .map(|element| element.selection_start())
-    } else {
-        None
-    };
     let Some(event) = construct_text_input_event_for_target(scope, runtime_ptr, target, text)
     else {
         return false;

@@ -8,7 +8,8 @@ use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
-use super::styles::{StyleMode, style_property_value};
+use super::rendered_state::ElementRenderedStyle;
+use super::styles::{StyleMode, StyleObservation, style_property_value};
 use super::{
     ClickEventSource, InputEventCoordinates, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
@@ -20,12 +21,19 @@ use super::{
 };
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::runtime::RendererDomFocusOutcome;
+use crate::style_engine::ComputedDisplayKind;
 use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 
 struct SequentialFocusEntry {
     tab_index: i32,
     order: usize,
     handles: Vec<DomHandle>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusSelection {
+    Initialize,
+    Preserve,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +80,94 @@ fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+pub(crate) fn initial_contenteditable_caret(
+    runtime: &PageScriptHost,
+    target: DomHandle,
+) -> (DomHandle, u32) {
+    let dom_host = runtime.dom_host();
+    let dom = dom_host.dom();
+    let mut styles = StyleObservation::new(runtime);
+    let mut current = dom.first_child(target);
+    while let Some(handle) = current {
+        let node = dom.node(handle).expect("an editing descendant exists");
+        let mut descend = false;
+        if let Some(text) = node.as_text() {
+            let parent = dom
+                .parent_node(handle)
+                .expect("an editing descendant has a parent");
+            if !text.data().is_empty()
+                && ElementRenderedStyle::read_in_scope(&mut styles, parent).visibility_visible
+            {
+                return (handle, 0);
+            }
+        } else if let Some(element) = node.as_element() {
+            let style = ElementRenderedStyle::read_in_scope(&mut styles, handle);
+            if style.display != ComputedDisplayKind::None && !style.hides_contents {
+                let visible = style.visibility_visible;
+                if visible
+                    && (element.has_attribute("inert")
+                        || element
+                            .attribute("contenteditable")
+                            .and_then(contenteditable_state_from_attr)
+                            == Some(false)
+                        || matches!(
+                            element.local_name(),
+                            "br" | "img"
+                                | "input"
+                                | "textarea"
+                                | "select"
+                                | "iframe"
+                                | "object"
+                                | "embed"
+                                | "canvas"
+                                | "video"
+                                | "audio"
+                                | "hr"
+                                | "svg"
+                                | "math"
+                        ))
+                {
+                    let parent = dom
+                        .parent_node(handle)
+                        .expect("an editing descendant has a parent");
+                    return (
+                        parent,
+                        u32::try_from(dom_host.child_index(parent, handle).unwrap())
+                            .unwrap_or(u32::MAX),
+                    );
+                }
+                if visible
+                    && dom.first_child(handle).is_none()
+                    && matches!(
+                        style.display,
+                        ComputedDisplayKind::Block
+                            | ComputedDisplayKind::ListItem
+                            | ComputedDisplayKind::TableCell
+                    )
+                {
+                    return (handle, 0);
+                }
+                descend = true;
+            }
+        }
+        if descend && let Some(child) = dom.first_child(handle) {
+            current = Some(child);
+            continue;
+        }
+        let mut cursor = handle;
+        current = loop {
+            if let Some(sibling) = dom.next_sibling(cursor) {
+                break Some(sibling);
+            }
+            match dom.parent_node(cursor) {
+                Some(parent) if parent != target => cursor = parent,
+                _ => break None,
+            }
+        };
+    }
+    (target, 0)
 }
 
 pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
@@ -363,7 +459,32 @@ pub(crate) fn update_focus(
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous = runtime.active_element_handle();
-    update_focus_from_previous(scope, runtime_ptr, previous, next);
+    update_focus_from_previous_with_previous_focus_within(
+        scope,
+        runtime_ptr,
+        previous,
+        next,
+        None,
+        FocusSelection::Initialize,
+    );
+}
+
+/// Drop keeps its own insertion range; focusing must not replace it with the
+/// caret that keyboard editing would initialize at the host's beginning.
+pub(crate) fn update_focus_preserving_selection(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    next: Option<DomHandle>,
+) {
+    let previous = unsafe { &*runtime_ptr }.active_element_handle();
+    update_focus_from_previous_with_previous_focus_within(
+        scope,
+        runtime_ptr,
+        previous,
+        next,
+        None,
+        FocusSelection::Preserve,
+    );
 }
 
 pub(crate) fn reset_focus_from_previous_handle(
@@ -377,6 +498,7 @@ pub(crate) fn reset_focus_from_previous_handle(
         Some(previous),
         None,
         None,
+        FocusSelection::Preserve,
     );
 }
 
@@ -392,16 +514,8 @@ pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
         Some(previous),
         None,
         Some(previous_focus_within),
+        FocusSelection::Preserve,
     );
-}
-
-fn update_focus_from_previous(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    previous: Option<DomHandle>,
-    next: Option<DomHandle>,
-) {
-    update_focus_from_previous_with_previous_focus_within(scope, runtime_ptr, previous, next, None);
 }
 
 fn update_focus_from_previous_with_previous_focus_within(
@@ -410,6 +524,7 @@ fn update_focus_from_previous_with_previous_focus_within(
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
+    selection: FocusSelection,
 ) {
     if previous == next {
         return;
@@ -444,6 +559,19 @@ fn update_focus_from_previous_with_previous_focus_within(
     }
     let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
     if let Some(next_handle) = next {
+        if selection == FocusSelection::Initialize
+            && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
+            && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle)
+                == Some(next_handle)
+            && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
+                scope,
+                runtime_ptr,
+                next_handle,
+            )
+        {
+            let scope = &mut v8::ContextScope::new(scope, context);
+            crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
+        }
         if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
             let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
         }
@@ -1243,7 +1371,8 @@ pub(crate) fn perform_mouse_focus_default_action(
                         runtime.dom_host().shadow_root_delegates_focus(root) == Some(true)
                             && delegated_focus_target(runtime, handle).is_some()
                     });
-            let should_focus = is_focusable(runtime, handle) || delegates_focus;
+            let should_focus = (is_focusable(runtime, handle) || delegates_focus)
+                && !focused_chain_requires_async_blur(runtime, handle);
             let parent = if should_focus {
                 None
             } else {

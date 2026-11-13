@@ -35,6 +35,7 @@ use super::super::{
     replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
     set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
+    update_focus_preserving_selection,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
@@ -2399,7 +2400,7 @@ pub(crate) fn perform_drop_default_action<'s>(
     }
 
     if let Some(focus_handle) = focus_handle {
-        update_focus(scope, runtime_ptr, Some(focus_handle));
+        update_focus_preserving_selection(scope, runtime_ptr, Some(focus_handle));
     }
 
     if is_file_input {
