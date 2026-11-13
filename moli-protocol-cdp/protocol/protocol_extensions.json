@@ -177,6 +177,63 @@
       "domain": "HeapProfiler",
       "commands": [
         {
+          "name": "moliAllocatorStats",
+          "description": "Moli extension. Returns allocator memory counters when jemalloc diagnostics are enabled.",
+          "experimental": true,
+          "returns": [
+            {
+              "name": "allocatedBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "activeBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "metadataBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "residentBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "mappedBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "retainedBytes",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "unavailable",
+              "type": "boolean",
+              "optional": true
+            },
+            {
+              "name": "epochErrorCode",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "name": "errors",
+              "type": "object",
+              "optional": true
+            },
+            {
+              "name": "profileDump",
+              "type": "object",
+              "optional": true
+            }
+          ]
+        },
+        {
           "name": "moliDiagnostics",
           "description": "Moli extension. Returns Moli memory and lifecycle diagnostics. Diagnostic object contents may grow independently of the CDP schema.",
           "experimental": true,

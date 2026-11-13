@@ -280,8 +280,10 @@ async fn assert_child_frame_navigation_completion(
     let child_navigated = ctx
         .sent
         .iter()
+        .rev()
         .find(|message| {
-            message["method"] == json!("Page.frameNavigated")
+            message["sessionId"] == json!("SID-1")
+                && message["method"] == json!("Page.frameNavigated")
                 && message["params"]["frame"]["id"] == json!(child_frame_id)
                 && expected_url.is_none_or(|expected_url| {
                     message["params"]["frame"]["url"] == json!(expected_url)
