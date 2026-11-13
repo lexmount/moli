@@ -11,12 +11,12 @@ use super::super::window_runtime::{
     navigator_service_worker_message_handler_setter_callback,
     navigator_service_worker_messageerror_handler_getter_callback,
     navigator_service_worker_messageerror_handler_setter_callback,
-    navigator_service_worker_register_callback, navigator_storage_estimate_callback,
-    navigator_storage_get_directory_callback, navigator_storage_persist_callback,
-    navigator_storage_persisted_callback, navigator_ua_data_get_high_entropy_values_callback,
-    navigator_ua_data_to_json_callback, navigator_vibrate_callback,
-    permission_status_name_getter_callback, permission_status_state_getter_callback,
-    service_worker_object_set_owner_scope,
+    navigator_service_worker_register_callback, navigator_service_worker_start_messages_callback,
+    navigator_storage_estimate_callback, navigator_storage_get_directory_callback,
+    navigator_storage_persist_callback, navigator_storage_persisted_callback,
+    navigator_ua_data_get_high_entropy_values_callback, navigator_ua_data_to_json_callback,
+    navigator_vibrate_callback, permission_status_name_getter_callback,
+    permission_status_state_getter_callback, service_worker_object_set_owner_scope,
 };
 use super::super::*;
 use super::clipboard::{build_clipboard_object, install_clipboard_template_bindings};
@@ -439,6 +439,9 @@ struct ServiceWorkerContainerDeclaration {
         length = 0
     )]
     get_registrations: (),
+
+    #[webapi(method, enumerable, callback = navigator_service_worker_start_messages_callback, receiver = web_api_interfaces::ServiceWorkerContainer::is_instance, length = 0)]
+    start_messages: (),
 
     #[webapi(
         accessor_property,

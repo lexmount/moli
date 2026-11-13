@@ -123,6 +123,7 @@ impl ScriptVm {
         &mut self,
         event_type: &str,
     ) -> Result<()> {
+        let document_owner = self.current_main_document_task_owner();
         if event_type == "DOMContentLoaded" {
             self.record_main_document_lifecycle_timing(
                 DocumentLifecycleTiming::DomContentLoadedStart,
@@ -152,6 +153,16 @@ impl ScriptVm {
                 "document lifecycle event `{event_type}` exceeded {:?} and was terminated",
                 watchdog_timeout
             );
+        }
+        if event_type == "DOMContentLoaded"
+            && let Some(owner) = document_owner
+        {
+            self._context_host
+                .borrow_mut()
+                .enable_service_worker_client_message_queue_for_document(
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                    crate::native_bridge::WindowDocumentOwner::Frame(owner),
+                );
         }
         Ok(())
     }

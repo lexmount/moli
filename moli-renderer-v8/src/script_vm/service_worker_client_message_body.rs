@@ -18,6 +18,7 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ServiceWorkerClientMessageBodyEffect {
+    QueuedForClientMessageQueue,
     EventDispatched {
         event_kind: ServiceWorkerClientMessageBodyEventKind,
         callback_effect: ServiceWorkerClientMessageBodyCallbackEffect,
@@ -100,7 +101,18 @@ impl ScriptVm {
                 .service_worker_window_owner_is_current(window_owner),
             "authorized ServiceWorker client-message owner changed inside one Page turn"
         );
-        let completion = task.into_completion();
+        let client_queue_delivery = task.is_client_queue_delivery();
+        let Some(completion) = self
+            ._context_host
+            .borrow_mut()
+            .admit_service_worker_client_message(
+                window_owner,
+                task.into_completion(),
+                client_queue_delivery,
+            )
+        else {
+            return Ok(ServiceWorkerClientMessageBodyEffect::QueuedForClientMessageQueue);
+        };
         self.with_default_context_scope(move |scope, _host_ptr| {
             Ok(
                 crate::context_bootstrap::dispatch_service_worker_client_message_body(

@@ -1202,3 +1202,6 @@ pub(crate) fn set_event_private_bool<'s>(
         v8::Boolean::new(scope, value).into(),
     );
 }
+
+#[cfg(test)]
+pub(crate) use self::window_runtime::navigator_service_worker_start_messages_callback;

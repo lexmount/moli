@@ -146,6 +146,8 @@ const WORKER_PARENT_PROBE: &str = r#"
       if (config.mode === 'service') {
         const listener = event => { navigator.serviceWorker.removeEventListener('message', listener); resolve(event.data); };
         navigator.serviceWorker.addEventListener('message', listener);
+        // This API fixture does not run a parser-driven DOMContentLoaded.
+        navigator.serviceWorker.startMessages();
         registration = await navigator.serviceWorker.register('/handler-sw.js?case=' + encodeURIComponent(config.name), {scope:'./'});
         const active = registration.active || registration.installing || registration.waiting;
         if (active.state !== 'activated') await new Promise(done => active.addEventListener('statechange', () => { if (active.state === 'activated') done(); }));

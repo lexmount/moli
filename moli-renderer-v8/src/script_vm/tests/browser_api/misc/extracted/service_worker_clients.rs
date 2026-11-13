@@ -1,5 +1,37 @@
 use super::*;
 
+impl ScriptVm {
+    pub(crate) fn borrow_service_worker_start_messages_from_an_unbound_realm_for_test(
+        &mut self,
+    ) -> anyhow::Result<()> {
+        self.with_default_context_scope(|scope, _| {
+            // Create the borrowed callback in an unbound realm, then invoke it
+            // through ScriptVm's regular JavaScript entry point.
+            let context = v8::Context::new(scope, Default::default());
+            let callback = {
+                let foreign_scope = &mut v8::ContextScope::new(scope, context);
+                v8::Function::new(
+                    foreign_scope,
+                    crate::context_bootstrap::navigator_service_worker_start_messages_callback,
+                )
+                .unwrap()
+            };
+            let global = scope.get_current_context().global(scope);
+            assert_eq!(
+                global.set(
+                    scope,
+                    crate::util::v8str(scope, "__serviceWorkerQueueBorrowedStartMessages").into(),
+                    callback.into(),
+                ),
+                Some(true)
+            );
+            Ok(())
+        })?;
+        self.eval("try { __serviceWorkerQueueBorrowedStartMessages.call(navigator.serviceWorker); } finally { delete globalThis.__serviceWorkerQueueBorrowedStartMessages; }")?;
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn navigator_service_worker_child_frame_controller_uses_child_client() {
     let (base_url, server) = spawn_service_worker_response_server(vec![
@@ -160,6 +192,8 @@ async fn navigator_service_worker_post_message_routes_to_waiting_and_active_vers
           globalThis.__serviceWorkerWaitingPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            // This API fixture does not run a parser-driven DOMContentLoaded.
+            sw.startMessages();
             const registration = await sw.register("worker.js", { scope: "./" });
             await sw.ready;
             const updated = await sw.register("worker.js", { scope: "./" });
@@ -272,6 +306,7 @@ async fn navigator_service_worker_post_message_routes_to_installing_version() {
           globalThis.__serviceWorkerInstallingPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            sw.startMessages();
             const registration = await sw.register("worker.js", { scope: "./" });
             await sw.ready;
             let installingWorker = null;
@@ -1167,6 +1202,7 @@ async fn navigator_service_worker_post_message_to_redundant_worker_is_dropped() 
           globalThis.__serviceWorkerRedundantPostMessageProbe = "pending";
           (async () => {
             const sw = navigator.serviceWorker;
+            sw.startMessages();
             const registration = await sw.register("worker-v1.js", { scope: "./" });
             await sw.ready;
             const firstWorker = registration.active;

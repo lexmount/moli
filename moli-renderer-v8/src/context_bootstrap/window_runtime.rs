@@ -43,8 +43,8 @@ pub(crate) use service_worker::{
     ServiceWorkerClientMessageCallbackDispatchEffect, ServiceWorkerClientMessageDispatchEffect,
     ServiceWorkerInternalEventCallbackDispatchEffect, dispatch_service_worker_client_message_body,
     dispatch_service_worker_controller_change, dispatch_service_worker_lifecycle_notification,
-    settle_service_worker_ready_completion, settle_service_worker_register_completion,
-    settle_service_worker_unregister_completion,
+    navigator_service_worker_start_messages_callback, settle_service_worker_ready_completion,
+    settle_service_worker_register_completion, settle_service_worker_unregister_completion,
 };
 pub(super) use service_worker::{
     install_initial_service_worker_ready_promise,
