@@ -163,5 +163,6 @@ async def run_svg_rect_group(
         )
         await _check_inline_svg(page, results)
         await _check_svg_scene_inputs(page, results, "template")
+        await _check_svg_scene_inputs(page, results, "units")
     finally:
         await context.close()

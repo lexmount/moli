@@ -1,6 +1,86 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn inline_svg_zoom_preserves_font_and_stroke_user_units() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-scene-units.html")?,
+        );
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/inline-svg-scene-inputs.js"
+        ));
+        let metadata = page_vm.vm_mut().eval(&format!(
+            "{fixture}\nJSON.stringify(installSvgSceneInputs('units'))"
+        ))?;
+        let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(
+                metadata["width"].as_u64().unwrap() as u32,
+                metadata["height"].as_u64().unwrap() as u32,
+                1.0,
+            ))?
+            .unwrap();
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        for case in metadata["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let observed = page_vm.vm_mut().eval(&format!(
+                "JSON.stringify(svgSceneInputRects({}))",
+                serde_json::to_string(name)?
+            ))?;
+            let observed: serde_json::Value = serde_json::from_str(&observed)?;
+            assert!(
+                observed["target"][2].as_f64().unwrap() > 0.0,
+                "{name}: {observed}"
+            );
+            for (target, reference) in observed["target"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(observed["reference"].as_array().unwrap())
+            {
+                assert!(
+                    (target.as_f64().unwrap() - reference.as_f64().unwrap()).abs() < 0.01,
+                    "{name}: {observed}"
+                );
+            }
+            let top = case["top"].as_u64().unwrap() as usize;
+            let mut ink = 0_u64;
+            for y in top..top + 140 {
+                for x in 0..200 {
+                    let target = (y * raster.width as usize + x) * 4;
+                    let reference = (y * raster.width as usize + x + 240) * 4;
+                    assert_eq!(
+                        &raster.rgba[target..target + 4],
+                        &raster.rgba[reference..reference + 4],
+                        "{name} pixel ({x},{y})"
+                    );
+                    ink += u64::from(255 - raster.rgba[reference]);
+                }
+            }
+            assert!(
+                ink > 1000,
+                "{name}: reference must contain visible glyphs or strokes"
+            );
+        }
+        assert_eq!(
+            crate::layout_renderer::svg_parse_count(),
+            parsed,
+            "clean SVG reads must reuse the scene publication"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("SVG zoom must match equivalent outer transforms in geometry and pixels");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn inline_svg_final_styles_do_not_become_author_selector_attributes() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

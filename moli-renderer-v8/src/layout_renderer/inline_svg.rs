@@ -17,6 +17,7 @@ use std::{
 
 use moli_layout::{LayoutImageResource, PaintColor, ReplacedMetrics, ResolvedLayoutStyle};
 use style::color::ColorSpace;
+use style::properties::{LonghandId, PropertyId};
 use style::values::computed::{SVGPaint, SVGPaintKind};
 use style_traits::ToCss;
 
@@ -247,7 +248,15 @@ fn prepare_source(mut source: String) -> Option<String> {
 }
 
 fn computed_svg_declarations(style: &ResolvedLayoutStyle) -> String {
-    let mut declarations = inherited_context_declarations(style.current_color(), style.font_size());
+    // Stylo stores CSS lengths after effective zoom. This scene uses SVG user
+    // units; the outer viewport applies zoom when publishing quads and paint.
+    // Graphics-local zoom also does not transform SVG coordinates.
+    let font_size = style
+        .stylo_computed_values()
+        .map_or(style.font_size(), |computed| {
+            computed.effective_zoom.unzoom(style.font_size())
+        });
+    let mut declarations = inherited_context_declarations(style.current_color(), font_size);
     let Some(computed) = style.stylo_computed_values() else {
         return declarations;
     };
@@ -270,6 +279,21 @@ fn computed_svg_declarations(style: &ResolvedLayoutStyle) -> String {
         &computed.clone_stroke(),
         &current_color,
     );
+    // Share CSSOM's typed length resolution: remove effective zoom from
+    // absolute lengths, while leaving percentages (including calc terms)
+    // relative to the unzoomed SVG viewport.
+    for property in [
+        LonghandId::StrokeWidth,
+        LonghandId::StrokeDasharray,
+        LonghandId::StrokeDashoffset,
+    ] {
+        if let Some(value) = crate::style_engine::serialize_resolved_computed_property(
+            computed,
+            PropertyId::NonCustom(property.into()),
+        ) {
+            append_serialized_declaration(&mut declarations, property.name(), &value);
+        }
+    }
     for (name, value) in [
         (
             "fill-opacity",
@@ -279,18 +303,6 @@ fn computed_svg_declarations(style: &ResolvedLayoutStyle) -> String {
         (
             "stroke-opacity",
             computed.clone_stroke_opacity().to_css_string(),
-        ),
-        (
-            "stroke-width",
-            computed.clone_stroke_width().to_css_string(),
-        ),
-        (
-            "stroke-dasharray",
-            computed.clone_stroke_dasharray().to_css_string(),
-        ),
-        (
-            "stroke-dashoffset",
-            computed.clone_stroke_dashoffset().to_css_string(),
         ),
         (
             "stroke-linecap",

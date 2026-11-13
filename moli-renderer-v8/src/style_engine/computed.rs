@@ -1629,7 +1629,9 @@ fn serialize_raw_computed_property(
     Some(serialized)
 }
 
-fn serialize_resolved_computed_property(
+/// Serializes an already sampled value with CSSOM's length/zoom normalization.
+/// This does not initiate style observation or layout work.
+pub(crate) fn serialize_resolved_computed_property(
     style: &ComputedValues,
     property_id: PropertyId,
 ) -> Option<String> {
