@@ -5,7 +5,28 @@
 // 300x150 default concrete-object-size algorithm follow Blink's
 // LayoutSVGRoot::UnscaledNaturalSizingInfo and ConcreteObjectSize.
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
+
+pub use usvg::ElementStyleProperty as SvgStyleProperty;
+/// Shared final style profile, applied after matching the original SVG XML.
+pub type SvgElementStyle = Arc<[SvgStyleProperty]>;
+
+/// Numeric object geometry associated with an original serialized element.
+#[derive(Clone, Debug)]
+pub struct SvgObjectGeometry {
+    pub element_index: usize,
+    pub bounds: [f32; 4],
+    pub transform: [f32; 6],
+}
+
+/// Paint and source geometry produced by one bounded inline SVG parse.
+pub struct SvgScene {
+    pub image: SvgImage,
+    pub objects: Vec<SvgObjectGeometry>,
+}
 
 /// Maximum encoded SVG body admitted to the static image decoder.
 ///
@@ -225,6 +246,8 @@ pub enum SvgDecodeError {
     MissingRoot,
     #[error("SVG concrete object size must be finite and positive")]
     InvalidConcreteSize,
+    #[error("SVG style profile count {actual} does not match {expected} serialized elements")]
+    StyleElementCount { actual: usize, expected: usize },
     #[error("SVG tree could not be parsed: {0}")]
     Parse(#[from] usvg::Error),
 }
@@ -277,6 +300,87 @@ pub fn svg_image_metadata_from_root_attributes(
 pub fn decode_svg_image(bytes: &[u8]) -> Result<SvgImage, SvgDecodeError> {
     let metadata = probe_svg_image(bytes)?;
     decode_svg_image_with_metadata(bytes, metadata)
+}
+
+/// Decodes an original XML input with an embedding document's final styles.
+/// Generated properties do not count towards the encoded user-input budget,
+/// never become selector-visible XML attributes, and share their value storage.
+pub fn decode_inline_svg_scene(
+    bytes: &[u8],
+    styles: &[Option<SvgElementStyle>],
+    viewport: (f32, f32),
+) -> Result<SvgScene, SvgDecodeError> {
+    check_encoded_budget(bytes)?;
+    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    let xml = usvg::roxmltree::Document::parse_with_options(
+        source,
+        usvg::roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))?;
+    let elements = xml
+        .descendants()
+        .filter(|node| node.is_element())
+        .collect::<Vec<_>>();
+    if elements.len() != styles.len() {
+        return Err(SvgDecodeError::StyleElementCount {
+            actual: styles.len(),
+            expected: elements.len(),
+        });
+    }
+    let default_size =
+        usvg::Size::from_wh(viewport.0, viewport.1).ok_or(SvgDecodeError::InvalidConcreteSize)?;
+    let overrides = elements
+        .iter()
+        .zip(styles)
+        .filter_map(|(node, style)| style.clone().map(|style| (node.id(), style)))
+        .collect();
+    let sources = elements
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id(), index))
+        .collect::<HashMap<_, _>>();
+    let fonts = &SVG_FONTS;
+    let options = usvg::Options {
+        fontdb: fonts.database.clone(),
+        font_family: fonts.default_family.clone(),
+        font_resolver: fonts.resolver(),
+        default_size,
+        element_styles: Some(Arc::new(overrides)),
+        collect_object_geometry: true,
+        image_href_resolver: usvg::ImageHrefResolver {
+            resolve_data: Box::new(|_, _, _| None),
+            resolve_string: Box::new(|_, _| None),
+        },
+        ..Default::default()
+    };
+    let mut tree = usvg::Tree::from_xmltree(&xml, &options)?;
+    let objects = tree
+        .take_object_geometry()
+        .into_iter()
+        .filter_map(|geometry| {
+            let rect = geometry.bounding_box;
+            let t = geometry.transform;
+            Some(SvgObjectGeometry {
+                element_index: *sources.get(&geometry.source)?,
+                bounds: [rect.x(), rect.y(), rect.width(), rect.height()],
+                transform: [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
+            })
+        })
+        .collect();
+    let metadata = SvgImageMetadata {
+        intrinsic_width: Some(viewport.0),
+        intrinsic_height: Some(viewport.1),
+        intrinsic_ratio: Some(viewport.0 / viewport.1),
+        concrete_width: viewport.0,
+        concrete_height: viewport.1,
+    };
+    Ok(SvgScene {
+        image: SvgImage { tree, metadata },
+        objects,
+    })
 }
 
 /// Parses SVG after the caller has already admitted the immutable byte buffer.
@@ -432,6 +536,32 @@ fn rounded_dimension(value: f32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_scene_keeps_xml_identity_without_retaining_geometry_in_the_paint_tree() {
+        let source = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><clipPath id="empty"/></defs><rect x="10" y="20" width="30" height="40" clip-path="url(#empty)"/></svg>"##;
+        let profile: SvgElementStyle = Arc::from([SvgStyleProperty::new("fill", "red")]);
+        let styles = [None, None, None, Some(profile)];
+        let mut scene = decode_inline_svg_scene(source, &styles, (100.0, 100.0)).unwrap();
+        let shape = scene
+            .objects
+            .iter()
+            .find(|object| object.element_index == 3)
+            .unwrap();
+        assert_eq!(shape.bounds, [10.0, 20.0, 30.0, 40.0]);
+        assert!(
+            scene.image.tree.root().children().is_empty(),
+            "the clipped shape has no paint node"
+        );
+        assert!(
+            scene.image.tree.take_object_geometry().is_empty(),
+            "numeric geometry is moved out, never duplicated in the retained paint tree"
+        );
+        assert!(matches!(
+            decode_inline_svg_scene(source, &[], (100.0, 100.0)),
+            Err(SvgDecodeError::StyleElementCount { .. })
+        ));
+    }
 
     #[test]
     fn metadata_preserves_natural_dimensions_and_applies_default_object_size() {

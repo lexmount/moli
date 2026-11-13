@@ -6395,7 +6395,7 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usvg"
 version = "0.48.1"
-source = "git+https://github.com/lexmount/resvg?rev=02b16a3cc3ca4dd019293c45aacf89ca11875ed9#02b16a3cc3ca4dd019293c45aacf89ca11875ed9"
+source = "git+https://github.com/lexmount/resvg?rev=5b272517a9802de769d72b1cac9ac1d2f7a5c08d#5b272517a9802de769d72b1cac9ac1d2f7a5c08d"
 dependencies = [
  "base64 0.23.1",
  "data-url",
