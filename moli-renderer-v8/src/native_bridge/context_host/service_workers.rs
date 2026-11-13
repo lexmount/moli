@@ -1188,7 +1188,10 @@ impl PageScriptHost {
             return None;
         }
         let popup_id = document_owner.popup_id();
-        let storage_key = service_worker_first_party_storage_key(&document_url);
+        let storage_key = self
+            .storage_context_for_lightweight_popup(popup_id)?
+            .storage_key()
+            .serialized_storage_key();
         if let Some(client_id) = self.service_worker_popup_clients.get(&popup_id).copied() {
             self.browser_context_runtime
                 .update_service_worker_client_document(
@@ -1223,7 +1226,10 @@ impl PageScriptHost {
         let Some(document_owner) = self.current_lightweight_popup_document_owner(popup_id) else {
             return false;
         };
-        let storage_key = service_worker_first_party_storage_key(&document_url);
+        let Some(context) = self.storage_context_for_lightweight_popup(popup_id) else {
+            return false;
+        };
+        let storage_key = context.storage_key().serialized_storage_key();
         self.browser_context_runtime
             .update_service_worker_client_document(
                 client_id,
@@ -1239,7 +1245,10 @@ impl PageScriptHost {
         handle: crate::document_runtime::DomHandle,
     ) -> Option<ServiceWorkerClientId> {
         let document_url = self.child_browsing_context_current_url(handle)?;
-        let storage_key = service_worker_first_party_storage_key(&document_url);
+        let storage_key = self
+            .storage_context_for_child_browsing_context(handle)?
+            .storage_key()
+            .serialized_storage_key();
         let document_owner = self
             .frame_owner_store
             .current_child_document_task_owner(handle)
@@ -1282,6 +1291,7 @@ impl PageScriptHost {
         &mut self,
         handle: crate::document_runtime::DomHandle,
         document_url: &Url,
+        storage_key: String,
     ) {
         if !matches!(document_url.scheme(), "http" | "https") {
             self.clear_pending_service_worker_child_client(handle);
@@ -1298,7 +1308,6 @@ impl PageScriptHost {
             return;
         }
         self.clear_pending_service_worker_child_client(handle);
-        let storage_key = service_worker_first_party_storage_key(document_url);
         let client_id = self
             .browser_context_runtime
             .register_reserved_service_worker_client(
