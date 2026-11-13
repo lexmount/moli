@@ -506,7 +506,8 @@ async fn webdriver_classic_navigation_honors_page_load_timeout() {
         json!({ "url": url }),
     )
     .await;
-    assert_eq!(timeout_status, StatusCode::REQUEST_TIMEOUT);
+    // WebDriver's timeout error uses HTTP 500, as does ChromeDriver.
+    assert_eq!(timeout_status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(timeout_response["value"]["error"], json!("timeout"));
     assert_eq!(
         timeout_response["value"]["message"],
