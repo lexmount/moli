@@ -2681,7 +2681,7 @@ async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
             evaluate_window_name_probe(
                 &mut opener,
                 100 + index as u64,
-                "window.popup = window.open('about:blank', 'closable'); popup.closed"
+                "window.selfCloseTailRan = false; window.popup = window.open('about:blank', 'closable'); popup.closed"
             )
             .await,
             false
@@ -2700,15 +2700,41 @@ async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
         match close_kind {
             "self" => {
                 let mut popup = connect_dynamic_page(addr, &popup_id).await;
-                assert_eq!(
-                    evaluate_window_name_probe(
-                        &mut popup,
-                        1,
-                        "window.close(); 'response-before-detach'"
-                    )
-                    .await,
-                    "response-before-detach"
-                );
+                send_cdp_command_without_wait(
+                    &mut popup, 1, "Runtime.evaluate", None,
+                    json!({"expression": "const liveOpener = window.opener; window.close(); liveOpener.selfCloseTailRan = true; 'closed-self'", "returnByValue": true}),
+                ).await;
+                // The current JS task must finish (as in Blink Page::CloseSoon),
+                // but retiring its own endpoint need not wait for a writer flush.
+                // Validate a delivered reply; otherwise require an orderly close.
+                let replied = timeout(Duration::from_secs(5), async {
+                    loop {
+                        let message: serde_json::Value = match popup
+                            .next()
+                            .await
+                            .expect("self-close terminal")
+                            .expect("self-close transport")
+                        {
+                            WsMessage::Text(text) => serde_json::from_str(&text).unwrap(),
+                            WsMessage::Binary(bytes) => serde_json::from_slice(&bytes).unwrap(),
+                            WsMessage::Close(_) => break false,
+                            WsMessage::Ping(_) | WsMessage::Pong(_) => continue,
+                            other => panic!("unexpected self-close message: {other:?}"),
+                        };
+                        if message.get("id").is_some() {
+                            assert_eq!(message["id"], 1, "{message}");
+                            assert!(message["error"].is_null(), "{message}");
+                            assert!(message["result"]["exceptionDetails"].is_null(), "{message}");
+                            assert_eq!(message["result"]["result"]["value"], "closed-self");
+                            break true;
+                        }
+                    }
+                })
+                .await
+                .expect("self-close reply or close");
+                if replied {
+                    wait_for_websocket_close(&mut popup, "self-closed popup").await;
+                }
             }
             "reference" => {
                 assert_eq!(
@@ -2733,6 +2759,13 @@ async fn popup_close_routes_script_and_protocol_requests_to_the_same_target() {
             !current.iter().any(|target| target["id"] == popup_id)
         })
         .await;
+        if close_kind == "self" {
+            assert_eq!(
+                evaluate_window_name_probe(&mut opener, 500, "selfCloseTailRan").await,
+                true,
+                "self-close must not interrupt the remainder of its JavaScript task"
+            );
+        }
         assert_eq!(
             evaluate_window_name_probe(
                 &mut opener,
