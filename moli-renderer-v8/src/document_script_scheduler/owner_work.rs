@@ -350,6 +350,7 @@ fn page_owned_document_script_work_from_source_load_outcome(
         source_result,
         source_bytes,
         network_result,
+        ..
     } = outcome;
     match source_result {
         Ok(source) => PageOwnedDocumentScriptWork::Script {

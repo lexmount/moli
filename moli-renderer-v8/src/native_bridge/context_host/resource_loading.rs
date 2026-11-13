@@ -334,7 +334,7 @@ impl PageScriptHost {
         )));
     }
 
-    fn get_subresource_network_record_with_initiator(
+    pub(crate) fn get_subresource_network_record_with_initiator(
         frame_id: Option<String>,
         document_url: url::Url,
         request_url: url::Url,

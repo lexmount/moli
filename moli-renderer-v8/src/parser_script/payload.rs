@@ -121,6 +121,7 @@ impl ParserPreparedClassicScript {
             source_result,
             source_bytes,
             network_result,
+            ..
         } = outcome;
         let source = source_result?;
         *self.script =
@@ -200,6 +201,7 @@ pub(crate) struct ParserClassicScriptSourceFailure {
     pub(crate) error: String,
     pub(crate) prepared_script: Option<Box<PreparedScript>>,
     pub(crate) source_network_result: Option<SharedNavigationResponseResult>,
+    pub(crate) network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
 }
 
 impl ParserClassicScriptSourceFailure {
@@ -269,6 +271,7 @@ impl ParserClassicScriptSourceResult {
                 source_result: result,
                 source_bytes: None,
                 network_result: None,
+                network_request_handle: None,
             },
         )
     }
@@ -290,6 +293,12 @@ impl ParserClassicScriptSourceResult {
 
     pub(crate) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
         self.outcome.network_result.as_ref()
+    }
+
+    pub(crate) fn network_request_handle(
+        &self,
+    ) -> Option<crate::types::SubresourceNetworkRequestHandle> {
+        self.outcome.network_request_handle
     }
 
     pub(crate) fn into_outcome(self) -> PreparedScriptSourceLoadOutcome {

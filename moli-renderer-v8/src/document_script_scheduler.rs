@@ -580,6 +580,7 @@ mod tests {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            network_request_handle: None,
         }
     }
 
@@ -588,6 +589,7 @@ mod tests {
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
+            network_request_handle: None,
         }
     }
 

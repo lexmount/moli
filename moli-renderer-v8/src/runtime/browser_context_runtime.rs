@@ -837,6 +837,8 @@ impl RendererBrowserContextRuntime {
             .next_detached_parser_script_fetch_id
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
+        let handle = crate::network::interception_control::next_subresource_network_handle();
+        info.network_request_handle = Some(handle);
         (
             info,
             DetachedParserScriptFetchContinuation::new(
@@ -845,7 +847,7 @@ impl RendererBrowserContextRuntime {
                 request_client,
                 task_runner,
                 document_character_set,
-                completer,
+                completer.with_network_request_handle(handle),
             ),
         )
     }

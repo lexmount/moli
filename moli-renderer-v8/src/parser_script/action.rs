@@ -461,6 +461,7 @@ pub(crate) struct ParserPendingClassicScriptSourceResultAction<'a> {
     notification: ParserPendingClassicScriptNotification,
     network_result: Option<&'a SharedNavigationResponseResult>,
     network_record_urls: Option<ParserClassicScriptNetworkRecordUrls>,
+    network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
 }
 
 impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
@@ -473,11 +474,26 @@ impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
             notification,
             network_result,
             network_record_urls,
+            network_request_handle: None,
         }
     }
 
     pub(crate) fn notification(&self) -> ParserPendingClassicScriptNotification {
         self.notification
+    }
+
+    pub(crate) fn with_network_request_handle(
+        mut self,
+        handle: Option<crate::types::SubresourceNetworkRequestHandle>,
+    ) -> Self {
+        self.network_request_handle = handle;
+        self
+    }
+
+    pub(crate) fn network_request_handle(
+        &self,
+    ) -> Option<crate::types::SubresourceNetworkRequestHandle> {
+        self.network_request_handle
     }
 
     pub(crate) fn network_result(&self) -> Option<&SharedNavigationResponseResult> {
@@ -836,6 +852,7 @@ mod tests {
             error: "network failure".to_owned(),
             prepared_script: None,
             source_network_result: None,
+            network_request_handle: None,
         };
         let action =
             ParserClassicScriptSourceFailureAction::new("document-1", failure, Some("error"));
@@ -857,6 +874,7 @@ mod tests {
             error: "network failure".to_owned(),
             prepared_script: None,
             source_network_result: None,
+            network_request_handle: None,
         };
         let action =
             ParserClassicScriptSourceFailureAction::new("queued-owner", failure, Some("error"));
@@ -880,6 +898,7 @@ mod tests {
             error: "blocked".to_owned(),
             prepared_script: None,
             source_network_result: None,
+            network_request_handle: None,
         };
         let pending = ParserPendingClassicScriptSourceFailureAction::new(failure);
         assert_eq!(pending.script_handle(), DomHandle::new(13));

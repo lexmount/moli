@@ -140,10 +140,11 @@ impl ParserScriptSourceResultOwner<PendingParsingBlockingClassicScriptContext>
         {
             self.page_vm
                 .vm_mut()
-                .record_script_subresource_network_result(
+                .record_parser_script_subresource_network_result(
                     urls.initiator_url().clone(),
                     urls.script_url().clone(),
                     network_result,
+                    action.network_request_handle(),
                 );
         }
         Some(notification)

@@ -347,6 +347,7 @@ impl AsyncFallbackQueue {
                 source_result: Err(error),
                 source_bytes: None,
                 network_result,
+                network_request_handle: None,
             }),
         });
     }
@@ -396,6 +397,7 @@ impl AsyncFallbackQueue {
                         source_result: Err(error),
                         source_bytes: completion.outcome.source_bytes,
                         network_result: completion.outcome.network_result,
+                        network_request_handle: None,
                     });
                 }
             }
@@ -485,6 +487,7 @@ fn parse_time_task_from_load_outcome(
         source_result,
         source_bytes,
         network_result,
+        ..
     } = outcome;
     match source_result {
         Ok(source) => ParseTimeDocumentScriptTask::classic_async_script(
@@ -509,6 +512,7 @@ fn async_phase_page_task_from_load_outcome(
         source_result,
         source_bytes,
         network_result,
+        ..
     } = outcome;
     match source_result {
         Ok(source) => PostParseDocumentScriptTask::async_script(
@@ -530,6 +534,7 @@ fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFall
             source_result: Ok(source),
             source_bytes,
             network_result: _,
+            ..
         }) => AsyncFallbackEntry {
             script: prepared_script_with_loaded_source(entry.original, source, source_bytes),
             load_delay_binding: entry.load_delay_binding,

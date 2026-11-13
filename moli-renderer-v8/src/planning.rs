@@ -30,6 +30,7 @@ pub(crate) struct SharedScriptSourceLoad {
 pub(crate) struct SharedScriptSourceLoadCompleter {
     load: SharedScriptSourceLoad,
     owner_wake: Option<crate::page_task_queue::RendererOwnerWakeSender>,
+    network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
 }
 
 impl std::fmt::Debug for SharedScriptSourceLoad {
@@ -148,7 +149,11 @@ impl SharedScriptSourceLoad {
         let load = Self::pending();
         (
             load.clone(),
-            SharedScriptSourceLoadCompleter { load, owner_wake },
+            SharedScriptSourceLoadCompleter {
+                load,
+                owner_wake,
+                network_request_handle: None,
+            },
         )
     }
 
@@ -189,6 +194,7 @@ impl SharedScriptSourceLoad {
             source_result: Ok(source.into()),
             source_bytes: None,
             network_result: None,
+            network_request_handle: None,
         });
         load
     }
@@ -200,6 +206,7 @@ impl SharedScriptSourceLoad {
             source_result: Err(error.into()),
             source_bytes: None,
             network_result: None,
+            network_request_handle: None,
         });
         load
     }
@@ -214,6 +221,7 @@ impl SharedScriptSourceLoad {
             source_result,
             source_bytes: None,
             network_result,
+            network_request_handle: None,
         });
         load
     }
@@ -230,6 +238,7 @@ impl SharedScriptSourceLoad {
                 source_result: task.await,
                 source_bytes: None,
                 network_result: None,
+                network_request_handle: None,
             });
         });
         load
@@ -237,11 +246,20 @@ impl SharedScriptSourceLoad {
 }
 
 impl SharedScriptSourceLoadCompleter {
+    pub(crate) fn with_network_request_handle(
+        mut self,
+        handle: crate::types::SubresourceNetworkRequestHandle,
+    ) -> Self {
+        self.network_request_handle = Some(handle);
+        self
+    }
+
     pub(crate) fn finish(mut self, result: PreparedScriptSourceLoadOutcome) {
         self.complete(result);
     }
 
-    fn complete(&mut self, result: PreparedScriptSourceLoadOutcome) {
+    fn complete(&mut self, mut result: PreparedScriptSourceLoadOutcome) {
+        result.network_request_handle = self.network_request_handle;
         self.load.finish(result);
         if let Some(owner_wake) = self.owner_wake.take() {
             owner_wake.signal_parse_time_document_script_work();
@@ -282,6 +300,7 @@ pub(crate) struct PreparedScriptSourceLoadOutcome {
     pub(crate) source_result: std::result::Result<String, String>,
     pub(crate) source_bytes: Option<Vec<u8>>,
     pub(crate) network_result: Option<SharedNavigationResponseResult>,
+    pub(crate) network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
 }
 
 pub(crate) fn script_preload_network_result(
@@ -303,12 +322,14 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                 source_result: Ok(source.clone()),
                 source_bytes: None,
                 network_result: None,
+                network_request_handle: None,
             }
         }
         ScriptSource::LoadedBinary { source, bytes } => PreparedScriptSourceLoadOutcome {
             source_result: Ok(source.clone()),
             source_bytes: Some(bytes.clone()),
             network_result: None,
+            network_request_handle: None,
         },
         ScriptSource::External => {
             if let Some(outcome) = local_or_unsupported_external_script_source_load_outcome(
@@ -337,6 +358,7 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                         source_result: Err(error.clone()),
                         source_bytes: None,
                         network_result: Some(Arc::new(Err(error))),
+                        network_request_handle: None,
                     }
                 }
             }
@@ -424,6 +446,7 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
                 source_result: Err(message.clone()),
                 source_bytes: None,
                 network_result: Some(Arc::new(Err(message))),
+                network_request_handle: None,
             }
         }
     }
@@ -440,6 +463,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
                 .map_err(|error| error.to_string()),
             source_bytes: None,
             network_result: None,
+            network_request_handle: None,
         }),
         "blob" => Some(match crate::network_host::local_url_response(&script.url) {
             Some(response) => {
@@ -484,6 +508,7 @@ fn failed_external_script_source_load_outcome(message: String) -> PreparedScript
         source_result: Err(message.clone()),
         source_bytes: None,
         network_result: Some(Arc::new(Err(message))),
+        network_request_handle: None,
     }
 }
 
@@ -612,6 +637,7 @@ fn external_script_source_load_outcome_from_response_inner(
         source_result,
         source_bytes: Some(response_bytes),
         network_result: Some(Arc::new(Ok(response))),
+        network_request_handle: None,
     }
 }
 
@@ -769,6 +795,7 @@ mod tests {
                     source_result: Ok("window.ready = true;".to_owned()),
                     source_bytes: None,
                     network_result: None,
+                    network_request_handle: None,
                 }
             },
             RendererResourceTaskRunner::from_current_tokio()

@@ -241,6 +241,7 @@ impl ParserClassicDocumentScriptExecutionHooks
         let script_handle = failure.script_handle();
         let script_url = failure.script_url().clone();
         let error = failure.error().to_owned();
+        let network_request_handle = failure.network_request_handle;
         let event = owner
             .page_vm
             .vm()
@@ -255,10 +256,11 @@ impl ParserClassicDocumentScriptExecutionHooks
             owner
                 .page_vm
                 .vm_mut()
-                .record_script_subresource_network_result(
+                .record_parser_script_subresource_network_result(
                     script.initiator_url,
                     script.url,
                     network_result,
+                    network_request_handle,
                 );
         }
         tracing::debug!(
