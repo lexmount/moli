@@ -3,6 +3,8 @@ use std::{
     sync::OnceLock,
 };
 
+include!(concat!(env!("OUT_DIR"), "/cdp-events.rs"));
+
 /// Final supported CDP schema, validated at build time and Brotli-compressed at quality 11.
 pub const CDP_PROTOCOL_BROTLI: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/cdp-protocol.json.br"));

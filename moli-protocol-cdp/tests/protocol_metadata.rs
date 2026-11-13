@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, io::Read};
 
-use moli_protocol_cdp::{CDP_PROTOCOL_BROTLI, advertised_protocol_json};
+use moli_protocol_cdp::{CDP_PROTOCOL_BROTLI, advertised_protocol_json, is_advertised_event};
 use moli_protocol_cdp_defs::{
-    FORWARDED_EVENT_DOMAINS, IMPLEMENTED_BROWSER_EVENTS, IMPLEMENTED_COMMANDS, SERVER_COMMANDS,
+    FORWARDED_EVENT_DOMAINS, IMPLEMENTED_COMMANDS, LocalCdpEvent, SERVER_COMMANDS,
 };
 use serde_json::{Value, json};
 
@@ -263,9 +263,9 @@ fn advertised_events_match_the_browser_catalog_and_v8_forwarding() {
     let advertised: Value = serde_json::from_str(advertised_protocol_json()).unwrap();
     let upstream = upstream_protocol_schema();
     let extensions = extensions();
-    let mut expected: BTreeSet<_> = IMPLEMENTED_BROWSER_EVENTS
+    let mut expected: BTreeSet<_> = LocalCdpEvent::METHODS
         .iter()
-        .flat_map(|(name, events)| events.iter().map(move |event| format!("{name}.{event}")))
+        .map(|method| (*method).to_owned())
         .collect();
     for source in [&upstream, &extensions] {
         for domain in source["domains"].as_array().unwrap() {
@@ -300,6 +300,18 @@ fn advertised_events_match_the_browser_catalog_and_v8_forwarding() {
         })
         .collect();
     assert_eq!(actual, expected);
+    for method in &actual {
+        assert!(is_advertised_event(method), "{method}");
+    }
+    for method in [
+        "Runtime.someUnknownEvent",
+        "Runtime.consoleAPICalled.extra",
+        "Page.LoadEventFired",
+        "Page.navigate",
+        "",
+    ] {
+        assert!(!is_advertised_event(method), "{method}");
+    }
 }
 
 fn domain_mut<'a>(protocol: &'a mut Value, name: &str) -> &'a mut Value {

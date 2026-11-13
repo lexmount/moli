@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use moli_protocol_cdp_defs::{
-    DomainMembers, FORWARDED_COMMAND_DOMAINS, FORWARDED_EVENT_DOMAINS, IMPLEMENTED_BROWSER_EVENTS,
-    IMPLEMENTED_COMMANDS, SERVER_COMMANDS,
+    DomainMembers, FORWARDED_COMMAND_DOMAINS, FORWARDED_EVENT_DOMAINS, IMPLEMENTED_COMMANDS,
+    LocalCdpEvent, SERVER_COMMANDS,
 };
 use serde_json::Value;
 
@@ -38,7 +38,15 @@ pub fn prepare_protocol(protocol: &mut Value, extensions: &Value) {
     for commands in [IMPLEMENTED_COMMANDS, SERVER_COMMANDS] {
         validate_supported_definitions(domains, "commands", commands);
     }
-    validate_supported_definitions(domains, "events", IMPLEMENTED_BROWSER_EVENTS);
+    for method in LocalCdpEvent::METHODS {
+        let (name, event) = method.split_once('.').expect("qualified local event name");
+        assert!(
+            definitions(required_domain(domains, name), "events")
+                .iter()
+                .any(|entry| entry["name"] == event),
+            "missing schema for {method}"
+        );
+    }
     for (section, forwarded) in [
         ("commands", FORWARDED_COMMAND_DOMAINS),
         ("events", FORWARDED_EVENT_DOMAINS),
@@ -65,7 +73,7 @@ pub fn prepare_protocol(protocol: &mut Value, extensions: &Value) {
             entries.retain(|entry| {
                 let event = entry["name"].as_str().expect("event name");
                 FORWARDED_EVENT_DOMAINS.contains(&name.as_str())
-                    || supports(IMPLEMENTED_BROWSER_EVENTS, &name, event)
+                    || LocalCdpEvent::METHODS.contains(&format!("{name}.{event}").as_str())
             });
         }
     }
