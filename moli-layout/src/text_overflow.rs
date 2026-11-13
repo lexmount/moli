@@ -7,7 +7,9 @@ use parley::{Layout, PositionedLayoutItem};
 
 use crate::{
     DocumentLayoutServices, LayoutBoxId, LayoutBoxKind, LayoutWorld,
-    inline::{InlineFormattingContext, InlineObjectRole, glyph_cluster_ranges},
+    inline::{
+        InlineFormattingContext, InlineObjectRole, InlineSourceMapEntry, glyph_cluster_ranges,
+    },
     style::{InlineDirection, LayoutOverflowMode},
     stylo_to_parley::TextBrush,
 };
@@ -248,13 +250,7 @@ pub(crate) fn prepare_text_overflow<N>(
                 } => {
                     let at_start = rtl != *child_rtl;
                     let edge = if at_start { range.start } else { range.end };
-                    let source = context.source_map.iter().find(|source| {
-                        if at_start {
-                            source.output_range.start <= edge && edge < source.output_range.end
-                        } else {
-                            source.output_range.start < edge && edge <= source.output_range.end
-                        }
-                    });
+                    let source = source_at_edge(&context.source_map, edge, at_start);
                     source.map_or((context.root_style, 0), |source| {
                         (
                             source.box_id,
@@ -301,6 +297,30 @@ pub(crate) fn prepare_text_overflow<N>(
         }
         context.text_overflow = Some(Box::new(overflow));
     }
+}
+
+fn source_at_edge(
+    sources: &[InlineSourceMapEntry],
+    edge: usize,
+    at_start: bool,
+) -> Option<&InlineSourceMapEntry> {
+    // Normalization produces monotonic starts and ends, including duplicate
+    // origins for collapsed text. Find the first containing origin without
+    // rescanning the entire IFC for every overflowing line.
+    let index = sources.partition_point(|source| {
+        if at_start {
+            source.output_range.end <= edge
+        } else {
+            source.output_range.end < edge
+        }
+    });
+    sources.get(index).filter(|source| {
+        if at_start {
+            source.output_range.start <= edge && edge < source.output_range.end
+        } else {
+            source.output_range.start < edge && edge <= source.output_range.end
+        }
+    })
 }
 
 fn line_bounds(line: &parley::Line<'_, TextBrush>, width: f32) -> (f32, f32) {
@@ -386,4 +406,37 @@ fn visual_children(
         }
     }
     children
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncation_source_edges_preserve_boundary_and_collapsed_origin_identity() {
+        let sources = [0..1, 1..3, 1..3, 3..7, 9..12].map(|output_range| InlineSourceMapEntry {
+            source_byte_range: output_range.clone(),
+            source_utf16_range: output_range.clone(),
+            output_range,
+            box_id: LayoutBoxId::from_index(0),
+        });
+        for edge in 0..=13 {
+            for at_start in [false, true] {
+                let expected = sources.iter().position(|source| {
+                    if at_start {
+                        source.output_range.contains(&edge)
+                    } else {
+                        source.output_range.start < edge && edge <= source.output_range.end
+                    }
+                });
+                let actual = source_at_edge(&sources, edge, at_start).map(|source| {
+                    sources
+                        .iter()
+                        .position(|entry| std::ptr::eq(entry, source))
+                        .unwrap()
+                });
+                assert_eq!(actual, expected, "edge={edge}, at_start={at_start}");
+            }
+        }
+    }
 }
