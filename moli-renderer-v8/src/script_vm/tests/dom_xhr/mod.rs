@@ -10,6 +10,7 @@ mod data_response;
 mod dom;
 mod file_input;
 mod forms;
+mod interception_route;
 mod json_response;
 mod misc;
 mod no_cors_redirect;

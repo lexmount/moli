@@ -1,23 +1,20 @@
 use super::super::delivery::{queue_xhr_failure_delivery, queue_xhr_response_delivery};
 use super::super::*;
 use super::request::PreparedXhrSendRequest;
+use crate::network_host::controlled_xhr::ControlledXhrContext;
 use crate::service_worker_runtime::{ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination};
 use moli_fetch::{
     FetchCancelHandle, RequestRedirectMode, should_request_be_blocked_due_to_bad_port,
 };
 
-pub(super) fn record_intercepted_xhr(
+// Standalone ScriptVm's public pending-request API has no protocol journal.
+// Keep that compatibility adapter separate from the native Page loading path.
+pub(super) fn record_compatibility_intercepted_xhr(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut PageScriptHost,
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
 ) -> u64 {
-    if host.root_document_lifecycle_identity().is_some()
-        && host.native_interception_output().is_some()
-    {
-        let loader = prepared.resource_loader.request_client().clone();
-        return spawn_network_xhr_fetch(scope, host, xhr, prepared, loader);
-    }
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -288,14 +285,8 @@ pub(super) fn spawn_network_xhr_fetch(
     xhr: v8::Local<'_, v8::Object>,
     prepared: PreparedXhrSendRequest,
     request_client: ResourceRequestClient,
+    control: Option<ControlledXhrContext>,
 ) -> u64 {
-    let control = if host.should_intercept_subresource(SubresourceResourceType::Xhr) {
-        host.root_document_lifecycle_identity()
-            .zip(host.native_interception_output())
-            .zip(host.document_connect_policy_snapshot_for_owner(prepared.owner))
-    } else {
-        None
-    };
     let request = prepared
         .request()
         .with_request_mode(moli_fetch::RequestMode::Cors)
@@ -342,23 +333,19 @@ pub(super) fn spawn_network_xhr_fetch(
         },
         control.is_none(),
     );
-    if let Some(((source_document, output), connect_policy)) = control {
+    if let Some(control) = control {
         let (load, info) = host
             .pending_subresource_native_inputs(internal_id)
             .expect("registered XHR must retain its resource authority");
         let completion_tx = host.resource_completion_sender();
         let runner = request_client.resource_task_runner();
-        let mut controlled = crate::network_host::controlled_xhr::ControlledXhrLoad {
-            initial_decision: None,
+        let mut controlled = control.load(
             request,
             info,
             load,
-            cancel: cancel_handle,
-            source_document,
-            output,
-            connect_policy,
-            preflight_headers: prepared.cors_preflight_request_headers,
-        };
+            cancel_handle,
+            prepared.cors_preflight_request_headers,
+        );
         host.append_live_turn_owner_action(controlled.prepare_initial_pause());
         runner.spawn(async move {
             use crate::network_host::controlled_xhr::{

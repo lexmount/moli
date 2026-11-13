@@ -1,6 +1,8 @@
 use crate::content_security_policy::ContentSecurityPolicy;
 
 use super::{OwnerDispatchScope, PageScriptHost};
+use crate::network_host::controlled_xhr::{ControlledXhrContext, XhrInterceptionRoute};
+use crate::types::SubresourceResourceType;
 use crate::{
     content_security_policy::{
         ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
@@ -75,6 +77,28 @@ impl DocumentCspOutcome {
 }
 
 impl PageScriptHost {
+    pub(crate) fn xhr_interception_route(
+        &mut self,
+        owner: crate::native_bridge::OwnerDispatchScope,
+    ) -> Result<XhrInterceptionRoute, &'static str> {
+        if !self.should_intercept_subresource(SubresourceResourceType::Xhr) {
+            return Ok(XhrInterceptionRoute::Ordinary);
+        }
+        if self.renderer_output_journal().is_none() {
+            return Ok(XhrInterceptionRoute::Compatibility);
+        }
+        let interception = self
+            .native_interception_context()
+            .ok_or("XHR interception Document is no longer active")?;
+        let connect_policy = self
+            .document_connect_policy_snapshot_for_owner(owner)
+            .ok_or("XHR interception Document policy is unavailable")?;
+        Ok(XhrInterceptionRoute::Native(ControlledXhrContext {
+            interception,
+            connect_policy,
+        }))
+    }
+
     fn owner_document_policy_snapshot(
         &self,
         owner: OwnerDispatchScope,
