@@ -1,6 +1,5 @@
 use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
-    context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
     context_bootstrap::ResolvedSimpleEventTarget,
     context_bootstrap::current_performance_time_origin,
@@ -39,10 +38,9 @@ use super::{
     script_provenance::CompiledStringProvenance,
     util::{
         context_host_from_global_bridge, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, define_non_enumerable_static_bool_property,
-        get_private_value, script_base_url_from_continuation_data,
-        script_base_url_from_host_defined_options, set_private_value, throw_type_error, v8_string,
-        v8str,
+        context_host_ptr_from_window_object, get_private_value,
+        script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
 };
@@ -283,16 +281,6 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     ) else {
         return;
     };
-    if call.event_type == "selectionchange"
-        && target == EventTargetHandle::Node(host.document_handle())
-    {
-        define_non_enumerable_static_bool_property(
-            scope,
-            identity.listener_owner,
-            DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
-            true,
-        );
-    }
     if let Some(signal) = signal {
         host.register_abort_target_listener(
             scope,
