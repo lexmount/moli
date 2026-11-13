@@ -290,6 +290,9 @@ impl Browser {
                 config.debugger_enabled(),
             );
         let browser_context_access = browser_context_owner.owner_access();
+        browser_context_access
+            .runtime()
+            .bind_storage_bucket_store(partition.storage_bucket_store());
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
             .context("browser context resource owner unavailable")?;
