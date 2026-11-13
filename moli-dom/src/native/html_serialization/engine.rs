@@ -242,7 +242,7 @@ fn serialize_cdata_section<S: HtmlSerializationSink, const EMBEDDED: bool>(
     }
 }
 
-fn is_void_html_element(namespace: &str, local_name: &str) -> bool {
+pub(super) fn is_void_html_element(namespace: &str, local_name: &str) -> bool {
     namespace == "http://www.w3.org/1999/xhtml"
         && matches!(
             local_name,
@@ -540,13 +540,11 @@ impl<'dom, S: HtmlSerializationSink, const EMBEDDED: bool, const POLICY: bool>
                         self.stack
                             .push(HtmlSerializationFrame::Markup(insertion.markup));
                     }
-                    let children_root = self
+                    if let Some(first) = self
                         .dom
-                        .node(node)
-                        .and_then(Node::as_element)
-                        .and_then(|e| e.template_contents())
-                        .unwrap_or(node);
-                    if let Some(first) = self.dom.first_child(children_root) {
+                        .html_serialization_children_root(node)
+                        .and_then(|root| self.dom.first_child(root))
+                    {
                         self.stack.push(HtmlSerializationFrame::Siblings(first));
                     }
                     if let Some(insertion) = insertion
