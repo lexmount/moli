@@ -1576,7 +1576,7 @@ fn expand_callback(
     is_setter: bool,
 ) -> proc_macro2::TokenStream {
     let returns_promise = attrs.returns_promise && !is_setter;
-    if attrs.receiver.is_none() && !returns_promise {
+    if attrs.receiver.is_none() && attrs.access_policy.is_none() && !returns_promise {
         return quote!(#callback);
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
@@ -1584,6 +1584,13 @@ fn expand_callback(
         quote! {
             if !#check {
                 ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
+                return;
+            }
+        }
+    });
+    let access_check = attrs.access_policy.as_ref().map(|policy| {
+        quote! {
+            if !#policy(scope, args.this()) {
                 return;
             }
         }
@@ -1611,6 +1618,7 @@ fn expand_callback(
             rv: ::moli_webapi_declare::v8::ReturnValue<'s>,
         ) {
             #receiver_check
+            #access_check
             #callback(scope, args, rv);
         }
         #adapter

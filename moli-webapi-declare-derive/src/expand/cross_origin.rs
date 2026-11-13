@@ -43,6 +43,7 @@ pub(crate) fn expand_webapi_cross_origin(
             || attrs.symbol.is_some()
             || attrs.getter_value.is_some()
             || attrs.receiver_access_check.is_some()
+            || attrs.access_policy.is_some()
             || attrs.value.is_some()
             || attrs.init.is_some()
             || attrs.enumerable
@@ -212,6 +213,18 @@ pub(crate) fn expand_webapi_cross_origin(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_strict_access_policies_in_cross_origin_property_tables() {
+        let input = syn::parse_quote! {
+            #[webapi(plain)]
+            struct Bad {
+                #[webapi(method, callback = callback, access_policy = authorize)]
+                operation: (),
+            }
+        };
+        assert!(expand_webapi_cross_origin(input).is_err());
+    }
 
     #[test]
     fn rejects_declarations_that_would_capture_runtime_state() {

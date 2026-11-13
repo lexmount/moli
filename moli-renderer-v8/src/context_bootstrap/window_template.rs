@@ -10,12 +10,13 @@ use super::{
     web_storage::{window_local_storage_getter, window_session_storage_getter},
     window_accessors::*,
     window_events::*,
+    window_receiver::require_same_origin_window_receiver,
     window_runtime::*,
 };
 use crate::web_api_interfaces;
 use crate::{
     network_host,
-    queue_microtask::window_queue_microtask_callback,
+    queue_microtask::queue_microtask_callback,
     util::{global_constructor_object, global_constructor_prototype, v8str},
     window_host,
 };
@@ -25,20 +26,36 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowEarlyTemplateMethodsDeclaration {
-    #[webapi(method, length = 1, callback = window_host::window_set_timeout_callback)]
-    #[webapi(receiver_access_check = false)]
+    #[webapi(
+        method,
+        length = 1,
+        callback = window_host::window_set_timeout_callback,
+        access_policy = require_same_origin_window_receiver
+    )]
     set_timeout: (),
 
-    #[webapi(method, length = 1, callback = window_host::window_set_interval_callback)]
-    #[webapi(receiver_access_check = false)]
+    #[webapi(
+        method,
+        length = 1,
+        callback = window_host::window_set_interval_callback,
+        access_policy = require_same_origin_window_receiver
+    )]
     set_interval: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_clear_timer_callback)]
-    #[webapi(receiver_access_check = false)]
+    #[webapi(
+        method,
+        length = 0,
+        callback = window_host::window_clear_timer_callback,
+        access_policy = require_same_origin_window_receiver
+    )]
     clear_timeout: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_clear_timer_callback)]
-    #[webapi(receiver_access_check = false)]
+    #[webapi(
+        method,
+        length = 0,
+        callback = window_host::window_clear_timer_callback,
+        access_policy = require_same_origin_window_receiver
+    )]
     clear_interval: (),
 
     #[webapi(method, length = 1, callback = window_host::window_post_message_callback)]
@@ -48,9 +65,9 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(
         method,
         length = 1,
-        callback = window_queue_microtask_callback
+        callback = queue_microtask_callback,
+        access_policy = require_same_origin_window_receiver
     )]
-    #[webapi(receiver_access_check = false)]
     queue_microtask: (),
 
     #[webapi(
@@ -135,33 +152,33 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method,
         length = 1,
-        callback = window_host::window_request_animation_frame_callback
+        callback = window_host::window_request_animation_frame_callback,
+        access_policy = require_same_origin_window_receiver
     )]
-    #[webapi(receiver_access_check = false)]
     request_animation_frame: (),
 
     #[webapi(
         method,
         length = 1,
-        callback = window_host::window_cancel_animation_frame_callback
+        callback = window_host::window_cancel_animation_frame_callback,
+        access_policy = require_same_origin_window_receiver
     )]
-    #[webapi(receiver_access_check = false)]
     cancel_animation_frame: (),
 
     #[webapi(
         method,
         length = 1,
-        callback = window_host::window_request_idle_callback
+        callback = window_host::window_request_idle_callback,
+        access_policy = require_same_origin_window_receiver
     )]
-    #[webapi(receiver_access_check = false)]
     request_idle_callback: (),
 
     #[webapi(
         method,
         length = 1,
-        callback = window_host::window_cancel_idle_callback
+        callback = window_host::window_cancel_idle_callback,
+        access_policy = require_same_origin_window_receiver
     )]
-    #[webapi(receiver_access_check = false)]
     cancel_idle_callback: (),
 
     #[webapi(method, length = 1, callback = window_btoa_callback)]
@@ -211,8 +228,11 @@ struct WindowIdentityAccessorsDeclaration {
     #[webapi(receiver_access_check = false)]
     frames: (),
 
-    #[webapi(accessor_property, getter = window_frame_element_getter)]
-    #[webapi(receiver_access_check = false)]
+    #[webapi(
+        accessor_property,
+        getter = window_frame_element_getter,
+        access_policy = require_same_origin_window_receiver
+    )]
     frame_element: (),
 
     #[webapi(

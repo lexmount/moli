@@ -176,6 +176,7 @@ pub(crate) struct FieldDefaults<'a> {
 pub(crate) struct FieldAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) receiver_access_check: Option<ReceiverAccessCheck>,
+    pub(crate) access_policy: Option<Path>,
     pub(crate) returns_promise: bool,
     pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
@@ -249,6 +250,7 @@ impl FieldAttrs {
     pub(crate) fn has_installation_attribute(&self) -> bool {
         self.receiver.is_some()
             || self.receiver_access_check.is_some()
+            || self.access_policy.is_some()
             || self.returns_promise
             || self.enumerable
             || self.readonly
@@ -493,6 +495,16 @@ pub(crate) fn parse_field_attrs_with_defaults(
                 }
                 return Ok(());
             }
+            if meta.path.is_ident("access_policy") {
+                if parsed
+                    .access_policy
+                    .replace(meta.value()?.parse()?)
+                    .is_some()
+                {
+                    return Err(meta.error("field access_policy can only be specified once"));
+                }
+                return Ok(());
+            }
             if meta.path.is_ident("returns_promise") {
                 parsed.returns_promise = true;
                 return Ok(());
@@ -715,6 +727,28 @@ pub(crate) fn parse_field_attrs_with_defaults(
         ));
     }
     parsed.inherit_receiver(defaults.receiver)?;
+    if parsed.access_policy.is_some() {
+        if !matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
+            || parsed.getter_value.is_some()
+        {
+            return Err(Error::new(
+                field.span(),
+                "access_policy requires an instance method or accessor_property callback",
+            ));
+        }
+        if parsed
+            .receiver_access_check
+            .is_some_and(|check| check != ReceiverAccessCheck::None)
+        {
+            return Err(Error::new(
+                field.span(),
+                "access_policy replaces V8 receiver_access_check; omit the member receiver_access_check or set it to false",
+            ));
+        }
+        // Authorization must run in the callback's realm, before V8 can reject
+        // a borrowed call using the receiver's realm instead.
+        parsed.receiver_access_check = Some(ReceiverAccessCheck::None);
+    }
     if parsed.receiver_access_check.is_some()
         && (!matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
             || parsed.getter_value.is_some())
@@ -1083,8 +1117,9 @@ fn set_field_name(
 #[cfg(test)]
 mod tests {
     use super::{
-        FieldDefaults, FieldKind, RenameRule, ValueInitAttr, parse_field_attrs,
-        parse_field_attrs_with_defaults, parse_function_template_attrs, parse_object_attrs,
+        FieldDefaults, FieldKind, ReceiverAccessCheck, RenameRule, ValueInitAttr,
+        parse_field_attrs, parse_field_attrs_with_defaults, parse_function_template_attrs,
+        parse_object_attrs,
     };
     use syn::Field;
     use syn::parse::Parser;
@@ -1161,6 +1196,48 @@ mod tests {
         assert!(!attrs[2].enumerable && attrs[2].receiver.is_some());
         assert!(!attrs[3].enumerable && attrs[3].receiver.is_none());
         assert!(attrs[4].enumerable && attrs[4].receiver.is_none());
+    }
+
+    #[test]
+    fn access_policy_replaces_the_inherited_v8_access_check() {
+        let fields: [Field; 3] = [
+            syn::parse_quote!(#[webapi(method, callback = call, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, setter = set, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(method, callback = call, receiver_access_check = false, access_policy = authorize)] value: ()),
+        ];
+        for field in fields {
+            let attrs = parse_field_attrs_with_defaults(
+                &field,
+                FieldDefaults {
+                    receiver_access_check: true,
+                    ..FieldDefaults::default()
+                },
+            )
+            .expect("native callback authorization");
+            assert!(attrs.access_policy.is_some());
+            assert!(matches!(
+                attrs.receiver_access_check,
+                Some(ReceiverAccessCheck::None)
+            ));
+        }
+    }
+
+    #[test]
+    fn access_policy_cannot_be_ignored_or_replaced_by_v8() {
+        let fields: [Field; 9] = [
+            syn::parse_quote!(#[webapi(data_property, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(static_method, callback = call, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(native_data_property, getter = get, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter_value = self.getter, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(method, callback = call, receiver_access_check, access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, receiver_access_check = "getter", access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(accessor_property, getter = get, setter = set, receiver_access_check = "setter", access_policy = authorize)] value: ()),
+            syn::parse_quote!(#[webapi(method, callback = call, access_policy = authorize)] #[webapi(access_policy = other)] value: ()),
+        ];
+        for field in fields {
+            assert!(parse_field_attrs(&field).is_err());
+        }
     }
 
     #[test]
