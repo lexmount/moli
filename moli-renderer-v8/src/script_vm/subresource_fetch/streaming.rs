@@ -520,7 +520,9 @@ impl ScriptVm {
 
         let security_error = detached_window_fetch
             .then(|| {
-                if !started.head.redirect_chain.is_empty() {
+                if !started.head.redirect_chain.is_empty()
+                    && !window_fetch_redirect_policy_was_checked(&pending, &started.head)
+                {
                     detached_window_fetch_csp_redirect_failure_message(
                         &self._context_host,
                         &pending,
@@ -724,7 +726,8 @@ impl ScriptVm {
                     pending.execution_context.dispatch_scope(),
                 );
 
-            let streaming_start_error = if !started.head.redirect_chain.is_empty() {
+            let streaming_start_error = if !started.head.redirect_chain.is_empty()
+                && !window_fetch_redirect_policy_was_checked(&pending, &started.head) {
                 document_connect_csp_redirect_failure_message(
                     scope,
                     &self._context_host,
@@ -785,7 +788,7 @@ impl ScriptVm {
                     PendingSubresourceContinuation::Fetch(fetch) => {
                         crate::context_bootstrap::record_resource_performance_entry(
                             scope,
-                            fetch.resource_timing().failed(&pending.info.url),
+                            fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url)),
                         );
                         let resolver = fetch
                             .resolver()
@@ -1862,7 +1865,7 @@ impl ScriptVm {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 fetch.resource_timing().completed(
-                                    &streaming.pending.info.url,
+                                    fetch.initial_request_url(&streaming.pending.info.url),
                                     &streaming.pending.request_origin,
                                     streaming.pending.request_mode,
                                     &streaming.head,
@@ -1926,7 +1929,7 @@ impl ScriptVm {
                         if let PendingSubresourceContinuation::Fetch(fetch) = &streaming.pending.continuation {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
-                                fetch.resource_timing().failed(&streaming.pending.info.url),
+                                fetch.resource_timing().failed(fetch.initial_request_url(&streaming.pending.info.url)),
                             );
                         }
                         let error_started =

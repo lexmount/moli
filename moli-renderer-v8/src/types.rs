@@ -245,6 +245,7 @@ impl PendingSubresourceContinuation {
 }
 
 pub(super) struct PendingWindowFetchContinuation {
+    pub(super) intercepted_request: Option<Box<moli_fetch::Request>>,
     promise: PendingWindowFetchPromise,
     resource_timing: crate::context_bootstrap::FetchResourceTiming,
     keepalive: bool,
@@ -268,6 +269,7 @@ impl PendingWindowFetchContinuation {
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
     ) -> Self {
         Self {
+            intercepted_request: None,
             promise: PendingWindowFetchPromise::Active(resolver),
             resource_timing,
             keepalive,
@@ -275,6 +277,22 @@ impl PendingWindowFetchContinuation {
             connect_policy,
             csp_report_context,
         }
+    }
+
+    pub(super) fn with_intercepted_request(mut self, request: moli_fetch::Request) -> Self {
+        self.intercepted_request = Some(Box::new(request));
+        self
+    }
+
+    pub(super) fn initial_request_url<'a>(&'a self, fallback: &'a Url) -> &'a Url {
+        self.intercepted_request
+            .as_deref()
+            .map_or(fallback, |request| {
+                request
+                    .redirect_chain()
+                    .first()
+                    .map_or(&request.url, |redirect| &redirect.from_url)
+            })
     }
 
     pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {

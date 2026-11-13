@@ -545,6 +545,7 @@ impl ScriptVm {
                     return Err("Font redirect blocked by Content Security Policy".to_owned());
                 }
                 if !response.redirect_chain.is_empty()
+                    && !window_fetch_redirect_policy_was_checked(&pending, &response.head())
                     && let Some(message) = document_connect_csp_redirect_failure_message(
                         scope,
                         &context_host,
@@ -690,10 +691,10 @@ impl ScriptVm {
                         let entry = if opaque_response_blocked {
                             // ORB removes the original headers and body measurements;
                             // its TAO header cannot re-enable those measurements.
-                            fetch.resource_timing().failed(&pending.info.url)
+                            fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url))
                         } else {
                             fetch.resource_timing().completed(
-                                &pending.info.url, &pending.request_origin, pending.request_mode,
+                                fetch.initial_request_url(&pending.info.url), &pending.request_origin, pending.request_mode,
                                 &response.head(), response.body_bytes().len(), response_filter.as_ref(),
                             )
                         };
@@ -927,7 +928,7 @@ impl ScriptVm {
                         PendingSubresourceContinuation::Fetch(fetch) => {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
-                                fetch.resource_timing().failed(&pending.info.url),
+                                fetch.resource_timing().failed(fetch.initial_request_url(&pending.info.url)),
                             );
                             let resolver = fetch
                                 .into_resolver()

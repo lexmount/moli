@@ -276,6 +276,7 @@ fn emit_complete_subresource_network_delivery_record(
     };
     let request_was_announced_by_fetch_pause =
         runtime_slot.request_was_announced_by_fetch_pause(request_id);
+    let announced_redirects = runtime_slot.fetch_pause_announced_redirects(request_id);
     runtime_slot.clear_fetch_pause_announced_request_id(request_id);
     if event_session_ids.is_empty() {
         return false;
@@ -357,7 +358,7 @@ fn emit_complete_subresource_network_delivery_record(
                 record_document_url,
                 resource_type,
                 output.request_initiator_type(),
-                redirect_chain,
+                &redirect_chain[announced_redirects.min(redirect_chain.len())..],
             );
             for event_session_id in event_session_ids {
                 // Complete records have already delivered their response and
@@ -531,6 +532,9 @@ fn emit_staged_subresource_response_started(
     let request_id = delivery_output.request_id();
     let output = delivery_output.output();
     let request = output.request();
+    let announced_redirects = conn
+        .runtime_session_owner_slot_for_owner(owner)
+        .map_or(0, |slot| slot.fetch_pause_announced_redirects(request_id));
     let record_frame_id = request.frame_id().unwrap_or(frame_id);
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
@@ -545,7 +549,7 @@ fn emit_staged_subresource_response_started(
         request.document_url(),
         resource_type,
         request.request_initiator_type(),
-        output.redirect_chain(),
+        &output.redirect_chain()[announced_redirects.min(output.redirect_chain().len())..],
     );
     for event_session_id in event_session_ids {
         let fetch_request_id = conn

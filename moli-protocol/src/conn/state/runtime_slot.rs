@@ -933,6 +933,16 @@ impl TargetRuntimeSlot {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
+    pub(crate) fn record_fetch_pause_announced_redirect(&mut self, request_id: &str) {
+        self.network_agent
+            .record_fetch_pause_announced_redirect(request_id);
+    }
+
+    pub(crate) fn fetch_pause_announced_redirects(&self, request_id: &str) -> usize {
+        self.network_agent
+            .fetch_pause_announced_redirects(request_id)
+    }
+
     pub(crate) fn replace_navigation_fetch_request_id(
         &mut self,
         network_id: String,

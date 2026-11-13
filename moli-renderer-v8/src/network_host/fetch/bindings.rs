@@ -315,7 +315,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     }
 
     if host.should_intercept_subresource(SubresourceResourceType::Fetch) {
-        let internal_id = record_intercepted_fetch(scope, host, resolver, prepared);
+        let internal_id = match record_intercepted_fetch(scope, host, resolver, prepared) {
+            Ok(internal_id) => internal_id,
+            Err(message) => {
+                rv.set(make_rejected_promise(scope, &message).into());
+                return;
+            }
+        };
         if let Some(signal) = signal {
             install_window_fetch_abort_listener(scope, signal, internal_id);
         }

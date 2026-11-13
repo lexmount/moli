@@ -544,6 +544,7 @@ impl PreparedProtocolOutputs {
                 info,
                 child_document,
                 network_pause,
+                redirect,
             } => {
                 crate::domains::fetch::
                     subresource_fetch_pause_prepared_outputs_for_renderer_record(
@@ -553,6 +554,7 @@ impl PreparedProtocolOutputs {
                         *info,
                         network_pause,
                         child_document.map(|document| *document),
+                        redirect.map(|redirect| *redirect),
                         page_source,
                     )
                     .append_to_output_sink(&mut prepared);

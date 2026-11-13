@@ -510,6 +510,23 @@ impl TargetNetworkAgentState {
             .record_fetch_pause_announced_request_id(request_id);
     }
 
+    pub(crate) fn record_fetch_pause_announced_redirect(&mut self, request_id: &str) {
+        self.artifacts
+            .subresource_network_artifacts
+            .fetch_pause_announced_request_ids
+            .entry(request_id.to_owned())
+            .or_default()
+            .announced_redirects += 1;
+    }
+
+    pub(crate) fn fetch_pause_announced_redirects(&self, request_id: &str) -> usize {
+        self.artifacts
+            .subresource_network_artifacts
+            .fetch_pause_announced_request_ids
+            .get(request_id)
+            .map_or(0, |announcement| announcement.announced_redirects)
+    }
+
     pub(crate) fn replace_navigation_fetch_request_id(
         &mut self,
         network_id: String,
@@ -1861,7 +1878,13 @@ struct SubresourceNetworkArtifacts {
     emitted_record_counts_by_session: HashMap<Option<String>, usize>,
     request_ids_by_handle: HashMap<SubresourceNetworkRequestHandle, String>,
     completed_request_ids: HashSet<String>,
-    fetch_pause_announced_request_ids: HashMap<String, HashMap<Option<String>, String>>,
+    fetch_pause_announced_request_ids: HashMap<String, FetchPauseAnnouncement>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FetchPauseAnnouncement {
+    fetch_ids: HashMap<Option<String>, String>,
+    announced_redirects: usize,
 }
 
 impl SubresourceNetworkArtifacts {
@@ -1947,6 +1970,7 @@ impl SubresourceNetworkArtifacts {
         self.fetch_pause_announced_request_ids
             .entry(network_id)
             .or_default()
+            .fetch_ids
             .insert(session_id, fetch_id)
     }
 

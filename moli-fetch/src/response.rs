@@ -96,7 +96,12 @@ impl ResponseHead {
         mode: crate::RequestMode,
     ) -> crate::FetchResponseType {
         use crate::FetchResponseType;
-        if matches!(self.status, 301 | 302 | 303 | 307 | 308) {
+        if matches!(self.status, 301 | 302 | 303 | 307 | 308)
+            && self
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+        {
             FetchResponseType::OpaqueRedirect
         } else if self.final_url.scheme() == "data" || !self.url_list().has_cross_origin_url(origin)
         {

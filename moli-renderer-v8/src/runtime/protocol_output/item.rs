@@ -79,6 +79,7 @@ pub enum RendererOwnerAction {
         /// Set for a child frame navigation, whose Network request id is the
         /// loader id of the Document it creates.
         child_document: Option<Box<crate::protocol_types::ChildDocumentFetchRequest>>,
+        redirect: Option<Box<crate::protocol_types::NavigationRedirect>>,
     },
     SubresourceContinue {
         network_pause: Option<crate::network::ResourceInterceptionPause>,
