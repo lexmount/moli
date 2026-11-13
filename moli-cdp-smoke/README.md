@@ -1214,3 +1214,9 @@ Chromium uses the same assertions with `--browser chromium`. A failed repetition
 fails the run. Worker Network routing can additionally be inspected with
 `MOLI_CDP_RUNTIME_TRACE=1` and `--group workers`: a known Worker Session must
 retain its own Target instead of entering the unowned global navigation gate.
+
+`tracing-wire` checks both outcomes of back-to-back start/end commands. If
+startup is interrupted, the end response precedes the specific start error;
+if startup has already completed, the successful start response precedes end.
+Both responses precede trace data and `tracingComplete`. Sending two separate
+WebSocket messages alone does not establish that startup is still pending.

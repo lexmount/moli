@@ -365,6 +365,19 @@ queue. `releaseActions` bypasses the long performActions wait and only releases
 already-dispatched input state. The Classic/attached-BiDi case records the
 shared ChromeDriver boundary and requires settlement after the HTTP gate opens.
 
+The navigation/prompt case opens the old Document's prompt only after the new
+navigation reaches a held HTTP response. Handling must return the real confirm
+result before that response is released, and the navigation must then finish.
+This avoids relying on Chrome's separate behavior of dismissing a prompt that
+was already open when navigation began.
+
+The release/old/new input-generation case is calibrated against
+Chrome/ChromeDriver 156.0.8078.73. Upstream mapper commit
+[`49622edb`](https://github.com/GoogleChromeLabs/chromium-bidi/commit/49622edb9775aaacbf99ef9afa4b3736cbaaafcf)
+instead serializes perform/release on the same queue. The fixed-version oracle
+does not establish the behavior of newer Chrome versions; this PR preserves
+the tested input behavior.
+
 Three additional groups require explicit selection:
 
 - `bidi-input-layout` requires a layout-enabled endpoint (for example,
