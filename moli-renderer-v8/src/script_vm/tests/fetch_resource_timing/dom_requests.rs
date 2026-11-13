@@ -122,6 +122,10 @@ struct DomInitiatorServer {
 
 async fn dom_initiator_server() -> DomInitiatorServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let redirect_url = format!(
+        "http://localhost:{}/image.gif",
+        listener.local_addr().unwrap().port()
+    );
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let requests = Arc::new(AtomicUsize::new(0));
     let request_count = requests.clone();
@@ -130,6 +134,7 @@ async fn dom_initiator_server() -> DomInitiatorServer {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request_count = request_count.clone();
+            let redirect_url = redirect_url.clone();
             connections.spawn(async move {
                 let mut request = Vec::new();
                 while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
@@ -141,6 +146,11 @@ async fn dom_initiator_server() -> DomInitiatorServer {
                 let request = String::from_utf8(request).unwrap();
                 let path = request.split_whitespace().nth(1).unwrap();
                 request_count.fetch_add(1, Ordering::SeqCst);
+                if path.starts_with("/redirect-image") {
+                    let head = format!("HTTP/1.1 302 Found\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n");
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    return;
+                }
                 let (mime, body): (&str, &[u8]) = match path.split('?').next().unwrap() {
                     "/image.gif" => ("image/gif", b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;"),
                     "/sheet.css" => ("text/css", b"p { color: green }") ,
@@ -165,6 +175,152 @@ async fn dom_initiator_server() -> DomInitiatorServer {
         origin,
         requests,
     }
+}
+
+async fn prefetch_with_policies(
+    server: &DomInitiatorServer,
+    policies: &[&str],
+    path: &str,
+    blocked: bool,
+) -> serde_json::Value {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = new_storage_page_task_executor_test_vm_with_loader(
+        &format!("{}/document.html", server.origin),
+        &loader,
+    );
+    let url = serde_json::to_string(&format!("{}{path}", server.origin)).unwrap();
+    let policies = serde_json::to_string(policies).unwrap();
+    page.eval(&format!(
+        r#"
+        globalThis.prefetchEvents = [];
+        globalThis.prefetchViolations = [];
+        document.addEventListener('securitypolicyviolation', e =>
+            prefetchViolations.push([e.effectiveDirective, e.disposition, e.blockedURI]));
+        for (const policy of {policies}) {{
+            const meta = document.createElement('meta');
+            meta.httpEquiv = 'Content-Security-Policy'; meta.content = policy;
+            document.head.appendChild(meta);
+        }}
+        const link = document.createElement('link');
+        link.rel = 'prefetch'; link.crossOrigin = 'anonymous'; link.href = {url};
+        link.onload = () => prefetchEvents.push('load');
+        link.onerror = () => prefetchEvents.push('error');
+        document.head.appendChild(link);
+    "#
+    ))
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        "prefetchEvents.join(',')",
+        if blocked { "error" } else { "load" },
+        "prefetch policy load result",
+    )
+    .await;
+    advance_page_task_executor_until_eval_equals(
+        &mut page,
+        &loader,
+        &format!("performance.getEntriesByName({url}).length"),
+        "1",
+        "prefetch policy timing entry",
+    )
+    .await;
+    if blocked {
+        advance_page_task_executor_until_eval_equals(
+            &mut page,
+            &loader,
+            "prefetchViolations.length",
+            "1",
+            "prefetch CSP violation",
+        )
+        .await;
+        assert_eq!(
+            page.eval("prefetchViolations[0][0]+';'+prefetchViolations[0][1]")
+                .unwrap(),
+            "default-src;enforce"
+        );
+    }
+    serde_json::from_str(
+        &page
+            .eval(&format!(
+                "JSON.stringify(performance.getEntriesByName({url})[0].toJSON())"
+            ))
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn connected_prefetch_csp_blocks_physical_requests_and_retains_failure_timing() {
+    let server = dom_initiator_server().await;
+    let scenarios: &[(&[&str], bool)] = &[
+        (&[], false),
+        (&["default-src 'none'; script-src 'unsafe-inline'"], true),
+        (&["default-src 'self'; script-src 'unsafe-inline'"], false),
+        (
+            &["default-src 'none'; img-src 'self'; script-src 'unsafe-inline'"],
+            false,
+        ),
+        (&["img-src 'none'; script-src 'unsafe-inline'"], false),
+        (
+            &["default-src 'none'; base-uri 'self'; script-src 'unsafe-inline'"],
+            true,
+        ),
+        (
+            &[
+                "default-src 'none'; img-src 'self'",
+                "default-src 'none'; script-src 'unsafe-inline'",
+            ],
+            true,
+        ),
+    ];
+    for (policies, blocked) in scenarios {
+        let before = server.requests.load(Ordering::SeqCst);
+        let entry = prefetch_with_policies(&server, policies, "/image.gif", *blocked).await;
+        assert_eq!(
+            server.requests.load(Ordering::SeqCst) - before,
+            usize::from(!*blocked),
+            "{policies:?}"
+        );
+        assert_eq!(entry["initiatorType"], "link");
+        if *blocked {
+            for name in [
+                "requestStart",
+                "responseStatus",
+                "transferSize",
+                "encodedBodySize",
+                "decodedBodySize",
+            ] {
+                assert_eq!(entry[name], 0, "{name}: {entry}");
+            }
+        } else {
+            assert_eq!(entry["responseStatus"], 200);
+            assert!(entry["requestStart"].as_f64().unwrap() > 0.0, "{entry}");
+            assert!(entry["decodedBodySize"].as_u64().unwrap() > 0, "{entry}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn connected_prefetch_csp_checks_redirects_before_contacting_the_next_origin() {
+    let server = dom_initiator_server().await;
+    prefetch_with_policies(
+        &server,
+        &["default-src 'self'; script-src 'unsafe-inline'"],
+        "/redirect-image",
+        true,
+    )
+    .await;
+    assert_eq!(server.requests.load(Ordering::SeqCst), 1);
+    let entry = prefetch_with_policies(
+        &server,
+        &["default-src 'self'; img-src http://localhost:*; script-src 'unsafe-inline'"],
+        "/redirect-image",
+        false,
+    )
+    .await;
+    assert_eq!(server.requests.load(Ordering::SeqCst), 3);
+    assert_eq!(entry["responseStatus"], 200);
 }
 
 async fn assert_dom_resource_initiator(path: &str, source: &str) {
