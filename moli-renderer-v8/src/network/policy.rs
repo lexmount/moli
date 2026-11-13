@@ -95,7 +95,7 @@ impl PageNetworkConditionsState {
 pub struct PageNetworkPolicy {
     state: Arc<Mutex<PageNetworkPolicyState>>,
     network_conditions: Arc<Mutex<PageNetworkConditionsState>>,
-    subresource_interception: Arc<Mutex<Option<SubresourceInterceptionClasses>>>,
+    subresource_interception: Arc<Mutex<SubresourceInterceptionClasses>>,
 }
 
 impl Default for PageNetworkPolicy {
@@ -128,7 +128,7 @@ impl PageNetworkPolicy {
     }
 
     /// Copies request configuration and network conditions into a new target.
-    /// Target-local protocol interception starts unconfigured; ordinary
+    /// Target-local protocol interception starts disabled; ordinary
     /// `clone()` keeps sharing the original target policy.
     pub fn isolated_copy(&self) -> Self {
         Self::from_snapshot(self.snapshot())
@@ -318,24 +318,19 @@ impl PageNetworkPolicy {
     /// Live target eligibility only. Protocol rules and session ordering stay
     /// with their canonical protocol owner, rather than being copied to XHR.
     pub fn set_subresource_interception(&self, classes: SubresourceInterceptionClasses) {
-        *self.subresource_interception.lock() = Some(classes);
+        *self.subresource_interception.lock() = classes;
     }
 
-    pub(crate) fn subresource_interception_config(
-        &self,
-        fallback: SubresourceInterceptionClasses,
-    ) -> SubresourceInterceptionClasses {
-        self.subresource_interception.lock().unwrap_or(fallback)
+    pub(crate) fn subresource_interception_config(&self) -> SubresourceInterceptionClasses {
+        *self.subresource_interception.lock()
     }
 
     pub(crate) fn should_intercept_subresource(
         &self,
         resource_type: SubresourceResourceType,
-        fallback: bool,
     ) -> bool {
-        self.subresource_interception
-            .lock()
-            .map_or(fallback, |classes| classes.intercepts(resource_type))
+        self.subresource_interception_config()
+            .intercepts(resource_type)
     }
 
     pub fn set_optional_resource_fetch_mask(&self, mask: OptionalResourceFetchMask) {
@@ -536,15 +531,15 @@ mod tests {
         page.set_subresource_interception(SubresourceInterceptionClasses::FETCH_LIKE);
         let target = page.isolated_copy();
         for view in [&page, &document, &worker] {
-            assert!(view.should_intercept_subresource(SubresourceResourceType::Xhr, false));
-            assert!(!view.should_intercept_subresource(SubresourceResourceType::Image, false));
+            assert!(view.should_intercept_subresource(SubresourceResourceType::Xhr));
+            assert!(!view.should_intercept_subresource(SubresourceResourceType::Image));
         }
-        assert!(!target.should_intercept_subresource(SubresourceResourceType::Xhr, false));
+        assert!(!target.should_intercept_subresource(SubresourceResourceType::Xhr));
         page.set_subresource_interception(SubresourceInterceptionClasses::NONE);
         for view in [&page, &document, &worker] {
-            assert!(!view.should_intercept_subresource(SubresourceResourceType::Xhr, true));
+            assert!(!view.should_intercept_subresource(SubresourceResourceType::Xhr));
         }
-        assert!(target.should_intercept_subresource(SubresourceResourceType::Xhr, true));
+        assert!(!target.should_intercept_subresource(SubresourceResourceType::Xhr));
     }
 
     #[test]

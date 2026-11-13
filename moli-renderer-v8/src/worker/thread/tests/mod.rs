@@ -106,6 +106,66 @@ async fn worker_loader_shares_backend_without_sharing_page_policy() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn existing_nested_worker_loaders_observe_one_live_interception_set() {
+    use crate::SubresourceInterceptionClasses as Classes;
+    use crate::types::SubresourceResourceType as Resource;
+
+    let creator = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let runner = crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap();
+    let kind = super::WorkerGlobalKind::Dedicated {
+        name: "eligibility".into(),
+    };
+    let worker = resource_loader_for_worker_context(
+        creator.handle(),
+        &WorkerNetworkPolicy::default(),
+        &kind,
+        runner.clone(),
+    );
+    let nested = resource_loader_for_worker_context(
+        worker.request_client().clone(),
+        &WorkerNetworkPolicy::default(),
+        &kind,
+        runner,
+    );
+    let accepted_request = nested.request_client().frozen_request_client();
+    let popup = creator.fork_with_isolated_page_network_policy();
+
+    for classes in [
+        Classes::IMAGE | Classes::FONT,
+        Classes::FETCH_LIKE,
+        Classes::NONE,
+    ] {
+        creator
+            .page_network_policy()
+            .set_subresource_interception(classes);
+        for client in [
+            worker.request_client(),
+            nested.request_client(),
+            &accepted_request,
+        ] {
+            assert_eq!(
+                client
+                    .page_network_policy()
+                    .subresource_interception_config(),
+                classes
+            );
+            assert_eq!(
+                client
+                    .page_network_policy()
+                    .should_intercept_subresource(Resource::Xhr),
+                classes.intercepts(Resource::Xhr)
+            );
+        }
+        assert_eq!(
+            popup
+                .page_network_policy()
+                .subresource_interception_config(),
+            Classes::NONE
+        );
+    }
+}
+
 #[test]
 fn data_worker_spawn_options_retain_creator_resource_runtime() {
     let creator = ResourceRequestClient::new(&FetchConfig::default()).expect("creator loader");

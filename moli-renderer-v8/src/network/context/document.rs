@@ -108,6 +108,10 @@ impl DocumentResourceLoaderBootstrap {
     pub(crate) fn author_styles_disabled(&self) -> bool {
         self.request_client.author_styles_disabled()
     }
+
+    pub(crate) fn page_network_policy(&self) -> crate::network::PageNetworkPolicy {
+        self.request_client.page_network_policy().clone()
+    }
 }
 
 /// Exact backend source selected when a new Document commits.

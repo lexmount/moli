@@ -3,8 +3,8 @@
 use crate::RendererSyntheticResponseBody;
 use crate::protocol_types::{
     PendingSubresourceContinueEvent, PendingSubresourceFetchInfo, SubresourceAuthCredentials,
-    SubresourceInterceptionClasses, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, WebSocketFrameDirection,
+    WebSocketFrameOpcode,
 };
 use crate::runtime::WorkerInspectorError;
 use crate::runtime::{
@@ -183,8 +183,6 @@ pub(crate) enum WorkerMessage {
     SetCacheDisabled(bool),
     /// Update the Network.setBlockedURLs state visible to worker-owned fetch/XHR.
     SetBlockedUrlPatterns(Vec<String>),
-    /// Update Fetch domain subresource interception visible to worker-owned fetch/XHR.
-    SetFetchSubresourceInterception(SubresourceInterceptionClasses),
     /// Continue a worker-owned fetch() that was paused for Fetch domain interception.
     ContinuePendingFetch(WorkerPendingFetchContinue),
     /// Continue a worker-owned XHR that was paused for Fetch domain interception.
@@ -672,7 +670,6 @@ pub(crate) struct WorkerNetworkPolicy {
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) network_partition_key: Option<String>,
-    pub(crate) fetch_subresource_interception_classes: SubresourceInterceptionClasses,
 }
 
 #[derive(Debug)]
@@ -937,15 +934,6 @@ impl WorkerHandle {
         let _ = self
             .tx
             .send(WorkerMessage::SetBlockedUrlPatterns(patterns.to_vec()));
-    }
-
-    pub(crate) fn set_fetch_subresource_interception(
-        &self,
-        classes: SubresourceInterceptionClasses,
-    ) {
-        let _ = self
-            .tx
-            .send(WorkerMessage::SetFetchSubresourceInterception(classes));
     }
 
     pub(crate) fn dispatch_service_worker_lifecycle_event(

@@ -67,8 +67,7 @@ pub(crate) fn reserve_nested_worker_context(
             network_offline: state.network_offline,
             blocked_url_patterns: state.blocked_url_patterns.clone(),
             network_partition_key: state.network_partition_key.clone(),
-            fetch_subresource_interception_classes: state
-                .fetch_subresource_interception_classes,
+
         },
         policy_context: state.policy_context,
         wake_tx: state.worker_wake_tx.clone(),

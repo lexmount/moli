@@ -285,8 +285,7 @@ impl ScriptVm {
     ) -> bool {
         self._context_host
             .borrow()
-            .fetch_subresource_interception_classes()
-            .intercepts(resource_type)
+            .should_intercept_subresource(resource_type)
     }
 
     pub(crate) fn set_viewport_surface(

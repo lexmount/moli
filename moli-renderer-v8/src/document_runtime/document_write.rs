@@ -1063,8 +1063,7 @@ impl DocumentRuntime {
         // protocol, not whenever interception is enabled for any class.
         if html.is_empty()
             || unsafe { &*host_ptr }
-                .fetch_subresource_interception_classes()
-                .intercepts(crate::types::SubresourceResourceType::Script)
+                .should_intercept_subresource(crate::types::SubresourceResourceType::Script)
         {
             return;
         }

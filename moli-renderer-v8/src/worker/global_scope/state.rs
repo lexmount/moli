@@ -11,7 +11,7 @@ impl WorkerGlobalState {
         self.loader
             .request_client()
             .page_network_policy()
-            .subresource_interception_config(self.fetch_subresource_interception_classes)
+            .subresource_interception_config()
     }
 
     pub(crate) fn callback_invocation_allowed(&self) -> bool {
@@ -90,8 +90,6 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) network_partition_key: Option<String>,
     /// COEP/DIP policy container state inherited by worker-owned subresource requests.
     pub(in crate::worker) policy_context: crate::types::SubresourcePolicyContext,
-    /// Fetch domain subresource interception inherited from the owning page/CDP session.
-    pub(in crate::worker) fetch_subresource_interception_classes: SubresourceInterceptionClasses,
     /// Async fetch completions routed back onto the worker event loop.
     pub(in crate::worker) fetch_completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
     /// Promise resolvers pending async fetch completion.

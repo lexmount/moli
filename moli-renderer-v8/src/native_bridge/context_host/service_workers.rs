@@ -711,7 +711,6 @@ impl PageScriptHost {
             network_offline: self.network_offline(),
             blocked_url_patterns: self.blocked_url_patterns().to_vec(),
             network_partition_key: None,
-            fetch_subresource_interception_classes: self.fetch_subresource_interception_classes(),
         };
         let document_url = request_context.document_url().clone();
         let storage_key = request_context.serialized_storage_key();

@@ -222,6 +222,7 @@ pub(crate) enum WorkerTestRequestClient {
 #[cfg(test)]
 pub(crate) struct WorkerTestHandle {
     handle: Option<WorkerHandle>,
+    request_client: ResourceRequestClient,
     _request_client_owner: Option<ResourceRequestClientOwner>,
 }
 
@@ -247,6 +248,15 @@ impl std::ops::DerefMut for WorkerTestHandle {
 
 #[cfg(test)]
 impl WorkerTestHandle {
+    pub(crate) fn set_fetch_subresource_interception(
+        &self,
+        classes: crate::SubresourceInterceptionClasses,
+    ) {
+        self.request_client
+            .page_network_policy()
+            .set_subresource_interception(classes);
+    }
+
     pub(crate) fn terminate_and_join(mut self) {
         if let Some(handle) = self.handle.take() {
             handle.terminate_and_join();
@@ -985,9 +995,6 @@ async fn run_worker_pre_bootstrap_debugger_pause(
                     .request_client()
                     .set_blocked_url_patterns(&patterns_for_loader);
             }
-            Some(WorkerMessage::SetFetchSubresourceInterception(classes)) => {
-                state.borrow_mut().fetch_subresource_interception_classes = classes;
-            }
             Some(WorkerMessage::Terminate) => {
                 trace!(url = %script_url, "worker terminated before bootstrap by parent");
                 return false;
@@ -1235,9 +1242,11 @@ fn worker_test_request_client() -> ResourceRequestClientOwner {
 #[cfg(test)]
 pub(crate) fn spawn_test_worker_with_options(mut options: WorkerSpawnOptions) -> WorkerTestHandle {
     let request_client_owner = options.test_request_client_owner.take();
+    let request_client = options.request_client.clone();
     let handle = spawn_worker_with_options(options);
     WorkerTestHandle {
         handle: Some(handle),
+        request_client,
         _request_client_owner: request_client_owner,
     }
 }
@@ -1617,8 +1626,6 @@ async fn worker_main(
         blocked_url_patterns: network_policy.blocked_url_patterns,
         network_partition_key: network_policy.network_partition_key,
         policy_context,
-        fetch_subresource_interception_classes: network_policy
-            .fetch_subresource_interception_classes,
         fetch_completion_tx,
         pending_fetches: std::collections::HashMap::new(),
         pending_network_body_sources: std::collections::HashMap::new(),
@@ -2774,11 +2781,6 @@ async fn worker_main(
                 loader
                     .request_client()
                     .set_blocked_url_patterns(&patterns_for_loader);
-            }
-            WorkerLoopWake::Message(Some(WorkerMessage::SetFetchSubresourceInterception(
-                classes,
-            ))) => {
-                state.borrow_mut().fetch_subresource_interception_classes = classes;
             }
             WorkerLoopWake::Message(Some(WorkerMessage::ContinuePendingFetch(request))) => {
                 continue_pending_worker_fetch(&state, request);

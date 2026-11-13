@@ -519,7 +519,6 @@ impl PageScriptHost {
             network_offline: self.network_offline(),
             blocked_url_patterns: self.blocked_url_patterns().to_vec(),
             network_partition_key,
-            fetch_subresource_interception_classes: self.fetch_subresource_interception_classes(),
         };
         let mut spawn_options = WorkerSpawnOptions::with_source_and_request_client(
             script_source,
