@@ -8,7 +8,17 @@ use super::{
 use std::collections::HashSet;
 
 trait HtmlSerializationSink {
+    // Propagate through escaping wrappers so budgeted output keeps its early
+    // exit instead of scanning an entire unchanged run first.
+    const BOUNDED: bool = false;
+
     fn push_str(&mut self, value: &str);
+    // The current escape stage leaves this run intact. An enclosing writer
+    // still applies its own encoding before the final String receives it.
+    #[inline]
+    fn unchanged_run(&mut self, value: &str) {
+        self.push_str(value);
+    }
     fn attribute_value(&mut self, value: &str) {
         escape_html_attribute(value, self);
     }
@@ -88,6 +98,20 @@ impl HtmlSerializationSink for String {
         String::push_str(self, value);
     }
 
+    #[inline]
+    fn unchanged_run(&mut self, value: &str) {
+        if value.len() <= MIN_HTML_ESCAPE_RUN {
+            String::push_str(self, value);
+            return;
+        }
+        if let Some(needed) = self.len().checked_add(value.len())
+            && needed > self.capacity()
+        {
+            grow_html_output_for_run(self, needed);
+        }
+        String::push_str(self, value);
+    }
+
     fn push(&mut self, value: char) {
         String::push(self, value);
     }
@@ -97,17 +121,64 @@ impl HtmlSerializationSink for String {
     }
 }
 
+#[cold]
+fn grow_html_output_for_run(out: &mut String, needed: usize) {
+    // Reserve at geometric capacity once, without leaving a large append
+    // exactly full and doubling it again for the following closing tag.
+    let mut capacity = out.capacity().max(8);
+    while capacity < needed {
+        capacity = capacity
+            .checked_mul(2)
+            .filter(|capacity| *capacity <= isize::MAX as usize)
+            .unwrap_or(needed);
+    }
+    out.reserve(capacity - out.len());
+}
+
 #[inline]
 fn escape_html_text<S>(value: &str, out: &mut S)
 where
     S: HtmlSerializationSink + ?Sized,
 {
+    escape_html_value::<S, false>(value, out);
+}
+
+#[inline(always)]
+fn escape_html_attribute<S>(value: &str, out: &mut S)
+where
+    S: HtmlSerializationSink + ?Sized,
+{
+    escape_html_value::<S, true>(value, out);
+}
+
+#[inline(always)]
+fn html_escape<const ATTRIBUTE: bool>(ch: char) -> Option<&'static str> {
+    match ch {
+        '&' => Some("&amp;"),
+        '"' if ATTRIBUTE => Some("&quot;"),
+        '<' => Some("&lt;"),
+        '>' => Some("&gt;"),
+        '\u{00A0}' => Some("&nbsp;"),
+        _ => None,
+    }
+}
+
+// Small runs do not amortize slicing and memcpy. Once escapes become dense,
+// retain the scalar writer instead of issuing a separate copy for each byte.
+const MIN_HTML_ESCAPE_RUN: usize = 16;
+
+#[inline(always)]
+fn escape_html_scalar<S: HtmlSerializationSink + ?Sized, const ATTRIBUTE: bool>(
+    value: &str,
+    out: &mut S,
+) {
     for ch in value.chars() {
         if out.limit_exceeded() {
             return;
         }
         match ch {
             '&' => out.push_str("&amp;"),
+            '"' if ATTRIBUTE => out.push_str("&quot;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '\u{00A0}' => out.push_str("&nbsp;"),
@@ -117,22 +188,34 @@ where
 }
 
 #[inline(always)]
-fn escape_html_attribute<S>(value: &str, out: &mut S)
-where
-    S: HtmlSerializationSink + ?Sized,
-{
-    for ch in value.chars() {
-        if out.limit_exceeded() {
+fn escape_html_value<S: HtmlSerializationSink + ?Sized, const ATTRIBUTE: bool>(
+    value: &str,
+    out: &mut S,
+) {
+    // Bounded consumers must stop at their budget rather than scan a long
+    // unchanged run before discovering overflow. Short text also keeps the
+    // scalar path; neither case benefits from slicing/copying runs.
+    if S::BOUNDED || value.len() <= if ATTRIBUTE { 1 } else { MIN_HTML_ESCAPE_RUN } {
+        escape_html_scalar::<S, ATTRIBUTE>(value, out);
+        return;
+    }
+    let mut start = 0;
+    for (index, ch) in value.char_indices() {
+        let Some(escaped) = html_escape::<ATTRIBUTE>(ch) else {
+            continue;
+        };
+        if index - start < MIN_HTML_ESCAPE_RUN {
+            escape_html_scalar::<S, ATTRIBUTE>(&value[start..], out);
             return;
         }
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\u{00A0}' => out.push_str("&nbsp;"),
-            _ => out.push(ch),
+        if start != index {
+            out.unchanged_run(&value[start..index]);
         }
+        out.push_str(escaped);
+        start = index + ch.len_utf8();
+    }
+    if start != value.len() {
+        out.unchanged_run(&value[start..]);
     }
 }
 
@@ -191,7 +274,7 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
     // for every character just because another node embeds a Document.
     #[inline]
     fn text(&mut self, value: &str) {
-        if EMBEDDED && let [byte] = value.as_bytes() {
+        if let [byte] = value.as_bytes() {
             match byte {
                 b'&' => self.push_str("&amp;"),
                 b'<' => self.push_str("&lt;"),
@@ -240,11 +323,60 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlEscapingWriter<'_, S, E
             self.push('>');
         }
     }
+
+    #[inline(always)]
+    fn scalar(&mut self, value: &str) {
+        for ch in value.chars() {
+            if self.limit_exceeded() {
+                return;
+            }
+            self.push(ch);
+        }
+    }
+
+    fn encoded_str<const ADAPTIVE: bool>(&mut self, value: &str) {
+        if !EMBEDDED || self.attribute_depth == 0 {
+            self.sink.push_str(value);
+            return;
+        }
+        if S::BOUNDED {
+            self.scalar(value);
+            return;
+        }
+        let mut start = 0;
+        for (index, ch) in value.char_indices() {
+            if matches!(ch, '&' | '<' | '>' | '"' | '\u{a0}') {
+                if ADAPTIVE && start != 0 && index - start < MIN_HTML_ESCAPE_RUN {
+                    self.scalar(&value[start..]);
+                    return;
+                }
+                if start != index {
+                    self.sink.unchanged_run(&value[start..index]);
+                }
+                self.push(ch);
+                start = index + ch.len_utf8();
+            }
+        }
+        if start != value.len() {
+            self.sink.unchanged_run(&value[start..]);
+        }
+    }
 }
 
 impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
     for HtmlEscapingWriter<'_, S, EMBEDDED>
 {
+    const BOUNDED: bool = S::BOUNDED;
+
+    #[inline]
+    fn unchanged_run(&mut self, value: &str) {
+        if !EMBEDDED || self.attribute_depth == 0 {
+            self.sink.unchanged_run(value);
+        } else {
+            self.push_str(value);
+        }
+    }
+
     #[inline]
     fn attribute_value(&mut self, value: &str) {
         if EMBEDDED && self.attribute_depth == 0 {
@@ -256,33 +388,15 @@ impl<S: HtmlSerializationSink, const EMBEDDED: bool> HtmlSerializationSink
                 sink: &mut *self.sink,
                 attribute_depth: self.attribute_depth + 1,
             };
-            for ch in value.chars() {
-                if writer.limit_exceeded() {
-                    break;
-                }
-                writer.push(ch);
-            }
+            writer.encoded_str::<true>(value);
         } else {
             escape_html_attribute(value, self);
         }
     }
     fn push_str(&mut self, value: &str) {
-        if !EMBEDDED || self.attribute_depth == 0 {
-            self.sink.push_str(value);
-            return;
-        }
-        let mut start = 0;
-        for (index, ch) in value.char_indices() {
-            if matches!(ch, '&' | '<' | '>' | '"' | '\u{a0}') {
-                self.sink.push_str(&value[start..index]);
-                self.push(ch);
-                start = index + ch.len_utf8();
-                if self.limit_exceeded() {
-                    return;
-                }
-            }
-        }
-        self.sink.push_str(&value[start..]);
+        // Raw script/markup and already escaped entity tokens retain the
+        // chunk writer. Only original attribute payloads use dense fallback.
+        self.encoded_str::<false>(value);
     }
     fn push(&mut self, value: char) {
         if !EMBEDDED || self.attribute_depth == 0 {
@@ -771,6 +885,8 @@ impl BoundedHtmlSerialization {
 }
 
 impl HtmlSerializationSink for BoundedHtmlSerialization {
+    const BOUNDED: bool = true;
+
     fn push_str(&mut self, value: &str) {
         if self.exceeded {
             return;
@@ -880,11 +996,76 @@ mod escaping_tests {
     use super::*;
 
     #[test]
+    fn text_and_attribute_runs_match_replacement_reference_and_byte_limits() {
+        let mut values = vec![
+            String::new(),
+            String::from("&<>\"'\u{a0}雪🙂\0\r\n"),
+            (0..=127).map(char::from).collect(),
+            format!(
+                "{}\u{a0}{}&雪<🙂>\"tail",
+                "plain ".repeat(1024),
+                "é".repeat(1024)
+            ),
+        ];
+        let mut seed = 1_u64;
+        for _ in 0..128 {
+            let mut value = String::from("&<>\"\u{a0}");
+            for _ in 0..64 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if let Some(ch) = char::from_u32((seed >> 32) as u32 % 0x110000) {
+                    value.push(ch);
+                }
+            }
+            values.push(value);
+        }
+        for value in values {
+            let text = value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\u{a0}', "&nbsp;");
+            let attribute = text.replace('"', "&quot;");
+            for (is_attribute, expected) in [(false, text), (true, attribute)] {
+                let mut actual = String::new();
+                if is_attribute {
+                    escape_html_attribute(&value, &mut actual);
+                } else {
+                    escape_html_text(&value, &mut actual);
+                }
+                assert_eq!(actual, expected);
+                for limit in [0, 1, expected.len().saturating_sub(1), expected.len()] {
+                    let mut bounded = BoundedHtmlSerialization::new(limit);
+                    if is_attribute {
+                        escape_html_attribute(&value, &mut bounded);
+                    } else {
+                        escape_html_text(&value, &mut bounded);
+                    }
+                    if expected.len() > limit {
+                        assert_eq!(
+                            bounded.finish(),
+                            Err(HtmlSerializationLimitExceeded { max_bytes: limit })
+                        );
+                    } else {
+                        assert_eq!(bounded.finish().unwrap(), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn single_byte_text_keeps_text_and_nested_attribute_escaping() {
         for byte in 0..=127 {
             let value = char::from(byte).to_string();
             let mut expected = String::new();
             escape_html_text(&value, &mut expected);
+            let mut plain = String::new();
+            HtmlEscapingWriter::<_, false> {
+                sink: &mut plain,
+                attribute_depth: 0,
+            }
+            .text(&value);
+            assert_eq!(plain, expected, "ordinary byte={byte}");
             for depth in 0..8 {
                 let mut output = String::new();
                 HtmlEscapingWriter::<_, true> {
