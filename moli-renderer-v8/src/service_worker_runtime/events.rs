@@ -627,10 +627,17 @@ pub(crate) fn service_worker_opaque_response_rejection(
 
 #[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerFetchEvent {
+    pub(crate) client_ids: ServiceWorkerFetchEventClientIds,
     pub(crate) event_id: ServiceWorkerEventId,
     pub(crate) owner: ServiceWorkerRunOwner,
     pub(crate) request: ServiceWorkerFetchRequest,
     pub(crate) navigation_preload_sent: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ServiceWorkerFetchEventClientIds {
+    pub(crate) client_id: String,
+    pub(crate) resulting_client_id: String,
 }
 
 pub(crate) use moli_fetch_types::FetchResponse as ServiceWorkerFetchResponse;
