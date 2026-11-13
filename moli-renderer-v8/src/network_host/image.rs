@@ -500,6 +500,30 @@ mod tests {
     }
 
     #[test]
+    fn image_response_admits_still_avif_negotiated_for_a_jpeg_url() {
+        // Servers honoring `Accept: image/avif` (for example via `Vary:
+        // Accept`) answer `.jpg` URLs with AVIF bytes.
+        let avif = include_bytes!("../../../moli-image/tests/fixtures/avif/yuv444-full-bt601.avif");
+        let manager = moli_parkable_image::ParkableImageManager::default();
+        let encoded = manager.from_frozen_bytes(avif.to_vec());
+        for headers in [
+            vec![("Content-Type".to_owned(), b"image/avif".to_vec())],
+            vec![("Content-Type".to_owned(), b"image/jpeg".to_vec())],
+            Vec::new(),
+        ] {
+            let response = crate::protocol_types::NavigationResponse::from_text_body(
+                url::Url::parse("https://images.test/photo.jpg").unwrap(),
+                200,
+                headers.clone(),
+                String::new(),
+            );
+            let descriptor = image_response_descriptor_from_parkable(&response, &encoded)
+                .unwrap_or_else(|| panic!("AVIF image rejected with headers {headers:?}"));
+            assert_eq!((descriptor.width, descriptor.height), (8, 8));
+        }
+    }
+
+    #[test]
     fn image_response_rejects_empty_and_invalid_data_at_any_http_status() {
         let manager = moli_parkable_image::ParkableImageManager::default();
         let png =

@@ -146,6 +146,11 @@ type_complexity = "allow"
 [profile.dev]
 panic = "abort"
 
+# avif-parse reports malformed network input as an error in release builds but
+# trips `debug_assert!`s on the same input first, which aborts debug builds.
+[profile.dev.package.avif-parse]
+debug-assertions = false
+
 [profile.release]
 panic = "abort"
 strip = false

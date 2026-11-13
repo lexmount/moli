@@ -109,7 +109,7 @@ jobs:
         run: |
           set -eu
           apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends cmake libclang-dev nasm
 
       - name: Install clippy
         run: rustup component add clippy
@@ -139,7 +139,7 @@ jobs:
             's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
             /etc/apt/sources.list.d/debian.sources
           apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends cmake libclang-dev nasm
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -317,7 +317,7 @@ jobs:
             's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
             /etc/apt/sources.list.d/debian.sources
           apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends cmake libclang-dev nasm
       - name: Build release binary
         run: cargo build --release --locked -p moli
       - name: Package release artifact
@@ -360,7 +360,7 @@ jobs:
             's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
             /etc/apt/sources.list.d/debian.sources
           apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends cmake libclang-dev nasm
       - name: Build release binary
         run: cargo build --release --locked -p moli
       - name: Package release artifact
