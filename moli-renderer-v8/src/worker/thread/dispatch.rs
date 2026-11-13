@@ -1334,6 +1334,11 @@ fn new_service_worker_lifecycle_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: ServiceWorkerLifecycleEventKind,
 ) -> v8::Local<'s, v8::Object> {
+    if kind == ServiceWorkerLifecycleEventKind::Install {
+        let event = v8::Object::new(scope);
+        super::super::global_scope::initialize_native_install_event(scope, event);
+        return event;
+    }
     ServiceWorkerLifecycleEventDeclaration {
         r#type: v8::String::new(scope, kind.as_str()).unwrap(),
         default_prevented: false,

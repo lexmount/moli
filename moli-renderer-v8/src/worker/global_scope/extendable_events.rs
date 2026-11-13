@@ -2,6 +2,8 @@
 
 use super::*;
 
+const INSTALL_EVENT_PROTOTYPE_SLOT: &str = "__moliInstallEventPrototype";
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     interface = web_api_interfaces::ExtendableEvent,
@@ -11,6 +13,40 @@ use super::*;
 struct ExtendableEventTemplateDeclaration {
     #[webapi(method = "waitUntil", callback = super::super::thread::service_worker_wait_until_callback, length = 1)]
     wait_until: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(
+    interface = web_api_interfaces::InstallEvent,
+    constructor_callback = install_event_constructor_callback,
+    constructor_length = 1,
+    readonly_prototype,
+    receiver = web_api_interfaces::InstallEvent::is_instance
+)]
+struct InstallEventTemplateDeclaration {}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
+struct InstallEventConstructorGlobalDeclaration<'scope> {
+    #[webapi(data_property = "InstallEvent")]
+    install_event: v8::Local<'scope, v8::Function>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::InstallEvent, prototype = "Object")]
+struct InstallEventStateDeclaration {}
+
+pub(in crate::worker) fn initialize_native_install_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    let global = scope.get_current_context().global(scope);
+    let prototype = get_private_value(scope, global, INSTALL_EVENT_PROTOTYPE_SLOT)
+        .expect("Service Worker InstallEvent prototype");
+    assert_eq!(event.set_prototype(scope, prototype), Some(true));
+    let event_type = v8str(scope, "install");
+    initialize_install_event_object(scope, event, event_type, InstallEventInit::default())
+        .expect("native InstallEvent state should initialize");
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -173,6 +209,24 @@ pub(super) fn install_service_worker_extendable_event_constructors<'s>(
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize ExtendableEvent global: {error}"))?;
 
+    let install_template = InstallEventTemplateDeclaration::build(scope);
+    let install_ctor = install_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build InstallEvent constructor"))?;
+    let install_proto = constructor_prototype(scope, install_ctor, "InstallEvent")?;
+    set_worker_to_string_tag(scope, install_proto, "InstallEvent");
+    let _ = install_ctor.set_prototype(scope, extendable_ctor.into());
+    let _ = install_proto.set_prototype(scope, extendable_proto.into());
+    set_private_value(
+        scope,
+        global,
+        INSTALL_EVENT_PROTOTYPE_SLOT,
+        install_proto.into(),
+    );
+    InstallEventConstructorGlobalDeclaration::new(install_ctor)
+        .initialize(scope, global)
+        .map_err(|error| anyhow!("failed to initialize InstallEvent global: {error}"))?;
+
     let message_template = ExtendableMessageEventTemplateDeclaration::build(scope);
     let message_ctor = message_template
         .get_function(scope)
@@ -235,6 +289,73 @@ fn extendable_event_constructor_callback<'s>(
         composed,
     );
     rv.set(args.this().into());
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+struct InstallEventInit {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "InstallEvent")]
+struct InstallEventConstructorArgs {
+    #[webidl(required, converter = "raw")]
+    event_type: webidl::DomString16,
+    #[webidl(dictionary)]
+    init: InstallEventInit,
+}
+
+fn install_event_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if !args.is_construct_call() {
+        throw_type_error(scope, "InstallEvent requires the new operator");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<InstallEventConstructorArgs>(scope, &args) else {
+        return;
+    };
+    let event_type =
+        v8::String::new_from_two_byte(scope, &parsed.event_type.0, v8::NewStringType::Normal)
+            .expect("InstallEvent type");
+    let event = args.this();
+    if initialize_install_event_object(scope, event, event_type, parsed.init).is_none() {
+        return;
+    }
+    rv.set(event.into());
+}
+
+fn initialize_install_event_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    event_type: v8::Local<'s, v8::String>,
+    init: InstallEventInit,
+) -> Option<()> {
+    let state = crate::context_bootstrap::new_event_state(scope);
+    crate::context_bootstrap::initialize_event_object_with_type(
+        scope,
+        state,
+        event_type,
+        init.bubbles,
+        init.cancelable,
+    );
+    let _ = state.set(
+        scope,
+        v8str(scope, "composed").into(),
+        v8::Boolean::new(scope, init.composed).into(),
+    );
+    crate::context_bootstrap::initialize_event_wrapper(scope, event, state)?;
+    InstallEventStateDeclaration {}
+        .initialize(scope, event)
+        .expect("InstallEvent state");
+    Some(())
 }
 
 fn extendable_message_event_constructor_callback<'s>(
