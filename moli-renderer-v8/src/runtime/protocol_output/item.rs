@@ -58,6 +58,8 @@ pub enum RendererOwnerAction {
     ChildFrameCommit {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,
+        /// Co-published before commit; stale loads use ChildFrameDocumentNetwork.
+        document_network: Option<Box<ChildFrameDocumentNetworkActivitySnapshot>>,
     },
     /// Load delivery finished, including any descendant Document blockers.
     /// This must not be projected as another navigation commit.

@@ -530,6 +530,23 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
                 network_request_id.clone(),
             );
         }
+        if output.network_output().child_document().is_some()
+            && output.network_output().redirect().is_none()
+        {
+            // This output represents the first HTTP hop, before any handler
+            // in its interception chain. ID allocation already reserves the
+            // announcement entry, so its presence cannot deduplicate starts.
+            let network = output.network_output();
+            crate::domains::page::emit_navigation_started_for_session_owner(
+                conn,
+                out,
+                owner,
+                network.frame_id(),
+                network.loader_id(),
+                network.request_url().as_str(),
+                crate::domains::page::NavigationStartInitiator::RendererChildFrame,
+            );
+        }
         if (output.network_output().child_document().is_some()
             || output.network_output().resource_type()
                 == moli_core::page::SubresourceResourceType::Fetch)

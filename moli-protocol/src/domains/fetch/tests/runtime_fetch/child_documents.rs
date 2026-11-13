@@ -158,6 +158,104 @@ fn terminal_events<'a>(ctx: &'a TestContext, network_id: &str) -> Vec<&'a Value>
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn intercepted_child_navigation_starts_once_before_its_first_request() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let (address, server) = serve_child_document_fixture(
+        "<!doctype html><iframe name=uno src=/child></iframe>",
+        &hits,
+    )
+    .await;
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        &format!("http://{address}/page"),
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    enable_runtime_async(&mut ctx, "SID-1", 52_000).await;
+    evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        52_001,
+        CHILD_BODY_EXPRESSION,
+        &json!("child"),
+        "initial HTTP child",
+    )
+    .await;
+    ctx.with_fixture(|conn| {
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .assign_attached_session_to_target("TID-1", "SID-child-observer".to_owned())
+        );
+    });
+    for (id, session) in [(52_002, "SID-1"), (52_006, "SID-child-observer")] {
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":"Page.enable"}))
+            .await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    enable_fetch_patterns(&mut ctx, 52_003, json!([{"resourceType":"Document"}])).await;
+    ctx.sent.clear();
+    let destination = format!("http://{address}/child?next");
+    evaluate_script(
+        &mut ctx,
+        52_004,
+        &format!("document.querySelector('iframe').src={destination:?}"),
+    )
+    .await;
+    let (paused, network_id) =
+        wait_for_child_document_pause(&mut ctx, &destination, "routed child navigation").await;
+    let frame_id = paused["params"]["frameId"].as_str().unwrap().to_owned();
+    continue_child_document(&mut ctx, 52_005, &paused).await;
+    wait_until_message(&mut ctx, "SID-1", "routed child commit", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["params"]["frame"]["url"] == destination
+    })
+    .await;
+    let request = ctx
+        .sent
+        .iter()
+        .position(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == network_id
+        })
+        .unwrap();
+    for session in ["SID-1", "SID-child-observer"] {
+        let starts = ctx
+            .sent
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message["method"] == "Page.frameRequestedNavigation"
+                    && message["sessionId"] == session
+                    && message["params"]["frameId"] == frame_id
+                    && message["params"]["url"] == destination
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            starts.len(),
+            1,
+            "a Fetch pause and commit must share one navigation start per subscriber"
+        );
+        assert!(
+            starts[0].0 < request,
+            "navigation start must precede its first Network request"
+        );
+    }
+    assert_eq!(request_will_be_sent_count(&ctx, &network_id), 1);
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| message["method"] == "Network.responseReceived"
+                && message["params"]["requestId"] == network_id
+                && message["params"]["response"]["status"] == 200)
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn child_document_redirect_fetch_ids_remain_in_their_session() {
     for both_match in [true, false] {
         let hits = Arc::new(AtomicUsize::new(0));

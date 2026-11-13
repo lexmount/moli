@@ -683,7 +683,6 @@ impl PageScriptHost {
                     };
                 };
                 entry.clear_cached_snapshot();
-                entry.clear_completed_document_network();
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),
@@ -699,18 +698,25 @@ impl PageScriptHost {
         let mut parser_stop_action = None;
         let mut owner_transition = None;
         if let Some(snapshot) = snapshot_to_install.as_ref() {
-            if let Some(network) = completed_document_network.as_ref() {
-                // The response belongs before the new Document commit, not
-                // after its parser and descendant loads have all finished.
-                self.record_child_document_load_network(&network_attribution, network.clone());
-            }
-            let window_commit = self.plan_child_document_window_commit(
-                handle,
-                snapshot,
-                window_commit_preflight,
-                DocumentCreationKind::Navigation,
-                Some(loader_id),
-            );
+            // Publish navigation start, main-resource Network facts and commit
+            // as one owner action before parsing can publish descendants.
+            let document_network = completed_document_network.as_ref().map(|network| {
+                crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot {
+                    frame_id: network_attribution.frame_id().to_owned(),
+                    parent_frame_id: network_attribution.parent_frame_id().map(ToOwned::to_owned),
+                    loader_id: network_attribution.loader_id().to_owned(),
+                    snapshot: network.clone(),
+                }
+            });
+            let window_commit = self
+                .plan_child_document_window_commit(
+                    handle,
+                    snapshot,
+                    window_commit_preflight,
+                    DocumentCreationKind::Navigation,
+                    Some(loader_id),
+                )
+                .with_document_network(document_network);
             let Some(install) = self.install_child_browsing_context_current_document_from_snapshot(
                 scope,
                 handle,
@@ -719,6 +725,9 @@ impl PageScriptHost {
                 false,
                 Some(pending.resource_loader.clone()),
             ) else {
+                if let Some(network) = completed_document_network {
+                    self.record_child_document_load_network(&network_attribution, network);
+                }
                 return ChildDocumentLoadApplication::Applied {
                     followup: None,
                     body_activity,
@@ -733,10 +742,9 @@ impl PageScriptHost {
                 let frame_owner_resource_timing = pending
                     .frame_owner_resource_timing
                     .take()
-                    .zip(completed_document_network.clone())
+                    .zip(completed_document_network)
                     .map(|(timing, network)| timing.complete(current_owner, network));
                 entry.bind_completed_frame_owner_resource_timing(frame_owner_resource_timing);
-                entry.bind_completed_document_network(current_owner, completed_document_network);
             }
             self.promote_pending_service_worker_child_client(handle);
         } else {

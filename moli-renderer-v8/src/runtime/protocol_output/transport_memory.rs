@@ -283,13 +283,16 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .flatten()
         .map(string_charge)
         .sum::<usize>()
-        .saturating_add(
-            event
-                .document_network
-                .as_ref()
-                .map(child_frame_document_network_charge)
-                .unwrap_or(0),
-        ),
+        .saturating_add(match action {
+            RendererOwnerAction::ChildFrameCommit {
+                document_network: Some(network),
+                ..
+            } => string_charge(&network.frame_id)
+                .saturating_add(network.parent_frame_id.as_deref().map_or(0, string_charge))
+                .saturating_add(string_charge(&network.loader_id))
+                .saturating_add(child_frame_document_network_charge(&network.snapshot)),
+            _ => 0,
+        }),
         RendererOwnerAction::SameDocumentNavigation(event) => {
             let navigation = event.navigation();
             string_charge(&navigation.url)
