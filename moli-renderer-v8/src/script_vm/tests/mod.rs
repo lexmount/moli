@@ -2452,3 +2452,5 @@ mod sqlite_web_storage;
 
 mod dynamic_inline_scripts;
 mod native_request_url_provenance;
+
+mod svg_legacy_rectangle_contracts;
