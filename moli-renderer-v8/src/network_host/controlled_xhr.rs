@@ -504,17 +504,15 @@ impl ControlledXhrLoad {
                     _ => unreachable!("response pause accepts only response decisions"),
                 }
             }
-            self.request
-                .validate_cors_response_for_url(&response.head.final_url, &response.head.headers)?;
-            let head = response.head.clone();
-            self.request.observe_redirect_requests(&head.redirect_chain);
-            let Some(url) = crate::network_host::next_redirect_url(
-                &head.final_url,
-                head.status,
-                &head.headers,
-                self.request.redirect_count(),
-            )?
-            else {
+            use super::response_hop::{
+                SubresourceResponseTransition, advance_subresource_response,
+            };
+            let transition =
+                advance_subresource_response(&mut self.request, response.head.clone(), false)?;
+            if let SubresourceResponseTransition::ManualResponse { .. } = transition {
+                return Err("XHR requests must follow redirects".into());
+            }
+            if transition == SubresourceResponseTransition::FinalResponse {
                 response.head.redirect_chain = self.request.redirect_chain().to_vec();
                 response.head.redirected = !response.head.redirect_chain.is_empty();
                 // Client-provided responses have the same CORS obligations as
@@ -541,25 +539,7 @@ impl ControlledXhrLoad {
                     )
                     .await?;
                 return Ok((delivered, network_request_headers));
-            };
-            self.request
-                .follow_redirect(moli_fetch::RedirectInfo {
-                    source: moli_fetch::RedirectSource::Network,
-                    from_url: head.final_url,
-                    to_url: url,
-                    status: head.status,
-                    headers: head.headers,
-                    network_extra_info_available: false,
-                    request_extra_info: None,
-                    dispatched_request: None,
-                    response_extra_info: None,
-                    redirect_has_extra_info: false,
-                    request_cookie_report: head.request_cookie_report,
-                    cookie_set_reports: head.cookie_set_reports,
-                    from_cache: head.from_cache,
-                    negotiated_http_version: head.negotiated_http_version,
-                })
-                .map_err(|error| error.to_string())?;
+            }
             self.preflight_headers = self.request.request_headers.to_byte_strings();
             // Retire the previous hop's protocol correlation before installing
             // its next one. The stable native network handle keeps Network ID.
