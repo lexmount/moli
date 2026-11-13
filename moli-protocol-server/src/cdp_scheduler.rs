@@ -1670,6 +1670,9 @@ impl CdpScheduler {
             let input = match input {
                 Ok(input) => input,
                 Err(()) => {
+                    // StopLoading acknowledges finite browser-side cancellation;
+                    // its exact Native cleanup is owned by the task supervisor,
+                    // so a blocked Renderer cannot withhold this timeout reply.
                     let stopped = self
                         .execute_owned_automation_command_with_interleaved_progress(
                             receivers,

@@ -102,6 +102,66 @@ pub struct BackgroundNavigationRequestFixture {
     cancellation: moli_fetch::FetchCancelHandle,
 }
 
+/// Holds a real Native owner operation until dropped. The entry receipt lets
+/// tests establish that later lifecycle work cannot run yet, without sleeps.
+pub struct HeldRenderer {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    release: Option<std::sync::mpsc::Sender<()>>,
+    pending: Option<moli_core::page::PendingPageCommand>,
+    response: Option<moli_core::RendererNativeCommandResponseGuard>,
+}
+
+impl HeldRenderer {
+    pub async fn wait_until_entered(&mut self) {
+        (&mut self.entered)
+            .await
+            .expect("Native owner gate entered");
+    }
+}
+
+impl Drop for HeldRenderer {
+    fn drop(&mut self) {
+        self.release.take();
+        self.response.take();
+        self.pending.take();
+    }
+}
+
+pub fn hold_renderer(
+    conn: &mut CdpConnection,
+    context: &crate::automation::AutomationContext,
+) -> HeldRenderer {
+    let owner = conn
+        .command_owner_scope_for_devtools_context(context)
+        .expect("held renderer requires a live target");
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let (pending, response) = conn
+        .loaded_page_mut_for_owner(&owner)
+        .expect("held renderer requires an installed Page")
+        .start_cdp_call(
+            9_000_199,
+            None,
+            moli_core::RendererNativeOperation::then(
+                moli_core::RendererPageCommand::ChildFrameTreeSnapshot,
+                move |_| {
+                    let _ = entered.send(());
+                    let _ = held.recv();
+                    moli_core::RendererNativeOperationStep::Complete(
+                        moli_core::RendererNativeProtocolResponse::success(serde_json::json!({})),
+                    )
+                },
+            ),
+        )
+        .expect("Native owner gate accepted");
+    HeldRenderer {
+        entered: waiting,
+        release: Some(release),
+        pending: Some(pending),
+        response: Some(response),
+    }
+}
+
 impl BackgroundNavigationRequestFixture {
     pub fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()

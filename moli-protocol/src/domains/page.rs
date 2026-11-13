@@ -102,9 +102,7 @@ mod resource_tree;
 pub(crate) use resource_tree::child_frame_security_identity;
 use resource_tree::*;
 mod termination;
-pub(crate) use termination::{
-    PreparedPageCrash, PreparedPageStopLoading, PreparedPageTargetTermination,
-};
+pub(crate) use termination::{PreparedPageCrash, PreparedPageTargetTermination};
 #[cfg(test)]
 mod tests;
 
@@ -230,7 +228,6 @@ enum PendingPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading(PreparedPageStopLoading),
     Crash(Box<PreparedPageCrash>),
     Close(PreparedPageTargetTermination),
     CreateIsolatedWorld(preload::PendingCreateIsolatedWorldCommand),
@@ -296,7 +293,6 @@ enum CompletedPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading(PreparedPageStopLoading),
     Crash(Box<PreparedPageCrash>),
     Close(PreparedPageTargetTermination),
     CreateIsolatedWorld(Box<preload::CompletedCreateIsolatedWorldCommand>),
@@ -333,7 +329,6 @@ impl CompletedPageCommandKind {
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
-            | Self::StopLoading(_)
             | Self::Crash(_)
             | Self::Close(_)
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
@@ -463,9 +458,6 @@ impl PendingPageCommandDispatch {
                 CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(Box::new(
                     pending.wait().await,
                 ))
-            }
-            PendingPageCommandKind::StopLoading(prepared) => {
-                CompletedPageCommandKind::StopLoading(prepared)
             }
             PendingPageCommandKind::Crash(prepared) => CompletedPageCommandKind::Crash(prepared),
             PendingPageCommandKind::Close(prepared) => CompletedPageCommandKind::Close(prepared),
@@ -1447,6 +1439,12 @@ pub(crate) fn execute_immediate_devtools_page_command_with_protocol_events(
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     let result = match command {
+        AutomationCommand::StopLoading(command) => {
+            page_command_owner(conn, &command.context).map(|owner| {
+                termination::stop_loading(conn, &owner);
+                AutomationResult::Empty
+            })
+        }
         AutomationCommand::GetNavigationHistory(command) => {
             navigation::execute_devtools_get_navigation_history_command(conn, command)
         }

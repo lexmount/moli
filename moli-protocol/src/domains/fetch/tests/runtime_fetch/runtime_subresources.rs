@@ -2366,14 +2366,11 @@ async fn stop_loading_aborts_paused_runtime_fetch_subresource() {
     ctx.expect_result(784, json!({}), Some("SID-1"));
 
     let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
+        .wait_for_scheduler_message("stopped Fetch loadingFailed", |message| {
             message["method"] == json!("Network.loadingFailed")
                 && message["params"]["requestId"] == network_id
         })
-        .cloned()
-        .expect("network loadingFailed event");
+        .await;
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
     assert_eq!(failed["params"]["canceled"], true);

@@ -942,6 +942,16 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     .await;
     ctx.expect_result(1038, json!({}), Some(session_id.as_str()));
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "stopped background navigation output",
+        |message| {
+            message["method"] == "Network.loadingFailed"
+                && message["params"]["requestId"] == network_id
+        },
+    )
+    .await;
+
     let navigation = take_response_by_id(&mut ctx, 1037);
     assert_eq!(navigation["sessionId"], json!(session_id));
     assert_eq!(navigation["error"]["message"], json!("Navigation stopped"));

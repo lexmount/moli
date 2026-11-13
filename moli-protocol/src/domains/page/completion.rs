@@ -407,7 +407,6 @@ pub(super) async fn complete_using(
                 Err(plan) => plan,
             }
         }
-        CompletedPageCommandKind::StopLoading(prepared) => prepared.run(driver, context).await?,
         CompletedPageCommandKind::Crash(prepared) => (*prepared).run(driver, context).await?,
         CompletedPageCommandKind::Close(prepared) => {
             prepared.run(driver, context).await?;
@@ -428,7 +427,6 @@ fn is_composite(kind: &CompletedPageCommandKind) -> bool {
             | CompletedPageCommandKind::ChildFrameNavigate(_)
             | CompletedPageCommandKind::Navigate(_)
             | CompletedPageCommandKind::ContinueNavigationWithoutRequestPause(_)
-            | CompletedPageCommandKind::StopLoading(_)
             | CompletedPageCommandKind::Crash(_)
             | CompletedPageCommandKind::Close(_)
     )
@@ -480,7 +478,6 @@ impl PendingPageCommandDispatch {
                 | PendingPageCommandKind::ChildFrameNavigate(_)
                 | PendingPageCommandKind::Navigate(_)
                 | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
-                | PendingPageCommandKind::StopLoading(_)
                 | PendingPageCommandKind::Crash(_)
                 | PendingPageCommandKind::Close(_)
         ) {
