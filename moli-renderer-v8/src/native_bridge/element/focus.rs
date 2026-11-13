@@ -38,7 +38,7 @@ enum ReadingFlowMode {
     FlexVisual,
 }
 
-pub(super) fn is_disabled_form_control(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+pub(crate) fn is_disabled_form_control(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     form_control_is_effectively_disabled(runtime, handle)
 }
 

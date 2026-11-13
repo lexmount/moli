@@ -1046,11 +1046,9 @@ pub(super) struct ScriptVm {
     /// keeps this conversion on LocalFrameView; retaining the last affine map
     /// lets exit events use the old frame after a new hit enters another one.
     hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D,
-    active_touch_pointer_handle: Option<DomHandle>,
     active_touch_pointer_handles: BTreeMap<i32, DomHandle>,
-    active_touch_event_handle: Option<DomHandle>,
-    active_touch_point: Option<crate::runtime::RendererTouchPoint>,
     active_touch_points: BTreeMap<i32, ActiveTouchPoint>,
+    pending_touch_tap: Option<PendingTouchTap>,
     suppress_next_keypress_after_canceled_raw_keydown: bool,
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
@@ -1122,6 +1120,17 @@ pub(super) struct ActiveTouchPoint {
     pub x: f64,
     pub y: f64,
     pub target: DomHandle,
+    pub is_primary: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingTouchTap {
+    pub id: i32,
+    pub target: DomHandle,
+    pub document: DomHandle,
+    pub start_x: f64,
+    pub start_y: f64,
+    pub suppress_mouse: bool,
 }
 
 pub(super) struct ActiveDragSession {
@@ -2526,11 +2535,9 @@ impl ScriptVmDefaultWorldBootstrap {
             pressed_mouse_buttons: 0,
             hovered_mouse_handle: None,
             hovered_mouse_root_to_frame: moli_layout::LayoutTransform2D::IDENTITY,
-            active_touch_pointer_handle: None,
             active_touch_pointer_handles: BTreeMap::new(),
-            active_touch_event_handle: None,
-            active_touch_point: None,
             active_touch_points: BTreeMap::new(),
+            pending_touch_tap: None,
             suppress_next_keypress_after_canceled_raw_keydown: false,
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,

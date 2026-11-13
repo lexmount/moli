@@ -171,6 +171,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
             pointer_type: "pen".to_owned(),
+            is_primary: true,
             pressure: 0.75,
             tangential_pressure: -0.25,
             tilt_x: 12.0,
@@ -191,6 +192,7 @@ fn mouse_dispatch_emits_pointer_event_properties() {
         crate::runtime::RendererPointerEventProperties {
             pointer_id: 1,
             pointer_type: "pen".to_owned(),
+            is_primary: true,
             pressure: 0.0,
             tangential_pressure: 0.0,
             tilt_x: 0.0,
@@ -952,6 +954,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
     let pointer = crate::runtime::RendererPointerEventProperties {
         pointer_id: 1,
         pointer_type: "pen".to_owned(),
+        is_primary: true,
         pressure: 0.0,
         tangential_pressure: 0.0,
         tilt_x: 0.0,
@@ -2220,5 +2223,70 @@ JSON.stringify([selectedText,[rect.left+2,rect.top+2],source.textContent]);
         vm.eval("String(window.__selectionStringCalls)")
             .expect("author stringifier invocation count"),
         "0"
+    );
+}
+
+#[test]
+fn touch_contacts_keep_primary_identity_until_the_entire_stream_ends() {
+    use crate::runtime::RendererTouchPoint;
+    let mut vm = new_rendered_test_vm(
+        "https://touch-primary-stream.test/",
+        r#"<html><body><div style="height:200px">touch</div></body></html>"#,
+    );
+    vm.eval(r#"window.primaryLog=[];for(const type of ['pointerdown','pointermove','pointerup']) document.addEventListener(type,e=>primaryLog.push([e.type,e.pointerId,e.isPrimary]));"#).unwrap();
+    let first = RendererTouchPoint {
+        id: 7,
+        x: 10.0,
+        y: 11.0,
+    };
+    let second = RendererTouchPoint {
+        id: 0,
+        x: 12.0,
+        y: 11.0,
+    };
+    vm.dispatch_touch_event_at_points(&[first], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[first, second], "touchstart", false)
+        .unwrap();
+    // An explicit renderer release removes only this contact. CDP's empty end
+    // packet below must still release the rest, including contact ID zero.
+    vm.dispatch_touch_event_at_points(&[first], "touchend", false)
+        .unwrap();
+    let moved = RendererTouchPoint { x: 13.0, ..second };
+    vm.dispatch_touch_event_at_points(&[moved], "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[second], "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_points(&[], "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify(primaryLog)").unwrap(),
+        r#"[["pointerdown",9,true],["pointerdown",2,false],["pointerup",9,true],["pointermove",2,false],["pointerup",2,false],["pointerdown",2,true],["pointerup",2,true]]"#
+    );
+    assert!(vm.active_touch_points.is_empty());
+    assert!(vm.active_touch_pointer_handles.is_empty());
+}
+
+#[test]
+fn touch_pointer_rehit_tests_after_implicit_capture_is_released() {
+    let mut vm = new_rendered_test_vm(
+        "https://touch-released-capture.test/",
+        r#"<html><body><div id="button">button</div><div id="target0">next</div></body></html>"#,
+    );
+    vm.eval(r#"window.releasedTouchLog=[];
+        const original=document.getElementById('button');
+        original.addEventListener('pointerdown',e=>original.releasePointerCapture(e.pointerId));
+        for(const type of ['pointermove','pointerup','touchmove','touchend']) document.addEventListener(type,e=>releasedTouchLog.push(e.type+'@'+e.target.id));"#).unwrap();
+    vm.dispatch_touch_event_at_point(10.0, 11.0, "touchstart", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(10.0, 35.0, "touchmove", false)
+        .unwrap();
+    vm.dispatch_touch_event_at_point(10.0, 35.0, "touchend", false)
+        .unwrap();
+    assert_eq!(
+        vm.eval("releasedTouchLog.join('|')").unwrap(),
+        "pointermove@target0|touchmove@button|pointerup@target0|touchend@button"
     );
 }
