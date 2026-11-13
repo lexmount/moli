@@ -53,27 +53,12 @@ impl ProtocolWorkflowState<'_> {
         PreparedRuntimeDomQuery::prepare(self.connection, scope.owner().clone(), command)
     }
 
-    pub(crate) fn register_scoped_dom_object(
-        self,
-        scope: &RuntimePageScope,
-        value: serde_json::Value,
-        group: Option<String>,
-    ) -> Result<()> {
+    pub(crate) fn validate_scoped_dom_result(self, scope: &RuntimePageScope) -> Result<()> {
         anyhow::ensure!(
             scope.can_start_operation(self.connection),
             crate::conn::NoDocumentLoaded
         );
-        if let Some(group) = group {
-            self.connection
-                .register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                    scope.owner(),
-                    &value,
-                    &group,
-                );
-        } else {
-            self.connection
-                .register_runtime_remote_object_ids_from_value_for_owner(scope.owner(), &value);
-        }
+
         Ok(())
     }
 }

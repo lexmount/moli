@@ -78,26 +78,10 @@ pub(in crate::domains) fn append_observation(
         RendererWebMcpEvent::ToolResponded {
             invocation_id,
             result,
-        } => {
-            if let RendererWebMcpResult::Error {
-                exception: Some(exception),
-                ..
-            } = result
-            {
-                let event_owner = session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
-                conn.register_runtime_remote_object_ids_from_value_for_owner(
-                    &event_owner,
-                    exception,
-                );
-            }
-            (
-                LocalCdpEvent::WebMcpToolResponded,
-                response_json(*invocation_id, result),
-            )
-        }
+        } => (
+            LocalCdpEvent::WebMcpToolResponded,
+            response_json(*invocation_id, result),
+        ),
     };
     let event = BackgroundProtocolEvent::immediate_event(method, params, session_id.as_deref());
     sink.push_produced_slot(ProtocolOutputSlot::WebMcp);

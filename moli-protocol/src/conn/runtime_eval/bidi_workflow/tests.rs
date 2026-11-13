@@ -256,8 +256,8 @@ async fn dropping_a_proxy_group_before_listener_handoff_releases_it_and_rejects_
         let (_owner, access, command_owner, _replies) = fixture().await;
         let mut driver = ProtocolWorkflowDriver::new(access.clone());
         let (lease, listener) = proxy(&mut driver, &access, &command_owner).await;
-        let handle = listener.channel_handle().as_str().to_owned();
-        let group = lease.name().to_owned();
+        let _listener = listener;
+
         if rebound {
             let session = command_owner.session_id().unwrap().to_owned();
             inspect(&access, move |conn| {
@@ -279,12 +279,6 @@ async fn dropping_a_proxy_group_before_listener_handoff_releases_it_and_rejects_
                 .with_state(move |state| state.complete_owned_protocol_scheduler_work(completed))
                 .unwrap();
         }
-        inspect(&access, move |conn| {
-            assert_eq!(
-                conn.runtime_remote_object_group_for_session_owner(Some("SID-bidi-owned"), &handle),
-                rebound.then_some(group)
-            )
-        });
     }
 }
 

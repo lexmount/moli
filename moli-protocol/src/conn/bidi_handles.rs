@@ -188,18 +188,8 @@ impl CdpConnection {
         realm: Option<&str>,
     ) -> Option<String> {
         self.resolve_bidi_handle(owner, handle, realm)?;
-        let native = self
-            .with_bidi_session(owner, |state| state.bidi_handles.disown(handle, realm))
-            .flatten();
-        // Migration only: ordinary CDP still consumes the old mirror until the
-        // request-validation/response-registration switch is committed.
-        if let Some(native) = &native {
-            self.unregister_runtime_remote_object_ids_for_owner(
-                owner,
-                std::slice::from_ref(native),
-            );
-        }
-        native
+        self.with_bidi_session(owner, |state| state.bidi_handles.disown(handle, realm))
+            .flatten()
     }
 
     pub(crate) fn export_bidi_node_reference(

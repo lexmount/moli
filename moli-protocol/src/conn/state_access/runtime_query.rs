@@ -318,33 +318,6 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
-    pub(crate) fn register_remapped_runtime_node(
-        self,
-        owner: &CommandOwnerScope,
-        remote: Value,
-        object_id: String,
-        realm: Option<crate::automation::DevToolsRealmId>,
-        object_group: &str,
-    ) {
-        self.connection
-            .register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                owner,
-                &remote,
-                object_group,
-            );
-        if let Some(realm) = realm {
-            self.connection
-                .register_runtime_remote_object_ids_for_owner_with_realm(
-                    owner,
-                    vec![object_id],
-                    realm.as_str(),
-                );
-        } else {
-            self.connection
-                .register_runtime_remote_object_ids_from_value_for_owner(owner, &remote);
-        }
-    }
-
     pub(crate) fn runtime_target_route(
         &self,
         target_id: &str,

@@ -613,17 +613,6 @@ impl<T> PendingRendererCommandRegistry<T> {
         })
     }
 
-    pub(crate) fn renderer_command_descriptor_for_renderer_if_attachment_matches(
-        &self,
-        renderer_call_id: RendererCallId,
-        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
-    ) -> Option<RendererCommandDescriptor> {
-        let frontend_command_id = self.frontend_commands_by_renderer.get(&renderer_call_id)?;
-        let registered_call = self.renderer_calls_by_frontend.get(frontend_command_id)?;
-        (registered_call.dispatched_attachment_id == dispatched_attachment_id)
-            .then(|| registered_call.descriptor.clone())
-    }
-
     #[cfg(test)]
     pub(crate) fn renderer_command_descriptor_for_frontend(
         &self,

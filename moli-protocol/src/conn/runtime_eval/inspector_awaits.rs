@@ -1,6 +1,52 @@
 use super::*;
 
 impl CdpConnection {
+    #[cfg(test)]
+    pub(super) fn apply_completed_pending_inspector_await_entry(
+        &mut self,
+        owner: &CommandOwnerScope,
+        entry: PendingInspectorAwait,
+        protocol_events: &[BackgroundProtocolEvent],
+    ) {
+        let object_group = entry.object_group();
+        for event in protocol_events {
+            if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
+                event.command_response_payload_ref()
+            {
+                self.register_runtime_remote_object_ids_from_response_result_for_owner(
+                    owner,
+                    result,
+                    object_group,
+                );
+            } else if let Some(message) = event.protocol_json() {
+                if message.id_u64().is_some() {
+                    self.register_runtime_remote_object_ids_from_response_for_owner(
+                        owner,
+                        message,
+                        object_group,
+                    );
+                } else if let Some(group) = object_group {
+                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                        owner,
+                        message.value(),
+                        group,
+                    );
+                } else {
+                    self.register_runtime_remote_object_ids_from_value_for_owner(
+                        owner,
+                        message.value(),
+                    );
+                }
+            }
+        }
+        if let Some(listener) = entry.bidi_channel_listener() {
+            self.unregister_runtime_remote_object_group_for_owner(
+                owner,
+                listener.channel_object_group(),
+            );
+        }
+    }
+
     /// Registers a CDP request as awaiting a deferred V8 inspector reply.
     /// Used by `Runtime.evaluate`/`Runtime.callFunctionOn` when `awaitPromise=true`
     /// is dispatched directly to V8 inspector. V8 calls back after the promise
@@ -170,58 +216,6 @@ impl CdpConnection {
         }
         self.target_devtools_session_state_for_session(session_id)?
             .renderer_call_for_frontend(cdp_request_id)
-    }
-
-    pub(super) fn renderer_command_descriptor_for_renderer_if_attachment_matches_for_session_owner(
-        &self,
-        session_id: Option<&str>,
-        renderer_call_id: RendererCallId,
-        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
-    ) -> Option<RendererCommandDescriptor> {
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.shared_worker_target_for_session(session_id)
-        {
-            return target.renderer_command_descriptor_for_renderer_if_attachment_matches(
-                owner_session_id,
-                renderer_call_id,
-                dispatched_attachment_id,
-            );
-        }
-        if let Some(owner_session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session(session_id)
-        {
-            return target.renderer_command_descriptor_for_renderer_if_attachment_matches(
-                owner_session_id,
-                renderer_call_id,
-                dispatched_attachment_id,
-            );
-        }
-        self.target_devtools_session_state_for_session(session_id)?
-            .renderer_command_descriptor_for_renderer_if_attachment_matches(
-                renderer_call_id,
-                dispatched_attachment_id,
-            )
-    }
-
-    pub(super) fn renderer_command_descriptor_for_renderer_if_attachment_matches_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-        renderer_call_id: RendererCallId,
-        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
-    ) -> Option<RendererCommandDescriptor> {
-        if owner.session_id().is_some() {
-            return self
-                .renderer_command_descriptor_for_renderer_if_attachment_matches_for_session_owner(
-                    owner.session_id(),
-                    renderer_call_id,
-                    dispatched_attachment_id,
-                );
-        }
-        self.target_devtools_session_state_for_owner(owner)?
-            .renderer_command_descriptor_for_renderer_if_attachment_matches(
-                renderer_call_id,
-                dispatched_attachment_id,
-            )
     }
 
     pub(crate) fn renderer_runtime_command_cause_for_frontend(
@@ -866,8 +860,7 @@ impl CdpConnection {
                     correlation.dispatched_attachment_id(),
                 );
             }
-            if let Some(object_group) = owner.bidi_channel_object_group.as_deref() {
-                self.unregister_runtime_remote_object_group_for_owner(&owner.owner, object_group);
+            if owner.bidi_channel_object_group.is_some() {
                 continue;
             }
             let mut response = RuntimeInspectorResponseReady::for_owner(
@@ -916,7 +909,7 @@ impl CdpConnection {
     pub(crate) fn complete_claimed_pending_inspector_await_for_scheduler_deferred_reply(
         &mut self,
         claimed: Option<ClaimedPendingInspectorAwait>,
-        protocol_events: &[BackgroundProtocolEvent],
+        _protocol_events: &[BackgroundProtocolEvent],
     ) {
         let Some(claimed) = claimed else {
             return;
@@ -924,12 +917,11 @@ impl CdpConnection {
         let ClaimedPendingInspectorAwait {
             command_id,
             owner,
-            entry,
+            entry: _,
         } = claimed;
         let session_id = owner.session_id().map(str::to_owned);
         self.remove_claimed_pending_inspector_await_owner(command_id, session_id.as_deref());
         self.complete_runtime_await_job(command_id, session_id.as_deref());
-        self.apply_completed_pending_inspector_await_entry(&owner, entry, protocol_events);
     }
 
     pub(crate) fn cancel_claimed_pending_inspector_await_for_scheduler_deferred_reply(
@@ -954,57 +946,6 @@ impl CdpConnection {
                 correlation.frontend_command_id().get(),
                 correlation.renderer_call_id(),
                 correlation.dispatched_attachment_id(),
-            );
-        }
-        if let Some(listener) = entry.bidi_channel_listener() {
-            self.unregister_runtime_remote_object_group_for_owner(
-                &owner,
-                listener.channel_object_group(),
-            );
-        }
-    }
-
-    pub(super) fn apply_completed_pending_inspector_await_entry(
-        &mut self,
-        owner: &CommandOwnerScope,
-        entry: PendingInspectorAwait,
-        protocol_events: &[BackgroundProtocolEvent],
-    ) {
-        let object_group = entry.object_group();
-        for event in protocol_events {
-            if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
-                event.command_response_payload_ref()
-            {
-                self.register_runtime_remote_object_ids_from_response_result_for_owner(
-                    owner,
-                    result,
-                    object_group,
-                );
-            } else if let Some(message) = event.protocol_json() {
-                if message.id_u64().is_some() {
-                    self.register_runtime_remote_object_ids_from_response_for_owner(
-                        owner,
-                        message,
-                        object_group,
-                    );
-                } else if let Some(group) = object_group {
-                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-                        owner,
-                        message.value(),
-                        group,
-                    );
-                } else {
-                    self.register_runtime_remote_object_ids_from_value_for_owner(
-                        owner,
-                        message.value(),
-                    );
-                }
-            }
-        }
-        if let Some(listener) = entry.bidi_channel_listener() {
-            self.unregister_runtime_remote_object_group_for_owner(
-                owner,
-                listener.channel_object_group(),
             );
         }
     }
@@ -1150,12 +1091,7 @@ impl CdpConnection {
         reason: &'static str,
     ) {
         for (cdp_id, entry) in target.drain_pending_inspector_awaits_for_session(owner_session_id) {
-            if let Some(listener) = entry.bidi_channel_listener() {
-                let object_owner_session_id = entry.session_id().unwrap_or(owner_session_id);
-                target.unregister_runtime_remote_object_group(
-                    object_owner_session_id,
-                    listener.channel_object_group(),
-                );
+            if entry.bidi_channel_listener().is_some() {
                 continue;
             }
             push_pending_inspector_await_error_background_event(
@@ -1181,13 +1117,7 @@ impl CdpConnection {
         reason: &'static str,
     ) {
         for (cdp_id, entry) in target.drain_pending_inspector_awaits() {
-            if let Some(listener) = entry.bidi_channel_listener() {
-                if let Some(session_id) = entry.session_id() {
-                    target.unregister_runtime_remote_object_group(
-                        session_id,
-                        listener.channel_object_group(),
-                    );
-                }
+            if entry.bidi_channel_listener().is_some() {
                 continue;
             }
             push_pending_inspector_await_error_background_event(
@@ -1227,14 +1157,9 @@ impl CdpConnection {
                 .shared_worker_target_for_session_mut(session_id)
                 .map(|target| target.drain_pending_inspector_awaits_for_session(owner_session_id))
                 .unwrap_or_default();
-            let mut listener_groups_to_unregister = Vec::new();
             for (cdp_id, entry) in drained {
                 self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
-                if let Some(listener) = entry.bidi_channel_listener() {
-                    listener_groups_to_unregister.push((
-                        entry.session_id().map(str::to_owned),
-                        listener.channel_object_group().to_owned(),
-                    ));
+                if entry.bidi_channel_listener().is_some() {
                     continue;
                 }
                 push_pending_inspector_await_error_background_event(
@@ -1245,14 +1170,6 @@ impl CdpConnection {
                 );
             }
             if let Some(target) = self.shared_worker_target_for_session_mut(session_id) {
-                for (entry_session_id, object_group) in listener_groups_to_unregister {
-                    let object_owner_session_id =
-                        entry_session_id.as_deref().unwrap_or(owner_session_id);
-                    target.unregister_runtime_remote_object_group(
-                        object_owner_session_id,
-                        &object_group,
-                    );
-                }
                 let terminated =
                     target.terminate_renderer_calls_for_session(owner_session_id, reason);
                 push_terminated_renderer_call_error_background_events(
@@ -1271,14 +1188,9 @@ impl CdpConnection {
                 .service_worker_target_for_session_mut(session_id)
                 .map(|target| target.drain_pending_inspector_awaits_for_session(owner_session_id))
                 .unwrap_or_default();
-            let mut listener_groups_to_unregister = Vec::new();
             for (cdp_id, entry) in drained {
                 self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
-                if let Some(listener) = entry.bidi_channel_listener() {
-                    listener_groups_to_unregister.push((
-                        entry.session_id().map(str::to_owned),
-                        listener.channel_object_group().to_owned(),
-                    ));
+                if entry.bidi_channel_listener().is_some() {
                     continue;
                 }
                 push_pending_inspector_await_error_background_event(
@@ -1289,14 +1201,6 @@ impl CdpConnection {
                 );
             }
             if let Some(target) = self.service_worker_target_for_session_mut(session_id) {
-                for (entry_session_id, object_group) in listener_groups_to_unregister {
-                    let object_owner_session_id =
-                        entry_session_id.as_deref().unwrap_or(owner_session_id);
-                    target.unregister_runtime_remote_object_group(
-                        object_owner_session_id,
-                        &object_group,
-                    );
-                }
                 let terminated =
                     target.terminate_renderer_calls_for_session(owner_session_id, reason);
                 push_terminated_renderer_call_error_background_events(
@@ -1315,11 +1219,7 @@ impl CdpConnection {
             .unwrap_or_default();
         for (cdp_id, entry) in drained {
             self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
-            if let Some(listener) = entry.bidi_channel_listener() {
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    entry.session_id(),
-                    listener.channel_object_group(),
-                );
+            if entry.bidi_channel_listener().is_some() {
                 continue;
             }
             push_pending_inspector_await_error_background_event(
@@ -1367,11 +1267,7 @@ impl CdpConnection {
             .unwrap_or_default();
         for (cdp_id, entry) in drained {
             self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
-            if let Some(listener) = entry.bidi_channel_listener() {
-                self.unregister_runtime_remote_object_group_for_owner(
-                    owner,
-                    listener.channel_object_group(),
-                );
+            if entry.bidi_channel_listener().is_some() {
                 continue;
             }
             push_pending_inspector_await_error_background_event(

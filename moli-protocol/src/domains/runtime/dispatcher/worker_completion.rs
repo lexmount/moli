@@ -338,23 +338,7 @@ impl WorkerRuntimeContinuation {
                 }
                 // Claim resources before yielding to binding replay. Closing
                 // can now capture these objects while that replay is pending.
-                self.routed.register_object_group_for_success(
-                    conn,
-                    &self.meta.owner_scope,
-                    self.meta.object_group.as_deref(),
-                );
-                if !self.meta.release_object_ids.is_empty() {
-                    conn.unregister_runtime_remote_object_ids_for_session_owner(
-                        self.meta.session_id(),
-                        &self.meta.release_object_ids,
-                    );
-                }
-                if let Some(group) = self.meta.release_object_group.as_deref() {
-                    conn.unregister_runtime_remote_object_group_for_session_owner(
-                        self.meta.session_id(),
-                        group,
-                    );
-                }
+
                 self.replay = PreparedWorkerBindingReplay::prepare(conn, self.scope.clone());
             }
         }

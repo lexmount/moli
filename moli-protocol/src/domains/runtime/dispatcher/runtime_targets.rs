@@ -434,7 +434,7 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
     owner: &CommandOwnerScope,
     execution_context_id: Option<i64>,
     shared_id: &str,
-    realm_id: Option<&DevToolsRealmId>,
+    _realm_id: Option<&DevToolsRealmId>,
     object_group: &str,
 ) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
     let is_internal_bidi_node_id = is_webdriver_bidi_node_shared_id(shared_id);
@@ -486,17 +486,5 @@ pub(super) async fn remap_bidi_node_shared_id_for_target_using(
         ));
     };
 
-    let registration_owner = owner.clone();
-    let registration_id = object_id.clone();
-    let realm = realm_id.cloned();
-    workflow.state(move |state| {
-        state.register_remapped_runtime_node(
-            &registration_owner,
-            remote_object,
-            registration_id,
-            realm,
-            object_group,
-        )
-    })?;
     Ok(Some(DevToolsRemoteHandleId::from(object_id)))
 }

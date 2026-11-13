@@ -12,41 +12,12 @@ pub(super) fn prepare_runtime_inspector_payload(
 }
 
 pub(super) fn prepare_runtime_inspector_payload_for_owner(
-    conn: &CdpConnection,
+    _conn: &CdpConnection,
     cmd: &Cmd<'_>,
-    owner: &CommandOwnerScope,
-    preparation: RuntimeInspectorPayloadPreparation,
+    _owner: &CommandOwnerScope,
+    _preparation: RuntimeInspectorPayloadPreparation,
 ) -> Result<String> {
-    match preparation {
-        RuntimeInspectorPayloadPreparation::Passthrough => Ok(cmd.json.to_owned()),
-        RuntimeInspectorPayloadPreparation::ValidateObjectOwner => {
-            let object_ids = cmd
-                .params
-                .map(runtime_remote_object_ids_in_map)
-                .unwrap_or_default();
-            conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
-            Ok(cmd.json.to_owned())
-        }
-        RuntimeInspectorPayloadPreparation::ValidatePrototypeOwner => {
-            let object_ids = runtime_prototype_object_id_from_params(cmd.params)
-                .map(|object_id| vec![object_id.to_owned()])
-                .unwrap_or_default();
-            conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
-            Ok(cmd.json.to_owned())
-        }
-        RuntimeInspectorPayloadPreparation::PrepareCallFunctionOn => {
-            let (browser_context_id, target_id) = conn
-                .target_owner_identity_for_owner(owner)
-                .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
-                .unwrap_or((None, None));
-            let command = build_cdp_call_function_command(
-                cmd,
-                target_id.as_deref(),
-                browser_context_id.as_deref(),
-            );
-            prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, &command)
-        }
-    }
+    Ok(cmd.json.to_owned())
 }
 
 pub(super) fn build_cdp_evaluate_script_command(
@@ -184,13 +155,11 @@ pub(super) fn cdp_call_function_arguments_from_params(
 }
 
 pub(super) fn prepare_pending_devtools_call_function_json_for_owner(
-    conn: &CdpConnection,
+    _conn: &CdpConnection,
     cmd: &Cmd<'_>,
-    owner: &CommandOwnerScope,
-    command: &DevToolsCallFunctionCommand,
+    _owner: &CommandOwnerScope,
+    _command: &DevToolsCallFunctionCommand,
 ) -> Result<String> {
-    let object_ids = devtools_call_function_remote_object_ids(command);
-    conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
     Ok(cmd.json.to_owned())
 }
 

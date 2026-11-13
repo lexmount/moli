@@ -266,12 +266,14 @@ impl PageTargetHost {
         self.devtools_sessions.pending_inspector_await_count()
     }
 
+    #[cfg(test)]
     pub(crate) fn has_runtime_remote_object_id(&self, object_id: &str) -> bool {
         self.devtools_sessions
             .states()
             .any(|session| session.has_runtime_remote_object_id(object_id))
     }
 
+    #[cfg(test)]
     pub(crate) fn has_runtime_remote_object_id_for_different_session(
         &self,
         devtools_session_id: Option<&str>,

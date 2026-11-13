@@ -410,6 +410,7 @@ impl ServiceWorkerTargetState {
         self.version_identity(browser_context_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn register_runtime_remote_object_ids_for_session<I>(
         &mut self,
         session_id: &str,
@@ -423,6 +424,7 @@ impl ServiceWorkerTargetState {
         state.register_runtime_remote_object_ids(object_ids);
     }
 
+    #[cfg(test)]
     pub(crate) fn register_runtime_remote_object_ids_with_realm<I>(
         &mut self,
         session_id: &str,
@@ -437,6 +439,7 @@ impl ServiceWorkerTargetState {
         state.register_runtime_remote_object_ids_with_realm(object_ids, realm_id);
     }
 
+    #[cfg(test)]
     pub(crate) fn register_runtime_remote_object_ids_with_group<I>(
         &mut self,
         session_id: &str,
@@ -451,17 +454,7 @@ impl ServiceWorkerTargetState {
         state.register_runtime_remote_object_ids_with_group(object_ids, object_group);
     }
 
-    pub(crate) fn unregister_runtime_remote_object_ids(
-        &mut self,
-        session_id: &str,
-        object_ids: &[String],
-    ) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.unregister_runtime_remote_object_ids(object_ids);
-    }
-
+    #[cfg(test)]
     pub(crate) fn unregister_runtime_remote_object_group(
         &mut self,
         session_id: &str,
@@ -518,6 +511,7 @@ impl ServiceWorkerTargetState {
         state.clear_runtime_remote_objects_for_realm(realm_id);
     }
 
+    #[cfg(test)]
     pub(crate) fn runtime_remote_object_group(
         &self,
         session_id: &str,
@@ -527,11 +521,13 @@ impl ServiceWorkerTargetState {
             .runtime_remote_object_group(object_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn has_runtime_remote_object_id(&self, session_id: &str, object_id: &str) -> bool {
         self.session_state(session_id)
             .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
     }
 
+    #[cfg(test)]
     pub(crate) fn any_session_has_runtime_remote_object_id(&self, object_id: &str) -> bool {
         self.sessions
             .values()
@@ -968,19 +964,6 @@ impl ServiceWorkerTargetState {
     ) -> Option<RendererCommandCorrelation> {
         self.session_state_mut(owner_session_id)?
             .take_frontend_command_for_renderer_if_attachment_matches(
-                renderer_call_id,
-                dispatched_attachment_id,
-            )
-    }
-
-    pub(crate) fn renderer_command_descriptor_for_renderer_if_attachment_matches(
-        &self,
-        owner_session_id: &str,
-        renderer_call_id: moli_page_types::RendererCallId,
-        dispatched_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
-    ) -> Option<RendererCommandDescriptor> {
-        self.session_state(owner_session_id)?
-            .renderer_command_descriptor_for_renderer_if_attachment_matches(
                 renderer_call_id,
                 dispatched_attachment_id,
             )

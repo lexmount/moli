@@ -886,16 +886,7 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
         panic!("expected a protocol response");
     };
     assert_eq!(response.value()["id"], json!(44));
-    ctx.with_fixture(|conn| {
-        assert_eq!(
-            conn.runtime_remote_object_group_for_session_owner(
-                Some("SID-session-output"),
-                "nested-main-object",
-            ),
-            Some("nested-main".to_owned()),
-            "session output must retain Runtime object ownership metadata",
-        )
-    });
+
     ctx.with_fixture(|conn| {
         assert!(
             conn.renderer_runtime_command_cause_for_frontend(Some("SID-session-output"), 44,)
@@ -903,66 +894,6 @@ async fn devtools_session_output_restores_only_the_exact_registered_frontend_res
             "publishing the session response must consume its exact correlation"
         )
     });
-}
-
-#[test]
-fn devtools_session_output_preserves_remote_object_group_projection() {
-    let mut conn = CdpConnection::default();
-    let mut browser_context = BrowserContext::new("BID-session-projection".to_owned());
-    browser_context.set_active_target_id("TID-session-projection".to_owned());
-    browser_context.attach_active_session("SID-session-projection".to_owned());
-    conn.install_browser_context_fixture_for_test(browser_context);
-    let session_id = Some("SID-session-projection");
-    let attachment_id = RendererAgentAttachmentId::allocate();
-
-    conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
-        &CommandOwnerScope::for_session("SID-session-projection"),
-        &json!({ "objectId": "nested-parent-object" }),
-        "nested-object-group",
-    );
-
-    let get_properties = ParsedCdpCommand::parse_str(
-            r#"{"id":45,"method":"Runtime.getProperties","params":{"objectId":"nested-parent-object","ownProperties":true}}"#,
-        )
-        .expect("getProperties command should parse");
-    let prepared = conn
-        .try_register_renderer_call_for_session_owner(
-            session_id,
-            45,
-            Some(attachment_id),
-            RendererCommandDescriptor::from_frontend_policy(
-                get_properties.json().to_owned(),
-                get_properties.renderer_policy(),
-                RendererInspectorResponseDelivery::SessionSink,
-            ),
-        )
-        .expect("getProperties response correlation should register");
-    let (correlation, response_sender, response_receiver) = prepared.into_parts();
-    assert!(response_receiver.is_none());
-    drop(response_sender);
-    let mut messages = vec![RendererRuntimeInspectorMessage::protocol(json!({
-        "id": correlation.renderer_call_id().get(),
-        "result": {
-            "result": [{
-                "name": "child",
-                "value": {
-                    "type": "object",
-                    "objectId": "nested-child-object"
-                }
-            }]
-        },
-    }))];
-    conn.restore_frontend_command_ids_in_devtools_session_output_for_owner(
-        &CommandOwnerScope::for_session("SID-session-projection"),
-        Some(attachment_id),
-        &mut messages,
-        true,
-    );
-    assert_eq!(
-        conn.runtime_remote_object_group_for_session_owner(session_id, "nested-child-object",),
-        Some("nested-object-group".to_owned()),
-        "getProperties results must inherit the receiver object's group",
-    );
 }
 
 fn bidi_channel_listener_residence_for_test(
@@ -1345,7 +1276,7 @@ fn raw_inspector_handle_free_notifications_do_not_materialize_business_views() {
 }
 
 #[test]
-fn raw_runtime_responses_register_handles_without_materializing_user_values() {
+fn raw_runtime_responses_stay_opaque_without_registering_handles() {
     for pending in [false, true] {
         let mut conn = CdpConnection::default();
         let mut context = BrowserContext::new("BID-raw-response".to_owned());
@@ -1383,17 +1314,6 @@ fn raw_runtime_responses_register_handles_without_materializing_user_values() {
         let output = responses[0].protocol_json().unwrap();
         assert!(!output.is_materialized());
         assert_eq!(output.to_string(), message.to_string());
-        for id in ["actual", "exception"] {
-            assert!(conn.runtime_remote_object_id_known_for_owner(&owner, id));
-            if pending {
-                assert_eq!(
-                    conn.runtime_remote_object_group_for_owner(&owner, id)
-                        .as_deref(),
-                    Some("raw-group")
-                );
-            }
-        }
-        assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-object"));
     }
 }
 
@@ -1506,7 +1426,7 @@ fn completed_runtime_await_response_containers_preserve_user_data_object_groups(
 }
 
 #[test]
-fn raw_inspector_unknown_notifications_still_register_remote_object_ownership() {
+fn raw_inspector_unknown_notifications_are_forwarded_without_handle_bookkeeping() {
     let mut conn = CdpConnection::default();
     let mut context = BrowserContext::new("BID-raw-notification".to_owned());
     context.set_active_target_id("TID-raw-notification".to_owned());
@@ -1525,7 +1445,7 @@ fn raw_inspector_unknown_notifications_still_register_remote_object_ownership() 
             &mut notifications,
         )
     );
-    assert!(conn.runtime_remote_object_id_known_for_owner(&owner, "future-handle"));
+
     assert!(responses.is_empty());
     assert_eq!(notifications.len(), 1);
     assert_eq!(
@@ -2035,11 +1955,6 @@ fn pending_inspector_await_response_routes_through_owner_runtime_response() {
         !conn.has_pending_inspector_awaits(),
         "owner runtime response should consume pending inspector await state"
     );
-    assert_eq!(
-        conn.runtime_remote_object_group_for_session_owner(Some("SID-bg"), "object-bg-1"),
-        Some("runtime-group".to_owned()),
-        "owner runtime response should register handles against the producing owner"
-    );
 }
 
 #[tokio::test]
@@ -2088,13 +2003,7 @@ async fn failing_pending_awaits_retire_concrete_listener_work_without_client_err
     ctx.with_fixture(|conn| {
         assert!(!conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")))
     });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.runtime_remote_object_group_for_session_owner(Some("SID-active"), "channel-proxy")
-                .is_none(),
-            "invalidated BiDi listener should remove its channel object group"
-        )
-    });
+
     let outcome = ctx.run_fixture_scheduler_work(held_listener_work).await;
     assert!(
         outcome.into_parts().0.is_empty(),
@@ -2175,16 +2084,6 @@ async fn failed_bidi_listener_reply_publishes_concrete_object_group_release() {
         Some(BidiChannelOwnerActionKind::ReleaseObjectGroup)
     );
     ctx.run_fixture_scheduler_work(work).await;
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.runtime_remote_object_group_for_session_owner(
-                Some("SID-active"),
-                "channel-proxy-error"
-            )
-            .is_none(),
-            "the concrete release must own and consume the listener's object group"
-        )
-    });
 }
 
 #[tokio::test]

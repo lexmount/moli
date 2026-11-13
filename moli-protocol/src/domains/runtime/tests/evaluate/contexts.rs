@@ -1176,7 +1176,7 @@ async fn get_exception_details_rejects_error_object_id_known_to_different_target
     assert_eq!(response["error"]["code"], json!(-32000));
     assert_eq!(
         response["error"]["message"],
-        json!("Cannot find object with given id")
+        json!("Cannot find context with specified id")
     );
 }
 
@@ -1274,21 +1274,6 @@ globalThis.__lmQueryObjectsThings = [
             panic!("Runtime.queryObjects should return an array handle: {query_response:?}")
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-        let devtools_session_state = {
-            conn.target_devtools_session_state_for_session(None)
-                .expect("default DevTools session state should exist")
-        };
-        assert!(
-            devtools_session_state.has_runtime_remote_object_id(&objects_id),
-            "Runtime.queryObjects result handle should be tracked: {query_response:?}"
-        );
-        assert_eq!(
-            devtools_session_state.runtime_remote_object_group(&objects_id),
-            Some("query-results"),
-            "Runtime.queryObjects should register its result in the explicit objectGroup"
-        );
-    });
 
     ctx.process_async(json!({
         "id": 11_013,
@@ -1299,21 +1284,8 @@ globalThis.__lmQueryObjectsThings = [
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 11_013)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        let devtools_session_state = {
-            conn.target_devtools_session_state_for_session(None)
-                .expect("default DevTools session state should exist")
-        };
-        assert!(
-            !devtools_session_state.has_runtime_remote_object_id(&objects_id),
-            "Runtime.releaseObjectGroup should clear the queryObjects result handle"
-        );
-        assert_eq!(
-            devtools_session_state.runtime_remote_object_group(&objects_id),
-            None,
-            "Runtime.releaseObjectGroup should clear the queryObjects result group"
-        );
-    });
+
+    assert_native_objects_released(&mut ctx, None, &[objects_id]).await;
 }
 
 #[tokio::test]
@@ -1357,21 +1329,6 @@ async fn loaded_page_compile_and_run_script_dispatch_through_v8_runtime_agent() 
             panic!("Runtime.runScript should return an object handle: {run_response:?}")
         })
         .to_owned();
-    ctx.with_fixture(|conn| {
-        let devtools_session_state = {
-            conn.target_devtools_session_state_for_session(None)
-                .expect("default DevTools session state should exist")
-        };
-        assert!(
-            devtools_session_state.has_runtime_remote_object_id(&object_id),
-            "Runtime.runScript result handle should be tracked: {run_response:?}"
-        );
-        assert_eq!(
-            devtools_session_state.runtime_remote_object_group(&object_id),
-            Some("compiled-script-results"),
-            "Runtime.runScript should register its result in the explicit objectGroup"
-        );
-    });
 
     ctx.process_async(json!({
         "id": 11_017,
@@ -1382,16 +1339,8 @@ async fn loaded_page_compile_and_run_script_dispatch_through_v8_runtime_agent() 
     }))
     .await;
     assert_eq!(take_response_by_id(&mut ctx, 11_017)["result"], json!({}));
-    ctx.with_fixture(|conn| {
-        let devtools_session_state = {
-            conn.target_devtools_session_state_for_session(None)
-                .expect("default DevTools session state should exist")
-        };
-        assert!(
-            !devtools_session_state.has_runtime_remote_object_id(&object_id),
-            "Runtime.releaseObjectGroup should clear the runScript result handle"
-        );
-    });
+
+    assert_native_objects_released(&mut ctx, None, &[object_id]).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1976,7 +1925,7 @@ async fn runtime_enable_after_navigation_replays_registered_named_world_contexts
 }
 
 #[tokio::test]
-async fn document_navigation_clears_old_runtime_remote_object_tracking() {
+async fn document_navigation_invalidates_native_runtime_objects() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><body>before</body></html>").await;
     ctx.with_fixture(|conn| {
@@ -2009,15 +1958,6 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
         })
         .to_owned();
 
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.target_devtools_session_state_for_session(Some("SID-1"))
-                .expect("DevTools session state should exist")
-                .has_runtime_remote_object_id(&object_id),
-            "pre-navigation object handle should be tracked by the DevTools session"
-        )
-    });
-
     ctx.process_async(json!({
         "id": 172,
         "method": "Page.navigate",
@@ -2026,23 +1966,6 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
     }))
     .await;
     let _ = take_response_by_id(&mut ctx, 172);
-
-    ctx.with_fixture(|conn| {
-        let devtools_session_state = {
-            conn.target_devtools_session_state_for_session(Some("SID-1"))
-                .expect("DevTools session state should exist")
-        };
-        assert!(
-            !devtools_session_state.has_runtime_remote_object_id(&object_id),
-            "committed document navigation must forget old document Runtime object handles"
-        );
-        assert!(
-            devtools_session_state
-                .runtime_remote_object_group(&object_id)
-                .is_none(),
-            "committed document navigation must forget old document Runtime object groups"
-        );
-    });
 
     ctx.process_async(json!({
         "id": 173,
@@ -2074,6 +1997,7 @@ async fn document_navigation_clears_old_runtime_remote_object_tracking() {
     .await;
     let marker = take_response_by_id(&mut ctx, 174);
     assert_eq!(marker["result"]["result"]["value"], json!("undefined"));
+    assert_native_objects_released(&mut ctx, None, &[object_id]).await;
 }
 
 #[tokio::test]

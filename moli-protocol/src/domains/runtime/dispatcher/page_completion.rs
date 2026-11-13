@@ -265,11 +265,6 @@ impl PageRuntimeCommandContinuation {
         let succeeded = session_response_succeeded
             .unwrap_or_else(|| routed_output.command_response_succeeded(completed.command_id));
         if succeeded {
-            routed_output.register_object_group_for_success(
-                conn,
-                &completed.owner_scope,
-                completed.object_group.as_deref(),
-            );
             if let Some(action) = console_action_from_protocol_method(completed.action)
                 && !apply_console_output_state_for_owner(conn, &completed.owner_scope, action)
             {
@@ -384,28 +379,15 @@ fn finish_runtime_inspector_tail(
     timing_started: Option<std::time::Instant>,
     response_flush: &crate::conn::CommandResponseFlushContext,
 ) -> CommandOutputPlan {
-    if succeeded {
-        if !completed.release_object_ids.is_empty() {
-            conn.unregister_runtime_remote_object_ids_for_owner(
-                &completed.owner_scope,
-                &completed.release_object_ids,
-            );
-        }
-        if let Some(object_group) = completed.release_object_group.as_deref() {
-            conn.unregister_runtime_remote_object_group_for_owner(
-                &completed.owner_scope,
-                object_group,
-            );
-        }
-        if completed.action == "runIfWaitingForDebugger"
-            && conn.release_waiting_for_debugger_session(completed.session_id())
-        {
-            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
+    if succeeded
+        && completed.action == "runIfWaitingForDebugger"
+        && conn.release_waiting_for_debugger_session(completed.session_id())
+    {
+        crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
                 conn,
                 completed.session_id(),
                 response_flush,
             );
-        }
     }
     let mut plan = CommandOutputPlan::default();
     routed_output.push_ordered_into_plan(&mut plan, completed.command_id);

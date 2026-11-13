@@ -5339,14 +5339,6 @@ async fn resolve_node_caches_node_payload_from_renderer_snapshot_command() {
         .expect("DOM.resolveNode should return objectId")
         .to_owned();
 
-    ctx.with_fixture(|conn| {
-        assert_eq!(
-            conn.runtime_remote_object_group_for_session_owner(None, &object_id),
-            Some("native-resolve".to_owned()),
-            "the Browser registry must be updated before the terminal becomes visible",
-        )
-    });
-
     navigate_to_data_html_async(&mut ctx, 5, "<!doctype html><html><body>next</body></html>").await;
 
     ctx.process_async(json!({

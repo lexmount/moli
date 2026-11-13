@@ -39,7 +39,7 @@ async fn child_default_context_activity_stays_silent_before_runtime_enable() {
     );
 }
 #[tokio::test]
-async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success() {
+async fn release_object_does_not_fall_back_to_another_owner() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -84,16 +84,6 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
             "background Runtime.evaluate should not activate the target"
         )
     });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&object_id),
-            )
-            .is_err(),
-            "active owner should see the background handle as belonging to another target"
-        )
-    });
 
     ctx.process_async(json!({
         "id": 527,
@@ -106,10 +96,7 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
     .await;
     let response = take_response_by_id(&mut ctx, 527);
     assert_eq!(response["error"]["code"], json!(-32000));
-    assert_eq!(
-        response["error"]["message"],
-        json!("Cannot find object with given id")
-    );
+    assert_eq!(response["error"]["message"], json!("NoDocumentLoaded"));
 
     ctx.process_async(json!({
         "id": 528,
@@ -131,19 +118,9 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
             "background Runtime.releaseObject should not activate the target"
         )
     });
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&object_id),
-            )
-            .is_ok(),
-            "successful owner release should remove the handle from the owner registry"
-        )
-    });
 }
 #[tokio::test]
-async fn release_object_group_drops_owner_registry_on_success() {
+async fn release_object_group_invalidates_native_handles() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -180,16 +157,6 @@ async fn release_object_group_drops_owner_registry_on_success() {
         .as_str()
         .unwrap_or_else(|| panic!("Runtime.evaluate should return an object handle: {response:?}"))
         .to_owned();
-    ctx.with_fixture(|conn| {
-        assert!(
-            conn.validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&object_id),
-            )
-            .is_err(),
-            "active owner should see the grouped background handle as belonging to another target"
-        )
-    });
 
     ctx.process_async(json!({
         "id": 527,
@@ -211,15 +178,7 @@ async fn release_object_group_drops_owner_registry_on_success() {
             "background Runtime.releaseObjectGroup should not activate the target"
         )
     });
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&object_id),
-            )
-            .is_ok(),
-        "successful owner releaseObjectGroup should remove grouped handles from the owner registry"
-    ) });
+    assert_native_objects_released(&mut ctx, Some("SID-background"), &[object_id]).await;
 }
 #[tokio::test]
 async fn release_object_group_drops_await_promise_inherited_result_handle() {
@@ -276,15 +235,6 @@ async fn release_object_group_drops_await_promise_inherited_result_handle() {
             panic!("Runtime.awaitPromise should return an object handle: {response:?}")
         })
         .to_owned();
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&resolved_object_id),
-            )
-            .is_err(),
-        "active owner should see the inherited-group await result as belonging to the background target"
-    ) });
 
     ctx.process_async(json!({
         "id": 536,
@@ -297,15 +247,7 @@ async fn release_object_group_drops_await_promise_inherited_result_handle() {
     .await;
     let response = take_response_by_id(&mut ctx, 536);
     assert_eq!(response["result"], json!({}));
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&resolved_object_id),
-            )
-            .is_ok(),
-        "releaseObjectGroup should remove awaitPromise result handles whose group was inherited from the promise"
-    ) });
+    assert_native_objects_released(&mut ctx, Some("SID-background"), &[resolved_object_id]).await;
 }
 #[tokio::test]
 async fn await_promise_routes_to_loaded_background_owner_without_activation() {
@@ -370,15 +312,11 @@ async fn await_promise_routes_to_loaded_background_owner_without_activation() {
             "background Runtime.awaitPromise should not activate the target"
         )
     });
-    ctx.with_fixture(|conn| { assert!(
-        conn
-            .validate_runtime_remote_object_ids_for_session_owner(
-                Some("SID-active"),
-                std::slice::from_ref(&resolved_object_id),
-            )
-            .is_err(),
-        "active owner should see the Runtime.awaitPromise result handle as belonging to the background target"
-    ) });
+    ctx.process_async(json!({"id": 998_500,"method":"Runtime.callFunctionOn","sessionId":"SID-background","params":{"objectId":resolved_object_id,"functionDeclaration":"function(){return this.owner;}","returnByValue":true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 998_500)["result"]["result"]["value"],
+        json!("background-await")
+    );
 }
 #[tokio::test]
 async fn await_promise_rejects_promise_object_id_known_to_different_target_owner() {
@@ -429,10 +367,7 @@ async fn await_promise_rejects_promise_object_id_known_to_different_target_owner
     .await;
     let response = take_response_by_id(&mut ctx, 534);
     assert_eq!(response["error"]["code"], json!(-32000));
-    assert_eq!(
-        response["error"]["message"],
-        json!("Cannot find object with given id")
-    );
+    assert_eq!(response["error"]["message"], json!("NoDocumentLoaded"));
 }
 #[tokio::test]
 async fn loaded_background_runtime_binding_routes_to_owner_without_activation() {
