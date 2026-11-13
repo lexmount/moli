@@ -454,7 +454,7 @@ impl ScriptVm {
                     completed.info.request_headers,
                     completed.info.request_body,
                     None,
-                    completed.synthetic,
+                    false,
                     None,
                     None,
                     completed

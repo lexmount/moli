@@ -11,7 +11,6 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct XhrLoadResult {
     pub(crate) result: Result<Response, String>,
-    pub(crate) synthetic: bool,
     pub(crate) info: PendingSubresourceFetchInfo,
     pub(crate) network_record: SubresourceNetworkRecord,
 }
@@ -20,7 +19,6 @@ impl XhrLoadResult {
     pub(super) fn new(
         info: PendingSubresourceFetchInfo,
         result: Result<Response, String>,
-        synthetic: bool,
         network_headers: Option<Vec<(String, String)>>,
     ) -> Self {
         let record = match &result {
@@ -80,7 +78,6 @@ impl XhrLoadResult {
         Self {
             info,
             result,
-            synthetic,
             network_record,
         }
     }
@@ -128,7 +125,7 @@ pub(crate) fn start_buffered_xhr(
                     )?;
                     Ok(response)
                 });
-                XhrLoadResult::new(info, result, false, None)
+                XhrLoadResult::new(info, result, None)
             }
         };
         let _ = tx.send(Ok(completed));
