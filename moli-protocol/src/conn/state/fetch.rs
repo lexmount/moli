@@ -1125,9 +1125,12 @@ impl TargetFetchConfig {
     pub(crate) fn subresource_interception_config(
         &self,
     ) -> moli_core::page::SubresourceInterceptionClasses {
-        if auth_interception_url_patterns(self.handle_auth_requests, &self.network_intercepts)
-            .next()
-            .is_some()
+        if auth_interception_url_patterns(
+            fetch_sessions_handle_auth_requests(&self.fetch_sessions),
+            &self.network_intercepts,
+        )
+        .next()
+        .is_some()
         {
             // Auth challenges are matched by URL alone, regardless of the
             // resource classes named by Fetch.enable patterns. The renderer
@@ -1144,7 +1147,6 @@ impl TargetFetchConfig {
         TargetFetchSubresourceInterceptionSnapshot {
             enabled: self.enabled,
             event_session_id: self.session_id.clone(),
-            handle_auth_requests: self.handle_auth_requests,
             fetch_sessions: self.fetch_sessions.clone(),
             fetch_session_order: self.fetch_session_order.clone(),
             patterns: self.patterns().to_vec(),
@@ -1191,7 +1193,7 @@ impl TargetFetchConfig {
     }
 
     pub(crate) fn matches_auth_required(&self, url: &Url) -> bool {
-        matches_auth_required(self.handle_auth_requests, &self.network_intercepts, url)
+        matches_auth_required(&self.fetch_sessions, &self.network_intercepts, url)
     }
 
     pub(crate) fn matching_auth_required_network_intercepts(
@@ -1319,10 +1321,7 @@ impl TargetFetchConfig {
                     .values()
                     .find_map(|intercept| intercept.session_id.clone())
             });
-        self.handle_auth_requests = self
-            .fetch_sessions
-            .values()
-            .any(|config| config.handle_auth_requests)
+        self.handle_auth_requests = fetch_sessions_handle_auth_requests(&self.fetch_sessions)
             || self
                 .network_intercepts
                 .values()
@@ -1372,7 +1371,6 @@ impl Drop for TargetFetchOwner {
 pub(crate) struct TargetFetchSubresourceInterceptionSnapshot {
     enabled: bool,
     event_session_id: Option<String>,
-    handle_auth_requests: bool,
     fetch_sessions: BTreeMap<Option<String>, TargetFetchSessionConfig>,
     fetch_session_order: Vec<Option<String>>,
     patterns: Vec<FetchInterceptionPattern>,
@@ -1713,11 +1711,7 @@ impl TargetFetchSubresourceInterceptionSnapshot {
         &self,
         url: &Url,
     ) -> Option<PendingSubresourceFetchOwnerKind> {
-        if self
-            .fetch_sessions
-            .values()
-            .any(|config| config.handle_auth_requests)
-        {
+        if fetch_sessions_handle_auth_requests(&self.fetch_sessions) {
             return Some(PendingSubresourceFetchOwnerKind::Fetch);
         }
         (!matching_auth_required_network_intercepts(&self.network_intercepts, url).is_empty())
@@ -1737,7 +1731,7 @@ impl TargetFetchSubresourceInterceptionSnapshot {
     }
 
     pub(crate) fn matches_auth_required(&self, url: &Url) -> bool {
-        matches_auth_required(self.handle_auth_requests, &self.network_intercepts, url)
+        matches_auth_required(&self.fetch_sessions, &self.network_intercepts, url)
     }
 
     pub(crate) fn matching_auth_required_network_intercepts(
@@ -1805,30 +1799,36 @@ fn matching_network_intercepts(
 }
 
 /// Effective auth URL patterns shared by renderer eligibility and per-request
-/// matching. Without network intercepts, enabled Fetch auth applies to any URL.
+/// matching. Fetch handlers and network rules contribute independently.
 fn auth_interception_url_patterns(
-    handle_auth_requests: bool,
+    fetch_handles_auth_requests: bool,
     intercepts: &BTreeMap<String, TargetNetworkInterceptConfig>,
 ) -> impl Iterator<Item = &str> {
-    let all_urls = (handle_auth_requests && intercepts.is_empty()).then_some("*");
-    let enabled_intercepts = handle_auth_requests
-        .then_some(intercepts)
-        .into_iter()
-        .flat_map(|intercepts| intercepts.values());
+    let all_urls = fetch_handles_auth_requests.then_some("*");
     all_urls.into_iter().chain(
-        enabled_intercepts
+        intercepts
+            .values()
             .filter(|intercept| intercept.handle_auth_requests)
             .flat_map(|intercept| intercept.auth_url_patterns.iter().map(String::as_str)),
     )
 }
 
 fn matches_auth_required(
-    handle_auth_requests: bool,
+    fetch_sessions: &BTreeMap<Option<String>, TargetFetchSessionConfig>,
     intercepts: &BTreeMap<String, TargetNetworkInterceptConfig>,
     url: &Url,
 ) -> bool {
-    auth_interception_url_patterns(handle_auth_requests, intercepts)
-        .any(|pattern| url_pattern_matches(pattern, url.as_str()))
+    auth_interception_url_patterns(
+        fetch_sessions_handle_auth_requests(fetch_sessions),
+        intercepts,
+    )
+    .any(|pattern| url_pattern_matches(pattern, url.as_str()))
+}
+
+fn fetch_sessions_handle_auth_requests(
+    sessions: &BTreeMap<Option<String>, TargetFetchSessionConfig>,
+) -> bool {
+    sessions.values().any(|config| config.handle_auth_requests)
 }
 
 fn matching_auth_required_network_intercepts(

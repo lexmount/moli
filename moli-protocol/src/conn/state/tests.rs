@@ -828,77 +828,141 @@ fn target_fetch_owner_reports_matching_auth_required_network_intercepts() {
 }
 
 #[test]
-fn fetch_session_auth_flag_without_matching_intercept_keeps_pattern_class_scope() {
+fn cdp_auth_is_independent_of_network_intercept_registration() {
     let mut owner = TargetFetchOwner::default();
-    // Fetch.enable{handleAuthRequests:true} with a typed pattern, plus a
-    // network intercept that cannot match auth: `matches_auth_required`
-    // requires some intercept with handleAuthRequests and non-empty auth URL
-    // patterns once any intercept exists, so the class set must stay scoped
-    // to the pattern instead of widening to every class.
-    owner.configure(
-        Some("SID-fetch".to_owned()),
+    let image_patterns = vec![FetchInterceptionPattern {
+        url_pattern: "*".to_owned(),
+        resource_type_filter: Some(FetchResourceTypeFilter::Image),
+        request_stage: FetchRequestStage::Request,
+    }];
+    owner.configure(Some("SID-fetch".to_owned()), true, image_patterns.clone());
+    owner.configure(Some("SID-other".to_owned()), true, image_patterns.clone());
+    owner.add_network_intercept(
+        "intercept-no-auth".to_owned(),
+        Some("BIDI-SID".to_owned()),
+        false,
+        vec!["*".to_owned()],
+        image_patterns.clone(),
+    );
+
+    let any_url = Url::parse("https://example.test/protected/basic").unwrap();
+    let config = owner.config_snapshot();
+    assert!(owner.handle_auth_requests());
+    assert!(config.matches_auth_required(&any_url));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::ALL
+    );
+    assert!(owner.remove_network_intercept("intercept-no-auth"));
+    assert!(owner.config_snapshot().matches_auth_required(&any_url));
+    owner.add_network_intercept(
+        "intercept-no-auth".to_owned(),
+        Some("BIDI-SID".to_owned()),
+        false,
+        Vec::new(),
+        image_patterns.clone(),
+    );
+
+    // A scoped network auth rule adds an owner only for its own URL. It
+    // cannot remove either CDP handler's authority over other challenges.
+    owner.add_network_intercept(
+        "intercept-auth".to_owned(),
+        Some("BIDI-SID".to_owned()),
         true,
+        vec!["https://other.test/protected*".to_owned()],
+        Vec::new(),
+    );
+    let config = owner.config_snapshot();
+    let snapshot = config.subresource_interception_snapshot();
+    assert!(config.matches_auth_required(&any_url));
+    assert!(snapshot.matches_auth_required(&any_url));
+    assert!(
+        snapshot
+            .matching_auth_required_network_intercepts(&any_url)
+            .is_empty()
+    );
+    assert_eq!(
+        snapshot.auth_required_owner_kind(&any_url),
+        Some(PendingSubresourceFetchOwnerKind::Fetch)
+    );
+    assert_eq!(
+        snapshot
+            .matching_auth_required_pause_sessions(None, &any_url)
+            .len(),
+        2
+    );
+    assert!(owner.remove_fetch_session(Some("SID-fetch")));
+    assert!(owner.config_snapshot().matches_auth_required(&any_url));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::ALL
+    );
+
+    owner.configure(Some("SID-other".to_owned()), false, image_patterns);
+    let config = owner.config_snapshot();
+    let snapshot = config.subresource_interception_snapshot();
+    let other_url = Url::parse("https://other.test/protected/basic").unwrap();
+    assert!(!config.matches_auth_required(&any_url));
+    assert!(!snapshot.matches_auth_required(&any_url));
+    assert!(
+        snapshot
+            .matching_auth_required_pause_sessions(None, &any_url)
+            .is_empty()
+    );
+    assert!(config.matches_auth_required(&other_url));
+    assert!(snapshot.matches_auth_required(&other_url));
+    assert_eq!(
+        snapshot.auth_required_owner_kind(&other_url),
+        Some(PendingSubresourceFetchOwnerKind::NetworkOrBidi)
+    );
+    // A real auth rule still requires all resource classes even though it
+    // no longer authorizes unrelated URLs after the last CDP handler stops.
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::ALL
+    );
+    assert!(owner.remove_network_intercept("intercept-auth"));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::IMAGE
+    );
+    assert!(!owner.config_snapshot().matches_auth_required(&other_url));
+    assert!(owner.remove_fetch_session(Some("SID-other")));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::IMAGE
+    );
+    assert!(owner.remove_network_intercept("intercept-no-auth"));
+    assert_eq!(
+        owner.subresource_interception_config(),
+        SubresourceInterceptionClasses::NONE
+    );
+}
+
+#[test]
+fn network_auth_without_url_patterns_does_not_broaden_or_authorize_requests() {
+    let mut owner = TargetFetchOwner::default();
+    owner.add_network_intercept(
+        "intercept-empty-auth".to_owned(),
+        Some("BIDI-SID".to_owned()),
+        true,
+        Vec::new(),
         vec![FetchInterceptionPattern {
             url_pattern: "*".to_owned(),
             resource_type_filter: Some(FetchResourceTypeFilter::Image),
             request_stage: FetchRequestStage::Request,
         }],
     );
-    let any_url = Url::parse("https://example.test/protected/basic").unwrap();
-    let other_url = Url::parse("https://other.test/public").unwrap();
+    let url = Url::parse("https://example.test/protected/basic").unwrap();
     let config = owner.config_snapshot();
-    assert_eq!(
-        owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
-    );
-    assert!(config.matches_auth_required(&any_url));
-    assert!(config.matches_auth_required(&other_url));
-
-    owner.add_network_intercept(
-        "intercept-no-auth".to_owned(),
-        Some("BIDI-SID".to_owned()),
-        false,
-        vec!["*".to_owned()],
-        Vec::new(),
-    );
-
-    let config = owner.config_snapshot();
+    let snapshot = config.subresource_interception_snapshot();
     assert!(owner.handle_auth_requests());
-    assert!(!config.matches_auth_required(&any_url));
+    assert!(!config.matches_auth_required(&url));
+    assert!(!snapshot.matches_auth_required(&url));
+    assert_eq!(snapshot.auth_required_owner_kind(&url), None);
     assert_eq!(
         owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::IMAGE,
-        "unmatched session auth must not broaden the renderer class set"
-    );
-
-    owner.add_network_intercept(
-        "intercept-empty-auth".to_owned(),
-        Some("BIDI-SID".to_owned()),
-        true,
-        Vec::new(),
-        Vec::new(),
-    );
-    assert!(!owner.config_snapshot().matches_auth_required(&any_url));
-    assert_eq!(
-        owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::IMAGE,
-        "an auth intercept without URL patterns must not broaden the class set"
-    );
-
-    // A matching auth intercept widens the set back to every class.
-    owner.add_network_intercept(
-        "intercept-auth".to_owned(),
-        Some("BIDI-SID".to_owned()),
-        true,
-        vec!["https://example.test/protected*".to_owned()],
-        Vec::new(),
-    );
-    let config = owner.config_snapshot();
-    assert!(config.matches_auth_required(&any_url));
-    assert!(!config.matches_auth_required(&other_url));
-    assert_eq!(
-        owner.subresource_interception_config(),
-        SubresourceInterceptionClasses::ALL
+        SubresourceInterceptionClasses::IMAGE
     );
 }
 
