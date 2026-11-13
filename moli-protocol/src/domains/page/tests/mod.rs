@@ -280,8 +280,10 @@ async fn assert_child_frame_navigation_completion(
     let child_navigated = ctx
         .sent
         .iter()
+        .rev()
         .find(|message| {
-            message["method"] == json!("Page.frameNavigated")
+            message["sessionId"] == json!("SID-1")
+                && message["method"] == json!("Page.frameNavigated")
                 && message["params"]["frame"]["id"] == json!(child_frame_id)
                 && expected_url.is_none_or(|expected_url| {
                     message["params"]["frame"]["url"] == json!(expected_url)
@@ -310,6 +312,23 @@ async fn assert_child_frame_navigation_completion(
         .as_str()
         .expect("child navigation loader id")
         .to_owned();
+
+    // frameStoppedLoading has no loader id and may belong to an earlier
+    // navigation. Wait for this loader's terminal lifecycle event as well.
+    let expected_frame_id = child_frame_id.to_owned();
+    let expected_loader_id = child_loader_id.clone();
+    wait_until_message(
+        ctx,
+        "SID-1",
+        "child loader Page.lifecycleEvent networkIdle",
+        move |message| {
+            message["method"] == json!("Page.lifecycleEvent")
+                && message["params"]["frameId"] == json!(expected_frame_id)
+                && message["params"]["loaderId"] == json!(expected_loader_id)
+                && message["params"]["name"] == json!("networkIdle")
+        },
+    )
+    .await;
 
     let lifecycle_names = ctx
         .sent

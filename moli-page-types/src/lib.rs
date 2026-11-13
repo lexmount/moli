@@ -1832,7 +1832,9 @@ impl SubresourceResponseBody {
 
     pub fn try_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(&bytes.as_slice()[..self.len()])),
+            SubresourceResponseBodyInner::Memory(bytes) => {
+                Ok(Cow::Borrowed(&bytes.as_slice()[..self.len()]))
+            }
             SubresourceResponseBodyInner::Disk { .. } => self.materialize_bytes().map(Cow::Owned),
             SubresourceResponseBodyInner::ParkableImage(image) => image
                 .snapshot()

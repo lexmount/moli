@@ -1,4 +1,3 @@
-
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use std::sync::Arc;
