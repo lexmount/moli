@@ -4,7 +4,7 @@ import base64
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record_contract
-from ..config import REPO_ROOT, is_moli_browser
+from ..config import REPO_ROOT
 from ..diagnostics import new_cdp_session
 from ..png_image import decode_png
 
@@ -42,6 +42,30 @@ async def _check_inline_svg(page: Any, results: list[dict[str, Any]]) -> None:
                             source="Chromium 145.0.7632.116 executable comparison (2026-11-13)", commands=["Runtime.evaluate", "Page.captureScreenshot"])
 
         await page.evaluate("""() => {
+            document.head.innerHTML='<style>html,body{margin:0}#container{width:250px}.hidden{display:none}svg{font:12px "DejaVu Sans"}</style>';
+            document.body.innerHTML='<div id="container"><svg class="hidden"><g><text>Code review</text></g></svg></div>';
+        }""")
+        await capture()
+        observed = await page.evaluate("""() => {
+            const container=document.getElementById('container'), width=container.clientWidth;
+            const svg=container.querySelector('svg'), text=svg.querySelector('text');
+            svg.classList.remove('hidden');
+            const initial=text.getBoundingClientRect();
+            text.setAttribute('x','40');text.setAttribute('y','50');
+            const positioned=svg.querySelector('g').getBoundingClientRect();
+            return {container:width, initial:[initial.width,initial.height], positioned:[positioned.x,positioned.y,positioned.width,positioned.height]};
+        }""")
+        assert_equal(observed["container"], 250, "chart container measurement")
+        if observed["initial"][0] <= 50 or observed["initial"][1] <= 8:
+            raise SmokeError(f"SVG stayed hidden in the measured layout: {observed!r}")
+        if observed["positioned"][0] <= 39 or observed["positioned"][1] <= 30:
+            raise SmokeError(f"SVG label position stayed stale: {observed!r}")
+        record_contract(results, "svg/chart_construction", observed=observed,
+                        contract="Container measurement, reveal, label measurement, and positioning can occur in one script turn.",
+                        source="Chromium 145.0.7632.116 executable comparison (2026-11-13)", commands=["Runtime.evaluate"])
+
+        await page.evaluate("""() => {
+            document.head.innerHTML='<style>html,body{margin:0;background:white}svg{display:block}</style>';
             document.body.innerHTML='<svg width="100" height="100">'+'<circle r="1"></circle>'.repeat(30000)+'</svg>';
         }""")
         image = await capture()
@@ -66,13 +90,13 @@ async def _check_inline_svg(page: Any, results: list[dict[str, Any]]) -> None:
             document.querySelector('rect').setAttribute('x','30');
             return [document.querySelector('svg'),document.querySelector('rect')].map(e=>e.getBoundingClientRect().x);
         }""")
-        assert_equal(observed, [100, 110] if is_moli_browser() else [300, 330], "coherent SVG geometry publication")
+        assert_equal(observed, [300, 330], "coherent SVG geometry publication")
         await capture()
         updated = await page.evaluate("document.querySelector('rect').getBoundingClientRect().x")
         assert_equal(updated, 330, "SVG geometry after publication")
         record_contract(results, "svg/coherent_batch_publication", observed={"count": count, "immediate": observed, "published": updated},
-                        contract="SVG object and viewport coordinates come from one publication; Moli freezes ordinary queries, Chromium flushes live layout.",
-                        source="Chromium executable comparison and Moli frozen-layout contract", commands=["Runtime.evaluate", "Page.captureScreenshot"])
+                        contract="An SVG measurement observes changed inputs and publishes object and viewport coordinates together.",
+                        source="Chromium 145.0.7632.116 executable comparison (2026-11-13)", commands=["Runtime.evaluate", "Page.captureScreenshot"])
     finally:
         await session.detach()
 

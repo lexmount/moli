@@ -221,6 +221,7 @@ operations that genuinely require them.
 | --- | --- |
 | Extract HTML/Markdown, query the DOM, run JS, inspect network/storage | Reads browser runtime state directly — does not trigger layout or paint |
 | Read an element's box, hit-test coordinates, send coordinate input | Runs one layout calculation and retains only the latest frozen layout tree |
+| Measure SVG graphics while constructing a chart | Refreshes the complete layout when native inputs changed; clean reads and batches reuse the published geometry |
 | Capture a screenshot | Rebuilds from the current DOM/style, replaces the frozen tree, renders a fresh frame, and discards its paint state after use |
 | Poll a screencast | Compares generation metadata only; clean state emits no frame, while changed state rebuilds and emits one fresh frame |
 
@@ -316,8 +317,11 @@ Inline SVG object geometry is collected before clipping and paint-tree
 simplification, then frozen with its CSS viewport in that same layout pass.
 Computed paint styles are supplied separately from the original SVG XML, so
 they cannot change author selector matching or inflate the encoded-input
-budget. Geometry queries read the published numeric results without reparsing
-the SVG or mixing live child geometry with an older outer layout.
+budget. SVG geometry measurements observe native input generations: changed
+inputs publish a complete layout, including the outer viewport; clean reads
+and batched sources reuse its numeric results without reparsing the SVG.
+This allows chart scripts to measure as they construct a scene, while avoiding
+live child geometry mixed with an older outer layout.
 
 ## Benchmark
 
