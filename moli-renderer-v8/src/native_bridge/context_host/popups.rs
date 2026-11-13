@@ -1547,6 +1547,28 @@ impl PageScriptHost {
             .is_some_and(|record| record.is_open() && !record.auxiliary_window.is_popup())
     }
 
+    pub(crate) fn cancel_pending_lightweight_popup_navigation(&mut self, popup_id: u64) {
+        if let Some(record) = self.lightweight_popup_record(popup_id) {
+            record.auxiliary_window.cancel_pending_navigation();
+        }
+        if !self.lightweight_popup_has_pending_document_load(popup_id) {
+            return;
+        }
+        self.cancel_lightweight_popup_document_loads(popup_id);
+        if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+            record.navigation_id = LightweightPopupNavigationId::new(
+                record
+                    .navigation_id
+                    .as_u64()
+                    .checked_add(1)
+                    .expect("lightweight popup navigation id space exhausted"),
+            );
+            if let LightweightPopupLifecycle::Open(open) = &record.lifecycle {
+                record.location_url = open.document.url.clone();
+            }
+        }
+    }
+
     pub(crate) fn lightweight_popup_is_open(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
             .is_some_and(LightweightPopupBrowsingContextRecord::is_open)
@@ -4304,7 +4326,8 @@ impl PageScriptHost {
                 .with_browsing_context_name(record.name.clone())
                 .with_auxiliary_window(Some(record.auxiliary_window.clone())),
             None => activation,
-        };
+        }
+        .capture_navigation_cancellation();
         let mut items = Vec::with_capacity(1 + usize::from(window_open_event.is_some()));
         if let Some(event) = window_open_event {
             items.push(crate::runtime::RendererOutputItem::Observation(
