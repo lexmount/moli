@@ -250,3 +250,5 @@ fn pointer_raw_update_handler_properties_follow_secure_context_exposure() {
         assert_eq!(vm.eval(&script).unwrap(), "true", "{url}");
     }
 }
+
+mod beforeunload_return;

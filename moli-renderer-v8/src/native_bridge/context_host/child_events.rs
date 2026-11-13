@@ -9,7 +9,7 @@ use crate::{
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
         ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_event_callback,
+        invoke_prepared_event_callback_with_return_conversion,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
@@ -634,7 +634,9 @@ impl PageScriptHost {
             event_type,
             event,
         );
-        let returned = invoke_prepared_event_callback(
+        let before_unload_handler = event_type == "beforeunload"
+            && ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty;
+        let returned = invoke_prepared_event_callback_with_return_conversion(
             scope,
             self as *mut PageScriptHost,
             false,
@@ -644,6 +646,7 @@ impl PageScriptHost {
             EventTargetHandle::ChildWindow(ready.target),
             event,
             &arguments,
+            before_unload_handler,
         );
         (true, returned)
     }
@@ -775,6 +778,14 @@ fn apply_child_window_event_handler_return<'s>(
         return;
     };
     let returned = v8::Local::new(scope, returned);
+    if event_type == "beforeunload" {
+        if let Ok(value) = v8::Local::<v8::String>::try_from(returned) {
+            crate::context_bootstrap::apply_before_unload_event_handler_return_value(
+                scope, event, value,
+            );
+        }
+        return;
+    }
     let should_cancel = if event_type == "error" && event_is_error_event(scope, event) {
         returned.is_boolean() && returned.boolean_value(scope)
     } else {

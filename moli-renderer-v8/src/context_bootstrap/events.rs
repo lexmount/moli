@@ -136,6 +136,38 @@ pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
     Some(wrapper)
 }
 
+pub(crate) fn construct_original_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event = new_uninitialized_before_unload_event(scope)?;
+    base::initialize_event_object(scope, event, "beforeunload", false, true);
+    base::set_event_initialized(scope, event, true);
+    mark_event_trusted(scope, event);
+    Some(event)
+}
+
+pub(crate) fn apply_before_unload_event_handler_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::String>,
+) {
+    if !crate::web_api_interfaces::BeforeUnloadEvent::is_instance(scope, event) {
+        return;
+    }
+    methods::set_event_default_prevented(scope, event);
+    if event_private_value(scope, event, BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .is_some_and(|value| value.length() == 0)
+    {
+        set_event_private_value(
+            scope,
+            event,
+            BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+            value.into(),
+        );
+    }
+}
+
 pub(super) fn before_unload_event_return_value_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

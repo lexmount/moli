@@ -213,6 +213,34 @@ impl CallbackInvoker {
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
     ) -> CallbackInvocationOutcome {
+        Self::invoke_with_return_conversion(
+            scope,
+            callback_kind,
+            log_label,
+            log_level,
+            callback_name,
+            invocation,
+            false,
+            |_scope, value| Ok(value),
+        )
+    }
+
+    /// Convert a callback return value while its relevant and incumbent realms
+    /// and window.event are still installed.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn invoke_with_return_conversion<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback_kind: &str,
+        log_label: &str,
+        log_level: CallbackExceptionLogLevel,
+        callback_name: &str,
+        invocation: CallbackInvocation<'s, '_>,
+        cleanup_before_leave: bool,
+        convert_return: impl FnOnce(
+            &mut v8::PinScope<'s, '_>,
+            v8::Global<v8::Value>,
+        ) -> Result<v8::Global<v8::Value>, Box<V8ExceptionReport>>,
+    ) -> CallbackInvocationOutcome {
         if let Some(host_ptr) = invocation.host_ptr {
             unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("callback invocation");
         }
@@ -248,24 +276,25 @@ impl CallbackInvoker {
             scope,
             invocation.resource_initiator.as_ref(),
         );
+        let scope = &mut v8::ContextScope::new(scope, invocation.relevant_context);
+        let relevant_context = invocation.relevant_context;
+        let previous_window_event =
+            invocation
+                .host_ptr
+                .and(invocation.current_event)
+                .map(|event| {
+                    let global = relevant_context.global(scope);
+                    let previous = get_private_value(scope, global, WINDOW_EVENT_SLOT)
+                        .unwrap_or_else(|| v8::undefined(scope).into());
+                    set_private_value(scope, global, WINDOW_EVENT_SLOT, event.into());
+                    previous
+                });
+
         let result = with_webidl_callback_contexts(
             scope,
             invocation.relevant_context,
             invocation.incumbent_context,
             |scope| {
-                let relevant_context = invocation.relevant_context;
-                let previous_window_event =
-                    invocation
-                        .host_ptr
-                        .and(invocation.current_event)
-                        .map(|event| {
-                            let global = relevant_context.global(scope);
-                            let previous = get_private_value(scope, global, WINDOW_EVENT_SLOT)
-                                .unwrap_or_else(|| v8::undefined(scope).into());
-                            set_private_value(scope, global, WINDOW_EVENT_SLOT, event.into());
-                            previous
-                        });
-
                 let webidl_invocation = WebIdlCallbackInvocation::new(
                     invocation.callback,
                     invocation.callback_this,
@@ -291,6 +320,7 @@ impl CallbackInvoker {
                                     receiver,
                                     arguments,
                                 )
+                                .and_then(|value| convert_return(scope, value))
                             },
                             |scope, failure| {
                                 capture_callback_resolution_failure(
@@ -305,13 +335,30 @@ impl CallbackInvoker {
                     },
                 );
 
-                if let Some(previous) = previous_window_event {
+                if !cleanup_before_leave && let Some(previous) = previous_window_event {
                     let global = relevant_context.global(scope);
                     set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
                 }
                 result
             },
         );
+
+        if cleanup_before_leave {
+            // Leave the Web IDL callback's microtasks scope before performing
+            // cleanup, while retaining the callback Window's current event.
+            if !scope.is_execution_terminating()
+                && v8::StackTrace::current_stack_trace(scope, 1)
+                    .is_some_and(|trace| trace.get_frame_count() == 0)
+                && let Err(error) =
+                    crate::script_vm::ScriptVm::perform_microtask_checkpoints(scope, None)
+            {
+                tracing::warn!(%error, "beforeunload callback cleanup checkpoint failed");
+            }
+            if let Some(previous) = previous_window_event {
+                let global = relevant_context.global(scope);
+                set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
+            }
+        }
 
         match result {
             Ok(value) => CallbackInvocationOutcome::Returned(value),
