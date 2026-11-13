@@ -936,6 +936,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="moli-benchmark")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from .fingerprint.cli import add_arguments as add_fingerprint_arguments, command as fingerprint_command
+
+    fingerprint = subparsers.add_parser("fingerprint", help="observe twelve public fingerprint sites over native CDP")
+    add_fingerprint_arguments(fingerprint)
+    fingerprint.set_defaults(func=fingerprint_command)
+
     collect_env = subparsers.add_parser("collect-env", help="write environment.json and versions.json")
     _add_output_args(collect_env)
     collect_env.add_argument("--moli-bin", type=str, default=None)
