@@ -84,6 +84,7 @@ members = [
     "moli-webmcp",
     "moli-cookie-jar",
     "moli-websocket",
+    "moli-webtransport",
     "moli-fetch",
     "moli-fetch-types",
     "moli-file-api",
