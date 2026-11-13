@@ -1773,10 +1773,7 @@ fn aria_element_by_id_including_disconnected(
         return None;
     }
     let root = runtime.dom_host().root_node_handle(owner)?;
-    let mut stack = runtime
-        .dom_host()
-        .child_handles_reversed(root)
-        .collect::<Vec<_>>();
+    let mut stack = vec![root];
     while let Some(candidate) = stack.pop() {
         if node_is_element(runtime, candidate)
             && runtime.dom_host().get_attribute(candidate, "id").as_deref() == Some(id)
