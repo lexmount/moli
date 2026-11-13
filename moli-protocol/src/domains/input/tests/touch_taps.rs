@@ -222,3 +222,64 @@ async fn touch_tap_click_keeps_touch_target_after_pointer_capture() {
         "[1,0,false,true]"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn touch_compatibility_boundaries_respect_ancestor_and_sibling_relationships() {
+    for previous in ["mouse-parent", "tap-parent", "child", "sibling"] {
+        let mut ctx = TestContext::new();
+        with_loaded_document(&mut ctx,r#"<style>body{margin:0}#menu{position:absolute;width:200px;height:100px}button{position:absolute;top:10px;width:60px;height:40px}#item{left:10px}#other{left:80px}</style><div id=menu><button id=item>Item</button><button id=other>Other</button></div><script>window.boundaries=[];window.menuClosed=false;window.itemClicks=0;const menuNode=document.getElementById('menu');document.getElementById('item').onclick=()=>itemClicks++;for(const type of ['mouseout','mouseleave','mouseover','mouseenter'])for(const node of [menuNode,...menuNode.children])node.addEventListener(type,e=>{if(e.target===node)boundaries.push(type+'@'+node.id)});</script>"#).await;
+        ctx.capture_fixture_layout(None).await;
+        let initial = if previous.ends_with("parent") {
+            json!([{"x":190,"y":90}])
+        } else {
+            json!([{"x":20,"y":20}])
+        };
+        if previous == "mouse-parent" {
+            ctx.process_async(json!({"id":27000,"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":190,"y":90}})).await;
+            ctx.expect_result(27000, json!({}), None);
+        } else {
+            contact(&mut ctx, 27000, "touchStart", initial).await;
+            contact(&mut ctx, 27001, "touchEnd", json!([])).await;
+        }
+        let close = previous.ends_with("parent");
+        assert_eq!(evaluate_string(&mut ctx,&format!(r#"(() => {{boundaries=[];if({close})document.getElementById('menu').onmouseleave=()=>{{menuClosed=true;document.getElementById('menu').remove();}};return 'ready';}})()"#)).await,"ready");
+        let next = match previous {
+            "child" => json!([{"x":190,"y":90}]),
+            "sibling" => json!([{"x":100,"y":20}]),
+            _ => json!([{"x":20,"y":20}]),
+        };
+        contact(&mut ctx, 27002, "touchStart", next).await;
+        contact(&mut ctx, 27003, "touchEnd", json!([])).await;
+        let observed: serde_json::Value = serde_json::from_str(
+            &evaluate_string(
+                &mut ctx,
+                "JSON.stringify([menuClosed,itemClicks,boundaries])",
+            )
+            .await,
+        )
+        .unwrap();
+        let expected = match previous {
+            "child" => json!([
+                false,
+                1,
+                ["mouseout@item", "mouseleave@item", "mouseover@menu"]
+            ]),
+            "sibling" => json!([
+                false,
+                1,
+                [
+                    "mouseout@item",
+                    "mouseleave@item",
+                    "mouseover@other",
+                    "mouseenter@other"
+                ]
+            ]),
+            _ => json!([
+                false,
+                1,
+                ["mouseout@menu", "mouseover@item", "mouseenter@item"]
+            ]),
+        };
+        assert_eq!(observed, expected, "{previous}");
+    }
+}
