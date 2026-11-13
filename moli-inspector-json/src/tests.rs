@@ -2,137 +2,127 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn response_handle_projection_agrees_for_envelopes_and_borrowed_results() {
-    let bodies = [
-        json!({"result":{"value":{"objectId":"user"},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}),
-        json!({"result":[{"value":{"type":"object","objectId":"property","value":{"objectId":"user"}}}],"internalProperties":[{"value":{"type":"object","objectId":"internal"}}]}),
-        json!({"result":{"type":"object","deepSerializedValue":{"type":"object","value":[["k",{"type":"object","objectId":"deep"}]]}}}),
-        json!({"result":{"value":{"objectId":"extension"}}}),
-    ];
-    for body in bodies {
-        let envelope = json!({"id":1,"result":body});
-        let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
-        for depth in 0..20 {
-            let expected = raw.response_remote_object_ids(depth).unwrap();
-            assert_eq!(
-                response_remote_object_ids_in_value(&envelope, depth),
-                expected
-            );
-            assert_eq!(response_result_remote_object_ids(&body, depth), expected);
-        }
-        assert!(!raw.is_materialized());
-    }
-}
-
-#[test]
-fn response_cursor_handles_escaped_strings_and_untyped_extension_values() {
-    for wire in [
-        r#"{"id":1,"result":{"result":{"t\u0079pe":"obj\u0065ct","value":{"objectId":"user","text":"\"\\[{]}"},"object\u0049d":"real\"\\\n"},"\ud800":{"objectId":"extension"}}}"#,
-        r#"{"id":1,"result":{"result":{"value":{"text":"é𝄞\\\"{[}]","promiseObjectId":"extension"},"type":42,"errorObjectId":"error"}}}"#,
-        r#"{"id":1,"objectId":"envelope-extension","result":{"result":{"value":[{"objectId":"untyped"}],"type":{"objectId":"type-extension"}}}}"#,
-        r#"{"id":1,"result":{"result":{"value":1e400,"type":"object","objectId":"actual"},"extension":[true,null,-0.0,1e400,{"objectId":"future"}]}}"#,
+fn response_projection_agrees_for_known_schema_fields() {
+    for (body, expected) in [
+        (
+            r#"{"result":{"value":{"objectId":"user"},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception","value":{"objectId":"user-exception"}}}}"#,
+            vec!["exception", "result"],
+        ),
+        (
+            r#"{"result":[{"name":"\ud800","value":{"type":"object","objectId":"value","value":{"objectId":"user"}}},{"name":"accessor","get":{"objectId":"get"},"set":{"objectId":"set"},"symbol":{"objectId":"symbol"}}],"internalProperties":[{"value":{"objectId":"internal"},"get":{"objectId":"not-internal"}}],"privateProperties":[{"value":{"objectId":"private-value"},"get":{"objectId":"private-get"},"set":{"objectId":"private-set"},"symbol":{"objectId":"not-private"}}]}"#,
+            vec![
+                "get",
+                "internal",
+                "private-get",
+                "private-set",
+                "private-value",
+                "set",
+                "symbol",
+                "value",
+            ],
+        ),
+        (
+            r#"{"object":{"objectId":"node"},"objects":{"objectId":"query"}}"#,
+            vec!["node", "query"],
+        ),
+        (
+            r#"{"result":{"objectId":"same"},"object":{"objectId":"same"},"exceptionDetails":{"exception":{"objectId":"same"}}}"#,
+            vec!["same"],
+        ),
+        (
+            r#"{"result":{"value":{"objectId":"no-type-user"}}}"#,
+            vec![],
+        ),
+        (
+            r#"{"result":{"objectId":{"objectId":"not-a-string"}},"object":{"objectId":42}}"#,
+            vec![],
+        ),
     ] {
+        let wire = format!(r#"{{"id":1,"result":{body}}}"#);
         let raw = InspectorJson::from_slice(wire.as_bytes()).unwrap();
-        // This numeric fixture intentionally cannot be represented as a Value.
-        if !wire.contains("1e400") && !wire.contains(r"\ud800") {
-            let parsed = serde_json::from_str::<Value>(wire).unwrap();
-            for depth in 0..20 {
-                assert_eq!(
-                    raw.response_remote_object_ids(depth).unwrap(),
-                    response_remote_object_ids_in_value(&parsed, depth)
-                );
-            }
-        }
-        let ids = raw.response_remote_object_ids(1000).unwrap();
-        assert!(!ids.iter().any(|id| id == "user"));
+        let envelope = decode_lossy_json(wire.as_bytes()).unwrap();
+        let parsed = InspectorJson::from(envelope.clone());
+        assert_eq!(raw.response_remote_object_ids().unwrap(), expected);
+        assert_eq!(parsed.response_remote_object_ids().unwrap(), expected);
+        assert_eq!(response_remote_object_ids_in_value(&envelope), expected);
+        assert_eq!(
+            response_result_remote_object_ids(&envelope["result"]),
+            expected
+        );
         assert!(!raw.is_materialized());
         assert_eq!(raw.to_string(), wire);
     }
 }
 
 #[test]
-fn response_handles_skip_user_values_and_preserve_exception_and_property_handles() {
-    for body in [
-        r#"{"result":{"value":{"objectId":"user","nested":[{"errorObjectId":"user-error"}]},"type":"object","objectId":"result"},"exceptionDetails":{"exception":{"type":"object","objectId":"exception","value":{"objectId":"user-exception"}}}}"#,
-        r#"{"result":[{"name":"x","value":{"type":"object","objectId":"value","value":[{"objectId":"user"}]}},{"name":"getter","get":{"type":"function","objectId":"get"},"set":{"type":"function","objectId":"set"},"symbol":{"type":"symbol","objectId":"symbol"}}],"internalProperties":[{"value":{"type":"object","objectId":"internal"}}],"privateProperties":[{"get":{"type":"function","objectId":"private"}}],"exceptionDetails":{"exception":{"type":"object","objectId":"exception"}}}"#,
-        r#"{"object":{"type":"object","objectId":"node"},"objects":{"type":"object","objectId":"query"},"extension":{"value":{"objectId":"extension"}}}"#,
-        r#"{"result":{"type":"object","deepSerializedValue":{"type":"array","value":[{"type":"object","objectId":"deep"}]},"value":{"objectId":"user"}}}"#,
-    ] {
-        let raw =
-            InspectorJson::from_slice(format!(r#"{{"id":1,"result":{body}}}"#).as_bytes()).unwrap();
-        let parsed = InspectorJson::from(serde_json::from_str::<Value>(&raw.to_string()).unwrap());
-        let expected: &[&str] = if body.contains("internalProperties") {
-            &[
-                "exception",
-                "get",
-                "internal",
-                "private",
-                "set",
-                "symbol",
-                "value",
-            ]
-        } else if body.contains("extension") {
-            &["extension", "node", "query"]
-        } else if body.contains("deepSerializedValue") {
-            &["deep"]
-        } else {
-            &["exception", "result"]
-        };
-        assert_eq!(raw.response_remote_object_ids(1000).unwrap(), expected);
-        assert_eq!(parsed.response_remote_object_ids(1000).unwrap(), expected);
-        assert!(!raw.is_materialized());
-    }
-}
-
-#[test]
-fn response_handle_projection_preserves_wire_escapes_and_unknown_fields() {
-    let wire = br#"{"id":7,"result":{"result":{"value":{"objectId":"user","text":"\ud800","number":1e400},"t\u0079pe":"object","object\u0049d":"actual"},"exceptionDetails":{"exception":{"type":"object","objectId":"\ud800"}},"extension":{"value":{"objectId":"future"}}}}"#;
-    let raw = InspectorJson::from_slice(wire).unwrap();
-    let encoded = raw.to_string();
+fn response_projection_ignores_user_deep_and_unknown_handles() {
+    let body = json!({
+        "result": {
+            "type":"object", "objectId":"actual",
+            "value":{"objectId":"user","promiseObjectId":"user-promise","errorObjectId":"user-error"},
+            "deepSerializedValue":{"type":"array","objectId":"deep-root","value":[{"objectId":"deep-child"}]},
+            "futureExtension":{"objectId":"remote-extension"}
+        },
+        "objectId":"body-extension",
+        "extension":{"objectId":"future","nested":{"errorObjectId":"future-error"}},
+        "exceptionDetails":{"exception":{"objectId":"exception","deepSerializedValue":{"objectId":"deep-exception"}}}
+    });
+    let envelope = json!({"id":1,"result":body,"objectId":"envelope-extension"});
+    let raw = InspectorJson::from_slice(envelope.to_string().as_bytes()).unwrap();
     assert_eq!(
-        raw.response_remote_object_ids(1000).unwrap(),
-        ["actual", "future", "�"]
+        raw.response_remote_object_ids().unwrap(),
+        ["actual", "exception"]
     );
-    assert_eq!(raw.to_string(), encoded);
+    assert_eq!(
+        response_remote_object_ids_in_value(&envelope),
+        ["actual", "exception"]
+    );
+    assert_eq!(
+        response_result_remote_object_ids(&body),
+        ["actual", "exception"]
+    );
     assert!(!raw.is_materialized());
+    assert_eq!(
+        decode_lossy_json(raw.to_string().as_bytes()).unwrap(),
+        envelope
+    );
 }
 
 #[test]
-fn response_handle_projection_has_the_same_depth_budget_for_raw_and_parsed() {
-    let mut value = json!({"objectId":"deep"});
-    for _ in 0..30 {
-        value = json!({"nested":value});
-    }
-    let parsed = InspectorJson::from(json!({"id":1,"result":{"extension":value}}));
-    let raw = InspectorJson::from_slice(parsed.to_string().as_bytes()).unwrap();
-    for depth in [0, 1, 2, 10, 32, 33, 34, 1000] {
-        assert_eq!(
-            raw.response_remote_object_ids(depth).unwrap(),
-            parsed.response_remote_object_ids(depth).unwrap()
+fn response_projection_preserves_wire_escapes_and_lossy_handles() {
+    let wire = br#"{"id":7,"result":{"result":{"value":{"objectId":"user","text":"\ud800","number":1e400,"quoted":"\"\\[{]}"},"t\u0079pe":"object","object\u0049d":"actual"},"exceptionDetails":{"exception":{"type":"object","objectId":"\ud800"}},"extension":{"\ud800":{"objectId":"future"}}}}"#;
+    let raw = InspectorJson::from_slice(wire).unwrap();
+    assert_eq!(raw.response_remote_object_ids().unwrap(), ["actual", "�"]);
+    assert!(!raw.is_materialized());
+    assert_eq!(raw.to_string(), std::str::from_utf8(wire).unwrap());
+}
+
+#[test]
+fn response_projection_forwards_deep_opaque_payloads_without_collecting_them() {
+    for depth in [0, 40, 2000] {
+        let deep = format!(
+            "{}{{\"objectId\":\"nested-ignored\",\"text\":\"{}\"}}{}",
+            "[".repeat(depth),
+            "x".repeat(1024 * 1024),
+            "]".repeat(depth)
         );
+        for field in ["value", "deepSerializedValue", "futureExtension"] {
+            let body = format!(
+                r#"{{"result":{{"objectId":"root","{field}":{deep}}},"exceptionDetails":{{"exception":{{"objectId":"exception"}}}}}}"#
+            );
+            let mut raw =
+                InspectorJson::from_slice(format!(r#"{{"id":1,"result":{body}}}"#).as_bytes())
+                    .unwrap();
+            assert_eq!(
+                raw.response_remote_object_ids().unwrap(),
+                ["exception", "root"]
+            );
+            raw.set_id(9);
+            raw.set_session_id(Some("SID-opaque"));
+            assert!(raw.to_string().contains(&body));
+            assert!(!raw.is_materialized());
+        }
     }
-    assert_eq!(raw.response_remote_object_ids(1000).unwrap(), ["deep"]);
-    assert!(!raw.is_materialized());
-}
-
-#[test]
-fn response_handle_projection_skips_deep_user_values_and_bounds_unknown_structures() {
-    let deep = format!("{}0{}", "[".repeat(2000), "]".repeat(2000));
-    let raw = InspectorJson::from_slice(format!(r#"{{"id":1,"result":{{"result":{{"type":"object","value":{deep}}},"exceptionDetails":{{"exception":{{"type":"object","objectId":"exception"}}}}}}}}"#).as_bytes()).unwrap();
-    assert_eq!(raw.response_remote_object_ids(1000).unwrap(), ["exception"]);
-    assert!(!raw.is_materialized());
-
-    let deep = format!(
-        "{}{{\"objectId\":\"too-deep\"}}{}",
-        "[".repeat(1008),
-        "]".repeat(1008)
-    );
-    let raw = InspectorJson::from_slice(
-        format!(r#"{{"id":1,"result":{{"extension":{deep}}}}}"#).as_bytes(),
-    )
-    .unwrap();
-    assert!(raw.response_remote_object_ids(1000).unwrap().is_empty());
-    assert!(!raw.is_materialized());
 }
 
 #[test]

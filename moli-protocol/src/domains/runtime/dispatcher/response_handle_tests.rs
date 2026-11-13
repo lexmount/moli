@@ -48,7 +48,9 @@ fn routed_output_response_registration_preserves_groups_without_materializing() 
                 );
                 let mut body = json!({"result":{"type":"object","value":{
                     "objectId":"existing-handle","nested":{"errorObjectId":"user-only"}
-                }}});
+                },"deepSerializedValue":{"type":"array","value":[{"objectId":"deep-only"}]}},
+                    "futureExtension":{"objectId":"unknown-only"}
+                });
                 if real_handles {
                     body["result"]["objectId"] = json!("actual");
                     body["exceptionDetails"] = json!({"exception":{
@@ -78,7 +80,9 @@ fn routed_output_response_registration_preserves_groups_without_materializing() 
                     Some("group-A"),
                     "{owner_kind:?}, {container:?}, real_handles={real_handles}"
                 );
-                assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, "user-only"));
+                for id in ["user-only", "deep-only", "unknown-only"] {
+                    assert!(!conn.runtime_remote_object_id_known_for_owner(&owner, id));
+                }
                 assert!(!raw.is_materialized());
                 assert_eq!(raw.to_string(), wire);
                 for id in ["actual", "exception"] {

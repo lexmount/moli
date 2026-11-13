@@ -9,13 +9,10 @@ impl CdpConnection {
         object_group: Option<&str>,
     ) {
         let object_ids = message
-            .response_remote_object_ids(MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)
+            .response_remote_object_ids()
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "falling back to the structured Inspector ownership scan");
-                response_remote_object_ids_in_value(
-                    message.value(),
-                    MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH,
-                )
+                response_remote_object_ids_in_value(message.value())
             });
         self.register_runtime_remote_object_ids_for_owner(owner, object_ids, object_group);
     }
@@ -26,8 +23,7 @@ impl CdpConnection {
         result: &Value,
         object_group: Option<&str>,
     ) {
-        let object_ids =
-            response_result_remote_object_ids(result, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH);
+        let object_ids = response_result_remote_object_ids(result);
         self.register_runtime_remote_object_ids_for_owner(owner, object_ids, object_group);
     }
 

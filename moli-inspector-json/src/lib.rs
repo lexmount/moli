@@ -18,16 +18,16 @@ use std::{
 
 mod remote_objects;
 
-/// Borrow a parsed response envelope, using the same protocol boundaries as raw
-/// response projection. In particular, RemoteObject.value is opaque user data.
-pub fn response_remote_object_ids_in_value(value: &Value, max_depth: usize) -> Vec<String> {
-    remote_objects::collect_envelope(value, max_depth)
+/// Borrow a parsed response envelope and collect handles from known CDP fields.
+/// User values, deepSerializedValue and unknown extensions remain opaque.
+pub fn response_remote_object_ids_in_value(value: &Value) -> Vec<String> {
+    remote_objects::collect_envelope(value)
 }
 
 /// Borrow a success result body after its envelope has already been removed.
-/// The depth budget still includes that envelope, so both entry points agree.
-pub fn response_result_remote_object_ids(value: &Value, max_depth: usize) -> Vec<String> {
-    remote_objects::collect_result(value, max_depth)
+/// Uses the same known schema positions as complete envelope projection.
+pub fn response_result_remote_object_ids(value: &Value) -> Vec<String> {
+    remote_objects::collect_result(value)
 }
 
 #[derive(Clone)]
@@ -96,10 +96,11 @@ impl RawInspectorJson {
 }
 
 impl InspectorJson {
-    /// Collect response handles without materializing RemoteObject.value payloads.
-    /// Exception objects and property descriptors remain part of the protocol walk.
-    pub fn response_remote_object_ids(&self, max_depth: usize) -> serde_json::Result<Vec<String>> {
-        remote_objects::collect(self, max_depth)
+    /// Collect known response handles without materializing user payloads.
+    /// deepSerializedValue and unknown fields are forwarded without inspecting
+    /// their handles; exception objects and property descriptors are projected.
+    pub fn response_remote_object_ids(&self) -> serde_json::Result<Vec<String>> {
+        remote_objects::collect(self)
     }
 
     /// Validate an Inspector envelope and retain each field without decoding its
