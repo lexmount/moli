@@ -117,7 +117,7 @@ struct ServiceWorkerLifecycleEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -144,7 +144,7 @@ struct ServiceWorkerFetchEventDeclaration<'scope> {
     is_reload: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
     #[webapi(method, enumerable, callback = service_worker_respond_with_callback)]
     respond_with: (),
@@ -169,7 +169,7 @@ struct ServiceWorkerMessageEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -220,7 +220,7 @@ struct ServiceWorkerNotificationEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -237,7 +237,7 @@ struct ServiceWorkerPushEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -269,7 +269,7 @@ struct ServiceWorkerSyncEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -286,7 +286,7 @@ struct ServiceWorkerPeriodicSyncEventDeclaration<'scope> {
     default_prevented: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
-    #[webapi(method, enumerable, callback = service_worker_wait_until_callback)]
+    #[webapi(method, enumerable, callback = service_worker_wait_until_callback, length = 1)]
     wait_until: (),
 }
 
@@ -1895,12 +1895,44 @@ fn service_worker_event_id_value(
     lossless.then_some(id)
 }
 
-fn service_worker_wait_until_callback<'s>(
+#[derive(crate::webidl::WebIdlArgs)]
+#[webidl(prefix = "ExtendableEvent.waitUntil")]
+struct ServiceWorkerWaitUntilArgs<'s> {
+    #[webidl(required, converter = "raw")]
+    promise: v8::Local<'s, v8::Value>,
+}
+
+pub(in crate::worker) fn service_worker_wait_until_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let event = args.this();
+    if !web_api_interfaces::ExtendableEvent::is_instance(scope, event) {
+        throw_type_error(
+            scope,
+            "ExtendableEvent.waitUntil called on an incompatible receiver.",
+        );
+        return;
+    }
+    // Convert the required Promise before the method's active-event check.
+    // Web IDL creates a new intrinsic capability and observes the input's then.
+    let Some(parsed) = crate::webidl::parse_args::<ServiceWorkerWaitUntilArgs>(scope, &args) else {
+        return;
+    };
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    if resolver.resolve(scope, parsed.promise) != Some(true) {
+        return;
+    }
+    let promise = resolver.get_promise(scope);
+    // Script redispatch clears trust even while the original native event
+    // still has pending lifetime promises. Its private dispatch ID is not enough.
+    if !crate::context_bootstrap::event_trusted(scope, event) {
+        throw_service_worker_wait_until_invalid_state(scope);
+        return;
+    }
     let lifecycle_event_id = service_worker_lifecycle_event_id(scope, event);
     let fetch_event_id = service_worker_fetch_event_id(scope, event);
     let message_event_id = service_worker_message_event_id(scope, event);
@@ -2079,12 +2111,7 @@ fn service_worker_wait_until_callback<'s>(
         throw_service_worker_wait_until_invalid_state(scope);
         return;
     }
-    if !promise_resolve_then2_after_wait_until_microtask(
-        scope,
-        args.get(0),
-        on_fulfilled,
-        on_rejected,
-    ) {
+    if !promise_then2_after_wait_until_microtask(scope, promise, on_fulfilled, on_rejected) {
         service_worker_wait_until_settled_for_event(scope, event_id, event_kind, false);
     }
 }
@@ -2108,9 +2135,9 @@ fn promise_resolve_then2<'s>(
     promise.then2(scope, on_fulfilled, on_rejected)
 }
 
-fn promise_resolve_then2_after_wait_until_microtask<'s>(
+fn promise_then2_after_wait_until_microtask<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
+    promise: v8::Local<'s, v8::Promise>,
     on_fulfilled: v8::Local<'s, v8::Function>,
     on_rejected: v8::Local<'s, v8::Function>,
 ) -> bool {
@@ -2122,9 +2149,6 @@ fn promise_resolve_then2_after_wait_until_microtask<'s>(
     let Some(extra_rejected) =
         v8::Function::builder(service_worker_wait_until_extra_rejected_callback).build(scope)
     else {
-        return false;
-    };
-    let Some(promise) = promise_resolve_value(scope, value) else {
         return false;
     };
     let Some(wait_until_promise) = promise.then2(scope, extra_fulfilled, extra_rejected) else {

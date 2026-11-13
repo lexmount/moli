@@ -3582,3 +3582,5 @@ fn evaluate_classic_worker_bootstrap_script(
 
 #[cfg(test)]
 mod tests;
+
+pub(in crate::worker) use self::dispatch::service_worker_wait_until_callback;

@@ -515,3 +515,5 @@ pub(crate) use subclasses::construct_original_error_event;
 
 mod ui_properties;
 pub(in crate::context_bootstrap) use ui_properties::ui_event_which_getter_function;
+
+pub(crate) use self::base::event_trusted;

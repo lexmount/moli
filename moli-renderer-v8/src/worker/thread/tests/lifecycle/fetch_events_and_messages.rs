@@ -1,6 +1,123 @@
 use super::*;
 
 #[tokio::test]
+async fn service_worker_wait_until_prototype_uses_native_dispatch_and_webidl_arguments() {
+    ensure_v8();
+    let source = format!(
+        "{}\n{}",
+        include_str!("../../../../../tests/fixtures/extendable-event-wait-until.js"),
+        r#"
+        for (const type of ['install', 'activate', 'message']) {
+            addEventListener(type, checkExtendableEventWaitUntil);
+        }
+        onfetch = event => {
+            checkExtendableEventWaitUntil(event);
+            event.respondWith(new Response('checked'));
+        };
+        "#
+    );
+    let mut handle = spawn_service_worker_for_test(&source);
+    for (kind, id) in [
+        (ServiceWorkerLifecycleEventKind::Install, 80),
+        (ServiceWorkerLifecycleEventKind::Activate, 81),
+    ] {
+        let completion =
+            dispatch_service_worker_lifecycle_event_for_test(&mut handle, kind, id).await;
+        assert_eq!(completion.result, Ok(()));
+    }
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        82,
+        serialize_test_string("go"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    let completion = dispatch_service_worker_fetch_event_for_test(&mut handle, 83).await;
+    let ServiceWorkerFetchResult::Response(response) = completion.result else {
+        panic!("expected response after borrowed waitUntil checks");
+    };
+    assert_eq!(response.body, b"checked");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_wait_until_rejects_script_redispatched_native_events() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        let captured;
+        let checked;
+        const redispatchChecked = new Promise(resolve => checked = resolve);
+        onmessage = event => {
+            if (event === captured) return;
+            if (captured) {
+                event.waitUntil(redispatchChecked);
+                return;
+            }
+            captured = event;
+            let finish;
+            event.waitUntil(new Promise(resolve => finish = resolve));
+            setTimeout(() => {
+                self.dispatchEvent(event);
+                if (event.isTrusted) throw Error('script redispatch must clear trust');
+                let reads = 0;
+                const value = {get then() { reads++; return undefined; }};
+                for (const method of [event.waitUntil, ExtendableEvent.prototype.waitUntil]) {
+                    let caught;
+                    try { method.call(event, value); } catch (error) { caught = error; }
+                    if (!(caught instanceof DOMException) || caught.name !== 'InvalidStateError') {
+                        throw Error('redispatched waitUntil must reject: ' + caught);
+                    }
+                }
+                if (reads !== 2) throw Error('Promise arguments must be converted before trust check');
+                checked();
+                finish();
+            }, 0);
+        };
+        "#,
+    );
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        85,
+        serialize_test_string("capture"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        86,
+        serialize_test_string("verify"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
+async fn service_worker_wait_until_prototype_rejection_fails_native_install() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        oninstall = event => {
+            ExtendableEvent.prototype.waitUntil.call(event,
+                new Promise((resolve, reject) => setTimeout(() => reject('install rejected'), 0)));
+        };
+        "#,
+    );
+    let completion = dispatch_service_worker_lifecycle_event_for_test(
+        &mut handle,
+        ServiceWorkerLifecycleEventKind::Install,
+        84,
+    )
+    .await;
+    assert_eq!(
+        completion.result,
+        Err("service worker waitUntil promise rejected".to_owned())
+    );
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_fetch_handler_throw_without_respond_with_still_falls_back() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(

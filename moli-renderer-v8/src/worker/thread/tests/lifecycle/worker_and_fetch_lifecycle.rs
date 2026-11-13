@@ -1522,7 +1522,8 @@ async fn service_worker_message_wait_until_same_turn_after_pending_promise_settl
 }
 
 #[tokio::test]
-async fn service_worker_message_wait_until_extra_microtask_after_pending_promise_settles_throws() {
+async fn service_worker_message_wait_until_original_promise_microtask_keeps_wrapped_lifetime_active()
+ {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(
         r#"
@@ -1532,6 +1533,8 @@ async fn service_worker_message_wait_until_extra_microtask_after_pending_promise
                 resolveFirst = resolve;
             });
             event.waitUntil(first);
+            // Web IDL wraps first in a new Promise. This original Promise's
+            // reaction and its microtask run before the wrapped lifetime settles.
             first.then(() => Promise.resolve().then(() => {
                 let result = "unset";
                 try {
@@ -1559,7 +1562,7 @@ async fn service_worker_message_wait_until_extra_microtask_after_pending_promise
         ServiceWorkerEventId::from_u64_for_worker(68)
     );
     assert_eq!(completion.result, Ok(()));
-    assert_eq!(console, "log: extra-turn:InvalidStateError:true");
+    assert_eq!(console, "log: extra-turn:OK");
     handle.terminate_and_join();
 }
 
@@ -1720,33 +1723,54 @@ async fn service_worker_wait_until_uses_native_promise_adoption() {
 }
 
 #[tokio::test]
-async fn service_worker_wait_until_uses_native_promise_reactions() {
+async fn service_worker_wait_until_wraps_native_promises_before_registering_lifetime() {
     ensure_v8();
-    let mut handle = spawn_service_worker_for_test(
-        r#"
+    for borrowed in [false, true] {
+        let source = format!(
+            "const borrowed = {borrowed};{}",
+            r#"
         self.addEventListener("install", event => {
-            const promise = new Promise(resolve => resolve("ok"));
-            promise.then = () => {
-                throw new Error("patched promise.then should not run");
-            };
-            event.waitUntil(promise);
+            const IntrinsicPromise = Promise;
+            const promise = IntrinsicPromise.resolve("ok");
+            let reads = 0, calls = 0;
+            Object.defineProperty(promise, 'constructor', {
+                get() { throw Error('Promise constructor should not be read'); }
+            });
+            Object.defineProperty(promise, 'then', {get() {
+                reads++;
+                return function(resolve) {
+                    if (this !== promise) throw Error('incorrect then receiver');
+                    calls++;
+                    resolve('assimilated');
+                };
+            }});
+            self.Promise = function() { throw Error('author Promise constructor'); };
+            const method = borrowed ? ExtendableEvent.prototype.waitUntil : event.waitUntil;
+            method.call(event, promise);
+            if (reads !== 1 || calls !== 0) throw Error('incorrect synchronous Promise conversion');
+            method.call(event, new IntrinsicPromise(resolve => setTimeout(() => {
+                if (reads !== 1 || calls !== 1) throw Error('incorrect asynchronous Promise adoption');
+                resolve();
+            }, 0)));
         });
-        "#,
-    );
+        "#
+        );
+        let mut handle = spawn_service_worker_for_test(&source);
 
-    let completion = dispatch_service_worker_lifecycle_event_for_test(
-        &mut handle,
-        ServiceWorkerLifecycleEventKind::Install,
-        11,
-    )
-    .await;
+        let completion = dispatch_service_worker_lifecycle_event_for_test(
+            &mut handle,
+            ServiceWorkerLifecycleEventKind::Install,
+            11,
+        )
+        .await;
 
-    assert_eq!(
-        completion.event_id,
-        ServiceWorkerEventId::from_u64_for_worker(11)
-    );
-    assert_eq!(completion.result, Ok(()));
-    handle.terminate_and_join();
+        assert_eq!(
+            completion.event_id,
+            ServiceWorkerEventId::from_u64_for_worker(11)
+        );
+        assert_eq!(completion.result, Ok(()));
+        handle.terminate_and_join();
+    }
 }
 
 #[tokio::test]
