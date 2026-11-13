@@ -15,6 +15,9 @@ use crate::worker::{WorkerNetworkPolicy, WorkerScriptKind, WorkerSecureContextPo
 use moli_storage_key::MoliStorageKey;
 use url::Url;
 
+mod client_messages;
+pub(super) use client_messages::ServiceWorkerClientMessageQueue;
+
 pub(super) fn service_worker_first_party_storage_key(document_url: &Url) -> String {
     moli_storage_key::MoliStorageKey::first_party_from_url(document_url, None)
         .serialized_storage_key()
@@ -377,6 +380,8 @@ impl PageScriptHost {
         retired_owner: WindowDocumentOwner,
     ) {
         self.retire_web_mcp_document(retired_owner);
+        self.service_worker_client_message_queues
+            .remove(&retired_owner);
         let register_count = self.pending_service_worker_registers.len();
         self.pending_service_worker_registers
             .retain(|_, pending| pending.owner.window_document_owner() != retired_owner);
@@ -408,6 +413,8 @@ impl PageScriptHost {
         transition: crate::frame_owner_model::MainDocumentOwnerTransition,
     ) {
         let retired_owner = transition.retired_owner();
+        self.service_worker_client_message_queues
+            .remove(&WindowDocumentOwner::Frame(retired_owner));
         self.retire_web_mcp_document(WindowDocumentOwner::Frame(retired_owner));
         let register_count = self.pending_service_worker_registers.len();
         self.pending_service_worker_registers

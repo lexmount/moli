@@ -738,6 +738,10 @@ impl PageScriptHost {
                     false,
                 )
             });
+        self.enable_service_worker_client_message_queue_for_document(
+            super::super::OwnerDispatchScope::Child(child_handle),
+            crate::native_bridge::WindowDocumentOwner::Frame(action.owner()),
+        );
         if self
             .frame_owner_store
             .child_document_task_owner_is_current(child_handle, action.owner())

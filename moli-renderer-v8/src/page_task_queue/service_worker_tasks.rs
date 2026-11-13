@@ -79,6 +79,15 @@ impl RendererPageServiceWorkerTaskSender {
             .map_err(|_| RendererPageServiceWorkerTaskRouteClosed)
     }
 
+    pub(crate) fn send_service_worker_client_queue_delivery(
+        &self,
+        completion: ServiceWorkerClientMessageCompletion,
+    ) -> Result<(), RendererPageServiceWorkerTaskRouteClosed> {
+        self.client_message
+            .send_client_queue_delivery(completion)
+            .map_err(|_| RendererPageServiceWorkerTaskRouteClosed)
+    }
+
     pub(crate) fn send_service_worker_client_navigate_request(
         &self,
         completion: ServiceWorkerClientNavigateRequestCompletion,

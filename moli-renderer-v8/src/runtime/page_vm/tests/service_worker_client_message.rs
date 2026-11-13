@@ -10,6 +10,104 @@ use crate::{
     types::ServiceWorkerClientMessageCompletion,
 };
 
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_client_queue_enables_asynchronously_and_keeps_older_messages_first() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for enable in [
+            "navigator.serviceWorker.startMessages()",
+            "navigator.serviceWorker.onmessage = () => {}",
+            "navigator.serviceWorker.onmessage = null",
+            "navigator.serviceWorker.onmessage = {}",
+        ] {
+            let (mut page, _resources, _wakes) = page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://service-worker-client-message.test/queue")?,
+            );
+            page.vm_mut().set_document_ready_state(crate::dom::native::DocumentReadyState::Loading)?;
+            page.vm_mut().eval(r#"
+globalThis.received = [];
+navigator.serviceWorker.addEventListener('message', event => {
+  received.push(event.data);
+  Promise.resolve().then(() => received.push('after:' + event.data));
+});
+navigator.serviceWorker.onmessageerror = () => {};
+document.dispatchEvent(new Event('DOMContentLoaded'));
+void 0;
+            "#)?;
+            let target = page.vm().service_worker_client_message_target_for_test(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )?;
+            let root = page.document_lifecycle.identity().document;
+            let sender = page.service_worker_task_sender_for_root_for_test(root);
+            let first = page.vm_mut().service_worker_client_message_payload_for_test("first")?;
+            sender.send_service_worker_client_message(service_worker_client_message(target, first)).unwrap();
+            let task = page.take_service_worker_client_message_body_task_for_test().unwrap();
+            let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+            assert_eq!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::QueuedForClientMessageQueue);
+            page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+            assert_eq!(page.vm_mut().eval("received.join('|')")?, "");
+            assert!(page.take_service_worker_client_message_body_task_for_test().is_none());
+
+            // This incoming message is already resident before the older
+            // disabled message is rescheduled by the enabling call.
+            let second = page.vm_mut().service_worker_client_message_payload_for_test("second")?;
+            sender.send_service_worker_client_message(service_worker_client_message(target, second)).unwrap();
+            page.vm_mut().eval(&format!("{enable}; Promise.resolve().then(() => received.push('enabled-microtask')); void 0;"))?;
+            assert_eq!(page.vm_mut().eval("received.join('|')")?, "enabled-microtask", "{enable} must not dispatch synchronously");
+            let newer = page.take_service_worker_client_message_body_task_for_test().unwrap();
+            let result = page.apply_selected_page_service_worker_client_message_turn(newer)?;
+            assert_eq!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::QueuedForClientMessageQueue);
+            page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+            for expected in ["enabled-microtask|first|after:first", "enabled-microtask|first|after:first|second|after:second"] {
+                let task = page.take_service_worker_client_message_body_task_for_test().unwrap();
+                assert!(task.is_client_queue_delivery());
+                let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+                assert!(matches!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::EventDispatchedToCurrentTarget { .. }));
+                page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+                assert_eq!(page.vm_mut().eval("received.join('|')")?, expected, "{enable}");
+            }
+            page.vm_mut().eval("navigator.serviceWorker.startMessages(); navigator.serviceWorker.startMessages();")?;
+            assert!(page.take_service_worker_client_message_body_task_for_test().is_none());
+        }
+        anyhow::Ok(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_client_queue_discards_pending_messages_when_document_open_replaces_document()
+ {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resources, _wakes) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://service-worker-client-message.test/open-queue")?,
+        );
+        page.vm_mut().set_document_ready_state(crate::dom::native::DocumentReadyState::Loading)?;
+        page.vm_mut().eval("globalThis.received=[]; globalThis.savedContainer=navigator.serviceWorker; savedContainer.addEventListener('message', event => received.push(event.data));")?;
+        let root = page.document_lifecycle.identity().document;
+        let old = page.vm().service_worker_client_message_target_for_test(crate::native_bridge::OwnerDispatchScope::Top)?;
+        let payload = page.vm_mut().service_worker_client_message_payload_for_test("retired")?;
+        page.service_worker_task_sender_for_root_for_test(root).send_service_worker_client_message(service_worker_client_message(old, payload)).unwrap();
+        let task = page.take_service_worker_client_message_body_task_for_test().unwrap();
+        let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+        assert_eq!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::QueuedForClientMessageQueue);
+        page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+        page.vm_mut().eval("document.open(); savedContainer.startMessages();")?;
+        let current = page.vm().service_worker_client_message_target_for_test(crate::native_bridge::OwnerDispatchScope::Top)?;
+        assert_ne!(old.document_owner, current.document_owner);
+        assert!(page.take_service_worker_client_message_body_task_for_test().is_none());
+        let payload = page.vm_mut().service_worker_client_message_payload_for_test("current")?;
+        page.service_worker_task_sender_for_root_for_test(root).send_service_worker_client_message(service_worker_client_message(current, payload)).unwrap();
+        let task = page.take_service_worker_client_message_body_task_for_test().unwrap();
+        let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+        assert!(matches!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::EventDispatchedToCurrentTarget { .. }));
+        page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+        assert_eq!(page.vm_mut().eval("received.join('|')")?, "current");
+        anyhow::Ok(())
+    }).await.unwrap();
+}
+
 fn service_worker_client_message(
     target: crate::types::ServiceWorkerWindowClientTarget,
     payload: crate::structured_clone::V8StructuredClonePayload,
@@ -128,6 +226,7 @@ navigator.serviceWorker.onmessageerror = event => {
     __serviceWorkerClientMessageErrorEvents.push("microtask");
   });
 };
+navigator.serviceWorker.startMessages();
 "listener-ready"
 "#,
         )?;
@@ -194,6 +293,7 @@ async fn service_worker_client_message_to_a_shadowed_container_without_listener_
         )?;
         page_vm.vm_mut().eval(
             r#"
+navigator.serviceWorker.startMessages();
 Object.defineProperty(navigator, "serviceWorker", {
   configurable: true,
   value: null,
@@ -255,6 +355,9 @@ async fn service_worker_client_message_without_listener_is_checkpoint_only() {
             Url::parse("https://service-worker-client-message.test/no-listener").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm
+            .vm_mut()
+            .eval("navigator.serviceWorker.startMessages();")?;
         let target = page_vm.vm().service_worker_client_message_target_for_test(
             crate::native_bridge::OwnerDispatchScope::Top,
         )?;
@@ -814,4 +917,35 @@ navigator.serviceWorker.onmessage = event => {
             server.await.expect("replacement HTTP server");
         },
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn service_worker_client_queue_uses_the_container_realm_when_the_callback_is_borrowed() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page, _resources, _wakes) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader, Url::parse("https://service-worker-client-message.test/borrowed")?,
+        );
+        page.vm_mut().set_document_ready_state(crate::dom::native::DocumentReadyState::Loading)?;
+        page.vm_mut().eval("globalThis.received=[]; navigator.serviceWorker.addEventListener('message', event => received.push(event.data));")?;
+        let target = page.vm().service_worker_client_message_target_for_test(crate::native_bridge::OwnerDispatchScope::Top)?;
+        let root = page.document_lifecycle.identity().document;
+        let payload = page.vm_mut().service_worker_client_message_payload_for_test("queued")?;
+        page.service_worker_task_sender_for_root_for_test(root)
+            .send_service_worker_client_message(service_worker_client_message(target, payload)).unwrap();
+        let task = page.take_service_worker_client_message_body_task_for_test().unwrap();
+        let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+        assert_eq!(result.action.target_effect, PageServiceWorkerClientMessageTargetEffect::QueuedForClientMessageQueue);
+        page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+        assert!(page.take_service_worker_client_message_body_task_for_test().is_none());
+        page.vm_mut().borrow_service_worker_start_messages_from_an_unbound_realm_for_test()?;
+        assert_eq!(page.vm_mut().eval("received.join('|')")?, "", "enabling must stay asynchronous");
+        let task = page.take_service_worker_client_message_body_task_for_test()
+            .expect("the container's native queue should become runnable");
+        assert!(task.is_client_queue_delivery());
+        let result = page.apply_selected_page_service_worker_client_message_turn(task)?;
+        page.finish_selected_page_task_completion(result.action.into_page_task_completion(), &loader).await?;
+        assert_eq!(page.vm_mut().eval("received.join('|')")?, "queued");
+        anyhow::Ok(())
+    }).await.unwrap();
 }
