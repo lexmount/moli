@@ -23,9 +23,7 @@ pub(crate) struct TextOverflow {
 
 #[derive(Debug)]
 pub(crate) struct EllipsisLine {
-    pub(crate) marker_offset: f32,
-    pub(crate) visible_start: f32,
-    pub(crate) visible_end: f32,
+    cut_inline: f32,
     pub(crate) target: LayoutBoxId,
     pub(crate) source_offset: usize,
     pub(crate) rtl: bool,
@@ -33,6 +31,22 @@ pub(crate) struct EllipsisLine {
 }
 
 impl EllipsisLine {
+    pub(crate) fn marker_offset(&self, marker_width: f32) -> f32 {
+        if self.rtl {
+            self.cut_inline - marker_width
+        } else {
+            self.cut_inline
+        }
+    }
+
+    pub(crate) fn visible_bounds(&self) -> (f32, f32) {
+        if self.rtl {
+            (self.cut_inline, f32::INFINITY)
+        } else {
+            (f32::NEG_INFINITY, self.cut_inline)
+        }
+    }
+
     pub(crate) fn visible_ranges(
         &self,
         range: Range<usize>,
@@ -280,7 +294,6 @@ pub(crate) fn prepare_text_overflow<N>(
                 continue;
             }
             let edge = if rtl { child.start } else { child.end };
-            let marker_offset = if rtl { edge - marker_width } else { edge };
             let mut visible_text = Vec::new();
             for (child_index, child) in children.iter().enumerate() {
                 if if rtl {
@@ -332,9 +345,7 @@ pub(crate) fn prepare_text_overflow<N>(
                 }
             };
             overflow.lines.push(Some(EllipsisLine {
-                marker_offset,
-                visible_start: if rtl { edge } else { f32::NEG_INFINITY },
-                visible_end: if rtl { f32::INFINITY } else { edge },
+                cut_inline: edge,
                 target,
                 source_offset,
                 rtl,
@@ -350,7 +361,7 @@ pub(crate) fn prepare_text_overflow<N>(
                 for run in line.runs() {
                     let metrics = run.font_metrics();
                     let rect = crate::LayoutRect::new(
-                        ellipsis.marker_offset,
+                        ellipsis.marker_offset(overflow.marker_width),
                         context.line_placements[index].baseline - metrics.ascent,
                         overflow.marker_width,
                         metrics.ascent + metrics.descent,

@@ -891,7 +891,9 @@ where
                 rtl: ellipsis.rtl,
             },
             rect: LayoutRect::new(
-                layout.border.left + layout.padding.left + ellipsis.marker_offset,
+                layout.border.left
+                    + layout.padding.left
+                    + ellipsis.marker_offset(overflow.marker_width),
                 layout.border.top + layout.padding.top + rect.y,
                 overflow.marker_width,
                 rect.height,
@@ -921,8 +923,9 @@ where
                 let id =
                     self.owner_paint_fragments[index][context.fragments.boxes.len() + text_index];
                 let fragment = &self.fragments[id.index()];
-                let start = fragment.rect.x.max(origin + line.visible_start);
-                let end = fragment.rect.right().min(origin + line.visible_end);
+                let (visible_start, visible_end) = line.visible_bounds();
+                let start = fragment.rect.x.max(origin + visible_start);
+                let end = fragment.rect.right().min(origin + visible_end);
                 let clip = self.push_clip(
                     fragment.clip_chain,
                     None,

@@ -524,7 +524,9 @@ fn project_ellipsis_phase<N>(
             };
             let clusters = sources.segment(&glyphs).map(|(_, range)| range).collect();
             let paint = TextRunPaint {
-                origin_x: layout.border.left + layout.padding.left + ellipsis.marker_offset,
+                origin_x: layout.border.left
+                    + layout.padding.left
+                    + ellipsis.marker_offset(overflow.marker_width),
                 origin_y: layout.border.top + layout.padding.top + placement.baseline
                     - marker_line.metrics().baseline,
                 transform,
