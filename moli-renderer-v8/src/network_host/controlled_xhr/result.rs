@@ -8,6 +8,21 @@ use crate::{
     types::{PendingSubresourceFetchInfo, SubresourceNetworkRecord, SubresourceResponseBody},
 };
 
+/// The JS boundary needs a materialized Response, while Network can retain
+/// the original raw-byte capture. Keeping both here avoids copying the whole
+/// body back out of the Response or creating another disk-pool capture.
+pub(super) struct BufferedXhrResponse {
+    pub(super) response: Response,
+    pub(super) body: SubresourceResponseBody,
+}
+
+impl BufferedXhrResponse {
+    fn from_response(response: Response) -> Self {
+        let body = SubresourceResponseBody::from_fetch_response(&response);
+        Self { response, body }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct XhrLoadResult {
     pub(crate) result: Result<Response, String>,
@@ -18,11 +33,12 @@ pub(crate) struct XhrLoadResult {
 impl XhrLoadResult {
     pub(super) fn new(
         info: PendingSubresourceFetchInfo,
-        result: Result<Response, String>,
+        result: Result<BufferedXhrResponse, String>,
         network_headers: Option<Vec<(String, String)>>,
     ) -> Self {
         let record = match &result {
-            Ok(response) => {
+            Ok(delivered) => {
+                let response = &delivered.response;
                 let mut record = SubresourceNetworkRecord::success_with_body(
                     info.frame_id.clone(),
                     info.document_url.clone(),
@@ -44,7 +60,7 @@ impl XhrLoadResult {
                     response.final_url.clone(),
                     response.status,
                     response.headers.clone(),
-                    SubresourceResponseBody::from_fetch_response(response),
+                    delivered.body.clone(),
                     response.cookie_set_reports.clone(),
                 )
                 .with_from_cache(response.from_cache)
@@ -77,7 +93,7 @@ impl XhrLoadResult {
         };
         Self {
             info,
-            result,
+            result: result.map(|delivered| delivered.response),
             network_record,
         }
     }
@@ -125,10 +141,113 @@ pub(crate) fn start_buffered_xhr(
                     )?;
                     Ok(response)
                 });
-                XhrLoadResult::new(info, result, None)
+                XhrLoadResult::new(info, result.map(BufferedXhrResponse::from_response), None)
             }
         };
         let _ = tx.send(Ok(completed));
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        network::ResourceInterceptionBody,
+        types::{
+            SubresourceNetworkOutcome, SubresourceResourceType, SubresourceResponseBodyWriter,
+        },
+    };
+
+    #[tokio::test]
+    async fn buffered_xhr_network_record_reuses_original_raw_capture() {
+        for disk_backed in [false, true] {
+            let pool = moli_disk_pool::DiskPool::new(None).unwrap();
+            let payload = [0, 0xff, 0xc3, 0x28, 0x80, b'x', b'y', b'z'].repeat(if disk_backed {
+                256 * 1024
+            } else {
+                512
+            });
+            let mut writer = SubresourceResponseBodyWriter::with_memory_limit_and_disk_pool(
+                if disk_backed {
+                    64 * 1024
+                } else {
+                    payload.len() + 1
+                },
+                Some(pool.clone()),
+            );
+            writer.append(&payload);
+            let captured = writer.finish();
+            let retained_bytes = captured.retained_size_bytes();
+            let address = (!disk_backed).then(|| captured.try_bytes().unwrap().as_ptr() as usize);
+            let before = pool.diagnostics();
+            let live_disk = before.disk_footprint_bytes - before.free_bytes as u64;
+            assert_eq!(live_disk > 0, disk_backed);
+
+            let url = url::Url::parse("https://xhr.test/body").unwrap();
+            let info = PendingSubresourceFetchInfo {
+                internal_id: 1,
+                network_request_handle: None,
+                frame_id: None,
+                document_url: url.clone(),
+                url: url.clone(),
+                websocket_socket_id: None,
+                method: "GET".into(),
+                request_headers: Default::default(),
+                request_body: None,
+                request_body_bytes: None,
+                resource_type: SubresourceResourceType::Xhr,
+                request_cookie_report: None,
+            };
+            let loaded = super::super::LoadedXhrResponse {
+                head: moli_fetch::ResponseHead {
+                    final_url: url,
+                    status: 200,
+                    status_text: Some("OK".into()),
+                    headers: vec![("content-type".into(), b"application/octet-stream".to_vec())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    cache_state: Default::default(),
+                    negotiated_http_version: None,
+                },
+                body: ResourceInterceptionBody::from_complete(captured),
+            };
+            let delivered = loaded.deliver(&info, None, None).await.unwrap().unwrap();
+            let completed = XhrLoadResult::new(info, Ok(delivered), None);
+            drop(loaded);
+
+            assert_eq!(completed.result.as_ref().unwrap().body_bytes(), payload);
+            let SubresourceNetworkOutcome::Success { response_body, .. } =
+                completed.network_record.outcome()
+            else {
+                panic!("buffered delivery must construct a success record")
+            };
+            assert_eq!(response_body.retained_size_bytes(), retained_bytes);
+            assert_eq!(response_body.materialize_bytes().unwrap(), payload);
+            if let Some(address) = address {
+                assert_eq!(
+                    response_body.try_bytes().unwrap().as_ptr() as usize,
+                    address,
+                    "the Network record must share the original allocation"
+                );
+            }
+            let retained = pool.diagnostics();
+            assert_eq!(
+                retained.disk_footprint_bytes, before.disk_footprint_bytes,
+                "Network delivery must not allocate a second disk capture"
+            );
+            assert_eq!(
+                retained.disk_footprint_bytes - retained.free_bytes as u64,
+                live_disk,
+                "the record retains the original disk capture after its producer drops"
+            );
+            drop(completed.network_record);
+            let released = pool.diagnostics();
+            assert_eq!(released.disk_footprint_bytes, released.free_bytes as u64);
+            assert_eq!(completed.result.unwrap().body_bytes(), payload);
+        }
+    }
 }

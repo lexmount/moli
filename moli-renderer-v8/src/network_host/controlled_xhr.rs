@@ -4,6 +4,7 @@ mod context;
 mod result;
 mod stream;
 pub(crate) use context::{ControlledXhrContext, XhrInterceptionRoute};
+use result::BufferedXhrResponse;
 pub(crate) use result::{XhrLoadResult, start_buffered_xhr};
 pub(crate) use stream::{ControlledXhrCompletion, ControlledXhrStream};
 
@@ -72,7 +73,7 @@ impl LoadedXhrResponse {
         info: &PendingSubresourceFetchInfo,
         stream: Option<&mut ControlledXhrStream>,
         network_request_headers: Option<Vec<(String, String)>>,
-    ) -> Result<Option<Response>, String> {
+    ) -> Result<Option<BufferedXhrResponse>, String> {
         if let Some(stream) = stream {
             stream.start(
                 info,
@@ -106,10 +107,10 @@ impl LoadedXhrResponse {
         let bytes = body
             .materialize_bytes()
             .map_err(|error| error.to_string())?;
-        Ok(Some(Response::from_head_and_lossy_body_bytes(
-            self.head.clone(),
-            bytes,
-        )))
+        Ok(Some(BufferedXhrResponse {
+            response: Response::from_head_and_lossy_body_bytes(self.head.clone(), bytes),
+            body,
+        }))
     }
 }
 
@@ -279,7 +280,7 @@ impl ControlledXhrLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledXhrStream>,
-    ) -> Result<(Option<Response>, Option<Vec<(String, String)>>), String> {
+    ) -> Result<(Option<BufferedXhrResponse>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = true;
         let mut intercept_response = false;
