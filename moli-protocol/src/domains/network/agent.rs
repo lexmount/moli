@@ -1410,7 +1410,7 @@ impl CapturedResponseBodyStore {
         collector_ids: impl IntoIterator<Item = String>,
         collection_was_gated: bool,
     ) {
-        let byte_len = body.len();
+        let byte_charge = body.retained_size_bytes();
         let captured = CapturedResponseBody::from_captured_body_with_collector_scope(
             body,
             session_ids,
@@ -1418,7 +1418,10 @@ impl CapturedResponseBodyStore {
             collection_was_gated,
         );
         self.bodies.remove(&request_id);
-        match self.buffered_bodies.insert(request_id, captured, byte_len) {
+        match self
+            .buffered_bodies
+            .insert(request_id, captured, byte_charge)
+        {
             InsertOutcome::Stored { evicted } => {
                 for (evicted_request_id, mut evicted_body) in evicted {
                     evicted_body.mark_evicted();
@@ -2487,6 +2490,92 @@ mod tests {
                 .expect("third response body should remain readable"),
             b"ccc"
         );
+    }
+
+    #[test]
+    fn response_body_store_charges_shared_prefix_backing_for_both_limits() {
+        use moli_page_types::{SubresourceResponseBody, SubresourceResponseBodyWriter};
+
+        let loader =
+            moli_core::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+                .unwrap();
+        let pool = loader.handle().disk_pool().unwrap();
+        for (disk, visible) in [(false, 0), (false, 1), (true, 0), (true, 1)] {
+            let prefix = || {
+                let full = if disk {
+                    let mut writer = SubresourceResponseBodyWriter::with_memory_limit_and_disk_pool(
+                        2,
+                        Some(pool.clone()),
+                    );
+                    writer.append(b"abcdef");
+                    writer.finish()
+                } else {
+                    SubresourceResponseBody::from_bytes(b"abcdef".to_vec())
+                };
+                let protocol_reader = CapturedBody::from_subresource_response_body(&full);
+                let body = CapturedBody::from_subresource_response_body(&full.prefix(visible));
+                drop(full);
+                drop(protocol_reader);
+                assert_eq!(body.len(), visible);
+                body
+            };
+            let mut store =
+                CapturedResponseBodyStore::with_limits(moli_bounded_buffer::ByteLimits::new(10, 8));
+            for id in ["first", "second", "third"] {
+                store.insert_captured_body_with_collector_scope(
+                    id.to_owned(),
+                    prefix(),
+                    [None],
+                    std::iter::empty::<String>(),
+                    false,
+                );
+                assert_eq!(store.buffered_body_bytes(), 6, "disk={disk} id={id}");
+            }
+            for id in ["first", "second"] {
+                assert_eq!(
+                    store
+                        .get(id)
+                        .unwrap()
+                        .body_bytes_limited(1)
+                        .unwrap_err()
+                        .to_string(),
+                    "Request content was evicted from inspector cache"
+                );
+            }
+            assert_eq!(
+                store.get("third").unwrap().body_bytes_limited(1).unwrap(),
+                &b"a"[..visible]
+            );
+            if disk {
+                let usage = pool.diagnostics();
+                assert_eq!(usage.disk_footprint_bytes - usage.free_bytes as u64, 6);
+            }
+            store.clear();
+            assert_eq!(store.buffered_body_bytes(), 0);
+            if disk {
+                let usage = pool.diagnostics();
+                assert_eq!(usage.disk_footprint_bytes, usage.free_bytes as u64);
+            }
+            let mut single_entry =
+                CapturedResponseBodyStore::with_limits(moli_bounded_buffer::ByteLimits::new(10, 5));
+            single_entry.insert_captured_body_with_collector_scope(
+                "too-large".to_owned(),
+                prefix(),
+                [None],
+                std::iter::empty::<String>(),
+                false,
+            );
+            assert_eq!(single_entry.buffered_body_bytes(), 0);
+            assert_eq!(
+                single_entry
+                    .get("too-large")
+                    .unwrap()
+                    .body_bytes_limited(1)
+                    .unwrap_err()
+                    .to_string(),
+                "Request content was evicted from inspector cache"
+            );
+        }
     }
 
     #[test]

@@ -1779,8 +1779,9 @@ impl SubresourceResponseBody {
         }
     }
 
-    /// A bounded view of the same capture. A cancelled consumer can retain
-    /// exactly its delivered prefix without copying or re-spooling the body.
+    /// A bounded readable view of the same capture, without copying or
+    /// re-spooling. The entire backing remains alive; bounded caches must
+    /// charge `retained_size_bytes()`, not this view's `len()`.
     pub fn prefix(&self, len: usize) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -1910,6 +1911,17 @@ impl SubresourceResponseBody {
             SubresourceResponseBodyInner::ParkableImage(image) => image.len(),
         };
         self.prefix_len.map_or(len, |prefix| prefix.min(len))
+    }
+
+    /// Storage byte charge for the whole backing retained by this view.
+    /// Shared backings are conservatively charged in full for each entry.
+    /// This does not read or materialize the body, and excludes object metadata.
+    pub fn retained_size_bytes(&self) -> usize {
+        match self.inner.as_ref() {
+            SubresourceResponseBodyInner::Memory(bytes) => bytes.capacity(),
+            SubresourceResponseBodyInner::Disk { storage } => storage.len,
+            SubresourceResponseBodyInner::ParkableImage(image) => image.len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -4300,6 +4312,57 @@ mod tests {
             assert_eq!(body.materialize_bytes().unwrap(), b"hello world");
         }
         assert_eq!(pool.diagnostics().disk_footprint_bytes, 11);
+    }
+
+    #[test]
+    fn response_body_prefix_retains_full_memory_allocation_after_other_owners_drop() {
+        for visible in [0, 2] {
+            let mut bytes = Vec::with_capacity(64);
+            bytes.extend_from_slice(b"abcdef");
+            let capacity = bytes.capacity();
+            let full = SubresourceResponseBody::from_bytes(bytes);
+            let backing = Arc::downgrade(&full.inner);
+            let reader = full.clone();
+            let prefix = full.prefix(visible);
+            drop(full);
+            drop(reader);
+
+            assert_eq!(backing.strong_count(), 1);
+            assert_eq!(prefix.len(), visible);
+            assert_eq!(prefix.retained_size_bytes(), capacity);
+            assert_eq!(prefix.materialize_bytes().unwrap(), &b"abcdef"[..visible]);
+            drop(prefix);
+            assert!(backing.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn response_body_prefix_retains_full_disk_capture_until_last_owner_drops() {
+        let pool = DiskPool::new(None).unwrap();
+        for visible in [0, 2] {
+            let mut writer = pooled_body_writer(4, &pool);
+            writer.append(b"abcdefghijkl");
+            let full = writer.finish();
+            let reader = full.clone();
+            let prefix = full.prefix(visible);
+            drop(full);
+            drop(reader);
+
+            let retained = pool.diagnostics();
+            assert_eq!(
+                retained.disk_footprint_bytes - retained.free_bytes as u64,
+                12
+            );
+            assert_eq!(prefix.len(), visible);
+            assert_eq!(prefix.retained_size_bytes(), 12);
+            assert_eq!(
+                prefix.materialize_bytes().unwrap(),
+                &b"abcdefghijkl"[..visible]
+            );
+            drop(prefix);
+            let released = pool.diagnostics();
+            assert_eq!(released.disk_footprint_bytes, released.free_bytes as u64);
+        }
     }
 
     #[test]
