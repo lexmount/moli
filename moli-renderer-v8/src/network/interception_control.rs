@@ -52,6 +52,7 @@ pub(crate) enum ResourceInterceptionDecision {
     CancelAuth,
     Fail(String),
     Fulfill {
+        request_overrides: Option<Box<moli_fetch::RequestOverrides>>,
         status: u16,
         headers: Vec<(String, Vec<u8>)>,
         body: RendererSyntheticResponseBody,
@@ -150,6 +151,7 @@ impl ResourceInterceptionPause {
             ),
             C::FulfillPendingSubresourceFetch {
                 internal_id,
+                request_overrides,
                 response_code,
                 response_headers,
                 response_body,
@@ -157,6 +159,7 @@ impl ResourceInterceptionPause {
                 internal_id,
                 InterceptionPhase::Request,
                 D::Fulfill {
+                    request_overrides,
                     status: response_code,
                     headers: response_headers,
                     body: response_body,
@@ -194,6 +197,7 @@ impl ResourceInterceptionPause {
                 internal_id,
                 InterceptionPhase::Response,
                 D::Fulfill {
+                    request_overrides: None,
                     status: response_code,
                     headers: response_headers,
                     body: response_body,

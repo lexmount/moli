@@ -5384,6 +5384,7 @@ pub enum RendererPageCommand {
     },
     FulfillPendingSubresourceFetch {
         internal_id: u64,
+        request_overrides: Option<Box<moli_fetch::RequestOverrides>>,
         response_code: u16,
         response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
