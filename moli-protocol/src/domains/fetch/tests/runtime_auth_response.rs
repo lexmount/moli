@@ -9,6 +9,8 @@ use crate::automation::{
 use crate::testing::collect_ready_scheduler_output;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+mod auth_source_union;
+
 fn is_fetch_event_for_request(message: &serde_json::Value, method: &str, request_id: &str) -> bool {
     message["method"] == json!(method)
         && message["params"]["requestId"].as_str() == Some(request_id)
