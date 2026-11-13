@@ -151,14 +151,14 @@ impl ControlledXhrLoad {
                 result: result.map(|_| ()),
             };
         }
-        let (result, synthetic, network_headers) = match result {
-            Ok((Some(response), synthetic, headers)) => (Ok(response), synthetic, headers),
-            Ok((None, _, _)) => {
+        let (result, network_headers) = match result {
+            Ok((Some(response), headers)) => (Ok(response), headers),
+            Ok((None, _)) => {
                 unreachable!("streamed body requires its registered sink")
             }
-            Err(error) => (Err(error), false, None),
+            Err(error) => (Err(error), None),
         };
-        let completed = XhrLoadResult::new(self.info.clone(), result, synthetic, network_headers);
+        let completed = XhrLoadResult::new(self.info.clone(), result, network_headers);
         if completed.info.network_request_handle.is_some() {
             // Redirects already crossed their own native request-pause boundary.
             // Diagnostics retain the full chain; protocol sees only the terminal.
@@ -273,7 +273,7 @@ impl ControlledXhrLoad {
     async fn run_inner(
         &mut self,
         mut stream: Option<&mut ControlledXhrStream>,
-    ) -> Result<(Option<Response>, bool, Option<Vec<(String, String)>>), String> {
+    ) -> Result<(Option<Response>, Option<Vec<(String, String)>>), String> {
         use ResourceInterceptionDecision as D;
         let mut next_request_pause = true;
         let mut intercept_response = false;
@@ -497,12 +497,8 @@ impl ControlledXhrLoad {
                     _ => unreachable!("response pause accepts only response decisions"),
                 }
             }
-            if !is_synthetic {
-                self.request.validate_cors_response_for_url(
-                    &response.head.final_url,
-                    &response.head.headers,
-                )?;
-            }
+            self.request
+                .validate_cors_response_for_url(&response.head.final_url, &response.head.headers)?;
             let head = response.head.clone();
             self.request.observe_redirect_requests(&head.redirect_chain);
             let Some(url) = crate::network_host::next_redirect_url(
@@ -514,17 +510,15 @@ impl ControlledXhrLoad {
             else {
                 response.head.redirect_chain = self.request.redirect_chain().to_vec();
                 response.head.redirected = !response.head.redirect_chain.is_empty();
-                if !is_synthetic {
-                    // Commit the same final CORS decision used by Page/Worker
-                    // delivery before publishing a successful Network terminal.
-                    super::validate_cors_response_chain(
-                        self.request
-                            .request_origin()
-                            .expect("XHR has a requesting origin"),
-                        &response.head,
-                        self.request.credentials_mode,
-                    )?;
-                }
+                // Client-provided responses have the same CORS obligations as
+                // transport responses. Validate before any success is published.
+                super::validate_cors_response_chain(
+                    self.request
+                        .request_origin()
+                        .expect("XHR has a requesting origin"),
+                    &response.head,
+                    self.request.credentials_mode,
+                )?;
                 if !is_synthetic {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }
@@ -539,7 +533,7 @@ impl ControlledXhrLoad {
                         network_request_headers.clone(),
                     )
                     .await?;
-                return Ok((delivered, is_synthetic, network_request_headers));
+                return Ok((delivered, network_request_headers));
             };
             self.request
                 .follow_redirect(moli_fetch::RedirectInfo {
