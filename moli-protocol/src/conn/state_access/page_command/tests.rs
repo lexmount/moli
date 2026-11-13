@@ -244,7 +244,105 @@ async fn assert_owned_page_wait(method: &str) {
 
 #[tokio::test]
 async fn stop_loading_owns_native_wait_through_cancellation_and_ready_loss() {
-    assert_owned_page_wait("Page.stopLoading").await;
+    for phase in 0..3 {
+        let mut fixture = TestContext::new();
+        let mut browser = BrowserContext::new("BID-page-owned".into());
+        browser.set_active_target_id("TID-page-owned");
+        browser.attach_active_session("SID-page-owned");
+        fixture.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        fixture
+            .install_navigation_fixture_for_session_owner("about:blank", Some("SID-page-owned"))
+            .await;
+        let gate = fixture.hold_fixture_renderer(Some("SID-page-owned")).await;
+        let owner = fixture.state;
+        let handle = owner.handle();
+        // Release Native before dropping its owner on any assertion failure.
+        let gate = gate;
+        let (_, pending) = admit_stop_loading(&handle);
+        let mut wait = Box::pin(pending.clone().wait());
+        assert!(
+            wait.as_mut().now_or_never().is_none(),
+            "cleanup still owns its real Native wait after the stop response"
+        );
+        assert!(matches!(
+            start(
+                &handle,
+                json!({"id":2102,"method":"Browser.getVersion"}),
+                &mut Default::default()
+            ),
+            CdpCommandTaskStep::Complete(_)
+        ));
+        if phase == 1 {
+            drop(wait);
+            wait = Box::pin(pending.clone().wait());
+            assert!(wait.as_mut().now_or_never().is_none());
+        }
+        drop(gate);
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(30), wait)
+            .await
+            .unwrap();
+        let completed = if phase == 2 {
+            drop(completed);
+            pending.clone().wait().await
+        } else {
+            completed
+        };
+        let outcome = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+            .unwrap();
+        let (events, _) = outcome.into_parts();
+        assert!(
+            events.iter().all(|message| message.get("id").is_none()),
+            "late cleanup has no command response authority"
+        );
+        let repeated = pending.wait().await;
+        let repeated = handle
+            .with_state(|state| state.complete_owned_protocol_scheduler_work(repeated))
+            .unwrap();
+        assert!(
+            repeated.into_parts().0.is_empty(),
+            "cleanup output is committed once"
+        );
+    }
+}
+
+fn admit_stop_loading(
+    handle: &ProtocolStateHandle,
+) -> (Vec<Value>, crate::PendingProtocolSchedulerWork) {
+    let CdpCommandTaskStep::Complete(outcome) = start(
+        handle,
+        json!({"id":2101,"method":"Page.stopLoading","sessionId":"SID-page-owned"}),
+        &mut Default::default(),
+    ) else {
+        panic!("stop acknowledges finite browser cancellation without a Native wait");
+    };
+    let (events, scheduler_events, predecessor) = outcome.into_protocol_event_parts();
+    assert!(
+        predecessor.is_empty(),
+        "the stop response must not wait for Native cleanup output"
+    );
+    let messages = events
+        .into_iter()
+        .map(|event| event.into_protocol_message())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == 2101 && message["result"] == json!({}))
+            .count(),
+        1
+    );
+    let mut cleanup = scheduler_events
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending } => Some(pending),
+            _ => None,
+        });
+    let pending = cleanup
+        .next()
+        .expect("the original cleanup transfers to the existing supervisor");
+    assert!(cleanup.next().is_none());
+    (messages, pending)
 }
 
 #[tokio::test]
@@ -284,17 +382,8 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
         .as_str()
         .unwrap()
         .to_owned();
-    let owner = fixture.state;
-    let handle = owner.handle();
-    let mut context = CommandDispatchContext::default();
-    let CdpCommandTaskStep::Pending(pending) = start(
-        &handle,
-        json!({"id":2101,"method":"Page.stopLoading","sessionId":"SID-page-owned"}),
-        &mut context,
-    ) else {
-        panic!("stop owns its native continuation");
-    };
-    assert_eq!(pending.kind_name(), "Workflow");
+    let handle = fixture.state.handle();
+    let (mut messages, pending) = admit_stop_loading(&handle);
     handle
         .with_state(|state| {
             assert!(
@@ -331,17 +420,20 @@ async fn stop_loading_captures_original_navigation_at_admission_before_a_success
     let completed = tokio::time::timeout(std::time::Duration::from_secs(5), pending.wait())
         .await
         .unwrap();
-    let CdpCommandTaskStep::Complete(outcome) = handle
-        .with_state(|state| state.complete_command_dispatch_with_context(completed, &mut context))
-        .unwrap()
-    else {
-        panic!("one completion");
-    };
-    let (events, _, _) = outcome.into_protocol_event_parts();
-    let messages = events
-        .into_iter()
-        .map(|event| event.into_protocol_message())
-        .collect::<Vec<_>>();
+    let outcome = handle
+        .with_state(|state| state.complete_owned_protocol_scheduler_work(completed))
+        .unwrap();
+    let (events, scheduler_events) = outcome.into_protocol_event_parts();
+    fixture
+        .route_direct_command_output_for_test(events, scheduler_events)
+        .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut fixture,
+        "original stopped navigation response",
+        |message| message["id"] == 2104,
+    )
+    .await;
+    messages.extend(fixture.take_all());
     assert_eq!(
         messages
             .iter()

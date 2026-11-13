@@ -24,6 +24,14 @@ impl ProtocolWorkflowState<'_> {
     }
 
     #[cfg(feature = "test-support")]
+    pub fn hold_renderer_for_test(
+        self,
+        context: &crate::automation::AutomationContext,
+    ) -> crate::test_support::HeldRenderer {
+        crate::test_support::hold_renderer(self.connection, context)
+    }
+
+    #[cfg(feature = "test-support")]
     pub fn arm_background_navigation_for_test(
         self,
         target_id: &str,

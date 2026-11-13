@@ -355,6 +355,135 @@ async fn classic_alert_navigation_deadline_stops_only_the_timed_out_navigation()
     }).await;
 }
 
+#[tokio::test]
+async fn classic_alert_timeout_does_not_wait_for_a_blocked_native_stop() {
+    use std::time::Duration;
+
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for operation in ["get", "set", "accept", "dismiss"] {
+                let (mut scheduler, mut receivers) =
+                    CdpScheduler::new_with_initial_state_runtime_config(
+                        moli_protocol::CdpInitialStoragePartition::memory(),
+                        moli_core::runtime::NavigationRuntimeConfig::new(
+                            moli_fetch::FetchConfig::default(),
+                            moli_core::OptionalResourceFetchMask::NONE,
+                            true,
+                            moli_core::LayoutPolicy::OnDemand,
+                        ),
+                    );
+                let context = AutomationContext {
+                    protocol: FrontendProtocol::WebDriverClassic,
+                    session_id: None,
+                    target_id: Some(moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID.into()),
+                    browser_context_id: None,
+                };
+                let installed = scheduler
+                    .execute_automation_command_with_protocol_messages(
+                        &mut receivers,
+                        AutomationCommand::Navigate(
+                            moli_protocol::automation::DevToolsNavigateCommand {
+                                context: context.clone(),
+                                url: "about:blank".to_owned(),
+                                referrer: None,
+                                wait: DevToolsNavigationWait::Load,
+                            },
+                        ),
+                    )
+                    .await;
+                installed.result.expect("fixture Page installed");
+                let mut gate = scheduler
+                    .state
+                    .with_state(|state| state.hold_renderer_for_test(&context))
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(30), gate.wait_until_entered())
+                    .await
+                    .unwrap();
+                let navigation = scheduler
+                    .state
+                    .with_state(|state| {
+                        state.arm_background_navigation_for_test(
+                            moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID,
+                            "LOADER-blocked-native-stop",
+                        )
+                    })
+                    .unwrap();
+
+                tokio::time::pause();
+                let duration = Duration::from_millis(200);
+                let execution = tokio::time::timeout(
+                    duration + Duration::from_millis(1),
+                    scheduler
+                        .execute_automation_command_with_external_load_wait_and_document_residence(
+                            &mut receivers,
+                            classic_alert_command(operation, context),
+                            Some(duration),
+                            None,
+                        ),
+                )
+                .await
+                .expect(
+                    "alert timeout must return while both navigation and Native owner remain held",
+                );
+                tokio::time::resume();
+                assert_eq!(
+                    execution.execution.result.unwrap_err().kind,
+                    moli_protocol::automation::DevToolsErrorKind::Timeout
+                );
+                assert!(navigation.is_cancelled());
+
+                let successor = scheduler
+                    .state
+                    .with_state(|state| {
+                        state.arm_background_navigation_for_test(
+                            navigation.target_id(),
+                            "LOADER-after-blocked-native-stop",
+                        )
+                    })
+                    .unwrap();
+                drop(gate);
+                // Drive the supervised cleanup, rather than relying on an old
+                // command waiter to keep polling it after its timeout response.
+                let completed = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    receivers.protocol_work_completion_rx.recv(),
+                )
+                .await
+                .unwrap()
+                .expect("Native cleanup remains supervised");
+                let output = scheduler.complete_protocol_work(completed).unwrap();
+                assert!(
+                    scheduler.protocol_tasks.take_tasks().is_empty(),
+                    "the stopped Page's cleanup must have completed"
+                );
+                assert!(
+                    output.events.iter().all(|event| event
+                        .protocol_message()
+                        .is_none_or(|message| message.get("id").is_none())),
+                    "late cleanup must not emit another command response"
+                );
+                assert!(
+                    !successor.is_cancelled(),
+                    "late cleanup must retain its original navigation identity"
+                );
+                assert!(
+                    scheduler
+                        .state
+                        .with_state(|state| state
+                            .has_inflight_background_navigation_for_target(successor.target_id()))
+                        .unwrap()
+                );
+                assert!(
+                    scheduler
+                        .state
+                        .with_state(|state| state.settle_background_navigation_for_test(&successor))
+                        .unwrap()
+                );
+            }
+        })
+        .await;
+}
+
 fn navigation_started_automation_event() -> AutomationEvent {
     AutomationEvent::NavigationFrame(NavigationFrameEvent {
         target_id: DevToolsTargetId::from("TID-output"),

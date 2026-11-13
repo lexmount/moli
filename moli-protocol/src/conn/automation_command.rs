@@ -152,6 +152,7 @@ impl CdpConnection {
             | AutomationCommand::GetJavaScriptDialog(_)
             | AutomationCommand::SetJavaScriptDialogPromptText(_)
             | AutomationCommand::HandleJavaScriptDialog(_)
+            | AutomationCommand::StopLoading(_)
             | AutomationCommand::GetNavigationHistory(_)) => {
                 crate::domains::page::execute_immediate_devtools_page_command_with_protocol_events(self, command)
             }

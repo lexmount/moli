@@ -5033,14 +5033,11 @@ async fn stop_loading_aborts_paused_response_stage_runtime_xhr_subresource() {
     ctx.expect_result(791, json!({}), Some("SID-1"));
 
     let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
+        .wait_for_scheduler_message("stopped response-stage XHR loadingFailed", |message| {
             message["method"] == json!("Network.loadingFailed")
                 && message["params"]["requestId"] == network_id
         })
-        .cloned()
-        .expect("network loadingFailed event");
+        .await;
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
     assert_eq!(failed["params"]["canceled"], true);
@@ -5468,14 +5465,11 @@ async fn stop_loading_aborts_paused_runtime_xhr_auth_subresource() {
     ctx.expect_result(7936, json!({}), Some("SID-1"));
 
     let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
+        .wait_for_scheduler_message("stopped auth-stage XHR loadingFailed", |message| {
             message["method"] == json!("Network.loadingFailed")
                 && message["params"]["requestId"] == network_id
         })
-        .cloned()
-        .expect("network loadingFailed event");
+        .await;
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
     assert_eq!(failed["params"]["canceled"], true);

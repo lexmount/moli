@@ -178,6 +178,23 @@ impl CompletedProtocolSchedulerWork {
 }
 
 impl PendingProtocolSchedulerWork {
+    /// Transfer an admitted workflow to the adapter supervisor. Its native
+    /// waits and output authority no longer belong to the initiating command.
+    pub(crate) fn publish_workflow(
+        conn: &mut CdpConnection,
+        workflow: PreparedCommandWorkflow,
+        target_id: Option<String>,
+    ) {
+        let pending = Self {
+            work: PendingProtocolWork::Workflow(super::workflow::PendingProtocolWorkflow::prepare(
+                workflow, target_id,
+            )),
+            access: conn.protocol_state_access(),
+        };
+        conn.scheduler_state
+            .push_scheduler_event(crate::conn::CdpSchedulerEvent::ProtocolTaskPrepared { pending });
+    }
+
     /// Commit browser selection now; supervise only its Native synchronization.
     pub(crate) fn publish_popup_activation(
         conn: &mut CdpConnection,

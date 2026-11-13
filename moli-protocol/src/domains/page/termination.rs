@@ -163,15 +163,35 @@ pub(super) fn try_start_stop_loading_command_dispatch(
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
     let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
-    let prepared = PreparedPageStopLoading::prepare(conn, &owner_scope);
-    PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
-        command_id: cmd.id,
-        owner_scope,
-        kind: Box::new(super::PendingPageCommandKind::StopLoading(prepared)),
-    })
+    stop_loading(conn, &owner_scope);
+    PageCommandTaskStep::Complete(CommandOutputPlan::success())
 }
 
-pub(crate) struct PreparedPageStopLoading {
+/// Like Chromium's browser-side PageHandler::StopLoading, acknowledge the
+/// finite cancellation without waiting for a paused Renderer to service it.
+/// The existing supervisor retains the exact Native and Fetch cleanup work.
+pub(super) fn stop_loading(conn: &mut CdpConnection, owner: &CommandOwnerScope) {
+    let prepared = PreparedPageStopLoading::prepare(conn, owner);
+    let target_id = conn
+        .target_owner_identity_for_owner(owner)
+        .and_then(|(_, target)| target);
+    let access = conn.protocol_state_access();
+    let workflow = crate::conn::PreparedCommandWorkflow::new(move |mut context| async move {
+        match prepared
+            .run(
+                &mut crate::conn::ProtocolWorkflowDriver::new(access),
+                &mut context,
+            )
+            .await
+        {
+            Ok(plan) => context.complete(plan.into_composite_command_prefix()),
+            Err(error) => context.fail(CommandOutputPlan::error(-32000, error)),
+        }
+    });
+    crate::conn::PendingProtocolSchedulerWork::publish_workflow(conn, workflow, target_id);
+}
+
+struct PreparedPageStopLoading {
     lifecycle: Option<(
         crate::conn::TargetPageResidenceIdentity,
         Result<moli_core::page::PendingPageCommand>,
@@ -180,15 +200,7 @@ pub(crate) struct PreparedPageStopLoading {
 }
 
 impl PreparedPageStopLoading {
-    pub(crate) fn prepare_for_automation(
-        conn: &mut CdpConnection,
-        context: &crate::automation::AutomationContext,
-    ) -> Result<Self, crate::automation::DevToolsError> {
-        let owner = super::page_command_owner(conn, context)?;
-        Ok(Self::prepare(conn, &owner))
-    }
-
-    pub(crate) fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Self {
+    fn prepare(conn: &mut CdpConnection, owner: &CommandOwnerScope) -> Self {
         let lifecycle = conn
             .target_page_residence_identity_for_owner(owner)
             .and_then(|page_owner| {
@@ -208,7 +220,7 @@ impl PreparedPageStopLoading {
         Self { lifecycle, cleanup }
     }
 
-    pub(crate) async fn run(
+    async fn run(
         self,
         driver: &mut crate::conn::ProtocolWorkflowDriver,
         context: &mut crate::conn::CommandWorkflowContext,
