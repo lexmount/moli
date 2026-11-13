@@ -222,3 +222,106 @@ async fn touch_tap_click_keeps_touch_target_after_pointer_capture() {
         "[1,0,false,true]"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn touch_compatibility_boundaries_respect_ancestor_and_sibling_relationships() {
+    for previous in ["mouse-parent", "tap-parent", "child", "sibling"] {
+        let mut ctx = TestContext::new();
+        with_loaded_document(&mut ctx,r#"<style>body{margin:0}#menu{position:absolute;width:200px;height:100px}button{position:absolute;top:10px;width:60px;height:40px}#item{left:10px}#other{left:80px}</style><div id=menu><button id=item>Item</button><button id=other>Other</button></div><script>window.boundaries=[];window.menuClosed=false;window.itemClicks=0;const menuNode=document.getElementById('menu');document.getElementById('item').onclick=()=>itemClicks++;for(const type of ['mouseout','mouseleave','mouseover','mouseenter'])for(const node of [menuNode,...menuNode.children])node.addEventListener(type,e=>{if(e.target===node)boundaries.push(type+'@'+node.id)});</script>"#).await;
+        ctx.capture_fixture_layout(None).await;
+        let initial = if previous.ends_with("parent") {
+            json!([{"x":190,"y":90}])
+        } else {
+            json!([{"x":20,"y":20}])
+        };
+        if previous == "mouse-parent" {
+            ctx.process_async(json!({"id":27000,"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":190,"y":90}})).await;
+            ctx.expect_result(27000, json!({}), None);
+        } else {
+            contact(&mut ctx, 27000, "touchStart", initial).await;
+            contact(&mut ctx, 27001, "touchEnd", json!([])).await;
+        }
+        let close = previous.ends_with("parent");
+        assert_eq!(evaluate_string(&mut ctx,&format!(r#"(() => {{boundaries=[];if({close})document.getElementById('menu').onmouseleave=()=>{{menuClosed=true;document.getElementById('menu').remove();}};return 'ready';}})()"#)).await,"ready");
+        let next = match previous {
+            "child" => json!([{"x":190,"y":90}]),
+            "sibling" => json!([{"x":100,"y":20}]),
+            _ => json!([{"x":20,"y":20}]),
+        };
+        contact(&mut ctx, 27002, "touchStart", next).await;
+        contact(&mut ctx, 27003, "touchEnd", json!([])).await;
+        let observed: serde_json::Value = serde_json::from_str(
+            &evaluate_string(
+                &mut ctx,
+                "JSON.stringify([menuClosed,itemClicks,boundaries])",
+            )
+            .await,
+        )
+        .unwrap();
+        let expected = match previous {
+            "child" => json!([
+                false,
+                1,
+                ["mouseout@item", "mouseleave@item", "mouseover@menu"]
+            ]),
+            "sibling" => json!([
+                false,
+                1,
+                [
+                    "mouseout@item",
+                    "mouseleave@item",
+                    "mouseover@other",
+                    "mouseenter@other"
+                ]
+            ]),
+            _ => json!([
+                false,
+                1,
+                ["mouseout@menu", "mouseover@item", "mouseenter@item"]
+            ]),
+        };
+        assert_eq!(observed, expected, "{previous}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn touch_tap_callbacks_use_frozen_geometry_and_reject_removed_targets() {
+    for event in ["mousemove", "mousedown", "focus"] {
+        for mutation in ["move", "hide", "cover", "remove-root"] {
+            let mut ctx = TestContext::new();
+            with_loaded_document(&mut ctx,r#"<style>body{margin:0}#parent{width:400px;height:120px}#item{position:absolute;left:0;top:0;width:80px;height:80px}#cover{display:none;position:absolute;left:0;top:0;width:80px;height:80px;z-index:10}</style><div id=parent><button id=item>Item</button><div id=cover>Cover</div></div><script>window.tapLog=[];for(const type of ['mousemove','mousedown','mouseup','click','focus'])for(const node of ['item','parent','cover'].map(id=>document.getElementById(id)))node.addEventListener(type,e=>{if(e.target===node)tapLog.push(type+'@'+node.id)});</script>"#).await;
+            let change = match mutation {
+                "move" => "document.getElementById('item').style.left='200px'",
+                "hide" => "document.getElementById('item').style.display='none'",
+                "remove-root" => "document.documentElement.remove()",
+                _ => "document.getElementById('cover').style.display='block'",
+            };
+            assert_eq!(evaluate_string(&mut ctx,&format!(r#"(() => {{document.getElementById('item').addEventListener('{event}',()=>{{{change}}},{{once:true}});return 'ready';}})()"#)).await,"ready");
+            ctx.capture_fixture_layout(None).await;
+            contact(&mut ctx, 28000, "touchStart", json!([{"x":20,"y":20}])).await;
+            contact(&mut ctx, 28001, "touchEnd", json!([])).await;
+            let observed: Vec<String> =
+                serde_json::from_str(&evaluate_string(&mut ctx, "JSON.stringify(tapLog)").await)
+                    .unwrap();
+            let expected = if mutation == "remove-root" {
+                let mut events = vec!["mousemove@item".to_owned()];
+                if event != "mousemove" {
+                    events.push("mousedown@item".to_owned());
+                }
+                if event == "focus" {
+                    events.push("focus@item".to_owned());
+                }
+                events
+            } else {
+                let mut events = vec!["mousemove@item".to_owned(), "mousedown@item".to_owned()];
+                if event == "focus" || mutation != "hide" {
+                    events.push("focus@item".to_owned());
+                }
+                events.push("mouseup@item".to_owned());
+                events.push("click@item".to_owned());
+                events
+            };
+            assert_eq!(observed, expected, "event={event}, mutation={mutation}");
+        }
+    }
+}
