@@ -408,6 +408,7 @@ impl ScriptVmContextBootstrap {
             };
             let owner = owner_context.global(scope);
             crate::context_bootstrap::bind_isolated_window_history_owner(scope, global, owner);
+            crate::context_bootstrap::bind_isolated_window_selection_owner(scope, global, owner);
         }
         finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
         match mode {

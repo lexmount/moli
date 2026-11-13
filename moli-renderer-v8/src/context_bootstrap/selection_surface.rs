@@ -18,6 +18,18 @@ use crate::util::{callback_data_index_value, get_private_value, set_private_valu
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+const WINDOW_SELECTION_OWNER_SLOT: &str = "__moliWindowSelectionOwner";
+
+// Capture the default Window at bootstrap so an old isolated realm cannot
+// resolve its Selection against a later Document occupying the same frame.
+pub(crate) fn bind_isolated_window_selection_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    set_private_value(scope, window, WINDOW_SELECTION_OWNER_SLOT, owner.into());
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Selection, enumerable)]
 struct SelectionPrototypeMethodsDeclaration {
@@ -201,8 +213,21 @@ pub(crate) fn selection_value_for_window<'s>(
         }
         return Some(selection);
     }
+    let owner = get_private_value(scope, window, WINDOW_SELECTION_OWNER_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    let backing = if let Some(owner) = owner {
+        let context = owner.get_creation_context(scope)?;
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let selection = selection_value_for_window(scope, owner)?;
+        Some(v8::Global::new(scope, selection))
+    } else {
+        None
+    };
     let selection = new_selection_object(scope);
-    if let Some(document) = object_property_as_object(scope, window, "document") {
+    if let Some(backing) = backing {
+        let backing = v8::Local::new(scope, &backing);
+        world_wrappers::insert(scope, backing, selection);
+    } else if let Some(document) = object_property_as_object(scope, window, "document") {
         selection_bind_owner_document(scope, selection, document);
     }
     set_private_value(scope, window, WINDOW_SELECTION_SLOT, selection.into());

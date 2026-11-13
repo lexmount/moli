@@ -55,7 +55,7 @@ impl ScriptVm {
             if contenteditable_editing_host(runtime, handle) != Some(handle) {
                 return Ok(false);
             }
-            let _ = select_contenteditable_contents(scope, handle);
+            let _ = select_contenteditable_contents(scope, runtime_ptr, handle);
             Ok(replace_contenteditable_selection(
                 scope,
                 runtime_ptr,

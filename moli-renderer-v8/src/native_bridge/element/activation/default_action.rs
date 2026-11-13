@@ -491,6 +491,21 @@ pub(crate) fn replace_contenteditable_selection(
     else {
         return false;
     };
+    // CDP starts in the top-level realm even when focus is inside a child
+    // Document. Editing must use that Document's Selection and Range realm.
+    if let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        && context != scope.get_current_context()
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        return replace_contenteditable_selection(
+            scope,
+            runtime_ptr,
+            handle,
+            replacement_text,
+            input_type,
+        );
+    }
     if !dispatch_beforeinput(
         scope,
         runtime_ptr,
@@ -547,8 +562,16 @@ pub(crate) fn replace_contenteditable_selection(
 
 pub(crate) fn select_contenteditable_contents(
     scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
 ) -> bool {
+    if let Some(context) =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        && context != scope.get_current_context()
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        return select_contenteditable_contents(scope, runtime_ptr, handle);
+    }
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };

@@ -1,7 +1,7 @@
 use super::super::range::{
     RangeBoundarySide, current_document_object, new_range_for_document,
-    range_boundary_container_object, range_boundary_offset, range_native_record_handle,
-    set_range_boundary,
+    range_boundary_container_object, range_boundary_offset, range_in_current_world,
+    range_native_record_handle, set_range_boundary,
 };
 use super::*;
 use crate::document_runtime::DomHandle;
@@ -60,7 +60,6 @@ pub(in crate::context_bootstrap) fn new_selection_runtime_object<'s>(
     SelectionObjectDeclaration::empty()
         .bind_into(scope, selection)
         .expect("Selection declaration should bind");
-    let _ = ensure_selection_record_handle(scope, selection);
     selection
 }
 
@@ -68,6 +67,7 @@ pub(in crate::context_bootstrap) fn selection_clear<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
 ) {
+    let selection = world_wrappers::owner(scope, selection);
     SelectionObjectDeclaration::empty()
         .initialize(scope, selection)
         .expect("Selection declaration should initialize object");
@@ -121,9 +121,10 @@ pub(in crate::context_bootstrap) fn selection_range<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    selection_slot_value(scope, selection, SELECTION_RANGE_SLOT)
+    let range = selection_slot_value(scope, selection, SELECTION_RANGE_SLOT)
         .and_then(|value| (!value.is_null_or_undefined()).then_some(value))
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    range_in_current_world(scope, range)
 }
 
 pub(in crate::context_bootstrap) fn selection_composed_start_node<'s>(
@@ -181,8 +182,8 @@ pub(in crate::context_bootstrap) fn selection_bind_owner_document<'s>(
         return;
     };
     if unsafe { &*host_ptr }.selection_record_owner_document(handle) != Some(document_handle) {
+        selection_clear(scope, selection);
         let host = unsafe { &mut *host_ptr };
-        host.clear_selection_record(handle);
         host.set_selection_record_owner_document(handle, document_handle);
     }
 }
@@ -731,6 +732,7 @@ fn selection_record_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
 ) -> Option<SelectionRecordHandle> {
+    let selection = world_wrappers::owner(scope, selection);
     if selection.internal_field_count() < SELECTION_WRAPPER_INTERNAL_FIELD_COUNT {
         return None;
     }
@@ -744,6 +746,7 @@ fn ensure_selection_record_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     selection: v8::Local<'s, v8::Object>,
 ) -> Option<SelectionRecordHandle> {
+    let selection = world_wrappers::owner(scope, selection);
     if selection.internal_field_count() < SELECTION_WRAPPER_INTERNAL_FIELD_COUNT {
         return None;
     }
@@ -832,8 +835,9 @@ fn selection_store_native_record<'s>(
         (composed_start_handle, composed_start_offset),
         (composed_end_handle, composed_end_offset),
     ) {
-        // Preserve the Range wrapper identity returned by getRangeAt(). The
-        // owning Window retains this Selection; reverse lookups use native records.
+        // Retain one live Range; world-local views share its native record and
+        // preserve getRangeAt() identity without sharing prototypes or expandos.
+        let range = world_wrappers::owner(scope, range);
         set_selection_slot_value(scope, selection, SELECTION_RANGE_SLOT, range.into());
     }
 }
@@ -853,15 +857,17 @@ fn selection_slot_value<'s>(
     selection: v8::Local<'s, v8::Object>,
     key: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let selection = world_wrappers::owner(scope, selection);
     get_private_value(scope, selection, key)
 }
 
-fn set_selection_slot_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    selection: v8::Local<'_, v8::Object>,
+fn set_selection_slot_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    selection: v8::Local<'s, v8::Object>,
     key: &'static str,
-    value: v8::Local<'_, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
 ) {
+    let selection = world_wrappers::owner(scope, selection);
     set_private_value(scope, selection, key, value);
 }
 
