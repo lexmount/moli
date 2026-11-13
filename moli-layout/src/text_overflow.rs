@@ -195,8 +195,6 @@ pub(crate) fn prepare_text_overflow<N>(
         if !text.lines().any(|line| line_overflows(&line, width, rtl)) {
             continue;
         }
-        let propagating_oof =
-            propagating_oof.get_or_insert_with(|| propagating_positioned_descendants(world));
         let parley = services.parley_mut();
         let mut marker_style = style.parley_text_style();
         // Blink shapes the generated marker directly with the line's font,
@@ -305,10 +303,12 @@ pub(crate) fn prepare_text_overflow<N>(
                         visible_text.push(range.clone());
                     }
                 } else if let ChildKind::Atomic(id) = child.kind
-                    && !propagating_oof[id.index()]
+                    && !propagating_oof
+                        .get_or_insert_with(|| propagating_positioned_descendants(world))
+                        [id.index()]
                 {
-                    // Blink leaves these fragments available so their OOF
-                    // descendants can still participate in the outer context.
+                    // Only an atomic candidate needs the tree's OOF summary;
+                    // text-only truncation and retained atomics never build it.
                     overflow.hidden_boxes.push(id);
                 }
             }
