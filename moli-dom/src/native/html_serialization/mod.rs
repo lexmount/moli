@@ -8,7 +8,7 @@ pub(super) use engine::{
     HtmlSerializationTarget, HtmlSerializedShadowRoot, escape_html_attribute_into_string,
     serialize_html_with_shadow_root_provider,
 };
-use engine::{serialize_html, serialize_html_with_limit, serialize_html_with_limit_and_attributes};
+use engine::{serialize_html, serialize_html_with_limit};
 
 /// A bounded serialization stopped before appending bytes past its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,18 +71,6 @@ impl NativeDom {
         max_bytes: usize,
     ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
         serialize_html_with_limit(self, node_id, max_bytes)
-    }
-
-    /// Bounded serialization for derived consumers that need resolved attributes
-    /// without mutating or cloning the live DOM. Replacement names must be valid
-    /// qualified attribute names; values are escaped by the serializer.
-    pub fn outer_html_with_limit_and_attributes(
-        &self,
-        node_id: NativeNodeId,
-        max_bytes: usize,
-        attributes: &dyn Fn(NativeNodeId) -> Vec<(String, String)>,
-    ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
-        serialize_html_with_limit_and_attributes(self, node_id, max_bytes, Some(attributes))
     }
 
     pub fn inner_html(&self, node_id: NativeNodeId) -> Option<String> {

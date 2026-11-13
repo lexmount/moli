@@ -312,6 +312,13 @@ Source lookup and hit-test candidates are derived from the frozen tree when
 queried. The system has no incrementally maintained layout tree, damage graph,
 retained display list, GPU compositor, or persistent window.
 
+Inline SVG object geometry is collected before clipping and paint-tree
+simplification, then frozen with its CSS viewport in that same layout pass.
+Computed paint styles are supplied separately from the original SVG XML, so
+they cannot change author selector matching or inflate the encoded-input
+budget. Geometry queries read the published numeric results without reparsing
+the SVG or mixing live child geometry with an older outer layout.
+
 ## Benchmark
 
 The following measurements show Moli's current capability envelope. They cover

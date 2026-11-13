@@ -23,26 +23,29 @@ pub(super) struct NativeLayoutSourceView<'a> {
     runtime: &'a PageScriptHost,
     root: DomHandle,
     document: Option<DomHandle>,
-    paint_styles: Option<RefCell<StyleObservation<'a>>>,
+    styles: RefCell<StyleObservation<'a>>,
+    paint_resources: bool,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
     pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
-        Self::with_paint_resources(runtime, root, None)
+        Self::with_paint_resources(runtime, root, StyleObservation::new(runtime), false)
     }
 
     pub(super) fn with_paint_resources(
         runtime: &'a PageScriptHost,
         root: DomHandle,
-        paint_styles: Option<StyleObservation<'a>>,
+        styles: StyleObservation<'a>,
+        paint_resources: bool,
     ) -> Self {
         Self {
             runtime,
             root,
             document: runtime.dom_host().owner_document_handle(root),
-            paint_styles: paint_styles.map(RefCell::new),
+            styles: RefCell::new(styles),
+            paint_resources,
             text_selections: document_text_selections(runtime, root),
         }
     }
@@ -239,9 +242,11 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     fn replaced_image(
         &self,
         node: Self::NodeId,
-        style: &moli_layout::ResolvedLayoutStyle,
+        _style: &moli_layout::ResolvedLayoutStyle,
     ) -> Option<LayoutImageResource> {
-        let paint_styles = self.paint_styles.as_ref()?;
+        if !self.paint_resources {
+            return None;
+        }
         let semantics = self
             .host()
             .node(node)
@@ -257,9 +262,6 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                     svg: ready.svg,
                 })
             }
-            Some(LayoutReplacedKind::Svg) => {
-                super::inline_svg::replaced_resource(self.runtime, node, style, paint_styles)
-            }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
                 Some(LayoutImageResource {
@@ -274,7 +276,9 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
     }
 
     fn css_image_resource(&self, resolved_url: &str) -> Option<LayoutImageResource> {
-        self.paint_styles.as_ref()?;
+        if !self.paint_resources {
+            return None;
+        }
         let parsed = url::Url::parse(resolved_url).ok()?;
         // Blink shares the fetched bytes using a fragment-free cache key, but
         // then applies SVG view/element-fragment semantics separately. Until
@@ -292,6 +296,22 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             pixels: ready.pixels,
             svg: ready.svg,
         })
+    }
+
+    fn svg_content(
+        &self,
+        node: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+        viewport: moli_layout::LayoutSize,
+    ) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
+        super::inline_svg::layout_content(
+            self.runtime,
+            node,
+            style,
+            viewport,
+            &self.styles,
+            self.paint_resources,
+        )
     }
 }
 

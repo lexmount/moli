@@ -44,12 +44,6 @@ fn published_geometry_query(
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
-        if let LayoutQuery::ClientRects { source } = query
-            && let Some(rects) =
-                crate::layout_renderer::svg_client_rect(runtime, document, *source)?
-        {
-            return Ok(LayoutQueryAnswer::ClientRects(rects));
-        }
         runtime.answer_layout_query_for_document(document, query)
     } else {
         Ok(answer_mock_query(runtime, document, query))
@@ -72,16 +66,7 @@ pub(crate) fn published_geometry_batch(
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
-        let mut answers = runtime.answer_layout_for_document(document, batch)?;
-        for (query, answer) in batch.queries.iter().zip(&mut answers.answers) {
-            if let LayoutQuery::ClientRects { source } = query
-                && let Some(rects) =
-                    crate::layout_renderer::svg_client_rect(runtime, document, *source)?
-            {
-                *answer = LayoutQueryAnswer::ClientRects(rects);
-            }
-        }
-        Ok(answers)
+        runtime.answer_layout_for_document(document, batch)
     } else {
         Ok(answer_mock_queries(
             runtime,
