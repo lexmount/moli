@@ -221,7 +221,6 @@ operations that genuinely require them.
 | --- | --- |
 | Extract HTML/Markdown, query the DOM, run JS, inspect network/storage | Reads browser runtime state directly — does not trigger layout or paint |
 | Read an element's box, hit-test coordinates, send coordinate input | Runs one layout calculation and retains only the latest frozen layout tree |
-| Measure SVG graphics while constructing a chart | Refreshes the complete layout when native inputs changed; clean reads and batches reuse the published geometry |
 | Capture a screenshot | Rebuilds from the current DOM/style, replaces the frozen tree, renders a fresh frame, and discards its paint state after use |
 | Poll a screencast | Compares generation metadata only; clean state emits no frame, while changed state rebuilds and emits one fresh frame |
 
