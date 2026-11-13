@@ -25,12 +25,10 @@ The server decodes this final response once through `BufReader` and caches it
 with `OnceLock`; it does not parse, merge, or filter schema JSON at runtime. The
 uncompressed build artifact is used only by the byte-for-byte round-trip test.
 
-The same build generates an exact event-name check from the final schema.
-Opaque Inspector output and nested `Target.receivedMessageFromTarget` messages
-must pass this check before routing wraps them and before the socket queue.
-An unadvertised notification closes its owning frontend, without sending an
-invented command reply. Validation reads envelope fields and preserves opaque
-Inspector parameter encoding. The protocol-schema smoke checks every observed
-notification, including non-flat session messages, against live discovery.
+Local event names are checked by Rust types and schema generation. V8 Inspector
+notifications follow the existing opaque JSON transport and session routing,
+without runtime schema checks. Keep the pinned V8 schema aligned when upgrading
+V8. The protocol-schema smoke checks every observed notification, including
+non-flat session messages, against live discovery.
 
 Upstream licensing is preserved in `LICENSE`.

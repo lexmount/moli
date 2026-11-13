@@ -1,6 +1,5 @@
 use anyhow::Result;
 use moli_inspector_json::{InspectorJson, PRIVATE_PROTOCOL_PARAM_FIELDS};
-use moli_protocol_cdp::{CdpEventContractError, validate_event_name, validate_event_names};
 use moli_protocol_cdp_defs::LocalCdpEvent;
 use std::sync::Arc;
 
@@ -578,7 +577,6 @@ pub(crate) enum BackgroundCommandResponsePayloadRef<'a> {
 pub struct BackgroundProtocolMessageEvent {
     message: InspectorJson,
     automation_event: Option<Box<AutomationEvent>>,
-    contract_error: Option<Arc<CdpEventContractError>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1098,11 +1096,7 @@ impl ProtocolDeliveryEnvelope {
     /// BackgroundProtocolEvent::immediate(serde_json::json!({"method":"Runtime.someUnknownEvent"}));
     /// ```
     pub fn immediate_event(event: LocalCdpEvent, params: Value, session_id: Option<&str>) -> Self {
-        Self::checked_protocol_message(
-            build_event(event, params, session_id).into(),
-            None,
-            "local event",
-        )
+        Self::inspector_message(build_event(event, params, session_id), None)
     }
 
     pub fn immediate_automation_event(
@@ -1111,43 +1105,21 @@ impl ProtocolDeliveryEnvelope {
         session_id: Option<&str>,
         automation_event: AutomationEvent,
     ) -> Self {
-        Self::checked_protocol_message(
-            build_event(event, params, session_id).into(),
+        Self::inspector_message(
+            build_event(event, params, session_id),
             Some(automation_event),
-            "local event",
         )
     }
 
-    /// Check an opaque Inspector/renderer message. A violation remains attached
-    /// to its delivery route so the owning frontend can be terminated at output.
+    /// Preserve an opaque Inspector/renderer message and its optional automation sidecar.
     pub fn inspector_message(
         message: impl Into<InspectorJson>,
         automation_event: Option<AutomationEvent>,
     ) -> Self {
-        Self::checked_protocol_message(message.into(), automation_event, "Inspector/renderer")
-    }
-
-    fn checked_protocol_message(
-        message: InspectorJson,
-        automation_event: Option<AutomationEvent>,
-        source: &'static str,
-    ) -> Self {
-        let contract_error = validate_event_name(&message, source).err().map(Arc::new);
         Self::wrap_protocol(BackgroundProtocolMessageEvent {
-            message,
+            message: message.into(),
             automation_event: automation_event.map(Box::new),
-            contract_error,
         })
-    }
-
-    pub fn cdp_contract_violation(&self) -> Option<&CdpEventContractError> {
-        match &self.payload {
-            BackgroundProtocolEventPayload::Protocol(event) => event.contract_error.as_deref(),
-            BackgroundProtocolEventPayload::TargetReceivedMessageFromTarget(event) => {
-                event.nested_event.cdp_contract_violation()
-            }
-            _ => None,
-        }
     }
 
     pub(crate) fn audits_issue_added(
@@ -1190,7 +1162,6 @@ impl ProtocolDeliveryEnvelope {
             )
             .into(),
             automation_event: None,
-            contract_error: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
     }
@@ -1216,7 +1187,6 @@ impl ProtocolDeliveryEnvelope {
             )
             .into(),
             automation_event: None,
-            contract_error: None,
         })
         .bind_to_page_subscription_route(session_id, subscription_generation)
     }
@@ -2031,16 +2001,9 @@ impl ProtocolDeliveryEnvelope {
 
     pub(crate) fn target_received_message_from_target(
         target_session_id: impl Into<String>,
-        mut nested_event: BackgroundProtocolEvent,
+        nested_event: BackgroundProtocolEvent,
         strip_implicit_session: bool,
     ) -> Self {
-        // Typed payloads have fixed event names. Opaque messages must be
-        // checked before a legal Target shell can obscure their envelope.
-        if let BackgroundProtocolEventPayload::Protocol(event) = &mut nested_event.payload {
-            event.contract_error = validate_event_names(&event.message, "Target inner message")
-                .err()
-                .map(Arc::new);
-        }
         Self::wrap_target_received_message_from_target_event(Box::new(
             BackgroundTargetReceivedMessageFromTargetEvent {
                 target_session_id: target_session_id.into(),
@@ -3085,9 +3048,6 @@ impl ProtocolDeliveryEnvelope {
     }
 
     pub fn has_protocol_wire_message(&self) -> bool {
-        if self.cdp_contract_violation().is_some() {
-            return false;
-        }
         matches!(
             &self.payload,
             BackgroundProtocolEventPayload::Protocol(_)
@@ -4564,20 +4524,6 @@ pub(crate) fn build_event(event: LocalCdpEvent, params: Value, session_id: Optio
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn opaque_inspector_entry_records_unadvertised_event_for_its_route() {
-        let event = super::BackgroundProtocolEvent::inspector_message(
-            serde_json::json!({"method":"Runtime.someUnknownEvent","sessionId":"SID-owner","params":{}}),
-            None,
-        );
-        assert!(!event.has_protocol_wire_message());
-        assert_eq!(event.protocol_session_id(), Some("SID-owner"));
-        let violation = event.cdp_contract_violation().unwrap();
-        assert_eq!(violation.method(), "Runtime.someUnknownEvent");
-        assert_eq!(violation.session_id(), Some("SID-owner"));
-        assert_eq!(event.clone().cdp_contract_violation(), Some(violation));
-    }
-
     use crate::automation::{
         AutomationEvent, DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId,
         DevToolsNetworkResourceType, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
@@ -6106,25 +6052,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_target_wrapper_checks_an_opaque_child_before_encoding_it() {
-        let inner = BackgroundProtocolEvent::inspector_message(
-            json!({
-                "method":"Target.receivedMessageFromTarget","params":{
-                    "sessionId":"SID-inner","message":r#"{"method":"Runtime.someUnknownEvent"}"#,
-                },
-            }),
-            None,
-        );
-        assert!(inner.cdp_contract_violation().is_none());
-        let wrapped =
-            BackgroundProtocolEvent::target_received_message_from_target("SID-outer", inner, true);
-        assert!(!wrapped.has_protocol_wire_message());
-        let error = wrapped.cdp_contract_violation().unwrap();
-        assert_eq!(error.method(), "Runtime.someUnknownEvent");
-        assert_eq!(error.session_id(), Some("SID-inner"));
-    }
-
-    #[test]
     fn legacy_target_wrapper_preserves_opaque_child_parameter_bytes() {
         let raw = moli_inspector_json::InspectorJson::from_slice(
             br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\ud800"}]}}"#,
@@ -6136,7 +6063,6 @@ mod tests {
             BackgroundProtocolEvent::inspector_message(raw.clone(), None),
             true,
         );
-        assert!(wrapped.cdp_contract_violation().is_none());
         let wire = wrapped.into_cdp_message();
         assert_eq!(wire.value()["params"]["message"], original);
         assert!(!raw.is_materialized());

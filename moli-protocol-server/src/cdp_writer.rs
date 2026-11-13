@@ -1,5 +1,4 @@
 use moli_inspector_json::InspectorJson;
-use moli_protocol_cdp::CdpEventContractError;
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -10,9 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use self::pending_bytes::{PendingByteBudget, PendingByteReservation};
 
-mod checked;
 mod pending_bytes;
-pub(crate) use checked::CheckedCdpMessage;
 #[cfg(test)]
 mod tests;
 
@@ -186,52 +183,25 @@ impl CdpSocketSink {
     }
 
     pub(crate) fn enqueue_owned_message(&self, message: impl Into<InspectorJson>) -> bool {
-        match CheckedCdpMessage::try_new(message, "socket ingress") {
-            Ok(message) => self.enqueue_checked_message(message),
-            Err(error) => {
-                self.reject_event_contract(&error, error.session_id());
-                false
-            }
-        }
-    }
-
-    pub(crate) fn reject_event_contract(
-        &self,
-        error: &CdpEventContractError,
-        wire_session_id: Option<&str>,
-    ) {
-        tracing::error!(
-            method = error.method(),
-            source = error.source(),
-            session_id = error.session_id(),
-            wire_session_id,
-            %error,
-            "closing CDP frontend after an event contract violation"
-        );
-        self.close();
-    }
-
-    pub(crate) fn enqueue_checked_message(&self, message: CheckedCdpMessage) -> bool {
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);
-        let message =
-            match serialize_owned_message_with_limit(message.into_message(), serialization_limit) {
-                Ok(message) => message,
-                Err(BoundedJsonError::LimitExceeded { .. }) => {
-                    tracing::warn!(
-                        max_message_bytes = self.max_message_bytes,
-                        available_pending_bytes,
-                        "closing CDP frontend after oversized protocol message"
-                    );
-                    self.close();
-                    return false;
-                }
-                Err(BoundedJsonError::Serialization(error)) => {
-                    tracing::warn!(?error, "failed to serialize CDP protocol output");
-                    self.close();
-                    return false;
-                }
-            };
+        let message = match serialize_owned_message_with_limit(message, serialization_limit) {
+            Ok(message) => message,
+            Err(BoundedJsonError::LimitExceeded { .. }) => {
+                tracing::warn!(
+                    max_message_bytes = self.max_message_bytes,
+                    available_pending_bytes,
+                    "closing CDP frontend after oversized protocol message"
+                );
+                self.close();
+                return false;
+            }
+            Err(BoundedJsonError::Serialization(error)) => {
+                tracing::warn!(?error, "failed to serialize CDP protocol output");
+                self.close();
+                return false;
+            }
+        };
         let Some(pending_bytes) = self.pending_byte_budget.try_reserve(message.len()) else {
             tracing::warn!(
                 message_bytes = message.len(),

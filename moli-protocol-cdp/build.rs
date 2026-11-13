@@ -31,31 +31,6 @@ fn main() {
     schema::prepare_protocol(&mut protocol, &extensions);
     let compact = serde_json::to_vec(&protocol).expect("serialize compact CDP protocol metadata");
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build output directory"));
-    let event_names: Vec<_> = protocol["domains"]
-        .as_array()
-        .expect("CDP domains")
-        .iter()
-        .flat_map(|domain| {
-            domain["events"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|event| {
-                    serde_json::to_string(&format!(
-                        "{}.{}",
-                        domain["domain"].as_str().expect("domain name"),
-                        event["name"].as_str().expect("event name")
-                    ))
-                    .expect("event name serializes")
-                })
-        })
-        .collect();
-    assert!(!event_names.is_empty(), "advertised protocol has events");
-    let check = format!(
-        "/// Check an exact event name against this build's discovery schema.\npub fn is_advertised_event(method: &str) -> bool {{ matches!(method, {}) }}\n",
-        event_names.join(" | ")
-    );
-    fs::write(output.join("cdp-events.rs"), check).expect("write CDP event-name check");
     // Keep the input as a build artifact for the byte-for-byte round-trip test.
     // Only the Brotli resource is embedded in production code.
     fs::write(output.join("cdp-protocol.json"), &compact)

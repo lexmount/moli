@@ -1,6 +1,6 @@
-use crate::cdp_writer::CheckedCdpMessage;
 use moli_inspector_json::InspectorJson;
-use moli_protocol_cdp::CdpEventContractError;
+use moli_protocol_cdp_defs::LocalCdpEvent;
+use serde_json::json;
 
 /// A session's complete path back to its WebSocket, also captured by pending
 /// replies so detachment cannot lose an already admitted command's terminal.
@@ -35,65 +35,36 @@ impl SessionOutputRoute {
         self.payload_session_id = session_id.map(str::to_owned);
     }
 
-    pub(super) fn encode(
-        &self,
-        message: impl Into<InspectorJson>,
-    ) -> Result<CheckedCdpMessage, CdpEventContractError> {
+    pub(super) fn encode(&self, message: impl Into<InspectorJson>) -> InspectorJson {
         let mut message = message.into();
         message.set_session_id(self.payload_session_id.as_deref());
-        let mut message = CheckedCdpMessage::try_new(message, "session routing")?;
         for envelope in self.envelopes.iter().rev() {
-            message = message.wrap_target(
-                &envelope.target_session_id,
-                envelope.carrier_session_id.as_deref(),
-            );
+            message = json!({"method": LocalCdpEvent::TargetReceivedMessageFromTarget.method(), "params":{
+                "sessionId": envelope.target_session_id, "message":message.to_string(),
+            }})
+            .into();
+            message.set_session_id(envelope.carrier_session_id.as_deref());
         }
-        Ok(message)
+        message
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::Value;
 
     #[test]
-    fn checks_unknown_notifications_before_adding_any_target_shell() {
-        let mut route = SessionOutputRoute::flat(Some("SID-root"));
-        route.nest("SID-child");
-        let error = route
-            .encode(json!({"method":"Runtime.someUnknownEvent"}))
-            .unwrap_err();
-        assert_eq!(error.method(), "Runtime.someUnknownEvent");
-    }
-
-    #[test]
-    fn checks_preexisting_nested_messages_before_adding_ancestors() {
-        let mut route = SessionOutputRoute::flat(None);
-        route.nest("SID-outer");
-        let error = route
-            .encode(json!({
-                "method":"Target.receivedMessageFromTarget", "params":{
-                    "sessionId":"SID-inner",
-                    "message":r#"{"method":"Runtime.someUnknownEvent"}"#,
-                },
-            }))
-            .unwrap_err();
-        assert_eq!(error.method(), "Runtime.someUnknownEvent");
-        assert_eq!(error.session_id(), Some("SID-inner"));
-    }
-
-    #[test]
-    fn nested_target_routes_preserve_raw_utf16_and_session_envelopes() {
+    fn nested_target_routes_preserve_opaque_notifications_and_sessions() {
         let mut route = SessionOutputRoute::flat(Some("SID-root"));
         route.nest("SID-middle");
         route.nest("SID-inner");
         let raw = InspectorJson::from_slice(
-            br#"{"method":"Runtime.consoleAPICalled","params":{"args":[{"value":"\udfff"}]}}"#,
+            br#"{"method":"Runtime.someUnknownEvent","params":{"args":[{"value":"\udfff"}]}}"#,
         )
         .unwrap();
         let original = raw.to_string();
-        let wire = route.encode(raw.clone()).unwrap();
+        let wire = route.encode(raw.clone());
         assert_eq!(wire.session_id(), Some("SID-root"));
         let middle: Value =
             serde_json::from_str(wire.value()["params"]["message"].as_str().unwrap()).unwrap();
