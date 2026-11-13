@@ -66,7 +66,7 @@ async fn check_popup_blob_continuation_policy(in_memory: bool) {
         blobPolicyPopup.onmessage = async () => {{
             popupBlobReadStarted = true;
             await ({read_expression}).text();
-            const xhr = new XMLHttpRequest();
+            const xhr = new blobPolicyPopup.XMLHttpRequest();
             xhr.open('GET', 'http://{address}/popup-probe');
             xhr.onload = () => {{ popupBlobPolicyResult = xhr.responseText; }};
             xhr.onerror = () => {{ popupBlobPolicyResult = 'error'; }};

@@ -82,6 +82,12 @@ impl NativeModuleSingleFetchRequest {
         self.csp_context = Some(context);
     }
 
+    pub(crate) fn take_csp_context(
+        &mut self,
+    ) -> Option<crate::content_security_policy::ModuleFetchCspContext> {
+        self.csp_context.take()
+    }
+
     pub(crate) fn csp_context(
         &self,
     ) -> Option<&crate::content_security_policy::ModuleFetchCspContext> {

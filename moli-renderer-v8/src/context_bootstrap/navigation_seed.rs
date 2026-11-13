@@ -22,10 +22,16 @@ pub(super) fn initial_navigation_history_seed<'s>(
     window: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> NavigationHistoryEntrySeed {
-    page_initial_navigation_history_seed(
-        runtime_window_uses_top_level_history_model(scope, window),
-        href,
-    )
+    let top_level = runtime_window_uses_top_level_history_model(scope, window);
+    if top_level
+        && let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope)
+        && let Some(seed) = unsafe { &*host_ptr }
+            .top_level_navigation_history()
+            .bootstrap_seed()
+    {
+        return seed.as_ref().clone();
+    }
+    page_initial_navigation_history_seed(top_level, href)
 }
 
 /// Restore the complete native record before exposing any JS wrapper.

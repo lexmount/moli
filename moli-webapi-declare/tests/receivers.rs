@@ -117,6 +117,8 @@ struct AccessSample {
     guarded_method: (),
     #[webapi(accessor_property, getter = callback, setter = callback, data = 9, setter_data = 11, access_policy = authorize)]
     guarded_value: (),
+    #[webapi(accessor_property, getter = callback, setter = callback, data = 9, setter_data = 11, access_policy = authorize, legacy_lenient_this)]
+    lenient_value: (),
     #[webapi(method, callback = promise_callback, returns_promise, access_policy = authorize)]
     guarded_promise: (),
     #[webapi(accessor_property, getter = promise_callback, setter = callback, returns_promise, access_policy = authorize)]
@@ -130,6 +132,8 @@ struct AccessObject {
     guarded_method: (),
     #[webapi(accessor_property, getter = callback, setter = callback, data = 9, setter_data = 11, receiver = has_brand, access_policy = authorize)]
     guarded_value: (),
+    #[webapi(accessor_property, getter = callback, setter = callback, data = 9, setter_data = 11, receiver = has_brand, access_policy = authorize, legacy_lenient_this)]
+    lenient_value: (),
     #[webapi(method, callback = promise_callback, returns_promise, receiver = has_brand, access_policy = authorize)]
     guarded_promise: (),
     #[webapi(accessor_property, getter = promise_callback, setter = callback, returns_promise, receiver = has_brand, access_policy = authorize)]
@@ -260,10 +264,15 @@ fn access_policies_authorize_both_derives_before_conversion_and_preserve_promise
         const input = {toString() { conversions++; return 'value'; }};
         for (const [allowed, denied] of [[allowedTemplate, deniedTemplate], [allowedObject, deniedObject]]) {
             const value = descriptor(allowed, 'guardedValue');
+            const lenient = descriptor(allowed, 'lenientValue');
             const ready = descriptor(allowed, 'guardedReady');
             assert(allowed.guardedMethod('value') === 7, 'allowed method retains callback data');
             assert(value.get.call(allowed) === 9, 'allowed getter retains callback data');
             assert(value.set.call(allowed, 'value') === 11, 'allowed setter retains separate data');
+            assert(lenient.get.call(allowed) === 9, 'lenient getter retains callback data');
+            assert(lenient.set.call(allowed, 'value') === 11, 'lenient setter retains callback data');
+            assert(throwsDenied(() => lenient.get.call(denied)), 'lenient getter still authorizes branded receivers');
+            assert(throwsDenied(() => lenient.set.call(denied, input)), 'lenient setter still authorizes before conversion');
             assert(allowed.guardedPromise() === allowed.guardedReady, 'cached Promise identity');
             assert(await allowed.guardedReady === allowed, 'successful Promise result');
             for (const invoke of [
@@ -290,6 +299,8 @@ fn access_policies_authorize_both_derives_before_conversion_and_preserve_promise
             for (const invalid of [{}, Object.create(allowed), proxy, revoked.proxy]) {
                 assert(throwsTypeError(() => allowed.guardedMethod.call(invalid, input)), 'brand before access policy');
                 assert(throwsTypeError(() => value.set.call(invalid, input)), 'setter brand before access policy');
+                assert(lenient.get.call(invalid) === undefined, 'lenient getter ignores invalid receivers');
+                assert(lenient.set.call(invalid, input) === undefined, 'lenient setter skips policy and conversion');
             }
             assert(traps === 0, 'checks do not run author traps');
             const original = new Error('conversion');

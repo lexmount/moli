@@ -208,10 +208,12 @@ fn start_resource_preload(
     let network_partition_key = active_subresource_network_partition_key(host, owner);
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let client_id = host.service_worker_client_id_for_subresource_owner(owner);
+    let redirect_state = FetchCspRedirectState::new(&policy);
+    redirect_state.record_checked_url(url, false);
     let mut pending = PendingResponsePreload {
         options,
         document_referrer_policy: host.document_response_preload_referrer_policy(owner),
-        redirect_state: FetchCspRedirectState::new(&policy),
+        redirect_state,
         policy,
         report_context,
         producer: None,
@@ -309,6 +311,7 @@ fn start_resource_preload(
         {
             let _ = host.resource_completion_sender().send_async_subresource(
                 AsyncSubresourceFetchCompletion {
+                    body_is_null: None,
                     internal_id,
                     request_url: url.clone(),
                     request_method: "GET".into(),

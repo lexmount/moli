@@ -46,7 +46,10 @@ pub use blocking::{
     clear_http_cache_root_for_origin, cookie_header_for_request, http_cache_stats,
     observe_cookie_access_report_for_request, trim_http_cache,
 };
-pub use cancellation::{FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming};
+pub use cancellation::{
+    FetchCancelHandle, FetchResponseBodySizes, FetchResponseTiming, ServiceWorkerRouterSource,
+    ServiceWorkerRouterTiming,
+};
 pub use client::{FetchClient, FetchClientHandle};
 pub use compression_dictionary::cache_vary_header_names;
 pub use config::FetchConfig;
@@ -93,9 +96,9 @@ pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, CookieHeaderPolicy, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
     RequestHeaderOverride, RequestMode, RequestOverrides, RequestPriorityHints,
-    RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy, RequestResourceType,
-    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
-    SubresourceRequestMetadata,
+    RequestRedirectCheck, RequestRedirectHandling, RequestRedirectMode, RequestRedirectPolicy,
+    RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
+    ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
 mod mixed_content;
 pub use mixed_content::RequestMixedContentPolicy;

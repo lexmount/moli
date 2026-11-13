@@ -240,6 +240,7 @@ impl DocumentPreloadConsumer {
             ),
         };
         AsyncSubresourceFetchCompletion {
+            body_is_null: None,
             internal_id,
             request_url: request.url,
             request_method: request.method,

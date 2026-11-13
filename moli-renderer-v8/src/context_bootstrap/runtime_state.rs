@@ -301,19 +301,19 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
 struct WindowLegacyAliasAccessorsDeclaration {
     #[webapi(
         accessor_property,
-        getter = legacy_unforgeable_self_getter,
+        getter = super::window_accessors::window_self_getter,
         setter = replaceable_self_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     self_: (),
     #[webapi(
         accessor_property,
-        getter = legacy_unforgeable_parent_getter,
+        getter = super::window_accessors::window_parent_getter,
         setter = replaceable_parent_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     parent: (),
-    #[webapi(accessor_property, dont_delete, getter = legacy_unforgeable_top_getter)]
+    #[webapi(accessor_property, dont_delete, getter = super::window_accessors::window_top_getter)]
     top: (),
     #[webapi(
         accessor_property,
-        getter = legacy_unforgeable_frames_getter,
+        getter = super::window_accessors::window_frames_getter,
         setter = replaceable_frames_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     frames: (),
 }
@@ -453,12 +453,6 @@ struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     console: v8::Local<'scope, v8::Object>,
     #[webapi(slot = WINDOW_EVENT_SLOT, init = "undefined")]
     event: (),
-    #[webapi(data_property = WINDOW_ONERROR_SLOT, init = "null")]
-    on_error: (),
-    #[webapi(data_property = WINDOW_ONUNHANDLEDREJECTION_SLOT, init = "null")]
-    on_unhandled_rejection: (),
-    #[webapi(data_property = WINDOW_ONREJECTIONHANDLED_SLOT, init = "null")]
-    on_rejection_handled: (),
     #[webapi(data_property = WINDOW_SELF_SLOT)]
     self_value: v8::Local<'scope, v8::Object>,
     #[webapi(data_property = WINDOW_PARENT_SLOT)]
@@ -517,40 +511,6 @@ struct WebDriverPrototypeMetadataDeclaration<'scope> {
 
     #[webapi(to_string_tag, readonly, init = string("WebDriver"))]
     to_string_tag: (),
-}
-
-fn legacy_unforgeable_window_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
-    {
-        rv.set(value);
-    }
-}
-
-fn legacy_unforgeable_window_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    slot: &'static str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(scope, "Window getter called on incompatible receiver.");
-        return None;
-    }
-    let context = scope.get_current_context();
-    let value =
-        object_hidden_value(scope, receiver, slot).unwrap_or_else(|| context.global(scope).into());
-    Some(
-        v8::Local::<v8::Object>::try_from(value)
-            .ok()
-            .and_then(|target| {
-                super::shared_event_targets::window_target_in_realm(scope, target, context)
-            })
-            .map(Into::into)
-            .unwrap_or(value),
-    )
 }
 
 fn document_fullscreen_enabled_getter<'s>(
@@ -668,7 +628,7 @@ fn define_legacy_unforgeable_window_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_window_getter)
+    let getter = v8::Function::builder(super::window_accessors::window_window_getter)
         .build(scope)
         .ok_or_else(|| anyhow!("failed to build window getter"))?;
     define_get_set_property(
@@ -680,17 +640,6 @@ fn define_legacy_unforgeable_window_property<'s>(
         v8::PropertyAttribute::DONT_DELETE,
         "window",
     )
-}
-
-fn legacy_unforgeable_self_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
-    {
-        rv.set(value);
-    }
 }
 
 fn replaceable_window_alias_set<'s>(
@@ -709,54 +658,12 @@ fn replaceable_self_setter<'s>(
     replaceable_window_alias_set(scope, args, "self");
 }
 
-fn legacy_unforgeable_parent_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
-        rv.set_null();
-        return;
-    }
-    if let Some(value) =
-        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
-    {
-        rv.set(value);
-    }
-}
-
 fn replaceable_parent_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     replaceable_window_alias_set(scope, args, "parent");
-}
-
-fn legacy_unforgeable_top_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
-        rv.set_null();
-        return;
-    }
-    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
-        rv.set(value);
-    }
-}
-
-fn legacy_unforgeable_frames_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if let Some(value) =
-        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_FRAMES_SLOT)
-    {
-        rv.set(value);
-    }
 }
 
 fn replaceable_frames_setter<'s>(

@@ -2274,6 +2274,9 @@ impl ScriptVmPageRealmBootstrap {
         context_host
             .borrow_mut()
             .register_main_document_resource_loader(&initial_document_loader);
+        if let Some(navigation) = initial_document_loader.navigation_timing() {
+            document_runtime.initialize_navigation_clock(&navigation);
+        }
         document_runtime.set_cookie_store(initial_document_loader.request_client().cookie_store());
         assert_eq!(
             document_runtime.has_main_document_runtime_route(),

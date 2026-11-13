@@ -18,13 +18,14 @@ pub(crate) struct FetchResourceTiming {
 
 #[derive(Clone, Debug, Default)]
 struct FetchResourceResponseTiming {
-    aborted: Option<bool>,
     native: Option<moli_fetch::FetchResponseTiming>,
+    service_worker: Option<moli_fetch::FetchResponseTiming>,
     request_start: Option<f64>,
     body_sizes: Option<moli_fetch::FetchResponseBodySizes>,
     final_headers_start: Option<f64>,
     first_interim_start: Option<f64>,
     end: Option<f64>,
+    aborted: Option<bool>,
 }
 
 impl FetchResourceTiming {
@@ -80,8 +81,14 @@ impl FetchResourceTiming {
 
     /// Use the transport's header boundary even when Worker JS delayed delivery.
     pub(crate) fn response_started_at(&self, start: Option<std::time::Instant>) {
+        let service_worker = self
+            .response_timing
+            .borrow()
+            .as_ref()
+            .and_then(|timing| timing.service_worker);
         *self.response_timing.borrow_mut() = Some(Box::new(FetchResourceResponseTiming {
             final_headers_start: start.map(|instant| self.unix_millis(instant)),
+            service_worker,
             ..Default::default()
         }));
     }
@@ -103,6 +110,20 @@ impl FetchResourceTiming {
                 * 1000.0
     }
 
+    pub(crate) fn observe_service_worker_timing(&self, native: moli_fetch::FetchResponseTiming) {
+        if native.service_worker_started_at().is_some()
+            || native
+                .service_worker_router()
+                .evaluation_started_at
+                .is_some()
+        {
+            self.response_timing
+                .borrow_mut()
+                .get_or_insert_with(Default::default)
+                .service_worker = Some(native);
+        }
+    }
+
     pub(crate) fn observe_native_timing(&self, native: moli_fetch::FetchResponseTiming) {
         let request_start = native
             .request_started_at()
@@ -122,6 +143,11 @@ impl FetchResourceTiming {
             && end.is_none()
             && native.body_sizes().is_none()
             && native.fetch_started_at().is_none()
+            && native.service_worker_started_at().is_none()
+            && native
+                .service_worker_router()
+                .evaluation_started_at
+                .is_none()
         {
             return;
         }
@@ -193,6 +219,7 @@ impl FetchResourceTiming {
         delivery: Option<&AsyncSubresourceFetchResponseFilter>,
     ) -> ResourcePerformanceEntry {
         let readable = metadata.response_type.is_readable();
+        let service_worker_response = delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some());
         let mut entry = ResourcePerformanceEntry::from_streaming_network_response(
             url.as_str(),
             self.initiator_type,
@@ -200,17 +227,17 @@ impl FetchResourceTiming {
             head,
             body_size,
         );
-        // CORS controls response metadata and script attribution. TAO controls
-        // timing/body sizes separately, including for opaque responses.
-        if readable && head.cache_state == ResponseCacheState::None {
+        // CORS controls response metadata, script attribution and body sizes.
+        // TAO additionally controls connection timing and transfer visibility.
+        if readable
+            && !service_worker_response
+            && head.cache_state == ResponseCacheState::None
+            && !head.preload_state.from_service_worker()
+        {
             entry.initiator_url.clone_from(&self.initiator_url);
         }
         self.apply_native_body_sizes(&mut entry, head);
-        if !readable {
-            entry.response_status = 0.0;
-            entry.content_type.clear();
-            entry.content_encoding.clear();
-        }
+        entry.apply_response_body_visibility(readable);
         if delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some()) {
             // Bytes delivered by a Service Worker are not a network transfer
             // to this global, even when respondWith forwards a fetched body.
@@ -218,7 +245,15 @@ impl FetchResourceTiming {
         }
         entry.end_unix_millis = Some(self.end());
         if metadata.timing_allow_passed {
-            if delivery.is_none_or(|filter| filter.service_worker_metadata().is_none()) {
+            self.apply_service_worker_timing(&mut entry);
+            if delivery.is_some_and(|delivery| delivery.service_worker_metadata().is_some()) {
+                entry.connection_timing = Some(ResourceConnectionTiming::at(
+                    entry
+                        .fetch_start_unix_millis
+                        .unwrap_or(self.start_unix_millis),
+                    false,
+                ));
+            } else {
                 self.apply_connection_timing(
                     &mut entry,
                     head.final_url.scheme() == "https",
@@ -230,7 +265,13 @@ impl FetchResourceTiming {
             }
 
             if let Some(timing) = self.response_timing.borrow().as_ref() {
-                entry.request_start_unix_millis = timing.request_start;
+                entry.request_start_unix_millis = timing.request_start.or_else(|| {
+                    (head.cache_state == ResponseCacheState::Local).then_some(
+                        entry
+                            .fetch_start_unix_millis
+                            .unwrap_or(self.start_unix_millis),
+                    )
+                });
                 entry.final_response_headers_start_unix_millis = timing.final_headers_start;
                 entry.first_interim_response_start_unix_millis = timing.first_interim_start;
                 entry.response_start_unix_millis =
@@ -245,8 +286,14 @@ impl FetchResourceTiming {
         if !metadata.timing_allow_passed {
             entry.delivery_type.clear();
             entry.transfer_size = 0.0;
-            entry.encoded_body_size = 0.0;
-            entry.decoded_body_size = 0.0;
+        }
+        if let Some(complete) = self
+            .response_timing
+            .borrow()
+            .as_ref()
+            .and_then(|timing| timing.aborted)
+        {
+            entry.mark_aborted(complete);
         }
         entry
     }
@@ -284,6 +331,53 @@ impl FetchResourceTiming {
             start_unix_millis,
             response_timing: Default::default(),
             initiator_url: String::new(),
+        }
+    }
+
+    fn apply_service_worker_timing(&self, entry: &mut ResourcePerformanceEntry) {
+        let Some(native) = self
+            .response_timing
+            .borrow()
+            .as_ref()
+            .and_then(|timing| timing.service_worker.or(timing.native))
+        else {
+            return;
+        };
+        let router = native.service_worker_router();
+        if native.service_worker_started_at().is_none() && router.evaluation_started_at.is_none() {
+            return;
+        }
+        let worker_start = match (router.matched_source, router.final_source) {
+            (
+                Some(moli_fetch::ServiceWorkerRouterSource::Cache),
+                Some(moli_fetch::ServiceWorkerRouterSource::Cache),
+            )
+            | (Some(moli_fetch::ServiceWorkerRouterSource::RaceNetworkAndFetchHandler), Some(_))
+            | (
+                Some(moli_fetch::ServiceWorkerRouterSource::FetchEvent),
+                Some(moli_fetch::ServiceWorkerRouterSource::FetchEvent),
+            ) => router.evaluation_started_at,
+            (Some(_), Some(moli_fetch::ServiceWorkerRouterSource::Network)) => None,
+            _ => native.service_worker_started_at(),
+        };
+        entry.service_worker = Some(Box::new(super::ResourceServiceWorkerTiming {
+            worker_start: worker_start.map(|value| self.unix_millis(value)),
+            router_evaluation_start: router
+                .evaluation_started_at
+                .map(|value| self.unix_millis(value)),
+            cache_lookup_start: router
+                .cache_lookup_started_at
+                .map(|value| self.unix_millis(value)),
+            matched_source: router
+                .matched_source
+                .map_or("", moli_fetch::ServiceWorkerRouterSource::as_str),
+            final_source: router
+                .final_source
+                .map_or("", moli_fetch::ServiceWorkerRouterSource::as_str),
+        }));
+        if router.final_source == Some(moli_fetch::ServiceWorkerRouterSource::Cache) {
+            entry.delivery_type = "cache-storage".to_owned();
+            entry.transfer_size = 0.0;
         }
     }
 
@@ -377,18 +471,6 @@ impl FetchResourceTiming {
         } else {
             self.now()
         });
-        if !expose_document_response || !network.resource_timing_body_visible {
-            entry.content_encoding.clear();
-            entry.response_status = 0.0;
-            entry.content_type.clear();
-        }
-        if !timing_allowed {
-            entry.encoded_body_size = 0.0;
-            entry.decoded_body_size = 0.0;
-            entry.transfer_size = 0.0;
-            entry.delivery_type.clear();
-            return;
-        }
         if let Some(sizes) = self
             .response_timing
             .borrow()
@@ -398,11 +480,19 @@ impl FetchResourceTiming {
             entry.encoded_body_size = sizes.encoded as f64;
             entry.decoded_body_size = sizes.decoded as f64;
         }
+        entry.apply_response_body_visibility(
+            expose_document_response && network.resource_timing_body_visible,
+        );
         entry.transfer_size = match network.cache_state {
             ResponseCacheState::None => entry.encoded_body_size + 300.0,
             ResponseCacheState::Local => 0.0,
             ResponseCacheState::Validated => 300.0,
         };
+        if !timing_allowed {
+            entry.transfer_size = 0.0;
+            entry.delivery_type.clear();
+            return;
+        }
         self.apply_connection_timing(
             entry,
             network.final_url.starts_with("https:"),

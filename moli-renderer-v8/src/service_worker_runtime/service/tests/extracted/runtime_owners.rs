@@ -331,6 +331,7 @@ fn idle_timeout_is_ignored_after_new_event_invalidates_timeout_token() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -408,6 +409,7 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -434,6 +436,7 @@ fn stopped_waiting_activation_queues_lifecycle_event_and_starts_worker() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),
@@ -564,6 +567,7 @@ fn stale_start_completion_does_not_dispatch_pending_lifecycle_activation() {
         state.versions.insert(
             active_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: active_version_id,
                 registration_id,
                 script_url: active_script_url.clone(),
@@ -590,6 +594,7 @@ fn stale_start_completion_does_not_dispatch_pending_lifecycle_activation() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),
@@ -689,6 +694,7 @@ fn activating_new_worker_destroys_replaced_active_target() {
         state.versions.insert(
             waiting_version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: waiting_version_id,
                 registration_id,
                 script_url: waiting_script_url.clone(),

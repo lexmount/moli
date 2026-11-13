@@ -422,13 +422,25 @@ fn invoke_simple_event_callback_with_invocation<'s>(
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventCallbackResult {
     let host_ptr = context_host_ptr_from_global_bridge(scope);
+    let callback_host = crate::util::context_host_ptr_from_context_slot(relevant_context);
+    if callback_host.is_none()
+        && relevant_context
+            .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+            .is_some()
+    {
+        return SimpleEventCallbackResult {
+            invoked: false,
+            threw: false,
+            value: None,
+        };
+    }
     let relevant_identity = captured_relevant_identity.or_else(|| {
-        host_ptr.and_then(|host_ptr| {
+        callback_host.and_then(|host_ptr| {
             unsafe { &*host_ptr }
                 .window_execution_context_identity_for_v8_context(scope, relevant_context)
         })
     });
-    if let Some(host_ptr) = host_ptr {
+    if let Some(host_ptr) = callback_host {
         invocation = invocation.with_execution_context_currentness(host_ptr, relevant_identity);
     }
     let _dom_debugger_pause = host_ptr.and_then(|host_ptr| {
@@ -455,7 +467,7 @@ fn invoke_simple_event_callback_with_invocation<'s>(
             CallbackInvocationOutcome::Threw(report) => {
                 if let Some(errors) = callback_errors {
                     errors.push(*report);
-                } else if let Some(host_ptr) = host_ptr {
+                } else if let Some(host_ptr) = callback_host.or(host_ptr) {
                     report_event_callback_exception(
                         scope,
                         host_ptr,

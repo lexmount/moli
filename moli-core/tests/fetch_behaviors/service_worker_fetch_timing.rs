@@ -57,18 +57,18 @@ async fn fetch_resource_timing_service_worker_distinguishes_synthetic_and_forwar
         ("stream", "basic", 4),
         ("cross-stream", "basic", 4),
         ("forward-same", "basic", 4),
-        ("forward-cors", "cors", 0),
+        ("forward-cors", "cors", 4),
         ("forward-tao", "cors", 4),
         ("cache-same", "basic", 4),
-        ("cache-cors", "cors", 0),
+        ("cache-cors", "cors", 4),
         ("cache-tao", "cors", 4),
-        ("cache-again-cors", "cors", 0),
+        ("cache-again-cors", "cors", 4),
         ("cache-again-tao", "cors", 4),
         ("cache-synthetic", "basic", 4),
         ("forward-redirect-tao", "cors", 4),
-        ("forward-redirect-denied", "cors", 0),
+        ("forward-redirect-denied", "cors", 4),
         ("cache-redirect-tao", "cors", 4),
-        ("cache-redirect-denied", "cors", 0),
+        ("cache-redirect-denied", "cors", 4),
     ]
     .into_iter()
     .map(|(name, response_type, size)| {

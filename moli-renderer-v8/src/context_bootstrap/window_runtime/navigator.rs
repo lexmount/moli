@@ -2614,11 +2614,12 @@ fn build_storage_bucket_cached_response_object<'s>(
     if !head.metadata.response_type.is_readable() {
         return crate::network_host::build_filtered_cached_response_object(scope, head, body);
     }
-    let body: v8::Local<'s, v8::Value> = if matches!(head.status, 204 | 205 | 304) {
-        v8::null(scope).into()
-    } else {
-        crate::blob::array_buffer_from_bytes(scope, body)?.into()
-    };
+    let body: v8::Local<'s, v8::Value> =
+        if head.body_is_null || matches!(head.status, 204 | 205 | 304) {
+            v8::null(scope).into()
+        } else {
+            crate::blob::array_buffer_from_bytes(scope, body)?.into()
+        };
     let init = cache_results::response_init(scope, head.status, &head.status_text)?;
     let constructor =
         crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "Response").ok()?;

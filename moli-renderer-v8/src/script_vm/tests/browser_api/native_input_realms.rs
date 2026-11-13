@@ -116,6 +116,9 @@ fn native_mouse_release_followups_use_target_document_intrinsics() {
                 .unwrap();
             }
             let mut expected_types = vec!["mousedown", "mouseup", followup];
+            if button == 2 {
+                expected_types.push("auxclick");
+            }
             if click_count == 2 {
                 expected_types.push("dblclick");
             }

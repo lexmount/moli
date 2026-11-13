@@ -46,11 +46,17 @@ struct StreamedFetchResponse {
 }
 
 impl ControlledFetchStream {
-    fn with_event_source_parser(mut self, parser: Option<crate::network_host::EventSourceParser>) -> Self {
+    fn with_event_source_parser(
+        mut self,
+        parser: Option<crate::network_host::EventSourceParser>,
+    ) -> Self {
         self.event_source_parser = parser;
         self
     }
-    pub(super) fn set_response_filter(&mut self, filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>) {
+    pub(super) fn set_response_filter(
+        &mut self,
+        filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    ) {
         self.response_filter = filter;
     }
     pub(super) fn policy_violations(
@@ -104,7 +110,10 @@ impl ControlledFetchStream {
         network_request_headers: Option<Vec<(String, String)>>,
         body: ResourceInterceptionBody,
     ) -> Result<(), String> {
-        let skip_fetch_security_validation = self.response_filter.as_ref().is_some_and(|filter| filter.service_worker_metadata().is_some());
+        let skip_fetch_security_validation = self
+            .response_filter
+            .as_ref()
+            .is_some_and(|filter| filter.service_worker_metadata().is_some());
         if skip_fetch_security_validation {
             self.timing.begin_synthetic_response();
         }
@@ -164,7 +173,7 @@ impl ControlledFetchStream {
             self.credentials,
             self.load.request_client().web_security_disabled(),
         );
-        let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(
+        let _ = self.completion.send(WorkerFetchEvent::StreamingStarted(Box::new(
             WorkerFetchStreamingStarted {
                 response_filter: self.response_filter.clone(),
                 skip_fetch_security_validation,
@@ -173,7 +182,7 @@ impl ControlledFetchStream {
                 head: observable_head,
                 metadata: Arc::clone(&metadata),
             },
-        ));
+        )));
         self.response = Some(Box::new(StreamedFetchResponse {
             handle,
             head,
@@ -199,23 +208,32 @@ impl ControlledFetchStream {
         // resource lease, rather than this delivery channel, owns cancellation.
         if let Some(parser) = &mut self.event_source_parser {
             let messages = parser.push(&bytes);
-            let _ = self.completion.send(WorkerFetchEvent::EventSourceState { fetch_id: self.fetch_id, body_source_id: self.body_source_id.unwrap(), last_event_id: parser.last_event_id().to_owned(), reconnect_delay_ms: parser.reconnect_delay_ms() });
-            for message in messages {
-                let _ = self.completion.send(WorkerFetchEvent::EventSourceMessage { fetch_id: self.fetch_id, body_source_id: self.body_source_id.unwrap(), message });
-            }
-        } else {
-        let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
-            WorkerFetchStreamingChunk {
+            let _ = self.completion.send(WorkerFetchEvent::EventSourceState {
                 fetch_id: self.fetch_id,
                 body_source_id: self.body_source_id.unwrap(),
-                bytes,
-            },
-        ));
+                last_event_id: parser.last_event_id().to_owned(),
+                reconnect_delay_ms: parser.reconnect_delay_ms(),
+            });
+            for message in messages {
+                let _ = self.completion.send(WorkerFetchEvent::EventSourceMessage {
+                    fetch_id: self.fetch_id,
+                    body_source_id: self.body_source_id.unwrap(),
+                    message,
+                });
+            }
+        } else {
+            let _ = self.completion.send(WorkerFetchEvent::StreamingChunk(
+                WorkerFetchStreamingChunk {
+                    fetch_id: self.fetch_id,
+                    body_source_id: self.body_source_id.unwrap(),
+                    bytes,
+                },
+            ));
         }
         Ok(())
     }
 
-    pub(super) fn finish(&mut self, result: Result<(), String>) {
+    pub(super) fn finish(&mut self, mut result: Result<(), String>) {
         self.timing.complete();
         let response = *self
             .response
@@ -223,7 +241,33 @@ impl ControlledFetchStream {
             .expect("streamed response must have headers");
         let handle = response.handle;
         let body = response.body.finish_capture(self.delivered);
+        let mut opaque_response_blocked = false;
+        if !self.load.request_client().web_security_disabled() && result.is_ok()
+            && self
+                .response_filter
+                .as_ref()
+                .is_none_or(|filter| filter.service_worker_metadata().is_none())
+            && super::super::fetch_response_needs_orb_body_validation(
+                &self.request_origin,
+                &response.head.final_url,
+                &response.head.headers,
+                self.mode,
+            )
+        {
+            match super::super::validated_opaque_response_body(&response.head.headers, &body) {
+                Ok(_) => {}
+                Err(super::super::FetchResponseSecurityViolation::OpaqueResponseBlocked(_)) => {
+                    opaque_response_blocked = true;
+                }
+                Err(error) => result = Err(error.into_message()),
+            }
+        }
         let terminal = match &result {
+            Ok(()) if opaque_response_blocked => SubresourceBodyFinished::failed_with_partial_body(
+                handle,
+                super::super::ABORTED_ERROR_TEXT.to_owned(),
+                body.clone(),
+            ),
             Ok(()) => SubresourceBodyFinished::ready_after_streaming(handle, body.clone()),
             Err(error) => SubresourceBodyFinished::failed_with_partial_body(
                 handle,
@@ -239,6 +283,7 @@ impl ControlledFetchStream {
             WorkerFetchStreamingFinished {
                 fetch_id: self.fetch_id,
                 body_source_id: self.body_source_id.unwrap(),
+                opaque_response_blocked,
                 result: result.map(|()| {
                     self.resource_timing.completed(
                         &self.request_url,
@@ -283,10 +328,10 @@ impl super::ControlledResourceLoad {
             .expect("native Worker Fetch has a browser origin")
             .clone();
         let web_security_disabled = self.load.request_client().web_security_disabled();
-        let mut stream = super::ControlledResourceStream::WorkerFetch(ControlledFetchStream::new(
+        let mut stream = super::ControlledResourceStream::WorkerFetch(Box::new(ControlledFetchStream::new(
             completion.clone(),
             fetch_id,
-            self.interception.clone(),
+            self.native_interception().clone(),
             self.request.request_mode,
             self.effective_credentials_mode(),
             policy,
@@ -295,7 +340,7 @@ impl super::ControlledResourceLoad {
             self.load.clone(),
             resource_timing.clone(),
             timing.clone(),
-        ).with_event_source_parser(event_source_parser));
+        ).with_event_source_parser(event_source_parser)));
         let result = self.run_inner((integrity.is_empty() && self.info.resource_type != crate::types::SubresourceResourceType::Font).then_some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));
@@ -334,16 +379,24 @@ impl super::ControlledResourceLoad {
                 Err(error) => result = Err(error.into_message()),
             }
         }
-        if !integrity.is_empty() && let Ok(delivered) = &result {
+        if !integrity.is_empty()
+            && let Ok(delivered) = &result
+        {
             let head = delivered.response.head();
-            let filter = self.response_filter.clone().or_else(|| {
-                super::super::network_response_filter(
-                    self.request.request_origin().expect("Worker fetch has a requesting origin"),
-                    &head,
-                    self.request.request_mode,
-                    self.request.redirect_mode(),
-                )
-            }).unwrap_or_else(|| crate::types::FetchResponseType::Basic.into());
+            let filter = self
+                .response_filter
+                .clone()
+                .or_else(|| {
+                    super::super::network_response_filter(
+                        self.request
+                            .request_origin()
+                            .expect("Worker fetch has a requesting origin"),
+                        &head,
+                        self.request.request_mode,
+                        self.request.redirect_mode(),
+                    )
+                })
+                .unwrap_or_else(|| crate::types::FetchResponseType::Basic.into());
             if let Err(error) = super::super::validate_fetch_response_integrity(
                 &integrity,
                 &self.request.method,
@@ -373,7 +426,7 @@ impl super::ControlledResourceLoad {
                 failure_record(&self.info, super::super::ABORTED_ERROR_TEXT.to_owned());
         }
         self.load.finish();
-        self.interception
+        self.native_interception()
             .record_subresource_network(record.network_record);
         self.publish_completed();
         // A manual response remains an opaque redirect even if interception
@@ -426,7 +479,7 @@ impl super::ControlledResourceLoad {
             }
         });
         let _ = completion.send(WorkerFetchEvent::Completion(Box::new(
-            crate::worker::WorkerFetchCompletion { fetch_id, result },
+            crate::worker::WorkerFetchCompletion { fetch_id, body_is_null: record.body_is_null, result },
         )));
         let _ = completion.send(WorkerFetchEvent::ResourceTiming { fetch_id, timing });
     }

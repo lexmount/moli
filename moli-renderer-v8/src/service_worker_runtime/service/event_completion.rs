@@ -32,7 +32,7 @@ impl ServiceWorkerRuntimeService {
                 FetchAbortTarget::Event(event_id) => event_id,
                 FetchAbortTarget::Handle(handle) => {
                     let Some(event_id) = state.pending_fetch_jobs.iter().find_map(|(id, job)| {
-                        job.cancel_handle
+                        job.request_cancel_handle()
                             .same_cancellation_authority(handle)
                             .then_some(*id)
                     }) else {
@@ -93,6 +93,7 @@ impl ServiceWorkerRuntimeService {
                 };
                 (host.run_owner() == *job.owner()).then_some((host.clone(), event_id))
             });
+            job.request_cancel_handle().cancel();
             job.cancel_handle.cancel();
             job.cancel_pending_navigation_preload();
             if should_update_lifecycle {
@@ -149,6 +150,7 @@ impl ServiceWorkerRuntimeService {
         if let Some((host, event_id)) = request_signal_abort {
             host.abort_fetch_event_request_signal(event_id, reason);
         }
+        self.close_job_router_race(&job);
         if let Some((host, event_id, body_source_id)) = stream_cancel {
             host.cancel_fetch_stream(event_id, body_source_id);
         }
@@ -204,6 +206,13 @@ impl ServiceWorkerRuntimeService {
             (job, completion.result, idle_timeout, progress)
         };
         let diagnostic = service_worker_fetch_diagnostic_from_job_result(&job, &result);
+        self.close_router_race(completion.event_id, job.owner());
+        if matches!(
+            result,
+            ServiceWorkerFetchResult::Response(_) | ServiceWorkerFetchResult::Failure(_)
+        ) {
+            self.mark_fetch_event_router_source(&job);
+        }
         self.enqueue_target_fetch_diagnostic(version_id, run, diagnostic);
         for progress in lifecycle_progress {
             self.run_lifecycle_progress(progress);

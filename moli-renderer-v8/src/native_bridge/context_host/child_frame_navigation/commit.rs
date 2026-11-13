@@ -464,8 +464,11 @@ impl PageScriptHost {
         } else {
             PendingChildFrameNavigation {
                 initiator: match pending.initiator {
-                    ChildDocumentNavigationInitiator::BrowsingContext(policy) =>
-                        ChildDocumentNavigationInitiator::BrowsingContext(entry_snapshot.pending_download_policy.or(policy)),
+                    ChildDocumentNavigationInitiator::BrowsingContext(policy) => {
+                        ChildDocumentNavigationInitiator::BrowsingContext(
+                            entry_snapshot.pending_download_policy.or(policy),
+                        )
+                    }
                     initiator => initiator,
                 },
                 ..pending

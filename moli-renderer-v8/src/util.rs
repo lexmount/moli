@@ -2,15 +2,14 @@ use super::document_runtime::DomHandle;
 use super::native_bridge::PageScriptHost;
 pub(crate) use moli_v8_util::v8_string_from_utf16_units;
 pub use moli_v8_util::{
-    array_contains_strict, array_push_value, call_object_method, callable_relevant_context, callback_data_index_value,
-    callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
-    define_non_enumerable_static_bool_property,
-    define_non_enumerable_static_property, define_non_enumerable_static_string_property,
+    array_contains_strict, array_push_value, call_object_method, callable_relevant_context,
+    callback_data_index_value, callback_data_item, constructor_object, constructor_prototype,
+    constructor_prototype_object, define_non_enumerable_static_property,
+    define_non_enumerable_static_string_property, ecmascript_promise_resolve,
     get_own_static_property, get_private_object, get_private_value, get_property,
     global_constructor_object, global_constructor_prototype,
-    initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_bool_property,
-    object_chain_contains, object_defined_string_property, object_non_empty_string_property,
-    object_number_property, object_own_static_string_property, object_property_as_array,
+    initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_chain_contains,
+    object_defined_string_property, object_non_empty_string_property, object_number_property,
     object_property_as_object, object_string_property, private_key, register_ecmascript_intrinsic,
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
     set_private_value, throw_range_error, throw_type_error, v8_string, v8str, walk_object_chain,
@@ -899,6 +898,13 @@ pub(super) fn context_host_ptr_from_window_object(
         }
     }
 
+    if let Some(context) = object.get_creation_context(scope)
+        && object.strict_equals(context.global(scope).into())
+        && let Some(host) = context_host_ptr_from_context_slot(context)
+    {
+        return Some(host);
+    }
+
     let bridge = get_own_static_property(scope, object, "__moliNativeBridge")
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
     let value = bridge.get_internal_field(scope, 0)?;
@@ -1135,28 +1141,6 @@ pub(crate) fn private_string_property<'s>(
             .to_string(scope)
             .map(|value| value.to_rust_string_lossy(scope))
     })
-}
-
-pub(crate) fn apply_webidl_constructor_prototype_fallback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    new_target: v8::Local<'s, v8::Value>,
-    default_constructor_name: &str,
-) {
-    // V8 has already read `NewTarget.prototype` while preparing the native
-    // constructor receiver. Do not read it again: a Proxy getter must run only
-    // once. V8 represents a non-object result with NewTarget's realm-local
-    // Object prototype, which lets us replace precisely that fallback with
-    // the WebIDL interface's default prototype from the same realm.
-    if !receiver_uses_new_target_realm_object_fallback(scope, receiver, new_target) {
-        return;
-    }
-    let Some(prototype) =
-        new_target_realm_constructor_prototype(scope, new_target, default_constructor_name)
-    else {
-        return;
-    };
-    let _ = receiver.set_prototype(scope, prototype.into());
 }
 
 #[cfg(test)]

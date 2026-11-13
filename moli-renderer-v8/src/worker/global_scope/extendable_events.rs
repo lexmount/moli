@@ -1,7 +1,8 @@
 //! Service Worker extendable events and their pending dispatch state.
 use moli_webapi::events::service_worker::{
-    extendable_event_constructor_callback, extendable_message_event_constructor_callback,
-    InstallEventInit, install_event_constructor_callback, initialize_install_event_object,
+    InstallEventInit, extendable_event_constructor_callback,
+    extendable_message_event_constructor_callback, initialize_install_event_object,
+    install_event_constructor_callback,
 };
 
 use super::*;
@@ -26,7 +27,10 @@ struct ExtendableEventTemplateDeclaration {
     constructor_length = 1,
     readonly_prototype,
 )]
-struct InstallEventTemplateDeclaration {}
+struct InstallEventTemplateDeclaration {
+    #[webapi(method = "addRoutes", callback = super::static_router::add_routes_callback, length = 1, enumerable, returns_promise)]
+    add_routes: (),
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -34,7 +38,6 @@ struct InstallEventConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "InstallEvent")]
     install_event: v8::Local<'scope, v8::Function>,
 }
-
 
 pub(in crate::worker) fn initialize_native_install_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,

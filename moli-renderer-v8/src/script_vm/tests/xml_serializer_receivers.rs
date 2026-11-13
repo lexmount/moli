@@ -192,7 +192,7 @@ fn xml_serialization_uses_one_attribute_prefix_allocator() {
 }
 
 #[test]
-fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_collisions() {
+fn xml_serialization_preserves_ordinary_xmlns_spelling_and_reserves_generated_prefixes() {
     let mut vm = new_storage_html_test_vm("https://xml-namespace-collisions.test/");
     let result = vm
         .eval(
@@ -212,19 +212,24 @@ fn xml_serialization_preserves_ordinary_xmlns_spelling_and_generated_prefix_coll
         for (let i = 0; i < roots.length; ++i) {
             if (snapshot(roots[i]) !== before[i]) throw Error('serializer mutated source');
             const parsed = new DOMParser().parseFromString(serialized[i], 'application/xml');
-            if (!parsed.getElementsByTagName('parsererror').length)
-                throw Error('this serialization is not required to be well-formed');
+            if (i === 0) {
+                if (!parsed.getElementsByTagName('parsererror').length)
+                    throw Error('ordinary xmlns spelling still appears verbatim');
+            } else if (parsed.getElementsByTagName('parsererror').length ||
+                       parsed.documentElement.getAttributeNS('urn:b', 'value') !== 'b') {
+                throw Error('generated namespace must round-trip without colliding');
+            }
         }
         return JSON.stringify(serialized);
     })()"#,
         )
         .unwrap();
-    // XMLSerializer uses require-well-formed=false. Namespace recording excludes
-    // ordinary xmlns:p spelling, and the specified nsN index can collide with a
-    // declaration already present on this element (DOM Parsing issue #44).
+    // Ordinary no-namespace xmlns:p text remains verbatim. Genuine namespace
+    // declarations reserve their prefixes so generated attributes round-trip;
+    // this matches Chromium rather than the old DOM Parsing issue #44 example.
     assert_eq!(
         result,
-        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns1=\"urn:b\" ns1:value=\"b\"/>"]"#
+        r#"["<p:root xmlns:p=\"urn:a\" xmlns:p=\"urn:b\"/>","<root xmlns:ns1=\"urn:reserved\" xmlns:ns2=\"urn:b\" ns2:value=\"b\"/>"]"#
     );
 }
 

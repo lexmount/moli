@@ -444,6 +444,7 @@ fn register_pending_window_fetch_for_test(
             }
             PendingWindowFetchTestStage::Auth => {
                 host.record_pending_subresource_auth(crate::types::PendingSubresourceAuthState {
+                    body_is_null: None,
                     pending,
                     response: crate::types::PendingSubresourceAuthResponse {
                         request_url: url.clone(),
@@ -468,6 +469,7 @@ fn register_pending_window_fetch_for_test(
             PendingWindowFetchTestStage::Response => {
                 host.record_pending_subresource_response(
                     crate::types::PendingSubresourceResponseState {
+                        body_is_null: None,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),
@@ -2377,11 +2379,11 @@ mod canvas_hdr_pixels;
 mod canvas_image_color;
 mod canvas_image_proxies;
 mod canvas_paths;
-mod canvas_transfer_to_image_bitmap;
 mod canvas_patterns;
 mod canvas_pixel_geometry;
 mod canvas_pixel_settings;
 mod canvas_style_state;
+mod canvas_transfer_to_image_bitmap;
 mod canvas_transform_snapshots;
 
 mod canvas_factory_realms;
@@ -2717,10 +2719,10 @@ mod window_restricted_accessors;
 mod window_scroll_methods;
 mod window_sync_method_receivers;
 
-mod svg_legacy_rectangle_contracts;
 mod dom_token_list_utf16;
 mod rectangle_receivers;
 mod svg_hyperlinks;
+mod svg_legacy_rectangle_contracts;
 mod svg_transform_lists;
 mod svg_value_lists;
 

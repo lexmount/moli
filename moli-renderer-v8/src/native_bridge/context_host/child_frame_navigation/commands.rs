@@ -129,7 +129,8 @@ impl PageScriptHost {
             .get_incumbent_context()
             .unwrap_or_else(|| scope.get_current_context());
         let initiator = self.window_dispatch_scope_for_context(scope, context);
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator);
+        let queued =
+            self.queue_child_browsing_context_navigation_to_url(handle, &url, None, initiator);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
@@ -142,14 +143,15 @@ impl PageScriptHost {
         initiator: Option<super::super::OwnerDispatchScope>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
-        let queued = self.queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
-            handle,
-            resolved_url,
-            replace_current,
-            initiator,
-            ChildDocumentNavigationInitiator::BrowsingContext(None),
-            Default::default(),
-        );
+        let queued = self
+            .queue_child_browsing_context_navigation_from_existing_seed_with_initiator(
+                handle,
+                resolved_url,
+                replace_current,
+                initiator,
+                ChildDocumentNavigationInitiator::BrowsingContext(None),
+                Default::default(),
+            );
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
@@ -230,7 +232,12 @@ impl PageScriptHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url, initiator);
+        let queued = self.queue_child_browsing_context_navigation_to_url(
+            handle,
+            &url,
+            initiator_url,
+            initiator,
+        );
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 

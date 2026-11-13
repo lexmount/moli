@@ -813,14 +813,6 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         Err(plan) => return PageCommandTaskStep::Complete(plan),
     };
     match start {
-        super::navigation::NavigateCommandStart::PendingBeforeUnload(pending) => {
-            pending_create_isolated_world_command_for_session(
-                command_id,
-                owner,
-                task,
-                PendingCreateIsolatedWorldPhase::BeforeUnload(pending),
-            )
-        }
         super::navigation::NavigateCommandStart::CompleteImmediate(plan) => {
             if plan.command_status().is_some_and(|status| status.is_err()) {
                 return PageCommandTaskStep::Complete(plan);
@@ -832,7 +824,14 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         super::navigation::NavigateCommandStart::CompletePlan(plan) => {
             PageCommandTaskStep::Complete(plan)
         }
-
+        super::navigation::NavigateCommandStart::PendingBeforeUnload(pending) => {
+            pending_create_isolated_world_command_for_session(
+                command_id,
+                owner,
+                task,
+                PendingCreateIsolatedWorldPhase::BeforeUnload(pending),
+            )
+        }
         super::navigation::NavigateCommandStart::PendingLoad(pending) => {
             pending_create_isolated_world_command_for_session(
                 command_id,

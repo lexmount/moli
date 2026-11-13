@@ -2,6 +2,30 @@ use super::*;
 use crate::webidl;
 use http::HeaderName;
 
+pub(crate) fn xhr_response_headers_for_filter(
+    origin: &moli_url::WebOrigin,
+    head: &moli_fetch::ResponseHead,
+    filter: &crate::types::AsyncSubresourceFetchResponseFilter,
+    credentials: moli_fetch::RequestCredentialsMode,
+    web_security_disabled: bool,
+) -> Vec<(String, Vec<u8>)> {
+    if !filter.is_readable() {
+        return Vec::new();
+    }
+    if let Some(metadata) = filter.service_worker_metadata() {
+        return head
+            .headers
+            .iter()
+            .filter(|(name, _)| {
+                !moli_fetch::is_forbidden_response_header_name(name)
+                    && metadata.exposes_header(&head.headers, name)
+            })
+            .cloned()
+            .collect();
+    }
+    crate::network_host::filter_cors_exposed_response_headers(origin, head, credentials, web_security_disabled)
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "XMLHttpRequest header")]
 struct XhrHeaderNameArgs {
@@ -192,28 +216,4 @@ pub(super) fn xhr_override_mime_type_callback<'s>(
 
 fn response_header_name_is(candidate: &str, expected: &HeaderName) -> bool {
     HeaderName::from_bytes(candidate.as_bytes()).is_ok_and(|candidate| candidate == *expected)
-}
-
-pub(crate) fn xhr_response_headers_for_filter(
-    origin: &moli_url::WebOrigin,
-    head: &moli_fetch::ResponseHead,
-    filter: &crate::types::AsyncSubresourceFetchResponseFilter,
-    credentials: moli_fetch::RequestCredentialsMode,
-    web_security_disabled: bool,
-) -> Vec<(String, Vec<u8>)> {
-    if !filter.is_readable() {
-        return Vec::new();
-    }
-    if let Some(metadata) = filter.service_worker_metadata() {
-        return head
-            .headers
-            .iter()
-            .filter(|(name, _)| {
-                !moli_fetch::is_forbidden_response_header_name(name)
-                    && metadata.exposes_header(&head.headers, name)
-            })
-            .cloned()
-            .collect();
-    }
-    crate::network_host::filter_cors_exposed_response_headers(origin, head, credentials, web_security_disabled)
 }

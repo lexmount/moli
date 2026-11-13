@@ -37,11 +37,13 @@ impl DocumentResourceStream {
         head: ResponseHead,
         network_request_headers: Option<Vec<(String, String)>>,
         body: crate::network::ResourceInterceptionBody,
+        response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+        skip_fetch_security_validation: bool,
     ) -> Result<(), String> {
         let body_source_id = crate::network_host::new_network_body_source_id();
         let started = AsyncSubresourceStreamingStarted {
-            skip_fetch_security_validation: false,
-            response_filter: None,
+            skip_fetch_security_validation,
+            response_filter,
             internal_id: info.internal_id,
             request_url: info.url.clone(),
             request_method: info.method.clone(),
@@ -79,7 +81,7 @@ impl DocumentResourceStream {
 
 pub(crate) enum ControlledResourceStream {
     Document(DocumentResourceStream),
-    WorkerFetch(super::fetch::ControlledFetchStream),
+    WorkerFetch(Box<super::fetch::ControlledFetchStream>),
 }
 
 impl ControlledResourceStream {
@@ -107,10 +109,17 @@ impl ControlledResourceStream {
         head: ResponseHead,
         headers: Option<Vec<(String, String)>>,
         body: crate::network::ResourceInterceptionBody,
+        filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+        skip_security: bool,
     ) -> Result<(), String> {
         match self {
-            Self::Document(stream) => stream.start(info, head, headers, body),
-            Self::WorkerFetch(stream) => stream.start(info, head, headers, body),
+            Self::Document(stream) => {
+                stream.start(info, head, headers, body, filter, skip_security)
+            }
+            Self::WorkerFetch(stream) => {
+                stream.set_response_filter(filter);
+                stream.start(info, head, headers, body)
+            }
         }
     }
     pub(super) fn chunk(&mut self, bytes: Vec<u8>) -> Result<(), String> {

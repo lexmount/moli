@@ -2,8 +2,9 @@ mod paths;
 mod request;
 
 use self::paths::{
-    dispatch_service_worker_xhr, queue_local_xhr_response, record_compatibility_intercepted_xhr,
-    record_xhr_response_success, request_body_text, spawn_network_xhr_fetch,
+    dispatch_service_worker_xhr, native_xhr_service_worker_context, queue_local_xhr_response,
+    record_compatibility_intercepted_xhr, record_xhr_response_success, request_body_text,
+    spawn_network_xhr_fetch,
 };
 #[cfg(test)]
 pub(crate) use self::request::prepare_xhr_send_body;
@@ -205,7 +206,15 @@ pub(super) fn xhr_send_callback<'s>(
         schedule_xhr_timeout(scope, host, xhr, internal_id);
         return;
     }
-    if host.network_offline() {
+    if host.network_offline()
+        && host
+            .service_worker_controller_for_fetch(
+                host.service_worker_client_id_for_subresource_owner(prepared.owner),
+                &prepared.document_url,
+                &prepared.resolved_url,
+            )
+            .is_none()
+    {
         record_xhr_failure(
             scope,
             host,
@@ -307,6 +316,15 @@ fn send_synchronous_network_xhr(
         request = request.with_redirect_check(check);
     }
 
+    let service_worker = native_xhr_service_worker_context(
+        host,
+        prepared.owner,
+        &prepared.document_url,
+        &prepared.resolved_url,
+        prepared.policy_context,
+        csp,
+    );
+
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
@@ -382,7 +400,10 @@ fn send_synchronous_network_xhr(
         load,
         cancel_handle.clone(),
         preflight_headers,
-        control,
+        crate::network_host::controlled_resource::BufferedXhrContext {
+            control,
+            service_worker,
+        },
         |_| {},
     );
     let outcome = {
@@ -485,18 +506,24 @@ fn send_synchronous_network_xhr(
                     RequestMode::Cors,
                     &response.head(),
                     response.body_bytes().len(),
-                    None,
+                    completed.response_filter.as_ref(),
                 ),
             );
-            let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
-                &prepared.request_origin,
-                &response.head(),
-                prepared.credentials_mode,
-                prepared
-                    .resource_loader
-                    .request_client()
-                    .web_security_disabled(),
-            );
+            let observable_headers = match completed.response_filter.as_ref() {
+                Some(filter) => crate::network_host::xhr_response_headers_for_filter(
+                    &prepared.request_origin,
+                    &response.head(),
+                    filter,
+                    prepared.credentials_mode,
+                    prepared.resource_loader.request_client().web_security_disabled(),
+                ),
+                None => crate::network_host::filter_cors_exposed_response_headers(
+                    &prepared.request_origin,
+                    &response.head(),
+                    prepared.credentials_mode,
+                    prepared.resource_loader.request_client().web_security_disabled(),
+                ),
+            };
             let mut response = response;
             response.headers = observable_headers;
             apply_xhr_response(scope, xhr, response);

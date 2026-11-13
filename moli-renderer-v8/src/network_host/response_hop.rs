@@ -35,7 +35,7 @@ pub(crate) fn network_response_extra_info(
     })
 }
 
-pub(super) fn advance_subresource_response(
+pub(crate) fn advance_subresource_response(
     request: &mut Request,
     head: ResponseHead,
     network_response_extra_info: Option<NetworkResponseExtraInfo>,
@@ -81,7 +81,6 @@ pub(super) fn advance_validated_subresource_response(
     source: RedirectSource,
     web_security_disabled: bool,
 ) -> Result<SubresourceResponseTransition, String> {
-
     if !is_redirect_status(head.status) {
         return Ok(SubresourceResponseTransition::FinalResponse);
     }

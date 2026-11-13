@@ -127,14 +127,6 @@ pub(crate) struct DocumentRequestPolicySnapshot {
 pub(crate) type DocumentConnectPolicySnapshot = DocumentRequestPolicySnapshot;
 
 impl DocumentRequestPolicySnapshot {
-    pub(crate) fn from_worker_policies(
-        enforce_policies: Vec<ContentSecurityPolicy>,
-        report_only_policies: Vec<ContentSecurityPolicy>,
-        reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
-    ) -> Self {
-        Self::from_policies(enforce_policies, report_only_policies, reporting_endpoints)
-    }
-
     pub(crate) fn for_script_request(
         mut self,
         metadata: crate::planning::ScriptFetchMetadata,
@@ -344,37 +336,6 @@ impl DocumentRequestPolicySnapshot {
                 .clone(),
             policy.content_security_reporting_endpoints.clone(),
         )
-    }
-
-    pub(crate) fn enforce_violation(
-        &self,
-        document_url: &Url,
-        request_url: &Url,
-        redirect_status: ContentSecurityPolicyRedirectStatus,
-    ) -> Option<DocumentContentSecurityPolicyViolation> {
-        if self.request_metadata.is_some() {
-            return self
-                .check_url(document_url, request_url, redirect_status)
-                .enforced_violations
-                .into_iter()
-                .next();
-        }
-        document_url_policy_violation_from_document_policies(
-            self.enforce_policies.clone(),
-            document_url,
-            self.policy_self_url.as_deref(),
-            request_url,
-            self.resource_kind,
-            redirect_status,
-            ContentSecurityPolicyDisposition::Enforce,
-        )
-        .map(|mut violation| {
-            violation.document_uri =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation.source_file =
-                crate::content_security_policy::csp_url_for_report(document_url);
-            violation
-        })
     }
 }
 
@@ -3296,8 +3257,6 @@ fn document_frame_ancestors_policy_violations(
         )
     }).collect()
 }
-
-impl DocumentRuntime {}
 
 #[cfg(test)]
 mod tests {

@@ -398,6 +398,7 @@ pub(super) struct PendingWindowFetchContinuation {
     pub(crate) upload: Option<crate::network_host::RequestUpload>,
     pub(super) intercepted_request: Option<Box<moli_fetch::Request>>,
     pub(super) response_metadata: Option<moli_fetch_types::FetchResponseMetadata>,
+    initial_request_url: Url,
     promise: PendingWindowFetchPromise,
     resource_timing: crate::context_bootstrap::FetchResourceTiming,
     keepalive: bool,
@@ -418,6 +419,7 @@ impl PendingWindowFetchContinuation {
     pub(super) fn new(
         resolver: v8::Global<v8::PromiseResolver>,
         resource_timing: crate::context_bootstrap::FetchResourceTiming,
+        initial_request_url: Url,
         keepalive: bool,
         cache_mode: moli_fetch::RequestCacheMode,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -425,15 +427,20 @@ impl PendingWindowFetchContinuation {
         redirect_mode: moli_fetch::RequestRedirectMode,
         integrity: String,
     ) -> Box<Self> {
+        // Window Fetch ran the original URL's CSP check before registering
+        // this continuation. Interception can subsequently replace that URL.
+        let redirect_csp_state = crate::network_host::FetchCspRedirectState::new(&connect_policy);
+        redirect_csp_state.record_checked_url(&initial_request_url, false);
         Box::new(Self {
             intercepted_request: None,
             response_metadata: None,
+            initial_request_url,
             promise: PendingWindowFetchPromise::Active(resolver),
             resource_timing,
             upload: None,
             keepalive,
             cache_mode,
-            redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
+            redirect_csp_state,
             connect_policy,
             csp_report_context,
             redirect_mode,
@@ -441,20 +448,16 @@ impl PendingWindowFetchContinuation {
         })
     }
 
-    pub(super) fn with_intercepted_request(mut self, request: moli_fetch::Request) -> Self {
+    pub(super) fn with_intercepted_request(
+        mut self: Box<Self>,
+        request: moli_fetch::Request,
+    ) -> Box<Self> {
         self.intercepted_request = Some(Box::new(request));
         self
     }
 
-    pub(super) fn initial_request_url<'a>(&'a self, fallback: &'a Url) -> &'a Url {
-        self.intercepted_request
-            .as_deref()
-            .map_or(fallback, |request| {
-                request
-                    .redirect_chain()
-                    .first()
-                    .map_or(&request.url, |redirect| &redirect.from_url)
-            })
+    pub(super) fn initial_request_url(&self) -> &Url {
+        &self.initial_request_url
     }
 
     pub(super) fn cache_mode(&self) -> moli_fetch::RequestCacheMode {
@@ -798,6 +801,7 @@ impl PendingSubresourceFetchState {
 }
 
 pub(super) struct PendingSubresourceResponseState {
+    pub(super) body_is_null: Option<bool>,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -809,6 +813,7 @@ pub(super) struct PendingSubresourceResponseState {
 }
 
 pub(super) struct PendingSubresourceAuthState {
+    pub(super) body_is_null: Option<bool>,
     pub(super) pending: PendingSubresourceFetchState,
     #[cfg(any(test, feature = "devtools"))]
     pub(super) response: PendingSubresourceAuthResponse,
@@ -850,6 +855,7 @@ pub(super) struct RunningSubresourceFetchState {
 
 #[derive(Debug)]
 pub(super) struct AsyncSubresourceFetchCompletion {
+    pub(super) body_is_null: Option<bool>,
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -939,7 +945,10 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
         match self {
             Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::ChildDocumentResponse { .. } | Self::Failure(_) | Self::PreloadFailure(_) => None,
+            Self::Response(_)
+            | Self::ChildDocumentResponse { .. }
+            | Self::Failure(_)
+            | Self::PreloadFailure(_) => None,
         }
     }
 

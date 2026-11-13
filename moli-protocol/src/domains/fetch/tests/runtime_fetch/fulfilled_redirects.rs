@@ -882,10 +882,6 @@ async fn fulfilled_window_fetch_redirect_rejects_disallowed_targets() {
         ("cors", "data:text/plain,blocked".to_owned()),
         (
             "cors",
-            origin.replace("http://", "http://user:password@") + "/credentials",
-        ),
-        (
-            "cors",
             origin
                 .replace("127.0.0.1", "localhost")
                 .replace("http://", "http://user:password@")
@@ -926,50 +922,52 @@ async fn fulfilled_window_fetch_redirect_rejects_disallowed_targets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fulfilled_window_fetch_redirect_allows_matching_document_credentials() {
-    let (mut ctx, origin, server) = fixture_with_userinfo("/page", "user:password@").await;
-    let target = origin.replace("http://", "http://user:password@") + "/credentials";
-    for (index, mode) in ["cors", "same-origin", "no-cors"].into_iter().enumerate() {
-        let id = 49_000 + index as u64 * 10;
-        let source = format!("{origin}/credentials-source-{index}");
-        // An absolute, credentialless URL avoids Request constructor rejection
-        // while retaining the embedding document's inherited credentials.
-        command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
+async fn fulfilled_window_fetch_redirect_allows_same_origin_credentials() {
+    for userinfo in ["", "user:password@"] {
+        let (mut ctx, origin, server) = fixture_with_userinfo("/page", userinfo).await;
+        let target = origin.replace("http://", "http://user:password@") + "/credentials";
+        for (index, mode) in ["cors", "same-origin", "no-cors"].into_iter().enumerate() {
+            let id = 49_000 + index as u64 * 10;
+            let source = format!("{origin}/credentials-source-{index}");
+            // An absolute, credentialless URL avoids Request constructor rejection
+            // while retaining the embedding document's inherited credentials.
+            command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
             "globalThis.redirectResult = fetch({source:?}, {{mode:{mode:?}}}).then(async r => ({{status:r.status,url:r.url,redirected:r.redirected,body:await r.text()}})); 'started'"
         )})).await;
-        let first = wait_for_request_paused(&mut ctx, &source, "credentialless source").await;
-        command(
-            &mut ctx,
-            id + 1,
-            "Fetch.fulfillRequest",
-            json!({
-                "requestId":first["params"]["requestId"],"responseCode":302,
-                "responseHeaders":[{"name":"Location","value":target}],
-            }),
-        )
-        .await;
-        let next = wait_for_request_paused(&mut ctx, &target, "inherited credentials").await;
-        command(
-            &mut ctx,
-            id + 2,
-            "Fetch.fulfillRequest",
-            json!({"requestId":next["params"]["requestId"],"responseCode":200,"body":"b2s="}),
-        )
-        .await;
-        let result = command(
-            &mut ctx,
-            id + 3,
-            "Runtime.evaluate",
-            json!({"expression":"redirectResult","awaitPromise":true,"returnByValue":true}),
-        )
-        .await;
-        assert_eq!(
-            result["result"]["result"]["value"],
-            json!({"status":200,"url":target,"redirected":true,"body":"ok"}),
-            "mode: {mode}"
-        );
+            let first = wait_for_request_paused(&mut ctx, &source, "credentialless source").await;
+            command(
+                &mut ctx,
+                id + 1,
+                "Fetch.fulfillRequest",
+                json!({
+                    "requestId":first["params"]["requestId"],"responseCode":302,
+                    "responseHeaders":[{"name":"Location","value":target}],
+                }),
+            )
+            .await;
+            let next = wait_for_request_paused(&mut ctx, &target, "inherited credentials").await;
+            command(
+                &mut ctx,
+                id + 2,
+                "Fetch.fulfillRequest",
+                json!({"requestId":next["params"]["requestId"],"responseCode":200,"body":"b2s="}),
+            )
+            .await;
+            let result = command(
+                &mut ctx,
+                id + 3,
+                "Runtime.evaluate",
+                json!({"expression":"redirectResult","awaitPromise":true,"returnByValue":true}),
+            )
+            .await;
+            assert_eq!(
+                result["result"]["result"]["value"],
+                json!({"status":200,"url":target,"redirected":true,"body":"ok"}),
+                "mode: {mode}"
+            );
+        }
+        server.abort();
     }
-    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -12,7 +12,7 @@ pub(in crate::context_bootstrap) use super::super::shared::WINDOW_DOCUMENT_SLOT;
          receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowDocumentAccessorDeclaration {
     #[webapi(accessor_property, getter = window_document_getter,
-             access_policy = crate::context_bootstrap::window_receiver::require_same_origin_window_receiver)]
+             access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     document: (),
 }
 

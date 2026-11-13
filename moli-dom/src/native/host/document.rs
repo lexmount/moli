@@ -1713,6 +1713,21 @@ impl DomHost {
         if self.node(root).is_none() {
             return Vec::new();
         }
+        if !self.is_connected(root) {
+            let mut handles = Vec::new();
+            let mut stack = vec![root];
+            while let Some(handle) = stack.pop() {
+                if self.is_child_browsing_context_host_candidate(handle) {
+                    handles.push(handle);
+                }
+                stack.extend(self.child_handles_reversed(handle));
+                if let Some(shadow_root) = self.shadow_root_handle(handle) {
+                    stack.push(shadow_root);
+                }
+            }
+            return handles;
+        }
+
         let connected = self.is_connected(root);
         let mut handles = self
             .child_browsing_context_host_candidates

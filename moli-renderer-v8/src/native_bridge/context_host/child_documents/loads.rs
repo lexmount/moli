@@ -5,6 +5,7 @@ use super::super::{
 use super::{
     ChildDocumentNavigationInitiator, PendingChildDocumentNavigation,
     configure_child_document_navigation_request,
+    frame_owner_resource_timing::PendingFrameOwnerResourceTiming,
     snapshots::child_document_content_type_from_headers,
 };
 #[cfg(test)]
@@ -219,6 +220,10 @@ impl PageScriptHost {
             initiator,
             target_snapshot.resource_timing_initiator().clone(),
         );
+        let timing_origin = frame_owner_resource_timing.as_ref().map_or_else(
+            || initiating_loader.fetch_context().request_origin(),
+            PendingFrameOwnerResourceTiming::request_origin,
+        );
         let initiator_url =
             initiator_url.unwrap_or_else(|| self.document_url_for_child_context(handle));
         let browser_context = self.host_document().cookie_browser_context();
@@ -261,19 +266,20 @@ impl PageScriptHost {
                 bypass_response_csp: self.bypass_content_security_policy(),
             },
         };
-        let fetch = ChildDocumentFetch {
-            response_body: None,
-            download_policy,
-            blob_resource,
-            target_snapshot: target_snapshot.clone(),
-            timing_origin: initiating_loader.fetch_context().request_origin(),
-            target,
-            network_attribution,
-            network_info: None,
-            redirect: None,
-            request: child_document_load_request(bootstrap)
-                .map(|request| {
-                    target_snapshot
+        let fetch =
+            ChildDocumentFetch {
+                response_body: None,
+                download_policy,
+                blob_resource,
+                target_snapshot: target_snapshot.clone(),
+                timing_origin,
+                target,
+                network_attribution,
+                network_info: None,
+                redirect: None,
+                request: child_document_load_request(bootstrap)
+                    .map(|request| {
+                        target_snapshot
                         .configure_request(
                             configure_child_document_navigation_request(
                                 request,
@@ -598,7 +604,6 @@ impl PageScriptHost {
         };
         let (result, object_fallback_required) = if object_attribute_navigation {
             match result {
-                Ok(redirect @ ChildDocumentLoadOutcome::Redirect(_)) => (Ok(redirect), false),
                 Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => {
                     let failed_status = loaded
                         .document_network
@@ -630,6 +635,7 @@ impl PageScriptHost {
                         true,
                     )
                 }
+                Ok(redirect @ ChildDocumentLoadOutcome::Redirect(_)) => (Ok(redirect), false),
                 Err(error) => (Err(error), true),
             }
         } else {
@@ -1334,7 +1340,10 @@ impl ChildDocumentFetch {
                         )
                         .await
                 {
-                    return response.map(Into::into).map(AsyncSubresourceFetchResult::Response).map_err(|error| error.to_string());
+                    return response
+                        .map(Into::into)
+                        .map(AsyncSubresourceFetchResult::Response)
+                        .map_err(|error| error.to_string());
                 }
                 if let Some((client_id, request)) = service_worker_request
                     && let Some(response) = runtime
@@ -2287,22 +2296,30 @@ mod tests {
                 status_text: None,
                 headers,
                 request_cookie_report: None,
+                request_include_credentials: false,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             };
             let body = moli_fetch::ResponseBody::materialized_bytes(Vec::new());
             let outcome = child_document_load_outcome_from_response(
-                url.to_string(),
-                "GET".into(),
-                Vec::new(),
+                ChildDocumentRequestSnapshot {
+                    request: moli_fetch::Request::get_with_url(url.clone()),
+                    target: Default::default(),
+                    source_policy: None,
+                },
                 head,
                 body,
                 url,
-                "UTF-8",
+                ChildDocumentTiming {
+                    origin: None,
+                    response: Default::default(),
+                },
+                &super::super::encoding::ChildDocumentEncodingContext::default(),
                 ChildNavigationDownloadPolicy {
                     source_allows,
                     target_allows,
@@ -2330,25 +2347,33 @@ mod tests {
                 b"attachment; filename=saved.bin".to_vec(),
             )];
             let outcome = child_document_load_outcome_from_response(
-                url.as_str().to_owned(),
-                "GET".to_owned(),
-                Vec::new(),
+                ChildDocumentRequestSnapshot {
+                    request: moli_fetch::Request::get_with_url(url.clone()),
+                    target: Default::default(),
+                    source_policy: None,
+                },
                 moli_fetch::ResponseHead {
                     status_text: None,
                     final_url: url.clone(),
                     status,
                     headers: headers.clone(),
                     request_cookie_report: None,
+                    request_include_credentials: false,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 moli_fetch::ResponseBody::materialized_bytes(body.clone()),
                 url.clone(),
-                "UTF-8",
+                ChildDocumentTiming {
+                    origin: None,
+                    response: Default::default(),
+                },
+                &super::super::encoding::ChildDocumentEncodingContext::default(),
                 ChildNavigationDownloadPolicy {
                     source_allows: true,
                     target_allows: true,

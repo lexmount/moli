@@ -122,24 +122,11 @@ struct WorkerResourceTimingState {
     completed_at: Option<Instant>,
     synthetic_response_start: Option<Instant>,
     response_is_synthetic: bool,
-    awaiting_selection: bool,
     aborted: bool,
     reported: bool,
 }
 
 impl WorkerResourceTiming {
-    pub(super) fn select_streaming_response(
-        &self,
-        head: &ResponseHead,
-        filter: AsyncSubresourceFetchResponseFilter,
-    ) {
-        let mut state = self.0.state.lock();
-        // IO may already have supplied chunks or EOF. The Worker accepts the
-        // exact exposed head here without replacing those body observations.
-        state.response_is_synthetic = filter.service_worker_metadata().is_some();
-        state.response = Some((head.clone(), filter));
-        state.awaiting_selection = false;
-    }
     pub(super) fn new(
         scope: &mut v8::PinScope<'_, '_>,
         name: Url,
@@ -163,7 +150,6 @@ impl WorkerResourceTiming {
                 completed_at: None,
                 synthetic_response_start: None,
                 response_is_synthetic: false,
-                awaiting_selection: false,
                 aborted: false,
                 reported: false,
             }),
@@ -182,7 +168,6 @@ impl WorkerResourceTiming {
         state.completed_at = None;
         state.synthetic_response_start = None;
         state.response_is_synthetic = false;
-        state.awaiting_selection = false;
         state.aborted = false;
     }
 
@@ -203,13 +188,13 @@ impl WorkerResourceTiming {
         state.completed_at.get_or_insert_with(Instant::now);
     }
 
-    pub(crate) fn pause(&self) {
-        self.0.state.lock().awaiting_selection = true;
-    }
-
     pub(crate) fn discard_response(&self) {
         let mut state = self.0.state.lock();
-        state.transport = None;
+        if let Some(transport) = state.transport.take() {
+            state
+                .clock
+                .observe_service_worker_timing(transport.response_timing());
+        }
         state.response = None;
         state.body_size = 0;
         state.completed_at = Some(Instant::now());
@@ -224,7 +209,11 @@ impl WorkerResourceTiming {
         state.response_is_synthetic = true;
     }
 
-    pub(crate) fn select_streaming_response(&self, head: &ResponseHead, filter: AsyncSubresourceFetchResponseFilter) {
+    pub(crate) fn select_streaming_response(
+        &self,
+        head: &ResponseHead,
+        filter: AsyncSubresourceFetchResponseFilter,
+    ) {
         self.0.state.lock().response = Some((head.clone(), filter));
     }
 
@@ -239,7 +228,11 @@ impl WorkerResourceTiming {
         if synthetic && state.synthetic_response_start.is_none() {
             // A fulfilled/intercepted response is a new client handover. The
             // transport that previously supplied a challenge is not its clock.
-            state.transport = None;
+            if let Some(transport) = state.transport.take() {
+                state
+                    .clock
+                    .observe_service_worker_timing(transport.response_timing());
+            }
             let now = Instant::now();
             state.synthetic_response_start = Some(now);
             state.completed_at = Some(now);
@@ -247,7 +240,6 @@ impl WorkerResourceTiming {
         state.response = Some((head.clone(), filter));
         state.response_is_synthetic = synthetic;
         state.body_size = body_size;
-        state.awaiting_selection = false;
     }
 
     pub(crate) fn publish(&self, scope: &mut v8::PinScope<'_, '_>) {
@@ -262,10 +254,10 @@ impl WorkerResourceTiming {
         {
             let mut state = self.0.state.lock();
             state.aborted = true;
-            if !state.awaiting_selection
-                && state.transport.as_ref().is_some_and(|transport| {
-                    transport.response_timing().response_end_at().is_some()
-                })
+            if state
+                .transport
+                .as_ref()
+                .is_some_and(|transport| transport.response_timing().response_end_at().is_some())
             {
                 // IO has committed its terminal but its Worker delivery may
                 // still be queued behind running JS. Let that event report.
@@ -292,8 +284,7 @@ impl WorkerResourceTiming {
             .transport
             .as_ref()
             .map(FetchCancelHandle::response_timing);
-        let completed = !state.awaiting_selection
-            && native.is_some_and(|timing| timing.response_end_at().is_some());
+        let completed = native.is_some_and(|timing| timing.response_end_at().is_some());
         let end = if aborted && !completed {
             Instant::now()
         } else {

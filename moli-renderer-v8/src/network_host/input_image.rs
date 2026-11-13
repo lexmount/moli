@@ -116,12 +116,14 @@ fn start_input_image_fetch(
         &environment.request_origin,
         "input",
     );
+    let redirect_state = FetchCspRedirectState::new(&policy);
+    redirect_state.record_checked_url(&request_url, false);
     let pending = PendingInputImageFetch {
         element,
         id,
         target,
         timing,
-        redirect_state: FetchCspRedirectState::new(&policy),
+        redirect_state,
         policy,
         report_context,
         request_initiator_type,
@@ -161,6 +163,7 @@ fn start_input_image_fetch(
             .map_err(|error| error.into_message());
         let _ = host.resource_completion_sender().send_async_subresource(
             AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method: "GET".into(),

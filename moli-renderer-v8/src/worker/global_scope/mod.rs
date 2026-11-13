@@ -103,6 +103,7 @@ mod console;
 mod content_security_policy;
 mod event_handlers;
 mod extendable_events;
+pub(in crate::worker) mod static_router;
 pub(in crate::worker) use extendable_events::initialize_native_install_event;
 mod fetch;
 mod font_loading;
@@ -132,6 +133,7 @@ mod service_worker_results;
 mod state;
 mod timers;
 mod xhr;
+mod xhr_service_worker;
 
 pub(crate) use redirect_owner::WorkerRedirectOwner;
 
@@ -214,12 +216,12 @@ pub(crate) use nested_workers::{
 };
 pub(super) use nested_workers::{dispatch_nested_worker_event, retire_nested_workers};
 pub(super) use network_state::{
-    WorkerFetchClient, PendingWorkerFetch, PendingWorkerXhr, WorkerWebSocketState, WorkerXhrCompletion, WorkerXhrEvent,
+    PendingWorkerFetch, PendingWorkerXhr, WorkerFetchClient, WorkerWebSocketState,
+    WorkerXhrCompletion, WorkerXhrEvent,
 };
 pub(crate) use network_state::{
     WorkerFetchCompletion, WorkerFetchEvent, WorkerFetchResponse, WorkerFetchStreamingChunk,
     WorkerFetchStreamingFinished, WorkerFetchStreamingStarted,
-
 };
 use network_state::{merge_worker_request_headers, next_fetch_id, next_xhr_id, worker_url_blocked};
 mod event_source;

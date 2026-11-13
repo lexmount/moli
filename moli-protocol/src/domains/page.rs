@@ -77,10 +77,13 @@ mod main_document_commit;
 pub(crate) mod native;
 mod navigation;
 pub(crate) use navigation::{
-    AutomationNavigationResult, BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
-    CompletedContinueNavigationWithoutRequestPauseCommand, CompletedNavigateLoadCommand,
-    PreparedBeforeUnloadNavigation, emit_navigation_started_for_session_owner,
+    AutomationNavigationResult, CompletedContinueNavigationWithoutRequestPauseCommand,
+    CompletedNavigateLoadCommand, emit_navigation_started_for_session_owner,
     prepare_automation_navigation, superseded_intercepted_navigation_events,
+};
+pub(crate) use navigation::{
+    BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
+    PreparedBeforeUnloadNavigation,
 };
 mod output;
 use capture::*;
@@ -181,7 +184,6 @@ enum PendingPageCommandKind {
         waiter: crate::conn::InitialDocumentPageBuildWaiter,
         host: crate::conn::ProtocolPageHostScope,
     },
-    BeforeUnloadNavigation(Box<navigation::PendingBeforeUnloadNavigationCommand>),
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -230,6 +232,7 @@ enum PendingPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::PendingBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::PendingSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::PendingChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -251,7 +254,6 @@ enum CompletedPageCommandKind {
         result: Result<()>,
         host: crate::conn::ProtocolPageHostScope,
     },
-    BeforeUnloadNavigation(Box<navigation::CompletedBeforeUnloadNavigationCommand>),
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -300,6 +302,7 @@ enum CompletedPageCommandKind {
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
+    BeforeUnloadNavigation(Box<navigation::CompletedBeforeUnloadNavigationCommand>),
     TraverseSameDocumentHistory(Box<navigation::CompletedSameDocumentHistoryTraversalCommand>),
     ChildFrameNavigate(Box<navigation::CompletedChildFrameNavigateCommand>),
     ContinueNavigationWithoutRequestPause(
@@ -378,9 +381,6 @@ impl PendingPageCommandDispatch {
                     _ = host.wait_for_binding_retirement() => Err(crate::conn::NoDocumentLoaded.into()),
                 };
                 CompletedPageCommandKind::Enable { result, host }
-            }
-            PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
-                CompletedPageCommandKind::BeforeUnloadNavigation(Box::new(pending.wait().await))
             }
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
@@ -470,7 +470,9 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::Navigate(pending) => {
                 CompletedPageCommandKind::Navigate(Box::new(Box::pin(pending.wait()).await))
             }
-
+            PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                CompletedPageCommandKind::BeforeUnloadNavigation(Box::new(pending.wait().await))
+            }
             PendingPageCommandKind::TraverseSameDocumentHistory(pending) => {
                 CompletedPageCommandKind::TraverseSameDocumentHistory(Box::new(
                     pending.wait().await,

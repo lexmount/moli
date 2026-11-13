@@ -34,8 +34,19 @@ impl WindowWebIdlCallbackFunction {
         callback: WebIdlCallbackFunction,
     ) -> Self {
         let relevant_context = callback.relevant_context(scope);
-        let relevant_identity =
-            host.window_execution_context_identity_for_v8_context(scope, relevant_context);
+        let relevant_identity = host
+            .window_execution_context_identity_for_v8_context(scope, relevant_context)
+            .or_else(|| {
+                let (_, owner) =
+                    crate::common_runtime::CommonRuntimeBinding::from_context(relevant_context)?;
+                let crate::common_runtime::RuntimeExecutionContext::Window(host_ptr) = owner else {
+                    return None;
+                };
+                // The callback can belong to another Page. Realm tokens are
+                // local to each host, so keep the native host qualification.
+                unsafe { &*host_ptr }
+                    .window_execution_context_identity_for_v8_context(scope, relevant_context)
+            });
         match relevant_identity {
             Some(relevant_identity) => Self::Live {
                 callback,

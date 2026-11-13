@@ -29,13 +29,17 @@ fn request(reload: bool) -> StorageBucketCachedRequest {
 fn response(body: &[u8]) -> StorageBucketCachedResponse {
     StorageBucketCachedResponse {
         head: moli_fetch_types::FetchResponseHead {
+            body_is_null: false,
+
             metadata: moli_fetch_types::FetchResponseMetadata {
+                cors_exposed_header_names: None,
+
                 request_include_credentials: false,
+
                 response_type: moli_fetch_types::FetchResponseType::Default,
                 url_list: vec![(URL.to_owned()).parse().unwrap()],
                 timing_allow_passed: true,
                 redirected: false,
-                cors_exposed_header_names: None,
             },
             status: 200,
             status_text: "OK".to_owned(),
@@ -259,6 +263,44 @@ fn cache_request_metadata_and_response_recover_as_one_atomic_entry() -> Result<(
         assert!(root.exists());
         assert!(!next.exists());
         assert!(!previous.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn cache_null_body_is_distinct_from_an_empty_body_after_profile_reopen() -> Result<()> {
+    let temp = TempStorePath::new("cache-null-body");
+    let root = temp.cache_root();
+    {
+        let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &root)?;
+        let mut store = store.lock();
+        let identity = store.open_bucket(ORIGIN, "bucket")?;
+        store.open_cache_for_identity(&identity, "cache")?;
+        for body_is_null in [false, true] {
+            let mut response = response(b"");
+            response.head.body_is_null = body_is_null;
+            store.put_cache_entry_with_request_for_identity(
+                &identity,
+                "cache",
+                &format!("{URL}?null={body_is_null}"),
+                request(false),
+                response,
+                0,
+                0,
+            )?;
+        }
+    }
+    let store = new_shared_json_storage_bucket_store_with_cache_root(&temp.path, &root)?;
+    let mut store = store.lock();
+    let identity = store.open_bucket(ORIGIN, "bucket")?;
+    let entries = store
+        .cache_entries_for_identity(&identity, "cache")
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    for (index, entry) in entries.iter().enumerate() {
+        assert!(entry.response.body.is_empty());
+        assert_eq!(entry.response.head.body_is_null, index == 1);
+        assert_eq!(entry.response.clone().head.body_is_null, index == 1);
     }
     Ok(())
 }

@@ -624,6 +624,9 @@ impl ScriptVm {
     }
 
     pub(crate) fn perform_parser_script_preparation_checkpoint(&mut self) -> Result<()> {
+        if self.current_main_world().is_none() {
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, _| {
             crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
         })

@@ -321,18 +321,65 @@ impl NavigationResourceLoader {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
-        self.begin_fetch()?;
-        let result = self
-            .request_client
-            .fetch_raw_with_cancel_and_network_metadata(
-                request.with_page_network_policy(),
-                self.inner.cancel.clone(),
-            )
-            .await;
-        match result {
+        if request.auth_requires_buffered_transport() {
+            // The native buffered transport owns Digest's intermediate
+            // challenges. A raw stream would expose a 401 as the final head.
+            self.begin_fetch()?;
+            return match self
+                .request_client
+                .fetch_raw_with_cancel_and_network_metadata(
+                    request.with_page_network_policy(),
+                    self.inner.cancel.clone(),
+                )
+                .await
+            {
+                Ok(response) => {
+                    self.inner.timing.observe_response(
+                        response.response().head(),
+                        Some(response.response().body_bytes().len()),
+                    );
+                    self.finish_response_ready()?;
+                    Ok(response)
+                }
+                Err(error) => {
+                    self.finish_failed();
+                    Err(error)
+                }
+            };
+        }
+        let single_hop = !request.transport_follows_redirects();
+        let response = self.fetch_raw_stream_with_network_metadata(request).await?;
+        let (response, journal) = response.into_parts_with_observation_journal();
+        let extra = response.network_request_extra_info().cloned();
+        let head = response.head();
+        if single_hop
+            && matches!(head.status, 301 | 302 | 303 | 307 | 308)
+            && head
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("location"))
+        {
+            // The redirect owner only needs the head. Dropping this hop's
+            // stream cancels its body without cancelling the navigation.
+            drop(response);
+            return Ok(NetworkFetchResult::with_observation_journal(
+                RawResponse::from_head_and_body(head, Vec::new())
+                    .with_network_request_extra_info(extra),
+                journal,
+            ));
+        }
+        let (head, body) = response.into_body();
+        match RawResponse::from_head_and_body_source(head, body).await {
             Ok(response) => {
-                self.finish_response_ready()?;
-                Ok(response)
+                self.inner
+                    .timing
+                    .observe_materialized_body_size(response.body_bytes().len());
+                Ok(NetworkFetchResult::with_observation_journal(
+                    response
+                        .with_body_sizes(self.inner.cancel.response_timing().body_sizes())
+                        .with_network_request_extra_info(extra),
+                    journal,
+                ))
             }
             Err(error) => {
                 self.finish_failed();

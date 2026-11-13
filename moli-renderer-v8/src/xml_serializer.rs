@@ -566,17 +566,6 @@ fn record_namespace_information(
     let mut local_prefixes = HashMap::new();
     for attribute in element.attributes() {
         if attribute.namespace() != XMLNS_NAMESPACE {
-            // An ordinary attribute keeps its native identity, but its literal
-            // XML spelling can still reserve a prefix in the serialized output.
-            // Do not emit a second declaration for that same prefix.
-            if attribute.namespace().is_empty()
-                && let Some(prefix) = attribute.local_name().strip_prefix("xmlns:")
-                && !prefix.is_empty()
-            {
-                let namespace = attribute_value(element, attribute);
-                namespace_context.add_prefix(&namespace, prefix);
-                local_prefixes.insert(prefix.to_owned(), namespace);
-            }
             continue;
         }
         // Only native XMLNS attributes declare namespaces; an ordinary

@@ -289,13 +289,14 @@ mod trusted_types;
 mod url_form;
 use moli_webapi::url_search_params as url_search_params_runtime;
 mod url_pattern;
+pub(crate) use url_pattern::RoutingPatternInput;
+pub(crate) mod rtc_certificate;
+mod rtc_rtp;
 mod video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;
 mod webassembly_runtime;
-pub(crate) mod rtc_certificate;
-mod rtc_rtp;
 pub(crate) use rtc_rtp::rtp_transceivers::apply_task as apply_webrtc_task;
 pub(crate) use rtc_rtp::script_transform::run_worker_task as run_rtp_transform_worker_task;
 mod websocket;
@@ -354,7 +355,7 @@ pub(crate) use self::canvas::{
 };
 pub(crate) use self::constructors::{
     WebTransportErrorClonePayload, WebTransportErrorSource, build_dom_exception_object,
-    build_quota_exceeded_error_object, build_rtc_sdp_error, build_web_transport_error,
+    build_quota_exceeded_error_object, build_web_transport_error,
     build_web_transport_error_from_clone_payload, dom_exception_clone_fields,
     ensure_dom_implementation_singleton, install_dom_exception_error_classifier,
     new_dom_error_value, new_dom_exception_value, new_most_derived_dom_exception_value,

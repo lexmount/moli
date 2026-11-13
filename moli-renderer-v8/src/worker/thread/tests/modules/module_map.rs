@@ -260,13 +260,14 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
     server
         .respond(
             "/worker/b.mjs",
-            "200 OK",
-            "text/javascript",
-            "import 'unresolvable-bare-specifier';",
+            "503 Service Unavailable",
+            "text/plain",
+            "retry later",
         )
         .await;
-    // Both records now exist. The common tree admits A's retry before B's
-    // resolution failure ends the graph in the same drive call.
+    // Both first attempts failed. The common tree admits A's held retry
+    // before B's retry fails; ending that graph must retain A's transport
+    // so the subsequent explicit import can join it.
     server
         .respond(
             "/worker/both.mjs",
@@ -275,7 +276,16 @@ async fn worker_module_tree_failure_preserves_admitted_network_actions() {
             "import './a.mjs'; import './b.mjs';",
         )
         .await;
-    let held = server.request("/worker/held.mjs").await;
+    let (held, failed) = server
+        .request_pair("/worker/held.mjs", "/worker/b.mjs")
+        .await;
+    ModuleSourceServer::write(
+        failed,
+        "503 Service Unavailable",
+        "text/plain",
+        "retry later",
+    )
+    .await;
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"["failed","TypeError"]"#

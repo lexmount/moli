@@ -61,12 +61,21 @@ impl PageScriptHost {
                 return true;
             }
             if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
-                return self.lightweight_popup_is_open(popup_id);
+                // close() marks Window.closed before its queued task retires
+                // the current Document. History remains active until that
+                // actual native Document association is removed.
+                return self.lightweight_popup_document_handle(popup_id) == Some(document);
             }
             let Some(frame) = self.child_browsing_context_host_for_document_handle(document) else {
                 return false;
             };
-            if !visited.insert(frame) || !self.dom_host().is_connected(frame) {
+            // Removal runs unload while this exact Document is still current.
+            // The native unload guard retains that lifecycle authority until
+            // dispatch finishes; a detached frame outside it is inactive.
+            if !visited.insert(frame)
+                || (!self.dom_host().is_connected(frame)
+                    && !self.has_document_unload_counter(document))
+            {
                 return false;
             }
             let Some(parent_document) = self.dom_host().node(frame).and_then(Node::owner_document)

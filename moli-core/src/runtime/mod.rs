@@ -460,16 +460,17 @@ impl Browser {
         deadline: FetchDeadline,
         allow_http_error: bool,
     ) -> Result<Page> {
-        let mut page = match self
-            .fetch_document_to_base_stage(
-                request,
-                wait_until,
-                deadline,
-                RendererReplyBoundary::Stage,
-                None,
-                RawDocumentFetchPolicy::RequirePage,
-            )
-            .await?
+        // A navigation owns a large asynchronous workflow. Keep that state
+        // off the polling stacks of callers that perform several navigations.
+        let mut page = match Box::pin(self.fetch_document_to_base_stage(
+            request,
+            wait_until,
+            deadline,
+            RendererReplyBoundary::Stage,
+            None,
+            RawDocumentFetchPolicy::RequirePage,
+        ))
+        .await?
         {
             FetchedDocument::Page(page) => page,
             FetchedDocument::Raw(_) => unreachable!(
@@ -512,16 +513,15 @@ impl Browser {
         deadline: FetchDeadline,
         raw_document_policy: RawDocumentFetchPolicy,
     ) -> Result<FetchedDocument> {
-        let fetched = self
-            .fetch_document_to_base_stage(
-                request,
-                wait_until,
-                deadline,
-                RendererReplyBoundary::Stage,
-                None,
-                raw_document_policy,
-            )
-            .await?;
+        let fetched = Box::pin(self.fetch_document_to_base_stage(
+            request,
+            wait_until,
+            deadline,
+            RendererReplyBoundary::Stage,
+            None,
+            raw_document_policy,
+        ))
+        .await?;
 
         match fetched {
             FetchedDocument::Page(mut page) => {

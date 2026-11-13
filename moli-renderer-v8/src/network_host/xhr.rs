@@ -3,7 +3,6 @@ mod delivery;
 mod encoding;
 mod events;
 mod header_surface;
-pub(crate) use self::header_surface::xhr_response_headers_for_filter;
 mod instance_state;
 mod lifecycle;
 mod request_state;
@@ -48,6 +47,7 @@ pub(crate) use self::delivery::{
     finish_xhr_abort, reset_xhr_response, throw_synchronous_xhr_failure,
 };
 pub(crate) use self::encoding::xhr_response_text_decoder;
+pub(crate) use self::header_surface::xhr_response_headers_for_filter;
 pub(crate) use self::instance_state::{
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_REQUEST_HEADERS_SLOT, XHR_RESPONSE_URL_SLOT,
     XHR_RESPONSE_XML_SLOT, XHR_STATUS_SLOT, XHR_STATUS_TEXT_SLOT, XHR_TIMEOUT_SLOT,

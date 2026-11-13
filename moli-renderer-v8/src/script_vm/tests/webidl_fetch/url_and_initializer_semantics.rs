@@ -755,7 +755,6 @@ async fn response_clone_tees_pending_network_body_after_parent_consumption() {
                         status_text: None,
                         final_url: response_url,
                         status: 200,
-
                         headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -871,7 +870,6 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                         status_text: None,
                         final_url: response_url,
                         status: 200,
-
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1001,7 +999,6 @@ fn materialize_response_object_preserves_redirected_slot() {
                         status_text: None,
                         final_url: final_url.clone(),
                         status: 200,
-
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1056,7 +1053,8 @@ async fn filtered_response_materialization_preserves_urls_across_clone_and_cache
                     scope,
                     "GET",
                     moli_fetch::ResponseHead {
- request_include_credentials: false, status_text: None,
+request_include_credentials: false,
+status_text: None,
 final_url: final_url.clone(),
 status: 302,
 headers: vec![("location".to_owned(), b"target.html".to_vec())],
@@ -1067,7 +1065,8 @@ redirect_chain: Vec::new(),
 from_cache: false,
 cache_state: Default::default(),
 negotiated_http_version: None,
- preload_state: Default::default(), },
+preload_state: Default::default(),
+},
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
                     &moli_fetch_types::FetchResponseMetadata { response_type: filter, url_list: vec![final_url.clone()], timing_allow_passed: false, redirected: false, cors_exposed_header_names: None, request_include_credentials: false },
                 );
@@ -1790,7 +1789,6 @@ async fn filtered_response_materialization_preserves_internal_head_across_clone_
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let head = moli_fetch::ResponseHead {
 request_include_credentials: false,
-
 
                         status_text: Some("Internal Status".to_owned()),
                         final_url: final_url.clone(),

@@ -526,6 +526,12 @@ impl ScriptVm {
     }
 
     pub(crate) fn publish_main_document_navigation_history(&mut self) -> anyhow::Result<()> {
+        // No author realm has changed History while the main world is pending.
+        // The native seed already owns that state; publication must not create
+        // an outgoing Window just to replace its scriptless Document.
+        if self.current_main_world().is_none() {
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, _host_ptr| {
             let window = scope.get_current_context().global(scope);
             crate::context_bootstrap::publish_top_level_navigation_history(scope, window);
@@ -844,12 +850,75 @@ impl ScriptVm {
         entry_seed: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
         source: Option<crate::runtime::RendererNavigationHistory>,
     ) {
+        if entry_seed.is_some()
+            && let Some(pending) = self.main_world.pending_mut()
+        {
+            // Explicit native records supersede an earlier positional fallback.
+            pending.history_position = None;
+        }
+        let mut entry_seed = entry_seed;
+        if self.main_world.pending().is_some() {
+            let host = self._context_host.borrow();
+            let seed = entry_seed.get_or_insert_with(|| {
+                moli_page_types::initial_navigation_history_seed(true, host.document_url().as_str())
+            });
+            let current_document = seed
+                .entries
+                .iter()
+                .find(|entry| entry.history_index == seed.current_index)
+                .map(|entry| entry.document_id.clone());
+            let origin = if host.document_sandbox_policy().forces_opaque_origin {
+                "null".to_owned()
+            } else {
+                host.current_main_document_resource_loader()
+                    .expect("pending main Document owns its resource authority")
+                    .fetch_context()
+                    .origin()
+                    .to_owned()
+            };
+            let policy = crate::context_bootstrap::document_referrer_policy_for_native_document(
+                &host,
+                host.document_handle(),
+            );
+            for entry in &mut seed.entries {
+                if current_document.as_ref() == Some(&entry.document_id) {
+                    entry.document_origin.clone_from(&origin);
+                    entry.referrer_policy.clone_from(&policy);
+                    if moli_url::is_about_blank(host.document_url())
+                        || moli_url::is_about_srcdoc(host.document_url())
+                    {
+                        entry.inherited_origin = Some(origin.clone());
+                    }
+                }
+            }
+            if let Some(activation) = &mut seed.activation
+                && let Some(current) = seed
+                    .entries
+                    .iter()
+                    .find(|entry| entry.history_index == seed.current_index)
+            {
+                activation.entry = current.clone();
+            }
+        }
         if let (Some(source), Some(seed)) = (&source, &entry_seed) {
             self._context_host
                 .borrow_mut()
                 .restore_top_level_navigation_history(source, seed);
         }
         if let Some(pending) = self.main_world.pending_mut() {
+            if let Some(seed) = &entry_seed {
+                let host = self._context_host.borrow();
+                let policy = matches!(host.document_url().scheme(), "blob" | "data").then(|| {
+                    crate::runtime::RendererNavigationPolicy::capture(
+                        host.document_policy_container(),
+                    )
+                });
+                host.top_level_navigation_history().publish(
+                    seed.clone(),
+                    host.current_about_document_state(),
+                    policy,
+                );
+            }
             pending.history_entry = entry_seed;
             return;
         }

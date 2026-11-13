@@ -37,10 +37,11 @@ pub(crate) use self::materialize::{
     build_fetch_response_object_from_body_source_with_metadata,
     build_fetch_response_object_from_stream_with_metadata, build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_with_metadata,
+    build_null_body_fetch_response_object_with_metadata,
     materialize_response_object_body, materialize_response_object_body_preserving_error,
     materialize_response_object_body_with_chunk_callback,
     materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, network_response_filter,
+    materialized_body_bytes_from_value, network_response_filter, set_cached_response_head,
 };
 pub(in crate::network_host) use moli_webapi::fetch_response::ParsedResponseInit;
 
@@ -49,5 +50,3 @@ pub(crate) use materialize::build_fetch_response_object_from_stream_for_request_
 
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object_head;
-
-pub(crate) use self::materialize::set_cached_response_head;

@@ -192,6 +192,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
             | WorkerToParentMessage::ServiceWorkerClientsOpenWindow(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
@@ -333,6 +334,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientQuery(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
             | WorkerToParentMessage::ServiceWorkerClientFocus(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)
@@ -547,6 +549,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::ServiceWorkerClientMessage(_)
             | WorkerToParentMessage::ServiceWorkerWorkerMessage(_)
             | WorkerToParentMessage::ServiceWorkerClientNavigate(_)
+            | WorkerToParentMessage::ServiceWorkerRegisterRouterRules { .. }
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::SubresourceNetwork(_)

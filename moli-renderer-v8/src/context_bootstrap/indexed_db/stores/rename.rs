@@ -31,12 +31,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_name_setter<'s>
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("IndexedDB schema receiver was validated");
     let Some(new_name) = name_value(scope, &args, "IDBObjectStore") else {
         return;
     };
     let result = (|| {
         let (transaction, database, handle, metadata) =
-            object_store_versionchange_common(scope, args.this())?;
+            object_store_versionchange_common(scope, receiver)?;
         let store_id = metadata.id();
         if metadata.info().name == new_name {
             return Ok(());
@@ -77,12 +79,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_name_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("IndexedDB schema receiver was validated");
     let Some(new_name) = name_value(scope, &args, "IDBIndex") else {
         return;
     };
     let result = (|| {
         let invalid = || IndexedDbError::InvalidState("The index is unavailable".into());
-        let index = args.this();
+        let index = receiver;
         let store = indexed_db_index_object_store(scope, index).ok_or_else(invalid)?;
         let transaction = indexed_db_object_store_transaction(scope, store).ok_or_else(invalid)?;
         // Index.name checks transaction mode and activity before deletion;

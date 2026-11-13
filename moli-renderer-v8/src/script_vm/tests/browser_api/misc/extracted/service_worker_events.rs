@@ -696,7 +696,7 @@ async fn csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
         .expect("service worker paused CSP report server should finish");
 }
 #[tokio::test]
-async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
+async fn worker_csp_report_ignores_page_interception_and_preserves_service_worker_dispatch() {
     let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
         (
             "/app/worker.js",
@@ -820,37 +820,16 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
     .await;
 
     let report_url = format!("{base_url}/app/csp-report");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let paused_report = loop {
-        let mut infos = vm.take_pending_subresource_fetch_infos();
-        if let Some(index) = infos.iter().position(|info| {
-            info.resource_type == crate::types::SubresourceResourceType::CspReport
-                && info.url.as_str() == report_url
-        }) {
-            break infos.remove(index);
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for paused worker CSP report"
-        );
-        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
-    };
-    assert_eq!(paused_report.method, "POST");
-
-    let outcome = vm
-        .continue_pending_subresource_fetch(
-            paused_report.internal_id,
-            None,
-            None,
-            None,
-            None,
-            false,
-            false,
-        )
-        .expect("paused worker CSP report continue should start");
-    assert_eq!(
-        outcome,
-        crate::types::PendingSubresourceContinueOutcome::Started
+    // Worker interception belongs to its target. The protocol fixture in
+    // runtime_fetch/worker_requests.rs covers a real Worker pause/continue;
+    // a Page-only policy must leave this report free to reach its controller.
+    assert!(
+        vm.take_pending_subresource_fetch_infos()
+            .iter()
+            .all(|info| {
+                info.resource_type != crate::types::SubresourceResourceType::CspReport
+                    || info.url.as_str() != report_url
+            })
     );
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -866,7 +845,7 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "continued paused worker CSP report did not settle through Service Worker: {items:?}"
+            "worker CSP report did not settle through Service Worker: {items:?}"
         );
         drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
     }
@@ -875,7 +854,6 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
         .await
         .expect("paused worker CSP report destination server should finish");
 }
-
 
 #[tokio::test]
 async fn service_worker_fetch_receives_resolved_client_referrer_and_policy() {

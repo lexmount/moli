@@ -408,12 +408,9 @@ fn send_worker_content_security_policy_report_for_state(
             crate::types::SubresourceRequestInitiatorType::Script,
         )
         .with_fetch_policy(policy_context)
-        .with_service_worker(runtime, client_id, metadata)
+        .with_worker_service_worker(runtime, client_id, metadata)
         .run()
         .await;
-
-
-
     });
 }
 

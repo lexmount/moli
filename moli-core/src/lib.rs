@@ -4,6 +4,8 @@
 //! `runtime`, `page`, `network`, and `protocol_types`, while the heavier
 //! implementation now lives in the split internal crates.
 
+#![recursion_limit = "256"]
+
 mod config;
 mod dom;
 pub mod network;

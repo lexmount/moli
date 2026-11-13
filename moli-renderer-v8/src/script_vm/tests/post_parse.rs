@@ -527,7 +527,7 @@ async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_onc
         "export default 1;".to_owned(),
     );
     let error = context
-        .check_response_head(&response.head())
+        .check_response(&response)
         .expect_err("cached middle hop must be checked by the captured policy");
     assert!(error.to_string().contains("Content Security Policy"));
     assert!(!error.to_string().contains("SECRET"));
@@ -545,7 +545,7 @@ async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_onc
         )
     );
     assert!(
-        context.check_response_head(&response.head()).is_err(),
+        context.check_response(&response).is_err(),
         "a previously denied cached middle hop must remain denied after its reports are drained"
     );
     vm.dispatch_module_fetch_csp_violations(Some(&context));
@@ -603,7 +603,7 @@ fn module_csp_admission_reports_once_for_service_worker_response_alias() {
         },
         "export default 42;".to_owned(),
     );
-    context.check_response_head(&response.head()).unwrap();
+    context.check_response(&response).unwrap();
     assert!(
         context.take_violations().is_empty(),
         "completion must not duplicate admission's report"

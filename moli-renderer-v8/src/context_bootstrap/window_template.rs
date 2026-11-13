@@ -265,7 +265,8 @@ struct WindowIdentityAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = window_event_getter,
-        setter = window_event_setter
+        setter = window_event_setter,
+        access_policy = require_same_origin_window_receiver
     )]
     event: (),
 

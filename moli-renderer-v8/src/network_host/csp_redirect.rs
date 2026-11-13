@@ -25,6 +25,65 @@ pub(crate) struct WindowCspRequestContext {
 }
 
 impl WindowCspRequestContext {
+    fn check_url(
+        &self,
+        document_url: &Url,
+        checked_url: &Url,
+        request_url: &Url,
+        status: crate::content_security_policy::ContentSecurityPolicyRedirectStatus,
+        completion_tx: RendererResourceCompletionSender,
+        operation: &'static str,
+    ) -> Result<(), String> {
+        let (reports, enforced) = self
+            .policy
+            .check_url(document_url, checked_url, status)
+            .into_violations();
+        let failure = enforced
+            .first()
+            .map(|violation| document_content_security_policy_error_message(violation, operation));
+        for mut violation in reports.into_iter().chain(enforced) {
+            violation.blocked_uri = csp_url_for_report(request_url);
+            ContentSecurityPolicySourceLocation::default().apply_to(&mut violation);
+            let _ = completion_tx.send_async_subresource_event(
+                crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                    report_context: Box::new(self.report_context.clone()),
+                    violation: Box::new(violation),
+                },
+            );
+        }
+        failure.map_or(Ok(()), Err)
+    }
+    pub(crate) fn check_response(
+        &self,
+        document_url: &Url,
+        request_url: &Url,
+        head: &moli_fetch::ResponseHead,
+        source: moli_fetch::RedirectSource,
+        completion_tx: RendererResourceCompletionSender,
+        operation: &'static str,
+    ) -> Result<(), String> {
+        if source != moli_fetch::RedirectSource::ServiceWorker
+            && (&head.final_url == request_url || self.redirect_state.was_checked(&head.final_url))
+        {
+            return Ok(());
+        }
+        let status = if head.redirect_chain.is_empty() {
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::NoRedirect
+        } else {
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect
+        };
+        let result = self.check_url(
+            document_url,
+            &head.final_url,
+            request_url,
+            status,
+            completion_tx,
+            operation,
+        );
+        self.redirect_state
+            .record_checked_url(&head.final_url, result.is_err());
+        result
+    }
     pub(crate) fn capture(
         scope: &mut v8::PinScope<'_, '_>,
         host: &PageScriptHost,
@@ -104,6 +163,15 @@ pub(crate) struct FetchCspRedirectState(Option<Arc<Mutex<Option<CheckedCspRedire
 impl FetchCspRedirectState {
     pub(crate) fn new(policy: &DocumentConnectPolicySnapshot) -> Self {
         Self(policy.has_policies().then(|| Arc::new(Mutex::new(None))))
+    }
+
+    pub(crate) fn record_checked_url(&self, url: &Url, blocked: bool) {
+        if let Some(checked) = &self.0 {
+            *checked.lock() = Some(CheckedCspRedirect {
+                url: url.clone(),
+                blocked,
+            });
+        }
     }
 
     pub(crate) fn was_checked(&self, url: &Url) -> bool {

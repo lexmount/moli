@@ -203,6 +203,7 @@ self.addEventListener("message", event => {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -377,6 +378,7 @@ fn show_notification_record_enables_scope_click_dispatch() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -468,6 +470,7 @@ fn push_dispatch_for_active_scope_uses_service_lane_completion() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -542,6 +545,7 @@ fn push_subscription_store_tracks_active_scope_subscription() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -622,6 +626,7 @@ fn sync_register_for_active_scope_retains_tag_until_success_or_last_chance_failu
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -725,6 +730,7 @@ fn sync_registration_request_deduplicates_active_tag_and_refires_after_finish() 
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -863,6 +869,7 @@ fn sync_retry_marks_failed_registration_as_last_chance_event() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -995,6 +1002,7 @@ fn periodic_sync_dispatch_for_registered_tag_queues_functional_event() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1092,6 +1100,7 @@ fn periodic_sync_dispatch_deduplicates_active_tag_and_refires_after_finish() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1212,6 +1221,7 @@ fn notification_store_filters_replaces_tagged_records_and_closes() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1448,6 +1458,7 @@ fn notification_close_dispatch_removes_record_and_starts_event() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1532,6 +1543,7 @@ fn notification_click_dispatch_enters_active_version_accounting() {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),

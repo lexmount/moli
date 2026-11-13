@@ -636,60 +636,72 @@ fn qualify_automation_event_target(event: &mut AutomationEvent, target_id: DevTo
 
 fn automation_event_from_protocol_message(message: &InspectorJson) -> Option<AutomationEvent> {
     let method = message.method()?;
-    let params = || message.value().get("params");
+    let params = || match message {
+        InspectorJson::Parsed(value) => value.get("params").cloned(),
+        InspectorJson::Raw(_) => {
+            let params = message
+                .deserialize_field::<Box<serde_json::value::RawValue>>("params")
+                .ok()
+                .flatten()?;
+            // Automation's UTF-8 projection is independent of the lossless
+            // CDP envelope. Never initialize the whole message's Value cache.
+            moli_inspector_json::decode_lossy_json(params.get().as_bytes()).ok()
+        }
+    };
     match method {
         "Page.javascriptDialogOpening" => {
-            page_javascript_dialog_opening_event_from_params(params()?)
+            page_javascript_dialog_opening_event_from_params(&params()?)
         }
-        "Page.fileChooserOpened" => page_file_chooser_opened_event_from_params(params()?),
-        "Browser.downloadWillBegin" => browser_download_will_begin_event_from_params(params()?),
-        "Browser.downloadProgress" => browser_download_progress_event_from_params(params()?),
+        "Page.fileChooserOpened" => page_file_chooser_opened_event_from_params(&params()?),
+        "Browser.downloadWillBegin" => browser_download_will_begin_event_from_params(&params()?),
+        "Browser.downloadProgress" => browser_download_progress_event_from_params(&params()?),
         "Page.frameScheduledNavigation" => {
-            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::Scheduled)
+            navigation_frame_event_from_params(&params()?, NavigationFrameEventKind::Scheduled)
         }
         "Page.frameRequestedNavigation" => {
-            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::Requested)
+            navigation_frame_event_from_params(&params()?, NavigationFrameEventKind::Requested)
         }
         "Page.frameStartedNavigating" => navigation_frame_event_from_params(
-            params()?,
+            &params()?,
             NavigationFrameEventKind::StartedNavigating,
         ),
         "Page.frameStartedLoading" => {
-            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::StartedLoading)
+            navigation_frame_event_from_params(&params()?, NavigationFrameEventKind::StartedLoading)
         }
         "Page.frameClearedScheduledNavigation" => navigation_frame_event_from_params(
-            params()?,
+            &params()?,
             NavigationFrameEventKind::ClearedScheduled,
         ),
-        "Page.frameNavigated" => frame_navigated_event_from_params(params()?),
+        "Page.frameNavigated" => frame_navigated_event_from_params(&params()?),
         "Page.frameStoppedLoading" => {
-            navigation_frame_event_from_params(params()?, NavigationFrameEventKind::StoppedLoading)
+            navigation_frame_event_from_params(&params()?, NavigationFrameEventKind::StoppedLoading)
         }
-        "Page.navigatedWithinDocument" => same_document_navigation_event_from_params(params()?),
-        "Page.lifecycleEvent" => page_lifecycle_event_from_params(params()?),
-        "Console.messageAdded" => console_message_added_event_from_params(params()?),
-        "Log.entryAdded" => log_entry_added_event_from_params(params()?),
-        "Runtime.consoleAPICalled" => runtime_console_api_called_event_from_params(params()?),
-        "Runtime.exceptionThrown" => runtime_exception_thrown_event_from_params(params()?),
+        "Page.navigatedWithinDocument" => same_document_navigation_event_from_params(&params()?),
+        "Page.lifecycleEvent" => page_lifecycle_event_from_params(&params()?),
+        "Console.messageAdded" => console_message_added_event_from_params(&params()?),
+        "Log.entryAdded" => log_entry_added_event_from_params(&params()?),
+        "Runtime.consoleAPICalled" => runtime_console_api_called_event_from_params(&params()?),
+        "Runtime.exceptionThrown" => runtime_exception_thrown_event_from_params(&params()?),
         "Network.requestWillBeSent" => network_automation_event_from_params(
-            params()?,
+            &params()?,
             AutomationEvent::NetworkBeforeRequestSent,
         ),
-        "Network.responseReceived" => {
-            network_automation_event_from_params(params()?, AutomationEvent::NetworkResponseStarted)
-        }
+        "Network.responseReceived" => network_automation_event_from_params(
+            &params()?,
+            AutomationEvent::NetworkResponseStarted,
+        ),
         "Network.loadingFinished" => network_automation_event_from_params(
-            params()?,
+            &params()?,
             AutomationEvent::NetworkResponseCompleted,
         ),
         "Network.loadingFailed" => {
-            network_automation_event_from_params(params()?, AutomationEvent::NetworkFetchError)
+            network_automation_event_from_params(&params()?, AutomationEvent::NetworkFetchError)
         }
         "Fetch.requestPaused" => {
-            network_automation_event_from_params(params()?, AutomationEvent::RequestPaused)
+            network_automation_event_from_params(&params()?, AutomationEvent::RequestPaused)
         }
         "Fetch.authRequired" => {
-            network_automation_event_from_params(params()?, AutomationEvent::NetworkAuthRequired)
+            network_automation_event_from_params(&params()?, AutomationEvent::NetworkAuthRequired)
         }
         _ => None,
     }

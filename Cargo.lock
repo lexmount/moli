@@ -3762,6 +3762,7 @@ dependencies = [
  "precomputed-hash",
  "rcgen",
  "read-fonts",
+ "regex",
  "selectors",
  "serde",
  "serde_json",

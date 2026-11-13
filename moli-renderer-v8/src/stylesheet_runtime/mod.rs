@@ -33,6 +33,7 @@ pub(crate) use completion::{
     ConnectedLoadCompletion, LiveStylesheetImportLoadCompletion,
     StylesheetImportCompletionAuthority,
 };
+pub(super) use connected::ConnectedStyleRequestSource;
 pub(crate) use connected::{ConnectedStyleLoadPrimeResult, PreparedConnectedStyleLoad};
 pub(super) use import_graph::{ConnectedStyleImportReadiness, connected_style_import_readiness};
 pub(crate) use import_graph::{

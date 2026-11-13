@@ -1638,44 +1638,85 @@ async fn rust_cdp_chromium_target_window_open_self_does_not_create_popup_target(
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_target() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-popup-name",
-        "TID-name-opener",
-        "<main>opener</main>",
-    )
-    .await;
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-popup-name",
+                "TID-name-opener",
+                "<main>opener</main>",
+            )
+            .await;
+            ctx.process_async(json!({
+                "id": 990001, "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-name-opener", "flatten": true }
+            })).await;
+            let opener_session_id = take_response_by_id(&mut ctx, 990001)["result"]["sessionId"]
+                .as_str().expect("actual opener session").to_owned();
+            ctx.take_all();
 
-    let first = open_popup_from_runtime(
-        &mut ctx,
-        260_026,
-        "window.open('https://example.com/one', 'named') !== null",
-    )
-    .await;
-    let target_id = event(&first, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("named target id")
-        .to_owned();
 
-    let second = open_popup_from_runtime(
-        &mut ctx,
-        260_027,
-        "window.open('https://example.com/two', 'named') !== null",
-    )
-    .await;
+            let first = {
+                ctx.process_async(json!({
+                    "id": 260_026, "method": "Runtime.evaluate",
+                    "sessionId": opener_session_id,
+                    "params": { "expression": "window.open('data:text/html,one', 'named') !== null", "returnByValue": true }
+                })).await;
+                ctx.take_all()
+            };
+            let target_id =
+                event(&first, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
+                    .as_str()
+                    .expect("named target id")
+                    .to_owned();
 
-    assert!(
-        !second
-            .iter()
-            .any(|message| message["method"] == "Target.targetCreated"),
-        "{second:?}"
-    );
-    let changed = event(&second, "Target.targetInfoChanged");
-    assert_eq!(changed["params"]["targetInfo"]["targetId"], target_id);
-    assert_eq!(
-        changed["params"]["targetInfo"]["url"],
-        "https://example.com/two"
-    );
+            if !first.iter().any(|message| {
+            message["method"] == json!("Target.targetInfoChanged")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,one")
+        }) {
+            ctx.wait_for_scheduler_message("named popup actual Document commit", |message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["url"] == json!("data:text/html,one")
+            })
+            .await;
+        }
+            ctx.take_all();
+
+            let mut second = {
+                ctx.process_async(json!({
+                    "id": 260_027, "method": "Runtime.evaluate",
+                    "sessionId": opener_session_id,
+                    "params": { "expression": "window.open('data:text/html,two', 'named') !== null", "returnByValue": true }
+                })).await;
+                ctx.take_all()
+            };
+
+            if !second.iter().any(|message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["url"] == json!("data:text/html,two")
+            }) {
+                let changed = ctx
+                    .wait_for_scheduler_message("named popup actual Document commit", |message| {
+                        message["method"] == json!("Target.targetInfoChanged")
+                            && message["params"]["targetInfo"]["url"] == json!("data:text/html,two")
+                    })
+                    .await;
+                second.extend(ctx.take_all());
+                second.push(changed);
+            }
+
+            assert!(
+                !second
+                    .iter()
+                    .any(|message| message["method"] == "Target.targetCreated"),
+                "{second:?}"
+            );
+            let changed = event(&second, "Target.targetInfoChanged");
+            assert_eq!(changed["params"]["targetInfo"]["targetId"], target_id);
+            assert_eq!(changed["params"]["targetInfo"]["url"], "data:text/html,two");
+        })
+        .await;
 }
 
 // Chromium source:
@@ -1683,31 +1724,75 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_info_changed_is_emitted_for_named_popup_reuse() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-popup-change",
-        "TID-change-opener",
-        "<main>opener</main>",
-    )
-    .await;
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            load_bc_with_titled_page_async(
+                &mut ctx,
+                "BID-popup-change",
+                "TID-change-opener",
+                "<main>opener</main>",
+            )
+            .await;
+            ctx.process_async(json!({
+                "id": 990001, "method": "Target.attachToTarget",
+                "params": { "targetId": "TID-change-opener", "flatten": true }
+            })).await;
+            let opener_session_id = take_response_by_id(&mut ctx, 990001)["result"]["sessionId"]
+                .as_str().expect("actual opener session").to_owned();
+            ctx.take_all();
 
-    let _first = open_popup_from_runtime(
-        &mut ctx,
-        260_028,
-        "window.open('https://example.com/first', 'reuse') !== null",
-    )
-    .await;
-    let second = open_popup_from_runtime(
-        &mut ctx,
-        260_029,
-        "window.open('https://example.com/second', 'reuse') !== null",
-    )
-    .await;
 
-    assert_eq!(
-        event(&second, "Target.targetInfoChanged")["params"]["targetInfo"]["url"],
-        "https://example.com/second"
-    );
+            let _first = {
+                ctx.process_async(json!({
+                    "id": 260_028, "method": "Runtime.evaluate",
+                    "sessionId": opener_session_id,
+                    "params": { "expression": "window.open('data:text/html,first', 'reuse') !== null", "returnByValue": true }
+                })).await;
+                ctx.take_all()
+            };
+            if !_first.iter().any(|message| {
+            message["method"] == json!("Target.targetInfoChanged")
+                && message["params"]["targetInfo"]["url"] == json!("data:text/html,first")
+        }) {
+            ctx.wait_for_scheduler_message("named popup actual Document commit", |message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["url"] == json!("data:text/html,first")
+            })
+            .await;
+        }
+            ctx.take_all();
+
+            let mut second = {
+                ctx.process_async(json!({
+                    "id": 260_029, "method": "Runtime.evaluate",
+                    "sessionId": opener_session_id,
+                    "params": { "expression": "window.open('data:text/html,second', 'reuse') !== null", "returnByValue": true }
+                })).await;
+                ctx.take_all()
+            };
+
+            if !second.iter().any(|message| {
+                message["method"] == json!("Target.targetInfoChanged")
+                    && message["params"]["targetInfo"]["url"] == json!("data:text/html,second")
+            }) {
+                let changed = ctx
+                    .wait_for_scheduler_message("named popup actual Document commit", |message| {
+                        message["method"] == json!("Target.targetInfoChanged")
+                            && message["params"]["targetInfo"]["url"]
+                                == json!("data:text/html,second")
+                    })
+                    .await;
+                second.extend(ctx.take_all());
+                second.push(changed);
+            }
+
+            assert_eq!(
+                event(&second, "Target.targetInfoChanged")["params"]["targetInfo"]["url"],
+                "data:text/html,second"
+            );
+        })
+        .await;
 }
 
 // Chromium source:

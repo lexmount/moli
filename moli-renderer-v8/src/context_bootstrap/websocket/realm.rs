@@ -37,7 +37,8 @@ pub(super) fn effective_websocket_document_scope(
         crate::native_bridge::OwnerDispatchScope::Top => (None, host.document_url().clone()),
     };
     let request_origin = moli_url::WebOrigin::from_serialized(&host.window_document_origin(owner)?);
-    let is_secure_context = host.window_is_secure_context(scope, owner)?;
+    let blocks_mixed_content =
+        host.window_mixed_content_policy(owner) == moli_fetch::RequestMixedContentPolicy::Block;
     Some((
         binding,
         crate::network::context::SubresourceRequestEnvironment {
@@ -46,6 +47,6 @@ pub(super) fn effective_websocket_document_scope(
             request_origin,
             frame_id,
         },
-        is_secure_context,
+        blocks_mixed_content,
     ))
 }

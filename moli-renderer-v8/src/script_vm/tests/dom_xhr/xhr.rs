@@ -277,6 +277,7 @@ fn pending_fetch_continuation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,
     host: &crate::native_bridge::PageScriptHost,
+    request_url: &Url,
 ) -> crate::types::PendingSubresourceContinuation {
     let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Top;
     crate::types::PendingSubresourceContinuation::Fetch(
@@ -286,6 +287,7 @@ fn pending_fetch_continuation<'s>(
                 scope,
                 &host.document_url().into(),
             ),
+            request_url.clone(),
             false,
             moli_fetch::RequestCacheMode::Default,
             crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(
@@ -3287,8 +3289,12 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
                     v8str(scope, "__swNonStreamFailurePromise").into(),
                     promise.into(),
                 );
-                let continuation =
-                    pending_fetch_continuation(scope, resolver, &context_host.borrow());
+                let continuation = pending_fetch_continuation(
+                    scope,
+                    resolver,
+                    &context_host.borrow(),
+                    &request_url,
+                );
 
                 context_host.borrow_mut().restore_pending_subresource_fetch(
                     super::PendingSubresourceFetchState {
@@ -3344,6 +3350,7 @@ __swNonStreamFailurePromise.then(
     .expect("promise observer should install");
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
@@ -3423,8 +3430,12 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                 let resolver = v8::PromiseResolver::new(scope).expect("resolver should be created");
                 let mut body_writer = crate::types::SubresourceResponseBodyWriter::default();
                 body_writer.append(b"partial");
-                let continuation =
-                    pending_fetch_continuation(scope, resolver, &context_host.borrow());
+                let continuation = pending_fetch_continuation(
+                    scope,
+                    resolver,
+                    &context_host.borrow(),
+                    &request_url,
+                );
 
                 context_host
                     .borrow_mut()
@@ -3606,7 +3617,7 @@ fn install_streaming_fetch_response_fixture(
             let global = context.global(scope);
             let _ = global.set(scope, v8str(scope, global_name).into(), response.into());
             let mut continuation =
-                pending_fetch_continuation(scope, resolver, &context_host.borrow());
+                pending_fetch_continuation(scope, resolver, &context_host.borrow(), &request_url);
             if let super::PendingSubresourceContinuation::Fetch(fetch) = &mut continuation {
                 fetch.response_metadata = Some(metadata);
             }
@@ -3705,8 +3716,12 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     v8str(scope, "__streamingFetchBody").into(),
                     stream.into(),
                 );
-                let continuation =
-                    pending_fetch_continuation(scope, resolver, &context_host.borrow());
+                let continuation = pending_fetch_continuation(
+                    scope,
+                    resolver,
+                    &context_host.borrow(),
+                    &request_url,
+                );
 
                 context_host
                     .borrow_mut()
@@ -4695,6 +4710,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 } else {
                     vm.complete_async_subresource_fetch(
                         crate::types::AsyncSubresourceFetchCompletion {
+                            body_is_null: None,
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: "GET".to_owned(),

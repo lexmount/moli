@@ -278,11 +278,7 @@ fn prepare_import_requests(
                 fetcher
                     .clone()
                     .with_request_initiator_type(crate::types::SubresourceRequestInitiatorType::Css)
-                    .fetch_stylesheet_resource(
-                        document_url.clone(),
-                        url.clone(),
-                        options,
-                    )
+                    .fetch_stylesheet_resource(document_url.clone(), url.clone(), options)
             };
             Box::pin(async move {
                 crate::stylesheet_blocking::StylesheetImportNetworkResult::new(

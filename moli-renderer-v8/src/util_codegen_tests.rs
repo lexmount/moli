@@ -37,14 +37,18 @@ fn isolate() -> v8::OwnedIsolate {
 
 fn run(scope: &mut v8::PinScope<'_, '_>, source: &str, nonce: Option<&str>) -> String {
     let url = Url::parse("https://example.test/shared-script.js").unwrap();
-    let mut metadata = crate::module_runtime::ModuleFetchMetadata::default();
-    metadata.request_metadata.nonce = nonce.map(str::to_owned);
     let origin = create_script_origin_with_base_url_and_fetch_metadata(
         scope,
         url.as_str(),
         0,
         Some(&url),
-        &metadata,
+        &crate::module_runtime::ModuleFetchMetadata {
+            request_metadata: moli_fetch::ScriptFetchRequestMetadata {
+                nonce: nonce.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         false,
     );
     let source = v8_string(scope, source).unwrap();

@@ -169,7 +169,7 @@ fn ended_and_cancelled_touch_contacts_are_retired_after_capture_events() {
     for contacts in [1, 2] {
         for end in ["touchend", "touchcancel"] {
             let mut vm = new_pointer_activity_test_vm("touch", false, contacts);
-            let points = (0..contacts)
+            let mut points = (0..contacts)
                 .map(|id| crate::runtime::RendererTouchPoint {
                     id: id as i32,
                     x: 80.0 + 20.0 * id as f64,
@@ -178,6 +178,9 @@ fn ended_and_cancelled_touch_contacts_are_retired_after_capture_events() {
                 .collect::<Vec<_>>();
             vm.dispatch_touch_event_at_points(&points, "touchstart", false)
                 .unwrap();
+            for point in &mut points {
+                point.x += 1.0;
+            }
             vm.dispatch_touch_event_at_points(&points, "touchmove", false)
                 .unwrap();
             vm.dispatch_touch_event_at_points(&[], end, false).unwrap();
@@ -190,7 +193,7 @@ fn ended_and_cancelled_touch_contacts_are_retired_after_capture_events() {
 #[test]
 fn ending_one_touch_contact_preserves_capture_for_the_other_contact() {
     let mut vm = new_pointer_activity_test_vm("touch", false, 2);
-    let points = [
+    let mut points = [
         crate::runtime::RendererTouchPoint {
             id: 11,
             x: 80.0,
@@ -204,6 +207,9 @@ fn ending_one_touch_contact_preserves_capture_for_the_other_contact() {
     ];
     vm.dispatch_touch_event_at_points(&points, "touchstart", false)
         .unwrap();
+    for point in &mut points {
+        point.x += 1.0;
+    }
     vm.dispatch_touch_event_at_points(&points, "touchmove", false)
         .unwrap();
     vm.dispatch_touch_event_at_points(&points[..1], "touchend", false)
@@ -471,12 +477,12 @@ fn changed_touch_batches_preserve_the_primary_flag_on_end() {
 #[test]
 fn contact_updates_on_move_can_start_an_additional_contact() {
     let mut vm = new_pointer_activity_test_vm("touch", false, 2);
-    let first = crate::runtime::RendererTouchPoint {
+    let mut first = crate::runtime::RendererTouchPoint {
         id: 0,
         x: 80.0,
         y: 80.0,
     };
-    let second = crate::runtime::RendererTouchPoint {
+    let mut second = crate::runtime::RendererTouchPoint {
         id: 11,
         x: 100.0,
         y: 80.0,
@@ -490,6 +496,8 @@ fn contact_updates_on_move_can_start_an_additional_contact() {
             .unwrap(),
         "2"
     );
+    first.x += 1.0;
+    second.x += 1.0;
     vm.dispatch_touch_event_at_points(&[first, second], "touchmove", false)
         .unwrap();
     vm.dispatch_touch_contact_updates(&[], "touchend").unwrap();

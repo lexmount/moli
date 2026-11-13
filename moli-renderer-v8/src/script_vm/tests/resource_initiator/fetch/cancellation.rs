@@ -77,6 +77,8 @@ fn fetch_resource_timing_records_abort_once_and_ignores_late_completion() {
             response_filter: None,
             network_error_text: None,
             result: Err("late cancellation completion".to_owned()).into(),
+
+            body_is_null: None,
         })
         .unwrap();
         vm.exec("0", None).unwrap();

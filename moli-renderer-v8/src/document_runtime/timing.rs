@@ -37,6 +37,14 @@ impl Default for DocumentTiming {
 }
 
 impl DocumentRuntime {
+    pub(crate) fn initialize_navigation_clock(
+        &mut self,
+        navigation: &crate::network::navigation::NavigationTiming,
+    ) {
+        debug_assert!(self.timing.lifecycle.iter().all(Option::is_none));
+        self.timing = DocumentTiming::from_navigation(navigation);
+    }
+
     /// Replacing the initial Document can retain the actual Window and its
     /// Performance objects. Keep that clock's anchors, but leave this new
     /// Document's lifecycle slots empty.
@@ -67,6 +75,7 @@ impl DocumentTiming {
             lifecycle: [None; 4],
         }
     }
+
     pub(crate) fn from_navigation_start(started: Instant, start: std::time::SystemTime) -> Self {
         Self {
             time_origin: start
@@ -78,6 +87,7 @@ impl DocumentTiming {
             lifecycle: [None; 4],
         }
     }
+
     pub(crate) fn snapshot(&self) -> DocumentTimingSnapshot {
         DocumentTimingSnapshot {
             time_origin: self.time_origin,

@@ -4260,8 +4260,10 @@ impl PageScriptHost {
             let script = match step {
                 LightweightPopupParserStep::Script(script) => script,
                 LightweightPopupParserStep::WindowEventHandlers(handle) => {
-                    crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
-                        scope, self as *mut PageScriptHost, handle,
+                    crate::native_bridge::element::initialize_parser_inserted_event_handlers(
+                        scope,
+                        self as *mut PageScriptHost,
+                        handle,
                     );
                     continue;
                 }

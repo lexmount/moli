@@ -6,7 +6,6 @@ use crate::network_host::{
     EventSourceParser, EventSourceTerminalMode, event_source_active_request_id,
     event_source_connection_url, event_source_last_event_id, event_source_ready_state,
     event_source_reconnect_delay_ms, event_source_with_credentials, fail_event_source_connection,
-    set_event_source_active_request_id,
 };
 
 pub(super) fn parser_for_request(
@@ -129,13 +128,7 @@ pub(crate) fn start_worker_event_source_request<'s>(
     else {
         return false;
     };
-    let (
-        policy_context,
-        extra_headers,
-        blocked,
-        referrer_policy,
-        partition,
-    ) = {
+    let (policy_context, extra_headers, blocked, referrer_policy, partition) = {
         let state = state.borrow();
         (
             state.policy_context,
@@ -186,11 +179,26 @@ pub(crate) fn start_worker_event_source_request<'s>(
     let blob = crate::network_host::CapturedBlobUrl::capture(&url)
         .map(|entry| entry.for_environment(environment.as_ref()));
     let error = check_worker_request_csp(
-        scope, &state, &document_url, &url, kind.csp_resource_kind(), "EventSource",
+        scope,
+        &state,
+        &document_url,
+        &url,
+        kind.csp_resource_kind(),
+        "EventSource",
         crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
-    ).or_else(|| moli_url_policy::route_fetch_url(&url).err().map(|error| error.to_string()))
-    .or_else(|| should_request_be_blocked_due_to_bad_port(&url).then(|| "EventSource URL has a blocked port".to_owned()))
-    .or_else(|| worker_url_blocked(&blocked, &url).then(|| BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned()));
+    )
+    .or_else(|| {
+        moli_url_policy::route_fetch_url(&url)
+            .err()
+            .map(|error| error.to_string())
+    })
+    .or_else(|| {
+        should_request_be_blocked_due_to_bad_port(&url)
+            .then(|| "EventSource URL has a blocked port".to_owned())
+    })
+    .or_else(|| {
+        worker_url_blocked(&blocked, &url).then(|| BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+    });
     let mut request = Request::new_browser("GET", url, None, headers, timing.origin().clone())
         .with_initiator_url(&document_url)
         .with_mixed_content_policy(metadata.mixed_content_policy)
@@ -200,13 +208,33 @@ pub(crate) fn start_worker_event_source_request<'s>(
         .with_network_partition_key(partition)
         .with_browser_request_metadata(BrowserRequestMetadata::EventSource);
     if let Some(policy) = referrer_policy {
-        request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata { referrer_policy: Some(policy), ..Default::default() });
+        request = request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
+            referrer_policy: Some(policy),
+            ..Default::default()
+        });
     }
-    super::fetch::start_native(scope, &state, super::fetch::NativeWorkerFetchRequest {
-        request, blob_url_entry: blob, kind, font_face: None, timing,
-        body_stream: None, body_stream_locked: false, signal: None,
-        event_source: Some(source), admission_error: error,
-    }, document_url, None, metadata, policy_context).is_some()
+    super::fetch::start_native(
+        scope,
+        &state,
+        super::fetch::NativeWorkerFetchRequest {
+            request,
+            blob_url_entry: blob,
+            kind,
+            font_face: None,
+            timing,
+            body_stream: None,
+            body_stream_locked: false,
+            signal: None,
+            event_source: Some(source),
+            admission_error: error,
+            race_response: None,
+        },
+        document_url,
+        None,
+        metadata,
+        policy_context,
+    )
+    .is_some()
 }
 
 pub(super) fn fail_request(
@@ -242,7 +270,6 @@ pub(crate) fn abort_worker_event_source(scope: &mut v8::PinScope<'_, '_>, id: u6
             runtime.abort_controlled_fetch_with_handle_and_reason(&handle, None);
         }
         pending.load.cancel();
-
     }
 }
 
@@ -291,7 +318,6 @@ pub(super) fn start_response(
             .get_mut(&started.fetch_id)
             .expect("current SSE response");
         pending.streaming_body_source_id = Some(started.body_source_id);
-
     }
     if let Some(source) =
         current_source(scope, state, started.fetch_id, Some(started.body_source_id))
@@ -394,7 +420,7 @@ pub(super) fn complete_response(
                 .insert(completion.fetch_id, pending);
             let tx = state.borrow().fetch_completion_tx.clone();
             let body_source_id = crate::network_host::new_network_body_source_id();
-            let _ = tx.send(WorkerFetchEvent::StreamingStarted(
+            let _ = tx.send(WorkerFetchEvent::StreamingStarted(Box::new(
                 WorkerFetchStreamingStarted {
                     fetch_id: completion.fetch_id,
                     body_source_id,
@@ -402,13 +428,13 @@ pub(super) fn complete_response(
                     response_filter,
                     skip_fetch_security_validation: true,
                 },
-            ));
+            )));
             send_stream_chunk(&tx, &mut parser, completion.fetch_id, body_source_id, bytes);
             let _ = tx.send(WorkerFetchEvent::StreamingFinished(
                 WorkerFetchStreamingFinished {
+                    opaque_response_blocked: false,
                     fetch_id: completion.fetch_id,
                     body_source_id,
-                    head,
                     result: Ok(body),
                 },
             ));
@@ -418,7 +444,6 @@ pub(super) fn complete_response(
 
 pub(super) fn finish_response(
     scope: &mut v8::PinScope<'_, '_>,
-    state: &Rc<RefCell<WorkerGlobalState>>,
     pending: PendingWorkerFetch,
     finished: WorkerFetchStreamingFinished,
 ) {

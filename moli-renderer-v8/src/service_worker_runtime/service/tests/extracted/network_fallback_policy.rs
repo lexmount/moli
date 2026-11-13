@@ -111,6 +111,7 @@ fn queued_controlled_fetch(
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             direct_completion_tx: None,
+
             request_body_owner: None,
             redirect_check: None,
         })
@@ -170,16 +171,18 @@ async fn controlled_network_fallback_enforces_blocked_and_offline_policy() {
                 ServiceWorkerFetchResult::Fallback
             } else {
                 ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-                    body_is_null: false,
-
                     head: moli_fetch_types::FetchResponseHead {
+                        body_is_null: false,
+
                         metadata: moli_fetch_types::FetchResponseMetadata {
+                            cors_exposed_header_names: None,
+
                             request_include_credentials: false,
+
                             response_type: moli_fetch_types::FetchResponseType::Default,
                             timing_allow_passed: true,
                             url_list: (None).into_iter().collect(),
                             redirected: false,
-                            cors_exposed_header_names: None,
                         },
                         status: 200,
                         status_text: "OK".to_owned(),
@@ -362,13 +365,12 @@ async fn event_source_network_fallback_preserves_no_store_with_cache_disabled() 
         owner: event.owner,
         result: ServiceWorkerFetchResult::Fallback,
     });
-    let body =
-        tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            let mut started = false;
-            let mut body = Vec::new();
-            loop {
-                while let Some(event) = queue.pop_next_async_subresource_event() {
-                    match event {
+    let body = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let mut started = false;
+        let mut body = Vec::new();
+        loop {
+            while let Some(event) = queue.pop_next_async_subresource_event() {
+                match event {
                     AsyncSubresourceFetchEvent::StreamingStarted(start) => {
                         assert_eq!(start.internal_id, FETCH_ID);
                         assert_eq!(start.head.status, 200);
@@ -396,20 +398,22 @@ async fn event_source_network_fallback_preserves_no_store_with_cache_disabled() 
                     unexpected @ (AsyncSubresourceFetchEvent::RequestBodyProducer { .. }
                     | AsyncSubresourceFetchEvent::RequestUploadReady { .. }
                     | AsyncSubresourceFetchEvent::RedirectAdmission { .. }
-                    | AsyncSubresourceFetchEvent::ResourceTiming { .. }
                     | AsyncSubresourceFetchEvent::DocumentAbort { .. }
-                    | AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. }
+                    | AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                        ..
+                    }
                     | AsyncSubresourceFetchEvent::Upload { .. }
+                    | AsyncSubresourceFetchEvent::ResourceTiming { .. }
                     | AsyncSubresourceFetchEvent::ResponseLinks(_)) => {
                         panic!("unexpected simple GET EventSource fallback work: {unexpected:?}")
                     }
                 }
-                }
-                assert!(queue.wait_for_arrival_without_timeout().await);
             }
-        })
-        .await
-        .expect("EventSource fallback completion deadline");
+            assert!(queue.wait_for_arrival_without_timeout().await);
+        }
+    })
+    .await
+    .expect("EventSource fallback completion deadline");
     assert_eq!(body, b"data: network-1\n\n");
     let stats = moli_fetch::http_cache_stats(&config).unwrap();
     assert_eq!(
@@ -453,16 +457,18 @@ async fn direct_network_fallback_after_synthetic_redirect_enforces_page_policy()
             event_id: event.event_id,
             owner: event.owner,
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
-                body_is_null: false,
-
                 head: moli_fetch_types::FetchResponseHead {
+                    body_is_null: false,
+
                     metadata: moli_fetch_types::FetchResponseMetadata {
+                        cors_exposed_header_names: None,
+
                         request_include_credentials: false,
+
                         response_type: moli_fetch_types::FetchResponseType::Basic,
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
-                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),

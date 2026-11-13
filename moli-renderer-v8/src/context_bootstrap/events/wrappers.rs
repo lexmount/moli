@@ -152,21 +152,24 @@ pub(crate) fn event_callback_values<'s>(
     let Ok(target) = v8::Local::<v8::Object>::try_from(receiver) else {
         return Some((receiver, event));
     };
-    let Some(target) = super::super::shared_event_targets::window_target_in_realm(
-        scope, target, context,
-    )
-    .or_else(|| super::super::shared_event_targets::node_target_in_realm(scope, target, context)) else {
+    let (target, context) = if let Some(window) =
+        super::super::shared_event_targets::window_target_in_realm(scope, target, context)
+    {
+        // This is the target Window's actual counterpart in the listener world.
+        // Its Event wrapper belongs to that Window, even for a foreign listener.
+        let context = window.get_creation_context(scope)?;
+        (window, context)
+    } else if let Some(node) =
+        super::super::shared_event_targets::node_target_in_realm(scope, target, context)
+    {
+        (node, context)
+    } else {
         return Some((receiver, event));
     };
-    // A Window view determines the target Realm. An adopted Node can keep
-    // a wrapper from its old Window: node_target_in_realm already checked its
-    // native ownerDocument against the listener Realm, so keep that Context.
-    let context = if crate::web_api_interfaces::Node::is_instance(scope, target) {
-        context
-    } else {
-        target.get_creation_context(scope)?
-    };
-    Some((target.into(), event_in_realm(scope, event, context)?))
+    Some((
+        target.into(),
+        super::super::event_worlds::event_in_realm(scope, target, event, context)?,
+    ))
 }
 
 pub(crate) fn node_event_callback_values<'s>(
@@ -192,25 +195,10 @@ pub(crate) fn node_event_callback_values<'s>(
     };
     let target = v8::Local::<v8::Object>::try_from(receiver).ok()?;
     let receiver = super::super::shared_event_targets::target_in_realm(scope, target, context);
-    Some((receiver.into(), event_in_realm(scope, event, context)?))
-}
-
-fn event_in_realm<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    context: v8::Local<'s, v8::Context>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if world_wrappers::belongs_to_world(scope, event, context) {
-        return Some(event);
-    }
-    let backing = event_backing(scope, event);
-    let wrapper = if let Some(wrapper) = world_wrappers::get(scope, backing, context) {
-        wrapper
-    } else {
-        let scope = &mut v8::ContextScope::new(scope, context);
-        new_event_wrapper(scope, backing)?
-    };
-    Some(wrapper)
+    Some((
+        receiver.into(),
+        super::super::event_worlds::event_in_realm(scope, receiver, event, context)?,
+    ))
 }
 
 fn bind_attribute<'s>(

@@ -227,8 +227,18 @@ impl ResourceConnectionTiming {
     }
 }
 
+#[derive(Debug, Default)]
+struct ResourceServiceWorkerTiming {
+    worker_start: Option<f64>,
+    router_evaluation_start: Option<f64>,
+    cache_lookup_start: Option<f64>,
+    matched_source: &'static str,
+    final_source: &'static str,
+}
+
 #[derive(Debug)]
 pub(crate) struct ResourcePerformanceEntry {
+    service_worker: Option<Box<ResourceServiceWorkerTiming>>,
     preload_state: moli_fetch::ResponsePreloadState,
     name: String,
     initiator_type: String,
@@ -255,6 +265,21 @@ pub(crate) struct ResourcePerformanceEntry {
 }
 
 impl ResourcePerformanceEntry {
+    pub(crate) fn apply_response_body_visibility(&mut self, readable: bool) {
+        if !readable {
+            self.encoded_body_size = 0.0;
+            self.decoded_body_size = 0.0;
+            self.response_status = 0.0;
+            self.content_type.clear();
+            self.content_encoding.clear();
+            // Transfer size uses the exposed encoded size plus the fixed overhead.
+            // Preserve an already-hidden or cache-local zero transfer size.
+            if self.transfer_size > 0.0 {
+                self.transfer_size = 300.0;
+            }
+        }
+    }
+
     pub(crate) fn mark_aborted(&mut self, transfer_complete: bool) {
         self.response_status = 0.0;
         self.content_type.clear();
@@ -362,6 +387,7 @@ impl ResourcePerformanceEntry {
         };
         let content_type = resource_timing_content_type(response_headers);
         Self {
+            service_worker: None,
             preload_state,
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
@@ -421,9 +447,8 @@ impl ResourcePerformanceEntry {
             // does not supply a Document representation or content metadata.
             entry.content_type.clear();
             entry.content_encoding.clear();
-        } else if !network.resource_timing_body_visible {
-            entry.content_encoding.clear();
         }
+        entry.apply_response_body_visibility(network.resource_timing_body_visible);
         entry
     }
 
@@ -461,6 +486,7 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
     ) -> Self {
         Self {
+            service_worker: None,
             preload_state: Default::default(),
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
@@ -484,6 +510,51 @@ impl ResourcePerformanceEntry {
             content_encoding: String::new(),
             final_response_headers_start_unix_millis: None,
             first_interim_response_start_unix_millis: None,
+        }
+    }
+}
+
+fn initialize_service_worker_timing_slots<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    timing: Option<&ResourceServiceWorkerTiming>,
+    time_origin: f64,
+) {
+    let Some(timing) = timing else {
+        return;
+    };
+    for (slot, value) in [
+        (PERFORMANCE_RESOURCE_WORKER_START_SLOT, timing.worker_start),
+        (
+            PERFORMANCE_RESOURCE_WORKER_ROUTER_EVALUATION_START_SLOT,
+            timing.router_evaluation_start,
+        ),
+        (
+            PERFORMANCE_RESOURCE_WORKER_CACHE_LOOKUP_START_SLOT,
+            timing.cache_lookup_start,
+        ),
+    ] {
+        if let Some(value) = value {
+            set_performance_entry_slot_number(
+                scope,
+                entry,
+                slot,
+                moli_time::relative_dom_time_millis(value, time_origin),
+            );
+        }
+    }
+    for (slot, value) in [
+        (
+            PERFORMANCE_RESOURCE_WORKER_MATCHED_ROUTER_SOURCE_SLOT,
+            timing.matched_source,
+        ),
+        (
+            PERFORMANCE_RESOURCE_WORKER_FINAL_ROUTER_SOURCE_SLOT,
+            timing.final_source,
+        ),
+    ] {
+        if let Some(value) = v8_string(scope, value) {
+            set_private_value(scope, entry, slot, value.into());
         }
     }
 }
@@ -552,6 +623,12 @@ fn append_resource_performance_entry<'s>(
         resource,
         &entry.delivery_type,
         &entry.content_encoding,
+    );
+    initialize_service_worker_timing_slots(
+        scope,
+        resource,
+        entry.service_worker.as_deref(),
+        time_origin,
     );
     if let Some(end_time) = end_time {
         let fetch_start = entry.fetch_start_unix_millis.map_or(start_time, |start| {

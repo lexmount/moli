@@ -175,7 +175,14 @@ impl WindowCspReportRequestContext {
 }
 
 pub(crate) fn capture_window_csp_report_request_context(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
+    host: &PageScriptHost,
+    dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+) -> Option<WindowCspReportRequestContext> {
+    capture_window_csp_report_request_context_for_owner(host, dispatch_scope)
+}
+
+pub(crate) fn capture_window_csp_report_request_context_for_owner(
     host: &PageScriptHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<WindowCspReportRequestContext> {
@@ -196,8 +203,7 @@ pub(crate) fn capture_window_csp_report_request_context(
             )
         }
     };
-    window_csp_report_request_context_for_identity(
-        scope,
+    window_csp_report_request_context_for_native_identity(
         host,
         crate::native_bridge::WindowDocumentNetworkRequestIdentity::new(
             document_owner,
@@ -408,6 +414,7 @@ fn dispatch_service_worker_content_security_policy_report(
     let _ =
         host.resource_completion_sender()
             .send_async_subresource(AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: request.url,
                 request_method: request.method,
@@ -508,7 +515,14 @@ fn report_subresource_fetch_info(
 }
 
 fn window_csp_report_request_context_for_identity(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
+    host: &PageScriptHost,
+    identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
+) -> Option<WindowCspReportRequestContext> {
+    window_csp_report_request_context_for_native_identity(host, identity)
+}
+
+fn window_csp_report_request_context_for_native_identity(
     host: &PageScriptHost,
     identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
 ) -> Option<WindowCspReportRequestContext> {
@@ -565,8 +579,7 @@ fn window_csp_report_request_context_for_identity(
             host,
             identity.dispatch_scope(),
         ),
-        policy_context: effective_subresource_policy_context(
-            scope,
+        policy_context: super::request_scope::subresource_policy_context_for_owner(
             host,
             identity.dispatch_scope(),
         ),

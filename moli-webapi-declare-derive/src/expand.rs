@@ -271,8 +271,6 @@ pub(crate) fn expand_webapi_function_template(
             }
 
 
-
-
             fn build<'s>(
                 scope: &mut ::moli_webapi_declare::v8::PinScope<'s, '_, ()>,
             ) -> ::moli_webapi_declare::v8::Local<'s, ::moli_webapi_declare::v8::FunctionTemplate> {
@@ -1622,9 +1620,14 @@ fn expand_callback(
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
         let check = quote!(#receiver(scope, args.this()));
+        let invalid_receiver = if attrs.legacy_lenient_this {
+            quote!()
+        } else {
+            quote!(::moli_webapi_declare::__private::throw_illegal_invocation(scope);)
+        };
         quote! {
             if !#check {
-                ::moli_webapi_declare::__private::throw_illegal_invocation(scope);
+                #invalid_receiver
                 return;
             }
         }

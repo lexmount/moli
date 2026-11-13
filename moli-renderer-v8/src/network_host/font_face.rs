@@ -123,9 +123,11 @@ pub(crate) fn start_font_face_fetch<'s>(
     moli_fetch::FetchUrlList::new(&request_url, &[])
         .validate_request_mode(moli_fetch::RequestMode::Cors, &environment.request_origin)
         .map_err(anyhow::Error::msg)?;
+    let redirect_state = FetchCspRedirectState::new(&policy);
+    redirect_state.record_checked_url(&request_url, false);
     let font = PendingFontFaceFetch {
         face: v8::Global::new(scope, face),
-        redirect_state: FetchCspRedirectState::new(&policy),
+        redirect_state,
         policy,
         report_context,
     };
@@ -161,6 +163,7 @@ pub(crate) fn start_font_face_fetch<'s>(
             .map_err(|error| error.into_message());
         let _ = host.resource_completion_sender().send_async_subresource(
             AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url,
                 request_method: "GET".to_owned(),

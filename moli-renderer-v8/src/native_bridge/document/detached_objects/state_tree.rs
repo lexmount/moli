@@ -482,9 +482,13 @@ pub(crate) fn detached_native_object_for_handle<'s>(
             .native_bridge_mut()
             .wrap_handle(scope, runtime_ptr, handle)
     }?;
+    let current = scope.get_current_context();
     let object = if let Some(object) =
-        get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT)
-    {
+        get_private_object(scope, wrapper, DOM_PARSER_FOREIGN_NODE_SLOT).filter(|object| {
+            object.get_creation_context(scope).is_some_and(|creation| {
+                crate::native_bridge::identity::contexts_share_wrapper_world(creation, current)
+            })
+        }) {
         object
     } else {
         let owner_document_handle = unsafe { &*runtime_ptr }
@@ -493,6 +497,15 @@ pub(crate) fn detached_native_object_for_handle<'s>(
         owner_document_handle
             .and_then(|owner_document_handle| {
                 paired_detached_native_object_for_handle(scope, runtime_ptr, owner_document_handle)
+                    .filter(|document| {
+                        document
+                            .get_creation_context(scope)
+                            .is_some_and(|creation| {
+                                crate::native_bridge::identity::contexts_share_wrapper_world(
+                                    creation, current,
+                                )
+                            })
+                    })
             })
             .and_then(|owner_document| {
                 materialize_attached_native_node_as_detached(scope, owner_document, wrapper)

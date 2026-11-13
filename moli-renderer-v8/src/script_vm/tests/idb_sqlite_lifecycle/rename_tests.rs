@@ -122,7 +122,7 @@ async fn idb_sqlite_rename_abort_restores_existing_identity_and_keeps_created_na
     assert_eq!(vm.eval("JSON.stringify(rollbackNow)").unwrap(), expected);
     assert_eq!(
         vm.eval("JSON.stringify(deletedErrors)").unwrap(),
-        r#"["InvalidStateError","InvalidStateError"]"#
+        r#"["InvalidStateError","TransactionInactiveError"]"#
     );
     backend.drain(&mut vm, &loader).await;
     assert_eq!(vm.eval("JSON.stringify([store.name,index.name,createdStore.name,createdIndex.name,Array.from(db.objectStoreNames).join(','),Array.from(upgrade.objectStoreNames).join(','),Array.from(store.indexNames).join(','),createdStore.indexNames.length])").unwrap(), expected);

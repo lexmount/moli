@@ -274,6 +274,7 @@ impl SubresourceRequestDispatch {
             if !browser_context_runtime.dispatch_service_worker_fetch_request(dispatch, request) {
                 let _ = host.resource_completion_sender().send_async_subresource(
                     AsyncSubresourceFetchCompletion {
+                        body_is_null: None,
                         internal_id,
                         request_url,
                         request_method,

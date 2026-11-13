@@ -340,7 +340,7 @@ fn inert_node_execution_context_survives_creation_realm_and_wrapper_cache_retire
 }
 
 #[test]
-fn popup_document_event_authority_follows_its_window_instead_of_parser_provenance() {
+fn popup_document_events_remain_live_before_the_queued_close_retires_the_window() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
@@ -357,6 +357,6 @@ fn popup_document_event_authority_follows_its_window_instead_of_parser_provenanc
             return JSON.stringify([before,after,called,node.checked,
                 oldDocument.cloneNode(false)===null,popup.closed]);
         })()"#).unwrap();
-        assert_eq!(facts, "[true,false,1,true,true,true]", "{policy:?}");
+        assert_eq!(facts, "[true,true,2,false,false,true]", "{policy:?}");
     }
 }

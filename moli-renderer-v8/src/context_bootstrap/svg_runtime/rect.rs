@@ -118,8 +118,7 @@ fn set_field<'s>(
         return;
     }
     // WebIDL conversion runs before the implementation checks mutability.
-    if get_private_value(scope, receiver, READ_ONLY)
-        .is_some_and(|value| value.boolean_value(scope))
+    if get_private_value(scope, receiver, READ_ONLY).is_some_and(|value| value.boolean_value(scope))
     {
         throw_dom_exception(
             scope,

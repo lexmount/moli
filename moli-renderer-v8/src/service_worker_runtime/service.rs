@@ -32,9 +32,9 @@ use crate::{
 use super::clients::{
     ServiceWorkerClientFrameType, ServiceWorkerClientQuery, ServiceWorkerClientQueryKind,
     ServiceWorkerClientQueryOptions, ServiceWorkerClientQueryResult, ServiceWorkerClientQueryType,
-    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState, ServiceWorkerWindowClientDocument,
-    allocate_service_worker_exposed_client_id, service_worker_current_url_for_creation_url,
-    service_worker_exposed_client_id,
+    ServiceWorkerClientSnapshot, ServiceWorkerClientType, ServiceWorkerClientVisibilityState,
+    ServiceWorkerWindowClientDocument, allocate_service_worker_exposed_client_id,
+    service_worker_current_url_for_creation_url, service_worker_exposed_client_id,
 };
 use super::diagnostics::{
     ServiceWorkerMainScriptUpdateCheckDiagnostics, ServiceWorkerRegistrationDiagnostics,
@@ -89,8 +89,8 @@ use super::jobs::{
 use super::matching::service_worker_scope_matches_url;
 use super::owner_wake::{ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender};
 use super::pending_clear::{
-    execute_pending_clear_locked,
-    pending_clear_phase_for_registration_locked, registration_ready_to_delete_locked,
+    execute_pending_clear_locked, pending_clear_phase_for_registration_locked,
+    registration_ready_to_delete_locked,
 };
 use super::registration::{
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
@@ -145,6 +145,8 @@ mod lifecycle_requests;
 mod registration_jobs;
 mod registration_lookup;
 mod registration_store;
+mod router_race;
+mod router_rules;
 #[cfg(feature = "devtools")]
 mod runtime_protocol;
 mod service_lane_completions;
@@ -960,6 +962,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1062,6 +1065,7 @@ mod tests {
             resource_task_runner: test_resource_task_runner(),
             cancel_handle,
             navigation_preload_cancel_handle: None,
+            router_race_request_cancel_handle: None,
             streaming_body_source_id: None,
             direct_completion_tx: None,
         }
@@ -1130,6 +1134,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1546,6 +1551,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1604,6 +1610,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),
@@ -1677,6 +1684,7 @@ mod tests {
         state.versions.insert(
             version_id,
             ServiceWorkerVersion {
+                router_rules: Vec::new(),
                 id: version_id,
                 registration_id,
                 script_url: script_url.clone(),

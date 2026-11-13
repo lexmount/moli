@@ -20,9 +20,7 @@ pub(crate) use generic::{
     node_event_handler_getter_function, node_event_handler_setter_function,
     shadow_root_event_handler_getter_function, shadow_root_event_handler_setter_function,
 };
-pub(crate) use parser::{
-    ParserAddedEventHandlers, initialize_parser_inserted_body_window_event_handlers,
-};
+pub(crate) use parser::{ParserAddedEventHandlers, initialize_parser_inserted_event_handlers};
 
 fn is_body_or_frameset_element(
     runtime: &super::super::PageScriptHost,

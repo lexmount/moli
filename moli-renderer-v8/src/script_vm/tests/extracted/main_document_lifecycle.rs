@@ -574,6 +574,7 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: registered.0,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
@@ -659,6 +660,7 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
 
     let request_url = Url::parse("https://beacon-execution-context.test/main").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: accepted[0].0,
         request_url: request_url.clone(),
         request_method: "POST".to_owned(),
@@ -755,6 +757,7 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: accepted[0].0,
         request_url: report_url.clone(),
         request_method: "POST".to_owned(),
@@ -1364,6 +1367,7 @@ async fn main_image_source_restart_cancels_exact_request_and_drops_stale_termina
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: first_request_id,
         request_url: Url::parse(&image_url).expect("image request URL"),
         request_method: "GET".to_owned(),
@@ -1870,6 +1874,7 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        body_is_null: None,
         internal_id: first_request_id,
         request_url: Url::parse(&media_url).expect("media request URL"),
         request_method: "GET".to_owned(),
@@ -2548,6 +2553,7 @@ document.addEventListener('securitypolicyviolation', e => {
             })
             .unwrap();
         vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            body_is_null: None,
             internal_id: registered.0,
             request_url: request_url.clone(),
             request_method: "GET".to_owned(),

@@ -1330,25 +1330,17 @@ fn websocket_wpt_target_loopback_websocket_is_allowed_from_secure_context() {
 }
 
 #[test]
-fn websocket_wpt_target_insecure_websocket_is_blocked_from_loopback_secure_context() {
+fn websocket_wpt_target_insecure_websocket_constructs_from_loopback_secure_context() {
     let mut vm = new_storage_test_vm("http://localhost/");
-
-    vm.eval(
-        r#"
-        (() => {
-            try {
-                new WebSocket('ws://insecure.example.test/socket');
-            } catch (error) {
-                if (error && error.name === 'SecurityError') {
-                    return 'ok';
-                }
-                throw new Error(`expected SecurityError, got ${error && error.name}`);
-            }
-            throw new Error('expected insecure WebSocket construction to throw');
-        })()
-        "#,
-    )
-    .expect("target WebSocket loopback secure-context construction test should pass");
+    let result = vm
+        .eval(
+            r#"JSON.stringify((() => {
+            const socket = new WebSocket('ws://insecure.example.test/socket');
+            return [isSecureContext, socket.url];
+        })())"#,
+        )
+        .expect("a trustworthy HTTP origin does not synchronously reject a ws: constructor");
+    assert_eq!(result, r#"[true,"ws://insecure.example.test/socket"]"#);
 }
 
 #[test]

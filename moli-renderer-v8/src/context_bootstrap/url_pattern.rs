@@ -16,10 +16,97 @@ mod input;
 mod parser;
 use input::{ConstructorArgs, Input, MatchArgs};
 
+pub(crate) struct RoutingPatternInput(RoutingPatternValue);
+
+enum RoutingPatternValue {
+    Native {
+        sources: [String; 8],
+        ignore_case: [bool; 8],
+        has_groups: bool,
+    },
+    Input(Input),
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for RoutingPatternInput {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _: &(),
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value)
+            && web_api_interfaces::URLPattern::is_instance(scope, object)
+        {
+            let mut sources = Vec::with_capacity(8);
+            let mut ignore_case = [false; 8];
+            for (index, flags) in ignore_case.iter_mut().enumerate() {
+                let part = component(scope, object, index as u32)
+                    .ok_or_else(|| webidl::WebIdlError::pending_exception(context))?;
+                let regexp = get_private_value(scope, part, REGEXP)
+                    .and_then(|value| v8::Local::<v8::RegExp>::try_from(value).ok())
+                    .ok_or_else(|| webidl::WebIdlError::pending_exception(context))?;
+                sources.push(regexp.get_source(scope).to_rust_string_lossy(scope));
+                *flags = get_private_value(scope, part, IGNORE_CASE)
+                    .is_some_and(|value| value.is_true());
+            }
+            let has_groups =
+                get_private_value(scope, object, HAS_GROUPS).is_some_and(|value| value.is_true());
+            return Ok(Self(RoutingPatternValue::Native {
+                sources: sources.try_into().expect("eight URLPattern components"),
+                ignore_case,
+                has_groups,
+            }));
+        }
+        webidl::convert::<Input>(scope, value, context)
+            .map(|input| Self(RoutingPatternValue::Input(input)))
+    }
+}
+
+impl RoutingPatternInput {
+    pub(crate) fn into_router_pattern(
+        self,
+        scope: &mut v8::PinScope<'_, '_>,
+        base: &url::Url,
+    ) -> Result<crate::service_worker_runtime::static_router::RouterUrlPattern, String> {
+        let (sources, ignore_case, has_groups) = match self.0 {
+            RoutingPatternValue::Native {
+                sources,
+                ignore_case,
+                has_groups,
+            } => (sources, ignore_case, has_groups),
+            RoutingPatternValue::Input(input) => {
+                let input = input.with_router_base_url(base.as_str());
+                let base = matches!(input, Input::String(_)).then_some(base.as_str());
+                let pattern = parser::parse(scope, input, base, false)
+                    .map_err(|error| format!("Invalid router URLPattern: {error}"))?;
+                let sources = [
+                    pattern.protocol,
+                    pattern.username,
+                    pattern.password,
+                    pattern.hostname,
+                    pattern.port,
+                    pattern.pathname,
+                    pattern.search,
+                    pattern.hash,
+                ]
+                .map(|part| part.regexp_string);
+                (sources, [false; 8], pattern.has_regexp_groups)
+            }
+        };
+        if has_groups {
+            return Err("Static router URLPatterns cannot contain regexp groups".to_owned());
+        }
+        crate::service_worker_runtime::static_router::RouterUrlPattern::new(sources, ignore_case)
+    }
+}
+
 const COMPONENTS: &str = "__moliURLPatternComponents";
 const HAS_GROUPS: &str = "__moliURLPatternHasGroups";
 const PATTERN: &str = "__moliURLPatternString";
 const REGEXP: &str = "__moliURLPatternRegExp";
+const IGNORE_CASE: &str = "__moliURLPatternIgnoreCase";
 const NAMES: &str = "__moliURLPatternGroupNames";
 const KEYS: [&str; 8] = [
     "protocol", "username", "password", "hostname", "port", "pathname", "search", "hash",
@@ -43,6 +130,8 @@ struct ComponentState<'s> {
     regexp: v8::Local<'s, v8::RegExp>,
     #[webapi(slot = NAMES)]
     names: v8::Local<'s, v8::Array>,
+    #[webapi(slot = IGNORE_CASE)]
+    ignore_case: bool,
 }
 
 #[derive(WebApiObject)]
@@ -150,9 +239,13 @@ fn constructor<'s>(
         let Some(names) = crate::util::serialize_v8_array(scope, part.group_name_list) else {
             return;
         };
-        let Ok(component) =
-            ComponentState::new(part.pattern_string, regexp.compiled(), names).bind(scope)
-        else {
+        let Ok(component) = ComponentState::new(
+            part.pattern_string,
+            regexp.compiled(),
+            names,
+            flags.contains(RegExpCreationFlags::IGNORE_CASE),
+        )
+        .bind(scope) else {
             return;
         };
         components.push(component.into());

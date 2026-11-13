@@ -188,6 +188,10 @@ impl FetchResponseMetadata {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FetchResponseHead {
+    /// Whether the internal response body is null. An empty byte body remains
+    /// a present body; opaque public filtering does not erase its internal body.
+    #[serde(default)]
+    pub body_is_null: bool,
     pub metadata: FetchResponseMetadata,
     pub status: u16,
     pub status_text: String,

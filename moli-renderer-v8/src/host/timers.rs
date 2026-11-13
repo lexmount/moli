@@ -1333,9 +1333,13 @@ fn timer_callback_relevant_context_is_current(
     let Some(identity) = callback.relevant_identity() else {
         return true;
     };
-    context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-        unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
-    })
+    let context = callback.context(scope);
+    let Some((_, crate::common_runtime::RuntimeExecutionContext::Window(host_ptr))) =
+        crate::common_runtime::CommonRuntimeBinding::from_context(context)
+    else {
+        return false;
+    };
+    unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
 }
 
 fn run_window_timer_callback(
@@ -1465,12 +1469,15 @@ fn run_window_timer_callback(
                     report,
                 ) => {
                     let message = report.formatted_error("callback", "Window Web IDL callback");
-                    report_window_timer_exception(
-                        scope,
-                        callback.relevant_identity(),
-                        None,
-                        &report,
-                    );
+                    if let Some(context) = callback.relevant_context(scope) {
+                        let scope = &mut v8::ContextScope::new(scope, context);
+                        report_window_timer_exception(
+                            scope,
+                            callback.relevant_identity(),
+                            None,
+                            &report,
+                        );
+                    }
                     Err(HostTimeoutRunResult::CallbackError(message))
                 }
             }

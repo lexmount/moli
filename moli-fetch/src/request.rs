@@ -1132,7 +1132,8 @@ impl Request {
         self.redirect_check
             .as_ref()
             .map_or(Ok(()), |check| (check.0)(next_url))?;
-        self.mixed_content_policy.check(next_url)
+        self.mixed_content_policy.check(next_url)?;
+        Ok(())
     }
 
     pub fn upload_observer(&self) -> Option<&crate::UploadObserver> {

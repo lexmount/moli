@@ -7,7 +7,7 @@ mod template_registry;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use install::capture_eager_intrinsic_interfaces;
+pub(crate) use install::{capture_eager_intrinsic_interfaces, initialize_window_proxy_intrinsics};
 pub(super) use install::{
     filter_window_exposed_interfaces, initialize_realm_interface_registry,
     install_interface_template_metadata, install_window_exposed_interfaces,

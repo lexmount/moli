@@ -410,10 +410,12 @@ fn start_window_ping(
         }
         return true;
     }
+    let redirect_state = FetchCspRedirectState::new(&policy);
+    redirect_state.record_checked_url(&request.url, false);
     let beacon = crate::types::PendingBeacon {
         request: request.clone(),
         policy_context: context.policy_context,
-        redirect_state: FetchCspRedirectState::new(&policy),
+        redirect_state,
         policy,
         report_context,
         timing: Some(
@@ -448,6 +450,7 @@ fn start_window_ping(
     if let Some(error) = error {
         let _ = host.resource_completion_sender().send_async_subresource(
             crate::types::AsyncSubresourceFetchCompletion {
+                body_is_null: None,
                 internal_id,
                 request_url: request.url,
                 request_method: request.method,

@@ -235,10 +235,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     ) {
         // New live elements register handlers on insertion. A merge into an
         // existing connected body has no insertion follow-up; detached fragment
-        // attributes also need registration without waiting for connection.
+        // and windowless parser attributes need admission in their original
+        // Document's relevant global before later connection or adoption.
         let window_handlers = if matches!(
             self.target,
             DocumentWriteParserMutationTarget::DetachedFragment
+                | DocumentWriteParserMutationTarget::WindowlessDocument { .. }
         ) || self.runtime.dom_host().is_connected(node_id)
         {
             crate::native_bridge::element::ParserAddedEventHandlers::capture(
