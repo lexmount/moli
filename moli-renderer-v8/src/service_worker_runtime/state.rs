@@ -136,6 +136,8 @@ pub(super) struct ServiceWorkerRuntimeInner {
     pub(super) resource_store: SharedServiceWorkerResourceStore,
     pub(super) restored_worker_context_runtime: RendererWorkerContextRuntime,
     pub(super) browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
+    pub(super) storage_bucket_store:
+        Mutex<Option<crate::context_bootstrap::SharedStorageBucketStore>>,
     #[cfg(test)]
     pub(super) target_output_test_rx:
         Mutex<Option<crate::runtime::RendererOutputTransportReceiver>>,
@@ -170,6 +172,7 @@ impl ServiceWorkerRuntimeInner {
             resource_store,
             restored_worker_context_runtime,
             browser_resource_runtime,
+            storage_bucket_store: Mutex::new(None),
             #[cfg(test)]
             target_output_test_rx: Mutex::new(None),
         }

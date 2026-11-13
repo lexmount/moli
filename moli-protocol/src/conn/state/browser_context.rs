@@ -512,6 +512,12 @@ impl BrowserContext {
         debugger_enabled: bool,
     ) -> Self {
         let storage_partition = BrowserContextStoragePartition::new(identity, partition);
+        let renderer_runtime_owner =
+            RendererBrowserContextRuntime::new_with_debugger_enabled(debugger_enabled);
+        renderer_runtime_owner
+            .owner_access()
+            .runtime()
+            .bind_storage_bucket_store(storage_partition.storage_bucket_store().clone());
 
         Self {
             id,
@@ -552,9 +558,7 @@ impl BrowserContext {
             http_cache_max_bytes,
             page_navigation_runtime_config: None,
             renderer_output_transport_sender: None,
-            renderer_runtime_owner: Some(RendererBrowserContextRuntime::new_with_debugger_enabled(
-                debugger_enabled,
-            )),
+            renderer_runtime_owner: Some(renderer_runtime_owner),
         }
     }
 
