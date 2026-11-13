@@ -266,17 +266,6 @@ async fn assert_child_frame_navigation_completion(
         },
     )
     .await;
-    let child_frame_id_owned = child_frame_id.to_owned();
-    wait_until_message(
-        ctx,
-        "SID-1",
-        "child frame Page.frameStoppedLoading",
-        move |message| {
-            message["method"] == json!("Page.frameStoppedLoading")
-                && message["params"]["frameId"] == json!(child_frame_id_owned)
-        },
-    )
-    .await;
     let child_navigated = ctx
         .sent
         .iter()
@@ -310,6 +299,31 @@ async fn assert_child_frame_navigation_completion(
         .as_str()
         .expect("child navigation loader id")
         .to_owned();
+
+    // A prior navigation may still publish its stop after this commit. Wait
+    // for this loader's terminal lifecycle and the stop following it instead.
+    let child_frame_id_owned = child_frame_id.to_owned();
+    let child_loader_id_owned = child_loader_id.clone();
+    wait_until_messages(
+        ctx,
+        "SID-1",
+        "child navigation loader lifecycle and stopped loading",
+        move |messages| {
+            let terminal_index = messages.iter().position(|message| {
+                message["method"] == json!("Page.lifecycleEvent")
+                    && message["params"]["frameId"] == json!(child_frame_id_owned)
+                    && message["params"]["loaderId"] == json!(child_loader_id_owned)
+                    && message["params"]["name"] == json!("networkIdle")
+            });
+            terminal_index.is_some_and(|index| {
+                messages[index + 1..].iter().any(|message| {
+                    message["method"] == json!("Page.frameStoppedLoading")
+                        && message["params"]["frameId"] == json!(child_frame_id_owned)
+                })
+            })
+        },
+    )
+    .await;
 
     let lifecycle_names = ctx
         .sent
