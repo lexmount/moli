@@ -33,6 +33,23 @@ attempt followed by a new interception ID with the same Network ID. The group
 settles each interception and still requires exactly one successful response
 body at response stage and one Network terminal per request.
 
+A synchronous XHR control in Window and DedicatedWorker requests the same
+Font-matching URL under mixed Font/Image/Media patterns. Its class remains
+outside interception eligibility:
+it must return the exact binary response with no Fetch pause and one origin hit.
+The Window control also requires one correlated successful Network terminal;
+Chromium reports Worker Network events on the Worker target rather than the
+Page session. Renderer regressions separately
+require an ordinary route before a native interception controller is created.
+Matching synchronous XHR remains interceptable through the native path.
+
+Eligibility is live target state shared by Documents and dedicated/nested
+Workers, including accepted request views; popup targets start independently.
+Loader retirement does not replace it with a local fallback. Buffered native
+XHR retains its original raw-byte capture for Network consumers while the
+Window/Worker JS boundary materializes a response. Memory-allocation identity,
+disk extent lifetime, non-UTF-8 bytes and release are checked by Rust regressions.
+
 The default `fetch-media` group drives real audio, video and text-track element
 loads. Eleven scenarios cover single Media filters, mixed Image/Media/Font
 patterns, continue/fulfill/fail/disable and response-stage body reading. Valid
