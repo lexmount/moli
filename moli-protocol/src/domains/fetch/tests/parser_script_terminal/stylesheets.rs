@@ -118,11 +118,29 @@ async fn script_terminal_precedes_stylesheet_release(action: &str, status: u16, 
     // No Runtime.evaluate or CSS release may be needed to publish this result.
     for session in ["SID-1", "SID-observer"] {
         wait_until_scheduler_message(&mut ctx, "script terminal before CSS release", |message| {
-            message["method"] == terminal
-                && message["params"]["requestId"] == network_id
+            matches!(
+                message["method"].as_str(),
+                Some("Network.loadingFinished" | "Network.loadingFailed")
+            ) && message["params"]["requestId"] == network_id
                 && message["sessionId"] == session
         })
         .await;
+        let message = ctx
+            .sent
+            .iter()
+            .find(|message| {
+                matches!(
+                    message["method"].as_str(),
+                    Some("Network.loadingFinished" | "Network.loadingFailed")
+                ) && message["params"]["requestId"] == network_id
+                    && message["sessionId"] == session
+            })
+            .unwrap();
+        assert_eq!(message["method"], terminal);
+        if action == "Fetch.fulfillRequest" && status >= 400 {
+            assert_eq!(message["params"]["errorText"], "net::ERR_ABORTED");
+            assert_eq!(message["params"]["canceled"], true);
+        }
     }
     if action == "Fetch.continueRequest" {
         (&mut broken_server)
@@ -182,7 +200,7 @@ async fn script_terminal_precedes_stylesheet_release(action: &str, status: u16, 
             "CSS settlement must not duplicate the terminal: {terminals:?}"
         );
         assert_eq!(terminals[0]["method"], terminal);
-        if terminal == "Network.loadingFinished" {
+        if action == "Fetch.fulfillRequest" {
             assert!(
                 ctx.sent
                     .iter()
@@ -224,11 +242,11 @@ async fn fulfilled_script_reports_network_success_before_blocking_stylesheet_fin
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn http_error_reports_network_success_before_blocking_stylesheet_finishes() {
+async fn http_error_reports_network_failure_before_blocking_stylesheet_finishes() {
     script_terminal_precedes_stylesheet_release(
         "Fetch.fulfillRequest",
         404,
-        "Network.loadingFinished",
+        "Network.loadingFailed",
     )
     .await;
 }

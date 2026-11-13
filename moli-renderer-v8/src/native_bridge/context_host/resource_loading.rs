@@ -275,7 +275,7 @@ impl PageScriptHost {
         request_initiator_type: SubresourceRequestInitiatorType,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        let record = Self::get_subresource_network_record_with_initiator(
+        self.record_get_subresource_network_result_with_handle(
             frame_id,
             document_url,
             request_url,
@@ -284,6 +284,74 @@ impl PageScriptHost {
             result,
             None,
         );
+    }
+
+    pub(crate) fn record_get_subresource_network_result_with_handle(
+        &mut self,
+        frame_id: Option<String>,
+        document_url: url::Url,
+        request_url: url::Url,
+        resource_type: SubresourceResourceType,
+        request_initiator_type: SubresourceRequestInitiatorType,
+        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
+        request_handle: Option<SubresourceNetworkRequestHandle>,
+    ) {
+        if resource_type == SubresourceResourceType::Script
+            && let Ok(response) = result
+            && response.status >= 400
+        {
+            // Script loading rejects HTTP error responses after receiving the
+            // headers. Preserve those headers and the original request identity,
+            // then report the resource failure independently of script execution.
+            let handle =
+                request_handle.unwrap_or_else(|| self.next_subresource_network_request_handle());
+            self.record_subresource_request_started(SubresourceRequestStarted::new(
+                handle,
+                frame_id,
+                document_url,
+                request_url,
+                "GET".to_owned(),
+                Default::default(),
+                None,
+                resource_type,
+                request_initiator_type,
+                response.request_cookie_report.clone(),
+            ));
+            self.record_subresource_response_started(
+                SubresourceResponseStarted::new(
+                    handle,
+                    response.redirect_chain.clone().into_iter().collect(),
+                    response.final_url.clone(),
+                    response.status,
+                    response.headers.clone(),
+                    response.cookie_set_reports.clone(),
+                )
+                .with_from_cache(response.from_cache)
+                .with_negotiated_http_version(response.negotiated_http_version)
+                .with_network_request_headers(
+                    response
+                        .network_request_headers()
+                        .map(|headers| headers.to_vec()),
+                ),
+            );
+            self.record_subresource_body_finished(SubresourceBodyFinished::failed(
+                handle,
+                moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+            ));
+            return;
+        }
+        let mut record = Self::get_subresource_network_record_with_initiator(
+            frame_id,
+            document_url,
+            request_url,
+            resource_type,
+            request_initiator_type,
+            result,
+            None,
+        );
+        if let Some(handle) = request_handle {
+            record = record.with_request_handle(handle);
+        }
         self.record_subresource_network(record);
     }
 
@@ -334,7 +402,7 @@ impl PageScriptHost {
         )));
     }
 
-    pub(crate) fn get_subresource_network_record_with_initiator(
+    fn get_subresource_network_record_with_initiator(
         frame_id: Option<String>,
         document_url: url::Url,
         request_url: url::Url,

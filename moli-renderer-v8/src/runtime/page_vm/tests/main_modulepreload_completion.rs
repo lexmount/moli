@@ -351,14 +351,24 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
             ModuleMapEntryState::Failed
         );
         assert!(page_vm.vm().subresource_activity_epoch() > activity_epoch_before);
-        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].document_url(), &document_url);
-        assert_eq!(records[0].url(), &request_url);
+        let network = page_vm.vm_mut().take_network_output().into_items().collect::<Vec<_>>();
+        let [ScriptNetworkOutputItem::SubresourceRequestStarted(request),
+             ScriptNetworkOutputItem::SubresourceResponseStarted(response),
+             ScriptNetworkOutputItem::SubresourceBodyFinished(body)] = network.as_slice() else {
+            panic!("HTTP error modulepreload must retain its response before failure: {network:?}");
+        };
+        assert_eq!(request.document_url(), &document_url);
+        assert_eq!(request.url(), &request_url);
+        assert_eq!(request.resource_type(), SubresourceResourceType::Script);
         assert_eq!(
-            records[0].request_initiator_type(),
+            request.request_initiator_type(),
             SubresourceRequestInitiatorType::Parser
         );
+        assert_eq!(response.final_url(), &request_url);
+        assert_eq!(response.status(), 404);
+        assert_eq!(request.handle(), response.handle());
+        assert_eq!(request.handle(), body.handle());
+        assert!(matches!(body.result(), SubresourceBodyFinishedResult::Failed(error) if error == "net::ERR_ABORTED"));
         assert_eq!(
             modulepreload_performance_summary(&mut page_vm, &request_url)?,
             "link",

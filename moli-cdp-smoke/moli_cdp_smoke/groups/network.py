@@ -1809,7 +1809,7 @@ async def _verify_parser_script_network_events(state: SmokeState) -> None:
 
 async def _verify_intercepted_parser_script_networkidle(state: SmokeState) -> None:
     script_body = 'globalThis.__smokeParserScriptValue = "parser script loaded";'
-    for action in ("fulfill", "continue", "abort"):
+    for action in ("fulfill", "continue", "abort", "fulfill_http_error"):
         async with isolated_network_page(state) as isolated:
             page = isolated.page
             script_url = f"{state.fixture}/parser-script.js"
@@ -1821,8 +1821,9 @@ async def _verify_intercepted_parser_script_networkidle(state: SmokeState) -> No
 
             async def handle(route: Any) -> None:
                 handled.append(route.request)
-                if action == "fulfill":
-                    await route.fulfill(status=200, content_type="text/javascript", body=script_body)
+                if action in ("fulfill", "fulfill_http_error"):
+                    await route.fulfill(status=404 if action == "fulfill_http_error" else 200,
+                                        content_type="text/javascript", body=script_body)
                 elif action == "continue":
                     await route.continue_()
                 else:
@@ -1835,7 +1836,8 @@ async def _verify_intercepted_parser_script_networkidle(state: SmokeState) -> No
             # can remove it from its inflight set and observe networkidle.
             await page.goto(f"{state.fixture}/parser-script-page", wait_until="networkidle", timeout=10_000)
             assert_equal(len(handled), 1, f"{action} parser script route count")
-            terminals = failed if action == "abort" else finished
+            expect_failure = action in ("abort", "fulfill_http_error")
+            terminals = failed if expect_failure else finished
             assert_equal(terminals.count(handled[0]), 1, f"{action} original Playwright request terminal")
             events = isolated.subresource_events[event_start:]
             requests = [event for event in events if event["method"] == "Network.requestWillBeSent"
@@ -1846,9 +1848,16 @@ async def _verify_intercepted_parser_script_networkidle(state: SmokeState) -> No
                                  if event["method"] in ("Network.loadingFinished", "Network.loadingFailed")
                                  and event["params"].get("requestId") == request_id]
             assert_equal(len(network_terminals), 1, f"{action} original Network request terminal count")
-            expected = "Network.loadingFailed" if action == "abort" else "Network.loadingFinished"
+            expected = "Network.loadingFailed" if expect_failure else "Network.loadingFinished"
             assert_equal(network_terminals[0]["method"], expected, f"{action} parser script terminal")
-            if action != "abort":
+            if action == "fulfill_http_error":
+                responses = [event for event in events if event["method"] == "Network.responseReceived"
+                             and event["params"].get("requestId") == request_id]
+                assert_equal(len(responses), 1, "HTTP error script response count")
+                assert_equal(responses[0]["params"]["response"]["status"], 404, "HTTP error script status")
+                assert_equal(network_terminals[0]["params"]["errorText"], "net::ERR_ABORTED", "HTTP error script failure")
+                assert_equal(network_terminals[0]["params"]["canceled"], True, "HTTP error script canceled")
+            if not expect_failure:
                 body = await isolated.cdp.send("Network.getResponseBody", {"requestId": request_id})
                 assert_equal(body.get("body"), script_body, f"{action} parser script response body")
             state.record(f"route_{action}_parser_script_networkidle")
