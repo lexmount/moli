@@ -217,6 +217,87 @@ async def _runtime(
         )
 
 
+async def _dialog_during_pending_navigation(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str
+) -> None:
+    # Open the old Document's prompt only after the navigation starts. Chrome
+    # can dismiss a prompt that was already open when navigation was requested.
+    with (
+        _held_navigation() as (trigger, trigger_arrived, trigger_release),
+        _held_navigation() as (held, arrived, release),
+    ):
+        async with _connection(
+            target, fixture, results, name, prompt_policy="ignore"
+        ) as (wire, a, _b):
+            try:
+                await wire.call(
+                    "session.subscribe",
+                    {
+                        "events": [
+                            "browsingContext.userPromptOpened",
+                            "browsingContext.userPromptClosed",
+                            "log.entryAdded",
+                        ],
+                        "contexts": [a],
+                    },
+                )
+                await wire.evaluate(
+                    a,
+                    "void(async()=>{await fetch("
+                    + json.dumps(trigger)
+                    + ", {mode:'no-cors'});"
+                    "const result=confirm('pending-navigation-prompt');"
+                    "console.log('pending-navigation-result:'+result);})()",
+                )
+                assert_true(
+                    await asyncio.to_thread(trigger_arrived.wait, 10),
+                    f"{name}: old Document has armed its prompt trigger",
+                )
+                navigation = await wire.send(
+                    "browsingContext.navigate",
+                    {"context": a, "url": held, "wait": "complete"},
+                )
+                assert_true(
+                    await asyncio.to_thread(arrived.wait, 10),
+                    f"{name}: new navigation reaches the held HTTP response",
+                )
+                trigger_release.set()
+                await wire.until(
+                    lambda m: m.get("method") == "browsingContext.userPromptOpened"
+                    and m["params"].get("context") == a
+                    and m["params"].get("message") == "pending-navigation-prompt",
+                    "old Document's prompt during navigation",
+                )
+                await wire.call(
+                    "browsingContext.handleUserPrompt", {"context": a, "accept": True}
+                )
+                await wire.until(
+                    lambda m: m.get("method") == "browsingContext.userPromptClosed"
+                    and m["params"].get("context") == a
+                    and m["params"].get("accepted") is True,
+                    "the original prompt is accepted",
+                )
+                await wire.until(
+                    lambda m: m.get("method") == "log.entryAdded"
+                    and m["params"].get("text") == "pending-navigation-result:true",
+                    "the old script receives its actual confirm result",
+                )
+                assert_true(
+                    not release.is_set() and not wire.has_response(navigation),
+                    f"{name}: prompt handling does not require or settle navigation",
+                )
+                release.set()
+                await wire.response(navigation)
+                assert_equal(
+                    await wire.evaluate(a, "document.title"),
+                    {"type": "string", "value": "held-navigation-completed"},
+                    f"{name}: navigation commits after handling the old prompt",
+                )
+            finally:
+                trigger_release.set()
+                release.set()
+
+
 async def _runtime_popup_facts(
     target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str
 ) -> None:
@@ -544,6 +625,86 @@ async def _input_release_during_pause(
         await wire.response(action, allow_error=True)
 
 
+async def _input_release_generations(
+    target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str
+) -> None:
+    # Calibrated against ChromeDriver 156.0.8078.73. Newer upstream mapper
+    # revisions serialize releaseActions on the same actions queue instead.
+    async with _connection(target, fixture, results, name) as (wire, a, _b):
+        await wire.call(
+            "session.subscribe", {"events": ["log.entryAdded"], "contexts": [a]}
+        )
+        await wire.evaluate(
+            a,
+            "document.body.innerHTML='<input>';document.querySelector('input').focus();"
+            "globalThis.progressKeys=[];for(const type of ['keydown','keyup'])"
+            "addEventListener(type,e=>{progressKeys.push([type,e.key,e.shiftKey]);"
+            "console.log('generation-'+type+':'+e.key);});true",
+        )
+        old = await wire.send(
+            "input.performActions",
+            {
+                "context": a,
+                "actions": [
+                    {
+                        "type": "key",
+                        "id": "generation-key",
+                        "actions": [
+                            {"type": "keyDown", "value": "\ue008"},
+                            {"type": "pause", "duration": 5000},
+                            {"type": "keyDown", "value": "\ue012"},
+                            {"type": "keyUp", "value": "\ue012"},
+                        ],
+                    }
+                ],
+            },
+        )
+        await wire.until(
+            lambda m: m.get("method") == "log.entryAdded"
+            and m["params"].get("text") == "generation-keydown:Shift",
+            "the old input generation actually presses Shift",
+        )
+        await wire.call("input.releaseActions", {"context": a})
+        assert_true(
+            not wire.has_response(old),
+            f"{name}: release completes during the old pause",
+        )
+        await wire.call(
+            "input.performActions",
+            {
+                "context": a,
+                "actions": [
+                    {
+                        "type": "key",
+                        "id": "generation-key",
+                        "actions": [
+                            {"type": "keyDown", "value": "b"},
+                            {"type": "keyUp", "value": "b"},
+                        ],
+                    }
+                ],
+            },
+        )
+        assert_true(
+            not wire.has_response(old), f"{name}: new input generation completes first"
+        )
+        await wire.response(old)
+        assert_equal(
+            json.loads(
+                (await wire.evaluate(a, "JSON.stringify(progressKeys)"))["value"]
+            ),
+            [
+                ["keydown", "Shift", True],
+                ["keyup", "Shift", False],
+                ["keydown", "b", False],
+                ["keyup", "b", False],
+                ["keydown", "ArrowLeft", False],
+                ["keyup", "ArrowLeft", False],
+            ],
+            f"{name}: release, new generation, and old continuation retain their input state",
+        )
+
+
 async def _runtime_cancel(
     target: WebDriverTarget, fixture: str, results: list[dict[str, Any]], name: str
 ) -> None:
@@ -868,6 +1029,12 @@ async def run_bidi_progress_group(
             lambda name: _navigation(target, fixture, results, name, "complete"),
         ),
         (
+            "bidi_dialog_during_pending_navigation",
+            lambda name: _dialog_during_pending_navigation(
+                target, fixture, results, name
+            ),
+        ),
+        (
             "bidi_pending_runtime_popup_facts",
             lambda name: _runtime_popup_facts(target, fixture, results, name),
         ),
@@ -886,6 +1053,10 @@ async def run_bidi_progress_group(
         (
             "bidi_input_release_during_pause",
             lambda name: _input_release_during_pause(target, fixture, results, name),
+        ),
+        (
+            "bidi_input_release_generations_chrome156",
+            lambda name: _input_release_generations(target, fixture, results, name),
         ),
         (
             "bidi_input_pause_controls",

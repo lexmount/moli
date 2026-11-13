@@ -174,14 +174,14 @@ async def run_raw_tracing_group(
             "tracing_raw_end_wire_order",
             {"sequence": sequence, "physicalFrontendPeerRejected": True},
         )
-        await _verify_stop_before_start_ack_wire_order(client, results)
+        await _verify_start_end_race_wire_order(client, results)
     finally:
         if peer is not None:
             await peer.websocket.close()
         await client.websocket.close()
 
 
-async def _verify_stop_before_start_ack_wire_order(
+async def _verify_start_end_race_wire_order(
     client: RawCdpClient,
     results: list[dict[str, Any]],
 ) -> None:
@@ -203,11 +203,13 @@ async def _verify_stop_before_start_ack_wire_order(
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise SmokeError(
-                "timed out reading stop-before-start-ack output: "
+                "timed out reading racing start/end output: "
                 f"responses={responses!r}, sequence={sequence!r}"
             )
         message = await asyncio.wait_for(client.recv(), timeout=remaining)
         message_id = message.get("id")
+        if message_id in responses:
+            raise SmokeError(f"duplicate Tracing response: {message!r}")
         if message_id == end_id:
             responses[end_id] = message
             sequence.append("end-response")
@@ -221,27 +223,35 @@ async def _verify_stop_before_start_ack_wire_order(
             saw_complete = True
 
     assert_equal(responses[end_id].get("result"), {}, "racing Tracing.end response")
-    assert_equal(
-        responses[start_id].get("error"),
-        {
-            "code": -32000,
-            "message": "Tracing was stopped before start has been completed.",
-        },
-        "stopped-before-ack Tracing.start error",
-    )
-    if sequence[:2] != ["end-response", "start-error"]:
-        raise SmokeError(
-            "Chromium sends the racing Tracing.end response before the interrupted "
-            f"Tracing.start error: {sequence!r}"
+    # Two sends do not keep startup pending: the server can finish it before
+    # receiving end. Preserve each outcome's exact response/data ordering.
+    interrupted = "error" in responses[start_id]
+    if interrupted:
+        assert_equal(
+            responses[start_id]["error"],
+            {
+                "code": -32000,
+                "message": "Tracing was stopped before start has been completed.",
+            },
+            "stopped-before-ack Tracing.start error",
         )
+        if sequence[:2] != ["end-response", "start-error"]:
+            raise SmokeError(
+                "Chromium sends the racing Tracing.end response before the interrupted "
+                f"Tracing.start error: {sequence!r}"
+            )
+    else:
+        assert_equal(responses[start_id].get("result"), {}, "completed Tracing.start response")
+        if sequence[:2] != ["start-response", "end-response"]:
+            raise SmokeError(f"completed trace must acknowledge start before end: {sequence!r}")
     if "data" not in sequence or sequence.index("data") < 2:
-        raise SmokeError(f"interrupted trace data must follow both responses: {sequence!r}")
+        raise SmokeError(f"trace data must follow both responses: {sequence!r}")
     if sequence[-1] != "complete":
-        raise SmokeError(f"interrupted trace must finish with tracingComplete: {sequence!r}")
+        raise SmokeError(f"trace must finish with tracingComplete: {sequence!r}")
     record(
         results,
-        "tracing_raw_stop_before_start_ack_wire_order",
-        {"sequence": sequence, "error": responses[start_id]["error"]},
+        "tracing_raw_start_end_race_wire_order",
+        {"sequence": sequence, "outcome": "interrupted" if interrupted else "started", "error": responses[start_id].get("error")},
     )
 
 
