@@ -3032,6 +3032,7 @@ impl ScriptVm {
             {
                 return Ok(input_dispatch_outcome(select_contenteditable_contents(
                     scope,
+                    runtime_ptr,
                     editing_host,
                 )));
             }

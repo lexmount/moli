@@ -9,18 +9,42 @@ pub(in crate::context_bootstrap) const RANGE_RECORD_LIFETIME_INTERNAL_FIELD_INDE
 pub(in crate::context_bootstrap) const RANGE_RECORD_ID_INTERNAL_FIELD_INDEX: usize = 1;
 pub(in crate::context_bootstrap) const RANGE_WRAPPER_INTERNAL_FIELD_COUNT: usize = 2;
 
-// Constructors read ordinary wrappers before branding is complete. Only a
-// registered native Proxy may use another object's range storage.
+// Constructors read ordinary wrappers before branding is complete. Only native
+// world wrappers and registered native Proxies may use another object's storage.
 pub(super) fn range_backing_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let range = world_wrappers::owner(scope, range);
     if range.is_proxy() {
         let target = moli_webapi_declare::web_api_object_target(scope, range)?;
-        crate::web_api_interfaces::AbstractRange::is_instance(scope, target).then_some(target)
+        crate::web_api_interfaces::AbstractRange::is_instance(scope, target)
+            .then(|| world_wrappers::owner(scope, target))
     } else {
         Some(range)
     }
+}
+
+pub(in crate::context_bootstrap) fn range_in_current_world<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    range: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let range = world_wrappers::owner(scope, range);
+    let context = scope.get_current_context();
+    if world_wrappers::belongs_to_world(scope, range, context) {
+        return Some(range);
+    }
+    if let Some(wrapper) = world_wrappers::get(scope, range, context) {
+        return Some(wrapper);
+    }
+    let wrapper =
+        super::super::exposed_interfaces::build_intrinsic_interface_instance(scope, "Range")
+            .ok()?;
+    crate::web_api_interfaces::initialize(scope, wrapper, "Range").ok()?;
+    // This view retains the original wrapper and uses its record. Only that
+    // original wrapper owns the registry's weak finalizer for the live Range.
+    world_wrappers::insert(scope, range, wrapper);
+    Some(wrapper)
 }
 
 pub(in crate::context_bootstrap) fn current_document_object<'s>(
