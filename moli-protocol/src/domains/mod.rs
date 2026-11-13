@@ -1,5 +1,5 @@
 pub mod accessibility;
-pub mod actions;
+pub(crate) use moli_protocol_cdp_defs::actions;
 pub(crate) mod activity;
 pub mod audits;
 pub(crate) mod audits_output_state;

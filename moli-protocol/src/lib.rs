@@ -10,7 +10,6 @@ mod cdp_projection;
 pub mod conn;
 pub mod domains;
 
-pub use domains::actions::implemented_cdp_commands;
 pub mod frame_index;
 #[cfg(feature = "test-support")]
 pub mod test_support;

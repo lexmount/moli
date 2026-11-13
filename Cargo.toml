@@ -13,6 +13,7 @@ members = [
     "moli-cookie-db",
     "moli-cookie-import",
     "moli-protocol-cdp",
+    "moli-protocol-cdp-defs",
     "moli-cookie-store",
     "moli-content-type",
     "moli-css-parse",

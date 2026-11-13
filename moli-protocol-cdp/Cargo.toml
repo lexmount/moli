@@ -11,7 +11,11 @@ moli-time = { path = "../moli-time" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 
+[dev-dependencies]
+moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
+
 [build-dependencies]
+moli-protocol-cdp-defs = { path = "../moli-protocol-cdp-defs" }
 brotlic = "0.8.2"
 serde_json = "1.0.145"
 

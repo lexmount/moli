@@ -81,12 +81,13 @@ pub(crate) use javascript_dialog::{
     TargetJavaScriptDialogState, TargetPreparedJavaScriptDialog,
     TargetPreparedJavaScriptDialogRoute,
 };
+pub(crate) use moli_protocol_cdp_defs::actions::ProfilerAction;
 pub(crate) use pending_renderer_command::{
     DuplicatePendingRendererCommand, PendingRendererCommandKey, PreparedRendererCallDispatch,
     PreparedRendererCallTermination, RegisterRendererCallError, RendererCommandCorrelation,
     RendererCommandDescriptor, RendererCommandReplay,
 };
-pub(crate) use profiler::{ProfilerAction, ProfilerInspectorCommand};
+pub(crate) use profiler::ProfilerInspectorCommand;
 pub(crate) use service_worker_lifetime::{
     TargetServiceWorkerProtocolAttachmentIdentity, TargetServiceWorkerProtocolAttachmentRetirement,
     TargetServiceWorkerRunIdentity, TargetServiceWorkerRunRetirement,
