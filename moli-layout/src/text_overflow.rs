@@ -337,12 +337,15 @@ fn line_overflows(line: &parley::Line<'_, TextBrush>, width: f32, rtl: bool) -> 
     let (start, end) = line_bounds(line, width);
     let advance = metrics.advance - metrics.hanging_advance;
     let tolerance = 1.0 / 64.0;
-    advance > end - start + tolerance
-        || if rtl {
-            metrics.offset + metrics.hanging_advance < -tolerance
-        } else {
-            metrics.offset + advance > end - start + tolerance
-        }
+    // Offset is relative to the float-constrained line slot. Compare the
+    // positioned inline-end against that same slot in layout coordinates;
+    // a wide run shifted past inline-start need not overflow inline-end.
+    let origin = metrics.inline_min_coord + metrics.offset;
+    if rtl {
+        origin + metrics.hanging_advance < start - tolerance
+    } else {
+        origin + advance > end + tolerance
+    }
 }
 
 fn has_positioned_descendant<N: Copy + Debug + Eq + Hash>(
