@@ -441,9 +441,9 @@ impl RendererBrowserContextRuntime {
         &self,
         version_id: u64,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         self.service_worker_runtime_for_existing_registration()
-            .is_some_and(|runtime| {
+            .and_then(|runtime| {
                 runtime.detach_runtime_inspector_session(
                     ServiceWorkerVersionId::from_u64_for_binding(version_id),
                     inspector_session_id,

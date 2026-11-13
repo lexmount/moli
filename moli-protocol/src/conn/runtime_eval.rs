@@ -69,7 +69,6 @@ pub(crate) enum RuntimeInspectorError {
 
 type RuntimeInspectorResponseReceiver = RuntimeInspectorAsyncCompletionReceiver;
 
-const SHARED_WORKER_RUNTIME_REMOTE_OBJECT_CLEANUP_COMMAND_ID_BASE: u64 = 900_600_000;
 const BIDI_SCRIPT_RESULT_OBJECT_GROUP: &str = "webdriver-bidi";
 const BIDI_CHANNEL_OBJECT_GROUP_PREFIX: &str = "webdriver-bidi-channel-";
 

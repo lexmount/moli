@@ -205,13 +205,15 @@ impl ProtocolWorkflowState<'_> {
         self,
         identity: &SessionDisposalIdentity,
         completed: Option<CompletedSessionWorkerCleanup>,
-    ) -> (Vec<BackgroundProtocolEvent>, Vec<BackgroundProtocolEvent>) {
+    ) -> (
+        Vec<BackgroundProtocolEvent>,
+        Vec<BackgroundProtocolEvent>,
+        Option<anyhow::Error>,
+    ) {
         if !identity.binding_is_current(self.connection) {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), None);
         }
-        if let Some(completed) = completed {
-            completed.finish(self.connection);
-        }
+        let error = completed.and_then(|completed| completed.finish().err());
         let mut background_events = Vec::new();
         let mut protocol_events = Vec::new();
         crate::domains::runtime::fail_pending_session_calls(
@@ -220,6 +222,6 @@ impl ProtocolWorkflowState<'_> {
             &mut protocol_events,
             identity.plan().session_id(),
         );
-        (background_events, protocol_events)
+        (background_events, protocol_events, error)
     }
 }

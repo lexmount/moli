@@ -76,10 +76,8 @@ impl SharedWorkerRuntimeService {
         &self,
         instance_id: SharedWorkerInstanceId,
         inspector_session_id: Option<String>,
-    ) -> bool {
-        let Some(host) = self.running_host_for_instance(instance_id) else {
-            return false;
-        };
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
+        let host = self.running_host_for_instance(instance_id)?;
         host.detach_runtime_inspector_session(inspector_session_id)
     }
 }

@@ -71,75 +71,11 @@ pub(crate) fn detach_session_inspector(
         SessionDisposalTarget::PageTarget { .. } => {
             detach_page_session_inspector(conn, session_id);
         }
-        SessionDisposalTarget::SharedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            let renderer_detach =
-                conn.browser_context_by_id(browser_context_id)
-                    .and_then(|browser_context| {
-                        browser_context
-                            .shared_worker_target(target_id)
-                            .map(|target| {
-                                (
-                                    browser_context.renderer_runtime(),
-                                    target.renderer_instance_id,
-                                )
-                            })
-                    });
-            if let Some((renderer_runtime, instance_id)) = renderer_detach {
-                renderer_runtime.detach_shared_worker_runtime_inspector_session(
-                    instance_id,
-                    Some(session_id.to_owned()),
-                );
-            }
-        }
-        SessionDisposalTarget::DedicatedWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            let renderer_detach =
-                conn.browser_context_by_id(browser_context_id)
-                    .and_then(|browser_context| {
-                        browser_context
-                            .dedicated_worker_target(target_id)
-                            .map(|target| {
-                                (
-                                    browser_context.renderer_runtime(),
-                                    target.renderer_instance_id,
-                                )
-                            })
-                    });
-            if let Some((renderer_runtime, instance_id)) = renderer_detach {
-                renderer_runtime.detach_dedicated_worker_runtime_inspector_session(
-                    instance_id,
-                    Some(session_id.to_owned()),
-                );
-            }
-        }
-        SessionDisposalTarget::ServiceWorkerTarget {
-            browser_context_id,
-            target_id,
-        } => {
-            let renderer_detach =
-                conn.browser_context_by_id(browser_context_id)
-                    .and_then(|browser_context| {
-                        browser_context
-                            .service_worker_target(target_id)
-                            .map(|target| {
-                                (
-                                    browser_context.renderer_runtime(),
-                                    target.renderer_version_id,
-                                )
-                            })
-                    });
-            if let Some((renderer_runtime, version_id)) = renderer_detach {
-                renderer_runtime.detach_service_worker_runtime_inspector_session(
-                    version_id,
-                    Some(session_id.to_owned()),
-                );
-            }
-        }
+        // Runtime's final Worker domain handler already awaited the exact
+        // native teardown. Never enqueue a second detach on a reused wire id.
+        SessionDisposalTarget::SharedWorkerTarget { .. }
+        | SessionDisposalTarget::DedicatedWorkerTarget { .. }
+        | SessionDisposalTarget::ServiceWorkerTarget { .. } => {}
         SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {}
     }
     Ok(())

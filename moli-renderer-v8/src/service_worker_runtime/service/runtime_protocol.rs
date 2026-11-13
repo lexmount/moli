@@ -79,10 +79,8 @@ impl ServiceWorkerRuntimeService {
         &self,
         version_id: ServiceWorkerVersionId,
         inspector_session_id: Option<String>,
-    ) -> bool {
-        let Some(host) = self.running_host_for_version(version_id) else {
-            return false;
-        };
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
+        let host = self.running_host_for_version(version_id)?;
         host.detach_worker_runtime_inspector_session(inspector_session_id)
     }
 }

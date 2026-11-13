@@ -181,9 +181,9 @@ impl RendererBrowserContextRuntime {
         &self,
         instance_id: u64,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         self.dedicated_worker_devtools_handle(instance_id)
-            .is_some_and(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
+            .map(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
     }
 
     pub fn run_dedicated_worker_if_waiting_for_debugger_for_devtools(

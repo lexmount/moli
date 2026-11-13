@@ -760,7 +760,7 @@ impl WorkerDevToolsHandle {
     pub(crate) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<()>> {
         self.inspector_tasks.append_detach(inspector_session_id)
     }
 
@@ -910,7 +910,7 @@ impl WorkerHandle {
     pub(crate) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> tokio::sync::oneshot::Receiver<anyhow::Result<()>> {
         self.devtools
             .detach_runtime_inspector_session(inspector_session_id)
     }

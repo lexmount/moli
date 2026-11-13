@@ -508,9 +508,9 @@ impl RendererBrowserContextRuntime {
         &self,
         instance_id: SharedWorkerInstanceId,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
+            .and_then(|runtime| {
                 runtime.detach_runtime_inspector_session(instance_id, inspector_session_id)
             })
     }

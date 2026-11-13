@@ -59,8 +59,8 @@ impl RendererSharedWorkerHost {
     pub(super) fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
-    ) -> bool {
+    ) -> Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>> {
         self.running_devtools_handle()
-            .is_some_and(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
+            .map(|handle| handle.detach_runtime_inspector_session(inspector_session_id))
     }
 }
