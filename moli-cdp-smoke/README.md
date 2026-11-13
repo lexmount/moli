@@ -679,6 +679,24 @@ headed Debian Chromium 145.0.7632.116 through CDP. It checks the full trusted
 typing, cancellation at keypress, the distinct `rawKeyDown` and `char` paths,
 and the absence of keyboard events for `Input.insertText`.
 
+The modifier regression for [#2864](https://github.com/lexmount/moli/issues/2864)
+was calibrated against headless Chrome 156.0.8078.73, including the reported
+Playwright 1.65 client. It covers input, textarea, and contenteditable controls:
+Playwright Alt/Control/Meta shortcuts do not insert text, Shift remains active
+on its own keydown, ordinary combos have exactly one event for each press/release, and
+intentional modifier autorepeat remains observable. It also checks the actual
+Shift+ArrowLeft text selection in input/textarea and each event's
+`getModifierState()` flags.
+
+`Alt+a` produces four keyboard events (Alt down, a down, a up, Alt up), and the
+issue's `Shift+Shift;Shift+ArrowLeft;` log also occurs in Chrome: the first
+`Shift+` is the logger's prefix, not another dispatched event. Playwright's
+literal `Shift+a` inserts `a`; physical `Shift+KeyA` inserts `A`. The regression
+distinguishes both. Explicit CDP `keyDown`/`char` with Alt and supplied text can
+still insert that text, whereas `rawKeyDown` cannot. `Input.insertText` also
+remains usable while Alt is held; shortcut filtering must not erase these
+separate character-input paths.
+
 The default `webgl-viewport` group was calibrated on 2026-09-07 against
 Debian `/usr/bin/chromium` 145.0.7632.116. It uses the same fixture as the
 renderer tests to check WebGL1/2 on HTML and
