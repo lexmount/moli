@@ -634,6 +634,7 @@ where
             if !owner.is_current_parser_script_owner(script.context()) {
                 return None;
             }
+            let network_request_handle = source_result.network_request_handle();
             let (notification, network_result) =
                 script.notify_runner_source_result_with_network_result(source_result)?;
             script
@@ -647,7 +648,9 @@ where
                 network_result.as_ref(),
                 network_record_urls,
             );
-            owner.parser_script_source_result_action(action)
+            owner.parser_script_source_result_action(
+                action.with_network_request_handle(network_request_handle),
+            )
         })
     }
 
@@ -667,6 +670,7 @@ where
                 if !owner.is_current_parser_script_owner(script.context()) {
                     return None;
                 }
+                let network_request_handle = source_result.network_request_handle();
                 let (notification, network_result) =
                     script.notify_runner_source_result_with_network_result(source_result)?;
                 script
@@ -680,7 +684,8 @@ where
                         notification,
                         network_result.as_ref(),
                         network_record_urls,
-                    ),
+                    )
+                    .with_network_request_handle(network_request_handle),
                 )
             },
         )
@@ -718,6 +723,7 @@ where
                 return Some(ParserClassicScriptSourceResultApplication::Waiting);
             };
             let source_result = source_identity.into_source_result(source_load_outcome);
+            let network_request_handle = source_result.network_request_handle();
             let (notification, network_result) =
                 script.notify_runner_source_result_with_network_result(source_result)?;
             script
@@ -729,7 +735,9 @@ where
                 network_record_urls,
             );
             Some(ParserClassicScriptSourceResultApplication::Applied(
-                owner.parser_script_source_result_action(action),
+                owner.parser_script_source_result_action(
+                    action.with_network_request_handle(network_request_handle),
+                ),
             ))
         })
         .unwrap_or(ParserClassicScriptSourceResultApplication::NoSourceLoad)

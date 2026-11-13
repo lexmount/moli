@@ -127,6 +127,9 @@ impl PreparedFetchCleanup {
                     && pending.owner_kind.drains_on_fetch_disable()
                     && (pending.resource_type == moli_core::page::SubresourceResourceType::Document
                         || pending
+                            .detached_parser_script_fetch_continuation()
+                            .is_some()
+                        || pending
                             .document_command_target()
                             .is_some_and(|target| target.has_native_network_pause()))
                 {
@@ -483,6 +486,10 @@ fn admit_subresource_cleanup(
         } => {
             let (url, method, body, headers) =
                 request.accumulated_request_stage_continue_modifications();
+            if let Some(continuation) = request.detached_parser_script_fetch_continuation() {
+                continuation.continue_request(url);
+                return None;
+            }
             (
                 request.document_command_target(),
                 RendererPageCommand::ContinuePendingSubresourceFetch {

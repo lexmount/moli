@@ -107,6 +107,7 @@ impl ResolvedDeferPhaseScript {
             source_result,
             source_bytes,
             network_result,
+            ..
         } = outcome;
         match source_result {
             Ok(source) => {

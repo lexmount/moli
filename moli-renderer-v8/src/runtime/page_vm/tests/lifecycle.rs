@@ -3120,7 +3120,8 @@ document.body.appendChild(replacementFrame);
                                     ),
                                     source_bytes: None,
                                     network_result: None,
-                                },
+                                    network_request_handle: None,
+},
                             ),
                             MainParserDeferredClassicSourceNetworkAttribution::new(
                                 Url::parse("https://old-document.test/").unwrap(),

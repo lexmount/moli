@@ -152,6 +152,7 @@ async def run_page_network_group(state: SmokeState) -> None:
             await scenario(isolated)
     await _verify_redirect_chain_network_events(state)
     await _verify_parser_script_network_events(state)
+    await _verify_intercepted_parser_script_networkidle(state)
     await _verify_parser_stylesheet_network_events(state)
     await _verify_parser_stylesheet_network_events_without_script_gate(state)
     await _verify_chromium_resource_type_network_matrix(state)
@@ -1804,6 +1805,53 @@ async def _verify_parser_script_network_events(state: SmokeState) -> None:
     body = await state.cdp.send("Network.getResponseBody", {"requestId": parser_script_request_id})
     assert_equal(body.get("body"), 'globalThis.__smokeParserScriptValue = "parser script loaded";', "parser script response body")
     state.record("parser_script_network_events")
+
+
+async def _verify_intercepted_parser_script_networkidle(state: SmokeState) -> None:
+    script_body = 'globalThis.__smokeParserScriptValue = "parser script loaded";'
+    for action in ("fulfill", "continue", "abort"):
+        async with isolated_network_page(state) as isolated:
+            page = isolated.page
+            script_url = f"{state.fixture}/parser-script.js"
+            handled: list[Any] = []
+            finished: list[Any] = []
+            failed: list[Any] = []
+            page.on("requestfinished", lambda request: finished.append(request))
+            page.on("requestfailed", lambda request: failed.append(request))
+
+            async def handle(route: Any) -> None:
+                handled.append(route.request)
+                if action == "fulfill":
+                    await route.fulfill(status=200, content_type="text/javascript", body=script_body)
+                elif action == "continue":
+                    await route.continue_()
+                else:
+                    await route.abort("blockedbyclient")
+
+            await page.route("**/parser-script.js", handle)
+            event_start = len(isolated.subresource_events)
+            # No evaluation or polling command after the route resumes: the
+            # original Network request must finish autonomously so Playwright
+            # can remove it from its inflight set and observe networkidle.
+            await page.goto(f"{state.fixture}/parser-script-page", wait_until="networkidle", timeout=10_000)
+            assert_equal(len(handled), 1, f"{action} parser script route count")
+            terminals = failed if action == "abort" else finished
+            assert_equal(terminals.count(handled[0]), 1, f"{action} original Playwright request terminal")
+            events = isolated.subresource_events[event_start:]
+            requests = [event for event in events if event["method"] == "Network.requestWillBeSent"
+                        and event["params"].get("request", {}).get("url") == script_url]
+            assert_equal(len(requests), 1, f"{action} parser script Network request count")
+            request_id = requests[0]["params"]["requestId"]
+            network_terminals = [event for event in events
+                                 if event["method"] in ("Network.loadingFinished", "Network.loadingFailed")
+                                 and event["params"].get("requestId") == request_id]
+            assert_equal(len(network_terminals), 1, f"{action} original Network request terminal count")
+            expected = "Network.loadingFailed" if action == "abort" else "Network.loadingFinished"
+            assert_equal(network_terminals[0]["method"], expected, f"{action} parser script terminal")
+            if action != "abort":
+                body = await isolated.cdp.send("Network.getResponseBody", {"requestId": request_id})
+                assert_equal(body.get("body"), script_body, f"{action} parser script response body")
+            state.record(f"route_{action}_parser_script_networkidle")
 
 
 async def _verify_parser_stylesheet_network_events(state: SmokeState) -> None:

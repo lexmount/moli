@@ -8,11 +8,10 @@ use crate::automation::{
 };
 use crate::conn::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationClaimError, CdpConnection, Cmd,
-    CommandOwnerScope, DEFAULT_LOADER_ID, PendingStreamingDocumentResponseNavigation,
-    monotonic_timestamp_seconds,
+    CommandOwnerScope, PendingStreamingDocumentResponseNavigation,
 };
 use crate::domains::command_output::CommandOutputPlan;
-use crate::domains::{activity, network, page};
+use crate::domains::{activity, page};
 use anyhow::Context as _;
 use moli_core::RendererPageCommand;
 use moli_core::page::{
@@ -608,23 +607,9 @@ fn start_devtools_fail_intercepted_request_command(
                     "RequestNotFound",
                 ));
             }
-            let mut plan = CommandOutputPlan::success();
-            let mut events = Vec::new();
-            let loader_id = conn
-                .current_document_loader_id_for_owner(owner)
-                .unwrap_or_else(|| DEFAULT_LOADER_ID.to_owned());
-            network::emit_loading_failed(
-                &mut events,
-                command_session_id,
-                &pending.network_request_id,
-                &pending.frame_id,
-                &loader_id,
-                monotonic_timestamp_seconds(),
-                &error_text,
-                pending.resource_type.into(),
-            );
-            plan.extend_background_events(events);
-            return FetchCommandTaskStep::Complete(plan);
+            // The parser owner publishes the correlated failure, including
+            // all Network observers, through the normal completion path.
+            return FetchCommandTaskStep::Complete(CommandOutputPlan::success());
         }
         let pending_page = match conn.start_subresource_document_command(
             owner,

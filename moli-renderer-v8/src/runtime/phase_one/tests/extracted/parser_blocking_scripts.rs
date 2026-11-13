@@ -412,6 +412,7 @@ fn main_parser_blocking_source_failure_uses_the_shared_completion_event_flow() {
                         error: "network failure".to_owned(),
                         prepared_script: None,
                         source_network_result: None,
+                        network_request_handle: None,
                     },
                     None,
                 );

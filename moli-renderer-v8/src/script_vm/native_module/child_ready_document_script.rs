@@ -340,6 +340,7 @@ mod tests {
                     error: "network error".to_owned(),
                     prepared_script: None,
                     source_network_result: None,
+                    network_request_handle: None,
                 },
                 None,
             ),

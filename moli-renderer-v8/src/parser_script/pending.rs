@@ -221,6 +221,7 @@ enum ParserPendingClassicScriptReadiness {
         error: String,
         prepared_script: Option<Box<PreparedScript>>,
         source_network_result: Option<SharedNavigationResponseResult>,
+        network_request_handle: Option<crate::types::SubresourceNetworkRequestHandle>,
     },
 }
 
@@ -267,6 +268,7 @@ impl ParserPendingClassicScriptReadiness {
             error: error.into(),
             prepared_script: None,
             source_network_result: None,
+            network_request_handle: None,
         }
     }
 
@@ -348,6 +350,7 @@ impl ParserPendingClassicScriptReadiness {
             error,
             prepared_script,
             source_network_result: None,
+            network_request_handle: None,
         };
         true
     }
@@ -372,6 +375,7 @@ impl ParserPendingClassicScriptReadiness {
             error,
             prepared_script,
             source_network_result,
+            network_request_handle,
         } = self
         else {
             return None;
@@ -382,6 +386,7 @@ impl ParserPendingClassicScriptReadiness {
             error: error.clone(),
             prepared_script: prepared_script.clone(),
             source_network_result: source_network_result.clone(),
+            network_request_handle: *network_request_handle,
         })
     }
 
@@ -452,6 +457,7 @@ impl ParserPendingClassicScriptReadiness {
         let script_url = script.script_url().clone();
         let prepared_script = script.script().clone();
         let source_network_result = source_result.network_result().cloned();
+        let network_request_handle = source_result.network_request_handle();
         match script.apply_source_result(source_identity.load_id(), source_result) {
             Some(Ok(network_result)) => {
                 *self = Self::ExternalReady { script };
@@ -467,6 +473,7 @@ impl ParserPendingClassicScriptReadiness {
                     error,
                     prepared_script: Some(Box::new(prepared_script)),
                     source_network_result,
+                    network_request_handle,
                 };
                 Some((ParserPendingClassicScriptNotification::SourceFailed, None))
             }

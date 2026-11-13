@@ -520,17 +520,21 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
 ) {
     for output in outputs {
         let network_request_id = output.network_output().network_request_id().to_owned();
+        // Detached parser-script completions use the same native handle as
+        // their pause, just like renderer-owned subresource completions.
+        if let Some(handle) = output.network_output().request_handle()
+            && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+        {
+            slot.record_subresource_request_id_for_handle_if_absent(
+                handle,
+                network_request_id.clone(),
+            );
+        }
         if (output.network_output().child_document().is_some()
             || output.network_output().resource_type()
                 == moli_core::page::SubresourceResourceType::Fetch)
             && let Some(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
         {
-            if let Some(handle) = output.network_output().request_handle() {
-                slot.record_subresource_request_id_for_handle_if_absent(
-                    handle,
-                    network_request_id.clone(),
-                );
-            }
             slot.record_fetch_pause_announced_request_id(network_request_id.clone());
             if output.network_output().redirect().is_some() {
                 slot.record_fetch_pause_announced_redirect(&network_request_id);

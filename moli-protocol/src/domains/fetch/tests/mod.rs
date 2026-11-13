@@ -329,6 +329,7 @@ mod navigation_control;
 mod navigation_response_stage;
 mod navigation_subresource;
 mod navigation_supersession;
+mod parser_script_terminal;
 mod runtime_auth_response;
 mod runtime_fetch;
 mod runtime_websocket;
