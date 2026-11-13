@@ -451,7 +451,9 @@ impl ConnectedStyleImportRoot {
 pub(crate) struct ConnectedLoadNetworkResult {
     /// Request provenance survives clearing the stylesheet installation owner.
     pub(crate) resource_timing_initiator_type: &'static str,
-    pub(crate) resource_timing: Option<ConnectedResourceTiming>,
+    /// Completed observation of the physical connected-link request. Element
+    /// movement and delayed Page delivery do not change its timing or origin.
+    pub(crate) resource_timing: Option<Box<crate::context_bootstrap::ResourcePerformanceEntry>>,
     pub(crate) import_options: Option<crate::stylesheet_blocking::StylesheetFetchOptions>,
     pub(crate) consumed_preload_error: bool,
     /// Exact request Document, independent of an element's current location.
@@ -469,14 +471,6 @@ pub(crate) struct ConnectedLoadNetworkResult {
     pub(crate) origin_clean: bool,
     pub(crate) network_observed: bool,
     pub(crate) result: std::result::Result<crate::protocol_types::NavigationResponse, String>,
-}
-
-/// Attribution and terminal observation of the physical connected-link request.
-/// Neither depends on a link's later location or on callback execution.
-#[derive(Debug, Clone)]
-pub(crate) struct ConnectedResourceTiming {
-    pub(crate) initiator: crate::context_bootstrap::ResourceTimingInitiator,
-    pub(crate) end_unix_millis: f64,
 }
 
 #[derive(Debug)]

@@ -2594,21 +2594,18 @@ impl ScriptVm {
                 !source_owners.is_empty()
             };
             if !consumed_preload_error {
-                let mut entry =
+                let has_connected_link_timing = resource_timing.is_some();
+                let mut entry = resource_timing.map(|entry| *entry).unwrap_or_else(|| {
                     crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                         request_url.as_str(),
                         resource_timing_initiator_type,
                         start_unix_millis,
                         &result,
-                    );
-                if let Some(timing) = resource_timing {
-                    entry.set_response_end_unix_millis(timing.end_unix_millis);
-                    if let Ok(response) = &result {
-                        timing
-                            .initiator
-                            .apply(&mut entry, &response.head(), origin_clean);
-                    }
-                } else if let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result) {
+                    )
+                });
+                if !has_connected_link_timing
+                    && let (Some(fetch), Ok(response)) = (stylesheet_fetch.as_ref(), &result)
+                {
                     if let Some(end) = fetch.end_unix_millis() {
                         entry.set_response_end_unix_millis(end);
                     }
