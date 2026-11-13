@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import quote
 
 from ..assertions import SmokeError, assert_equal, record
-from ..config import is_moli_browser
+from ..config import REPO_ROOT, is_moli_browser
 from ..pdf_document import assert_pdf_envelope
 from ..png_image import decode_png
 from ..raw_cdp import RawCdpClient, connect_raw_cdp
@@ -318,6 +318,34 @@ def _replacement(kind: str) -> Callable[[Probe], Awaitable[dict[str, Any]]]:
     return run
 
 
+async def _svg_publication(probe: Probe) -> dict[str, Any]:
+    fixture = (REPO_ROOT / "moli-renderer-v8/tests/fixtures/inline-svg-layout-publication.js").read_text()
+    await probe.evaluate(f"{fixture}\ninstallSvgLayoutPublication()")
+    initial = await probe.evaluate("readSvgLayoutPublication()")
+    expected = {"htmlBefore": 80, "svg": [100, 40, 200, 100], "object": [110, 50, 10, 10],
+                "shapeCount": 1, "range": [110, 50, 10, 10], "rangeCount": 1000, "htmlAfter": 80}
+    assert_equal(initial, expected, "initial HTML and SVG publication")
+    await probe.evaluate("document.getElementById('html').style.width='300px'")
+    html_changed = await probe.evaluate("readSvgLayoutPublication()")
+    assert_equal(html_changed, expected if is_moli_browser() else
+                 {**expected, "htmlBefore": 300, "htmlAfter": 300},
+                 "SVG queries must follow the browser's ordinary layout policy")
+    await probe.evaluate("mutateSvgLayoutPublication()")
+    dirty = await probe.evaluate("readSvgLayoutPublication()")
+    refreshed = {"htmlBefore": 300, "svg": [300, 40, 200, 100], "object": [330, 50, 100, 10],
+                 "shapeCount": 1, "range": [310, 50, 120, 10], "rangeCount": 1000, "htmlAfter": 300}
+    assert_equal(dirty, expected if is_moli_browser() else refreshed,
+                 "dirty SVG single and Range queries")
+    png, _ = await _capture(probe.client, probe.session)
+    image = decode_png(png)
+    assert_equal(image.pixel(250, 10), (255, 0, 0, 255), "published HTML paint")
+    assert_equal(image.pixel(335, 55), (0, 255, 0, 255), "published SVG paint")
+    published = await probe.evaluate("readSvgLayoutPublication()")
+    assert_equal(published, refreshed, "capture publishes both coordinate levels")
+    return {"initial": initial, "htmlChanged": html_changed, "svgChanged": dirty,
+            "published": published}
+
+
 async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dict[str, Any]]) -> None:
     object_params = lambda p, phase: {"objectId": p.object_id}
     initializers: list[tuple[str, Operation]] = [
@@ -364,6 +392,7 @@ async def run_layout_policy_group(endpoint: str, fixture: str, results: list[dic
         ("validation/empty-clip", _invalid_clip),
         ("state/live-viewport-frozen-content", _live_metrics),
         ("state/missing-box", _missing_box),
+        ("state/svg-shares-frozen-publication", _svg_publication),
         *[("replacement/" + kind, _replacement(kind)) for kind in ["Page.navigate", "Page.reload", "Page.setDocumentContent", "document.open"]],
     ]
     client = await connect_raw_cdp(endpoint)
