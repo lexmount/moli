@@ -27,7 +27,7 @@ use super::state::{
     take_pending_subresource_auth_request_for_action_session,
 };
 use super::{
-    FetchCommandOutput, FetchCommandTaskStep, PageFetchCompletion, PendingFetchCommandDispatch,
+    FetchCommandOutput, FetchCommandTaskStep, PendingFetchCommandDispatch, ResourceFetchCompletion,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -285,9 +285,9 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     PendingFetchCommandDispatch::new_for_owner(
                         command_id,
                         owner.clone(),
-                        PendingFetchCommandOperation::Page {
+                        PendingFetchCommandOperation::Resource {
                             pending: pending_page,
-                            finish: PageFetchCompletion::ContinueWithAuth {
+                            finish: ResourceFetchCompletion::ContinueWithAuth {
                                 state: Box::new(state),
                             },
                         },
@@ -355,9 +355,9 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     PendingFetchCommandDispatch::new_for_owner(
                         command_id,
                         owner.clone(),
-                        PendingFetchCommandOperation::Page {
+                        PendingFetchCommandOperation::Resource {
                             pending: pending_page,
-                            finish: PageFetchCompletion::ContinueWithAuth {
+                            finish: ResourceFetchCompletion::ContinueWithAuth {
                                 state: Box::new(
                                     PendingContinueWithAuthState::SubresourceAuthContinue {
                                         correlation,
