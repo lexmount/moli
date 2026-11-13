@@ -81,6 +81,7 @@ fn legacy_transport_admits_actual_command_and_routes_its_background_reply_once()
         json!({"id":command.request().id(),"sessionId":"SID-page-1","result":{"loaderId":"LID-1"}});
     let (frontend, event) = routing
         .route_message(background.clone(), Some("SID-page-1"), None)
+        .unwrap()
         .unwrap();
     assert_eq!(frontend.frontend_id(), 5);
     assert!(event.session_id().is_none());
@@ -91,10 +92,12 @@ fn legacy_transport_admits_actual_command_and_routes_its_background_reply_once()
     assert!(
         routing
             .route_message(background, Some("SID-page-1"), None)
+            .unwrap()
             .is_none()
     );
     let (frontend, response) = routing
         .route_message(json!({"id":peer.request().id(),"result":{}}), None, None)
+        .unwrap()
         .unwrap();
     assert_eq!(frontend.frontend_id(), 6);
     assert_eq!(response.value(), &json!({"id":42,"result":{}}));
@@ -131,6 +134,7 @@ fn recursive_transport_preserves_ack_paths_and_explicit_payload_session() {
             Some("SID-worker"),
             None,
         )
+        .unwrap()
         .unwrap();
     let inner = unwrap_message(response.value(), "SID-page-1");
     assert!(inner.get("sessionId").is_none());
@@ -162,6 +166,7 @@ fn transport_with_explicit_carrier_keeps_only_that_carrier_on_outer_event() {
     let command = command.unwrap();
     let (_, response) = routing
         .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
+        .unwrap()
         .unwrap();
     assert_eq!(response.session_id(), Some("SID-page-1"));
     assert_eq!(
@@ -245,6 +250,7 @@ fn nested_attach_keeps_normal_registration_and_disconnect_retires_pending_reply(
             None,
             None,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(
         unwrap_message(response.value(), "SID-page-1"),
@@ -274,6 +280,7 @@ fn nested_attach_keeps_normal_registration_and_disconnect_retires_pending_reply(
     assert!(
         routing
             .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
+            .unwrap()
             .is_none()
     );
 }
@@ -284,11 +291,11 @@ fn root_received_target_event_uses_owning_frontend_and_parent_carrier() {
     for (session, parent) in [("SID-page-1", None), ("SID-worker", Some("SID-page-1"))] {
         let (frontend, response) = routing.route_message(json!({
             "method":"Target.receivedMessageFromTarget","params":{"sessionId":session,"message":"{}"},
-        }),None, None).unwrap();
+        }),None, None).unwrap().unwrap();
         assert_eq!(frontend.frontend_id(), 5);
         assert_eq!(response.session_id(), parent);
     }
-    assert!(routing.route_message(json!({"method":"Target.receivedMessageFromTarget","params":{"sessionId":"SID-missing","message":"{}"}}),None, None).is_none());
+    assert!(routing.route_message(json!({"method":"Target.receivedMessageFromTarget","params":{"sessionId":"SID-missing","message":"{}"}}),None, None).unwrap().is_none());
 }
 
 #[test]
@@ -305,6 +312,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
             Some("SID-page-1"),
             Some(false),
         )
+        .unwrap()
         .unwrap();
     assert_eq!(attached.session_id(), Some("SID-page-1"));
     let enable = expect_prepared_command(
@@ -334,6 +342,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
                 Some("SID-nonflat"),
                 None,
             )
+            .unwrap()
             .unwrap();
         assert_eq!(event.session_id(), Some("SID-page-1"));
         assert_eq!(
@@ -343,6 +352,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
         if method == "Runtime.executionContextCreated" {
             let (_, reply) = routing
                 .route_message(json!({"id":enable.request().id(),"result":{}}), None, None)
+                .unwrap()
                 .unwrap();
             assert_eq!(reply.session_id(), Some("SID-page-1"));
             assert_eq!(
@@ -373,6 +383,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
                 Some("SID-nonflat"),
                 None
             )
+            .unwrap()
             .is_none()
     );
     let (_, reply) = routing
@@ -381,6 +392,7 @@ fn nonflat_attachment_routes_events_before_and_after_reply_without_losing_parent
             None,
             None,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(reply.session_id(), Some("SID-page-1"));
     assert_eq!(unwrap_message(reply.value(), "SID-nonflat")["id"], 81);
@@ -400,7 +412,7 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
     routing.register_child_session(5, Some("SID-flat"), "SID-inner", Some("TID-inner"), false);
     let (_, event) = routing.route_message(json!({
         "method":"Runtime.executionContextCreated","sessionId":"SID-inner","params":{"context":{"id":3}},
-    }), Some("SID-inner"), None).unwrap();
+    }), Some("SID-inner"), None).unwrap().unwrap();
     assert!(event.session_id().is_none());
     let middle = unwrap_message(event.value(), "SID-outer");
     assert_eq!(middle["sessionId"], "SID-flat");
@@ -413,6 +425,7 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
             Some("SID-flat"),
             None,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(
         unwrap_message(flat_event.value(), "SID-outer")["sessionId"],
@@ -424,6 +437,7 @@ fn mixed_flat_and_nonflat_ancestors_share_one_event_and_response_encoder() {
             None,
             None,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(
         unwrap_message(detached.value(), "SID-outer")["sessionId"],
@@ -463,6 +477,7 @@ fn nested_target_commands_share_implicit_session_policy_with_the_adapter() {
         );
         let (_, wrapped) = routing
             .route_message(json!({"id":command.request().id(),"result":{}}), None, None)
+            .unwrap()
             .unwrap();
         let reply = unwrap_message(wrapped.value(), "SID-page-1");
         assert_eq!(reply["id"], 42);

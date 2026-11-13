@@ -76,7 +76,8 @@ impl CdpFrontendRoutingState {
             && message.get("sessionId").is_some()
         {
             *message = self
-                .encode_for_frontend(frontend_id, &output, std::mem::take(message))?
+                .encode_for_frontend(frontend_id, &output, std::mem::take(message))
+                .ok()?
                 .into_value();
         }
         Some(prepared)

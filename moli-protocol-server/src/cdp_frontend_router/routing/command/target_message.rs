@@ -63,7 +63,8 @@ impl CdpFrontendRoutingState {
             };
             let ack = json!({"id": request.id(), "result": {}});
             acknowledgements.push(
-                self.encode_for_frontend(frontend_id, &route, ack)?
+                self.encode_for_frontend(frontend_id, &route, ack)
+                    .ok()?
                     .into_value(),
             );
             route.nest(&target_session_id);
@@ -80,7 +81,8 @@ impl CdpFrontendRoutingState {
                                 error.response_code(),
                                 error.response_message(),
                             ),
-                        )?
+                        )
+                        .ok()?
                         .into_value(),
                     );
                     return Some(CdpPreparedFrontendCommand::TargetMessage {
@@ -108,7 +110,8 @@ impl CdpFrontendRoutingState {
                             frontend_id,
                             &route,
                             cdp_error_response(Some(id), -32603, "Internal error"),
-                        )?
+                        )
+                        .ok()?
                         .into_value(),
                     );
                     return Some(CdpPreparedFrontendCommand::TargetMessage {
@@ -139,7 +142,8 @@ impl CdpFrontendRoutingState {
                     route.set_payload_session_id(None);
                 }
                 acknowledgements.push(
-                    self.encode_for_frontend(frontend_id, &route, message)?
+                    self.encode_for_frontend(frontend_id, &route, message)
+                        .ok()?
                         .into_value(),
                 );
                 Some(CdpPreparedFrontendCommand::TargetMessage {

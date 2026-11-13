@@ -57,7 +57,11 @@ impl CdpFrontendRouter {
     /// Route a response through the ordinary command table and return its
     /// writer if the response was queued.
     pub(crate) fn enqueue_response(&self, message: Value) -> Option<CdpSocketSink> {
-        let (frontend, message) = self.routing.lock().route_message(message, None, None)?;
+        let (frontend, message) = self
+            .routing
+            .lock()
+            .route_message(message, None, None)
+            .ok()??;
         let sink = frontend.into_sink();
         sink.enqueue_checked_message(message).then_some(sink)
     }
@@ -135,8 +139,13 @@ impl CdpFrontendRouter {
                 wire_session.as_deref(),
                 attachment_flattened_protocol,
             );
-            let Some((frontend, message)) = routed else {
-                continue;
+            let (frontend, message) = match routed {
+                Ok(Some(routed)) => routed,
+                Ok(None) => continue,
+                Err(_) => {
+                    all_enqueued = false;
+                    continue;
+                }
             };
             let frontend_id = frontend.frontend_id();
             let enqueued = frontend.enqueue_message(message);

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use moli_inspector_json::InspectorJson;
+use moli_protocol_cdp::CdpEventContractError;
 use serde_json::{Value, json};
 
 use crate::cdp_writer::{CdpSocketSink, CheckedCdpMessage};
@@ -98,16 +99,16 @@ impl CdpFrontendRoutingState {
         frontend_id: u64,
         output: &session_output::SessionOutputRoute,
         message: impl Into<InspectorJson>,
-    ) -> Option<CheckedCdpMessage> {
+    ) -> Result<CheckedCdpMessage, CdpEventContractError> {
         match output.encode(message) {
-            Ok(message) => Some(message),
+            Ok(message) => Ok(message),
             Err(error) => {
                 if let Some(frontend) = self.frontend_by_id(frontend_id) {
                     frontend
                         .sink
                         .reject_event_contract(&error, error.session_id());
                 }
-                None
+                Err(error)
             }
         }
     }

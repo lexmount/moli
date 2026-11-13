@@ -30,6 +30,7 @@ use moli_protocol::{
         root_frame_stopped_loading_work_for_target, settle_background_navigation_request,
     },
 };
+use moli_protocol_cdp_defs::LocalCdpEvent;
 use serde_json::json;
 
 use super::{
@@ -327,7 +328,9 @@ async fn classic_alert_navigation_deadline_stops_only_the_timed_out_navigation()
                                "timestamp": 0, "marker": "before-alert-deadline"}
                 });
                 if !duration.is_zero() {
-                    background_tx.send(BackgroundProtocolEvent::immediate(marker.clone())).unwrap();
+                    background_tx.send(BackgroundProtocolEvent::immediate_event(
+                        LocalCdpEvent::RuntimeConsoleApiCalled, marker["params"].clone(), None,
+                    )).unwrap();
                 }
                 let mut receivers = super::CdpSchedulerEventReceivers {
                     state_events_ready: scheduler.state.scheduler_events_ready(),

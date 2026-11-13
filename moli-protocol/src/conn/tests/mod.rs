@@ -680,11 +680,13 @@ fn navigation_gate_keeps_worker_sessions_out_of_unrelated_page_loads() {
     ] {
         let target_id = route.target_id().unwrap().to_owned();
         conn.register_session_route_for_test("SID-worker", route);
-        let event = BackgroundProtocolEvent::immediate(json!({
-            "sessionId":"SID-worker", "method":"Network.responseReceived", "params":{
+        let event = BackgroundProtocolEvent::immediate_event(
+            LocalCdpEvent::NetworkResponseReceived,
+            json!({
                 "requestId":"worker-script", "type":"Script", "response":{"url":"https://example.test/worker.js", "status":200}
-            }
-        }));
+            }),
+            Some("SID-worker"),
+        );
         assert!(event.should_wait_for_background_navigation_completion());
         assert!(conn.has_inflight_background_navigation());
         assert_eq!(
