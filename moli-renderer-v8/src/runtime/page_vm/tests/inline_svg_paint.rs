@@ -1,5 +1,10 @@
 use super::*;
 
+const SVG_PUBLICATION_FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/inline-svg-layout-publication.js"
+));
+
 #[tokio::test(flavor = "current_thread")]
 async fn inline_svg_zoom_preserves_font_and_stroke_user_units() {
     run_page_vm_async_test(async move {
@@ -137,37 +142,112 @@ async fn inline_svg_batch_geometry_uses_one_frozen_scene() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
         let mut page_vm = test_page_vm_with_loader_and_document_url(
-            &loader, Vec::new(), Url::parse("https://example.com/svg-frozen-geometry.html")?,
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-frozen-geometry.html")?,
         );
-        page_vm.vm_mut().eval(r#"
-            document.head.innerHTML = '<style>html,body{margin:0}svg{position:absolute;left:100px;top:0}</style>';
-            document.body.innerHTML = '<svg width="200" height="100">' + '<rect x="10" width="10" height="10"/>'.repeat(1000) + '</svg>';
-            'installed'
-        "#)?;
+        page_vm.vm_mut().eval(&format!(
+            "{SVG_PUBLICATION_FIXTURE}\ninstallSvgLayoutPublication()"
+        ))?;
         page_vm.vm_mut().sync_live_document_style_sources();
-        let before = crate::layout_renderer::svg_parse_count();
-        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 150, 1.0))?;
-        assert_eq!(crate::layout_renderer::svg_parse_count() - before, 1);
-        let frozen = crate::layout_renderer::svg_parse_count();
-        assert_eq!(page_vm.vm_mut().eval("(()=>{const r=document.createRange();r.selectNodeContents(document.querySelector('svg'));return r.getClientRects().length})()")?, "1000");
-        assert_eq!(crate::layout_renderer::svg_parse_count(), frozen, "a batch must only read the published numeric geometry");
-        assert_eq!(page_vm.vm_mut().eval(r#"(()=>{
-            document.querySelector('svg').style.left='300px';
-            document.querySelector('rect').setAttribute('x','30');
-            return JSON.stringify([document.querySelector('svg').getBoundingClientRect().x,document.querySelector('rect').getBoundingClientRect().x]);
-        })()"#)?, "[300,330]", "an SVG observation must refresh both coordinate levels together");
-        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 1);
-        assert_eq!(page_vm.vm_mut().eval("document.querySelector('rect').getBoundingClientRect().x")?, "330");
-        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 1, "clean SVG reads must reuse the publication");
-        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 150, 1.0))?;
-        assert_eq!(page_vm.vm_mut().eval("document.querySelector('rect').getBoundingClientRect().x")?, "330");
-        assert_eq!(crate::layout_renderer::svg_parse_count() - frozen, 2);
+        let before = page_vm.vm().layout_pass_observability_for_test().1;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let initial = page_vm
+            .vm_mut()
+            .eval("JSON.stringify(readSvgLayoutPublication())")?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&initial)?,
+            json!({
+                "htmlBefore":80,"svg":[100,40,200,100],"object":[110,50,10,10],"shapeCount":1,
+                "range":[110,50,10,10],"rangeCount":1000,"htmlAfter":80,
+            })
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 1,
+            "the first geometry demand must publish once, including all SVG sources"
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        let publications = page_vm
+            .vm()
+            .layout_snapshot_cache_observability_for_test()
+            .2;
+
+        // An unrelated HTML change must not turn an SVG read into a page refresh.
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('html').style.width='300px';'changed'")?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(readSvgLayoutPublication())")?,
+            initial
+        );
+        page_vm.vm_mut().eval("mutateSvgLayoutPublication()")?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(readSvgLayoutPublication())")?,
+            initial,
+            "single-source and Range reads must use the same old publication"
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 1
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_snapshot_cache_observability_for_test()
+                .2,
+            publications
+        );
+        assert_eq!(
+            crate::layout_renderer::svg_parse_count(),
+            parsed + 1,
+            "1000 dirty SVG sources must not be reparsed by geometry reads"
+        );
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 160, 1.0))?
+            .expect("fresh screenshot");
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        for (x, y, color) in [(250, 10, [255, 0, 0, 255]), (335, 55, [0, 255, 0, 255])] {
+            let offset = (y * raster.width as usize + x) * 4;
+            assert_eq!(&raster.rgba[offset..offset + 4], color);
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(readSvgLayoutPublication())")?
+            )?,
+            json!({
+                "htmlBefore":300,"svg":[300,40,200,100],"object":[330,50,100,10],"shapeCount":1,
+                "range":[310,50,120,10],"rangeCount":1000,"htmlAfter":300,
+            })
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 2
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .layout_snapshot_cache_observability_for_test()
+                .2,
+            publications + 1
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
         Ok::<_, anyhow::Error>(())
-    }).await.expect("SVG geometry must share its outer layout's publication");
+    })
+    .await
+    .expect("SVG single and batch queries must only consume the frozen publication");
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn inline_svg_measurement_observes_a_chart_shown_after_container_measurement() {
+async fn inline_svg_reveal_waits_for_visual_publication() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
         let mut page_vm = test_page_vm_with_loader_and_document_url(
@@ -179,25 +259,125 @@ async fn inline_svg_measurement_observes_a_chart_shown_after_container_measureme
             'installed'
         "#)?;
         page_vm.vm_mut().sync_live_document_style_sources();
-        // GitHub measures its container before revealing the graph, then uses
-        // SVG measurements repeatedly while assigning label positions.
         assert_eq!(page_vm.vm_mut().eval("document.getElementById('container').clientWidth")?, "250");
-        let measured = page_vm.vm_mut().eval(r#"(() => {
-            const svg=document.querySelector('svg'), text=svg.querySelector('text'), group=svg.querySelector('g');
+        let passes = page_vm.vm().layout_pass_observability_for_test().1;
+        let hidden = page_vm.vm_mut().eval(r#"(() => {
+            const svg=document.querySelector('svg'), text=svg.querySelector('text');
             svg.classList.remove('hidden');
-            const label=text.getBoundingClientRect();
             text.setAttribute('x','40'); text.setAttribute('y','50');
-            const bounds=group.getBoundingClientRect();
-            svg.setAttribute('width',Math.ceil(bounds.width)); svg.setAttribute('height',Math.ceil(bounds.height));
-            return JSON.stringify([label.width,label.height,bounds.x,bounds.y,bounds.width,bounds.height]);
+            const r=text.getBoundingClientRect();
+            return JSON.stringify([r.x,r.y,r.width,r.height]);
         })()"#)?;
+        assert_eq!(hidden,"[0,0,0,0]","revealing SVG must not refresh old geometry");
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1,passes);
+        page_vm.vm_mut().screenshot_layout_snapshot(moli_layout::PaintViewport::new(400,150,1.0))?;
+        let measured = page_vm.vm_mut().eval(r#"JSON.stringify((r=>[r.x,r.y,r.width,r.height])(document.querySelector('text').getBoundingClientRect()))"#)?;
         let measured: Vec<f64> = serde_json::from_str(&measured)?;
-        assert!(measured[0] > 50.0 && measured[1] > 8.0, "visible label: {measured:?}");
-        assert!(measured[2] > 39.0 && measured[3] > 30.0, "updated position: {measured:?}");
-        assert!((measured[0] - measured[4]).abs() < 0.001);
-        assert!((measured[1] - measured[5]).abs() < 0.001);
+        assert!(measured[0] > 39.0 && measured[1] > 30.0,"{measured:?}");
+        assert!(measured[2] > 50.0 && measured[3] > 8.0,"{measured:?}");
+        assert_eq!(page_vm.vm().layout_pass_observability_for_test().1,passes+1);
         Ok::<_, anyhow::Error>(())
-    }).await.expect("chart construction must not read a hidden or incomplete SVG snapshot");
+    }).await.expect("revealed SVG must become measurable only after a new publication");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_screencast_publishes_changed_geometry_and_skips_clean_polls() {
+    use crate::runtime::{
+        RendererCaptureScreencastFrameReply as Reply, RendererCaptureScreencastFrameRequest,
+        RendererScreenshotFormat,
+    };
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-screencast-publication.html")?,
+        );
+        page_vm.vm_mut().eval(&format!(
+            "{SVG_PUBLICATION_FIXTURE}\ninstallSvgLayoutPublication()"
+        ))?;
+        let request = |known_visual_state| RendererCaptureScreencastFrameRequest {
+            base_background_color: [255; 4],
+            format: RendererScreenshotFormat::Png,
+            quality: 100,
+            optimize_for_speed: true,
+            max_width: None,
+            max_height: None,
+            known_visual_state,
+        };
+        let before = page_vm.vm().layout_pass_observability_for_test().1;
+        let parsed = crate::layout_renderer::svg_parse_count();
+        let Reply::Captured(first) = page_vm.capture_screencast_frame(request(None))? else {
+            panic!("first screencast must capture");
+        };
+        let initial = page_vm
+            .vm_mut()
+            .eval("JSON.stringify(readSvgLayoutPublication())")?;
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 1
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        assert_eq!(
+            page_vm.capture_screencast_frame(request(Some(first.visual_state.clone())))?,
+            Reply::Unchanged
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 1
+        );
+
+        page_vm.vm_mut().eval("mutateSvgLayoutPublication()")?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(readSvgLayoutPublication())")?,
+            initial
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 1
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 1);
+        let Reply::Captured(second) =
+            page_vm.capture_screencast_frame(request(Some(first.visual_state)))?
+        else {
+            panic!("changed SVG and HTML must capture one new frame");
+        };
+        let measured: serde_json::Value = serde_json::from_str(
+            &page_vm
+                .vm_mut()
+                .eval("JSON.stringify(readSvgLayoutPublication())")?,
+        )?;
+        assert_eq!(measured["htmlBefore"], 300);
+        assert_eq!(measured["htmlAfter"], 300);
+        assert_eq!(measured["object"], json!([330, 50, 100, 10]));
+        assert_eq!(measured["range"], json!([310, 50, 120, 10]));
+        let raster = moli_image::decode_png(&second.image.bytes)?;
+        let offset = (55 * raster.width as usize + 335) * 4;
+        assert_eq!(&raster.rgba[offset..offset + 4], [0, 255, 0, 255]);
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 2
+        );
+        assert_eq!(crate::layout_renderer::svg_parse_count(), parsed + 2);
+        assert_eq!(
+            page_vm.capture_screencast_frame(request(Some(second.visual_state)))?,
+            Reply::Unchanged
+        );
+        assert_eq!(
+            page_vm.vm().layout_pass_observability_for_test().1,
+            before + 2
+        );
+        assert_eq!(
+            crate::layout_renderer::svg_parse_count(),
+            parsed + 2,
+            "clean screencast polls must not rebuild or reparse the scene"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("screencast must own SVG refreshes just as it owns HTML refreshes");
 }
 
 #[tokio::test(flavor = "current_thread")]

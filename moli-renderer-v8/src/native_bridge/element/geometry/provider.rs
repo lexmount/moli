@@ -33,11 +33,7 @@ pub(crate) fn observable_geometry_query(
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-    if is_svg_geometry_query(runtime, query) {
-        runtime.ensure_svg_geometry_layout()?;
-    } else {
-        runtime.ensure_initial_layout()?;
-    }
+    runtime.ensure_initial_layout()?;
     published_geometry_query(runtime, document, query)
 }
 
@@ -59,27 +55,8 @@ pub(crate) fn observable_geometry_batch(
     document: DomHandle,
     batch: &LayoutQueryBatch<DomHandle>,
 ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-    if batch
-        .queries
-        .iter()
-        .any(|query| is_svg_geometry_query(runtime, query))
-    {
-        runtime.ensure_svg_geometry_layout()?;
-    } else {
-        runtime.ensure_initial_layout()?;
-    }
+    runtime.ensure_initial_layout()?;
     published_geometry_batch(runtime, document, batch)
-}
-
-fn is_svg_geometry_query(runtime: &PageScriptHost, query: &LayoutQuery<DomHandle>) -> bool {
-    let (LayoutQuery::ClientRects { source } | LayoutQuery::ContentQuads { source }) = query else {
-        return false;
-    };
-    runtime
-        .dom_host()
-        .node(*source)
-        .and_then(|node| node.as_element())
-        .is_some_and(|element| element.namespace() == "http://www.w3.org/2000/svg")
 }
 
 /// Style and observer sampling never initializes layout as a side effect.
