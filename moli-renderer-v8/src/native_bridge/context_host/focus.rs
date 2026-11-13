@@ -2,6 +2,35 @@ use super::{PageScriptHost, PendingWindowMessageEndpoint};
 use crate::document_runtime::DomHandle;
 
 impl PageScriptHost {
+    pub(crate) fn document_has_focus(&self, document: DomHandle) -> bool {
+        if !self.document_activity().focused || !self.document_is_fully_active(document) {
+            return false;
+        }
+        let container = match self.window_endpoint_for_document(document) {
+            Some(PendingWindowMessageEndpoint::TopWindow)
+            | Some(PendingWindowMessageEndpoint::LightweightPopup(_)) => return true,
+            Some(PendingWindowMessageEndpoint::ChildWindow(container)) => container,
+            None => return false,
+        };
+        // Main retains one active element for this native document tree.
+        // Walk its embedding chain instead of reading author-visible getters.
+        let Some(mut focused) = self.active_element_handle() else {
+            return false;
+        };
+        loop {
+            if focused == container {
+                return true;
+            }
+            let Some(owner) = self.dom_host().owner_document_handle(focused) else {
+                return false;
+            };
+            let Some(parent) = self.child_browsing_context_host_for_document_handle(owner) else {
+                return false;
+            };
+            focused = parent;
+        }
+    }
+
     pub(crate) fn window_endpoint_for_document(
         &self,
         document_handle: DomHandle,
