@@ -12,7 +12,7 @@ mod session;
 mod tls;
 
 pub use client::{Connector, Owner};
-pub use config::{Config, CongestionControl, ConnectOptions};
+pub use config::{CertificateHash, Config, CongestionControl, ConnectOptions};
 pub use session::{CloseInfo, CloseReason, RecvStream, SendStream, Session};
 pub use web_transport_quinn::{ReadError, SessionError, WriteError};
 
