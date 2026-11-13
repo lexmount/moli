@@ -311,6 +311,21 @@ async fn assert_child_frame_navigation_completion(
         .expect("child navigation loader id")
         .to_owned();
 
+    // A previous navigation on this frame can stop after the next loader's
+    // commit. Frame-level stopped-loading alone does not finish this loader.
+    wait_until_message(
+        ctx,
+        "SID-1",
+        "current child loader lifecycle completion",
+        |message| {
+            message["method"] == "Page.lifecycleEvent"
+                && message["params"]["frameId"] == child_frame_id
+                && message["params"]["loaderId"] == child_loader_id
+                && message["params"]["name"] == "networkIdle"
+        },
+    )
+    .await;
+
     let lifecycle_names = ctx
         .sent
         .iter()
