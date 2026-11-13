@@ -175,7 +175,14 @@ impl WindowCspReportRequestContext {
 }
 
 pub(crate) fn capture_window_csp_report_request_context(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+) -> Option<WindowCspReportRequestContext> {
+    capture_window_csp_report_request_context_for_owner(host, dispatch_scope)
+}
+
+pub(in crate::network_host) fn capture_window_csp_report_request_context_for_owner(
     host: &JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<WindowCspReportRequestContext> {
@@ -196,8 +203,7 @@ pub(crate) fn capture_window_csp_report_request_context(
             )
         }
     };
-    window_csp_report_request_context_for_identity(
-        scope,
+    window_csp_report_request_context_for_native_identity(
         host,
         crate::native_bridge::WindowDocumentNetworkRequestIdentity::new(
             document_owner,
@@ -509,7 +515,14 @@ fn report_subresource_fetch_info(
 }
 
 fn window_csp_report_request_context_for_identity(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
+) -> Option<WindowCspReportRequestContext> {
+    window_csp_report_request_context_for_native_identity(host, identity)
+}
+
+fn window_csp_report_request_context_for_native_identity(
     host: &JsContextHost,
     identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
 ) -> Option<WindowCspReportRequestContext> {
@@ -566,8 +579,7 @@ fn window_csp_report_request_context_for_identity(
             host,
             identity.dispatch_scope(),
         ),
-        policy_context: effective_subresource_policy_context(
-            scope,
+        policy_context: super::request_scope::subresource_policy_context_for_owner(
             host,
             identity.dispatch_scope(),
         ),

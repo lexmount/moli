@@ -20,6 +20,7 @@ const FONT_SRC: &str = "font-src";
 const IMG_SRC: &str = "img-src";
 const MANIFEST_SRC: &str = "manifest-src";
 const MEDIA_SRC: &str = "media-src";
+const OBJECT_SRC: &str = "object-src";
 const SCRIPT_SRC_ATTR: &str = "script-src-attr";
 const SCRIPT_SRC_ELEM: &str = "script-src-elem";
 const SCRIPT_SRC: &str = "script-src";
@@ -373,13 +374,18 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
     policies.iter().find_map(|policy| {
         let (effective_directive, source_list) =
             effective_source_list_with_directive(policy, kind)?;
-        if source_list_allows_resource_request(
-            source_list,
-            protected_url,
-            checked_url,
-            redirect_status,
-            request,
-        ) {
+        let allowed = if kind == ContentSecurityPolicyResourceKind::DocumentPrefetch {
+            source_list_allows(source_list, protected_url, checked_url, redirect_status)
+        } else {
+            source_list_allows_resource_request(
+                source_list,
+                protected_url,
+                checked_url,
+                redirect_status,
+                request,
+            )
+        };
+        if allowed {
             return None;
         }
         let document_uri = csp_url_for_report(protected_url);
@@ -667,6 +673,34 @@ fn effective_source_list_with_directive(
     policy: &ContentSecurityPolicy,
     kind: ContentSecurityPolicyResourceKind,
 ) -> Option<(&'static str, Vec<&str>)> {
+    if kind == ContentSecurityPolicyResourceKind::DocumentPrefetch {
+        // Resource hints without default-src are unrestricted. Otherwise,
+        // every delivered policy allows the union of its fetch source lists.
+        // Navigation and document directives, such as base-uri, do not grant
+        // permission to send a resource-hint request.
+        directive_source_list(policy, DEFAULT_SRC)?;
+        let sources = [
+            DEFAULT_SRC,
+            CHILD_SRC,
+            CONNECT_SRC,
+            FONT_SRC,
+            FRAME_SRC,
+            IMG_SRC,
+            MANIFEST_SRC,
+            MEDIA_SRC,
+            OBJECT_SRC,
+            SCRIPT_SRC,
+            SCRIPT_SRC_ELEM,
+            STYLE_SRC,
+            STYLE_SRC_ELEM,
+            WORKER_SRC,
+        ]
+        .into_iter()
+        .filter_map(|directive| directive_source_list(policy, directive))
+        .flatten()
+        .collect();
+        return Some((DEFAULT_SRC, sources));
+    }
     kind.directive_fallbacks().iter().find_map(|directive| {
         directive_source_list(policy, directive)
             .map(|sources| (kind.effective_directive(), sources))
@@ -1345,6 +1379,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
+            Self::DocumentPrefetch => DEFAULT_SRC,
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport | Self::WorkerScript => {
                 SCRIPT_SRC_ELEM
             }
@@ -1363,6 +1398,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
+            Self::DocumentPrefetch => &[DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
             Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],

@@ -44,7 +44,14 @@ pub(in crate::network_host) fn active_subresource_network_partition_key(
 }
 
 pub(crate) fn effective_subresource_policy_context(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    owner: crate::native_bridge::OwnerDispatchScope,
+) -> crate::types::SubresourcePolicyContext {
+    subresource_policy_context_for_owner(host, owner)
+}
+
+pub(in crate::network_host) fn subresource_policy_context_for_owner(
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> crate::types::SubresourcePolicyContext {
@@ -64,7 +71,6 @@ pub(crate) fn effective_subresource_policy_context(
             .map(|snapshot| snapshot.settings.subresource_policy_context)
             .unwrap_or_default(),
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let _ = scope;
             crate::types::SubresourcePolicyContext {
                 https_state: false,
                 mixed_content_policy: Default::default(),

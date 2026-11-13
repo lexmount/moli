@@ -1432,6 +1432,28 @@ impl DocumentRuntime {
                 })
                 .flatten();
             let document_owner = operation.document_owner();
+            let prefetch_policy = if fetch_options.request_resource_type
+                == Some(RequestResourceType::LinkPrefetch)
+                && !host_ptr.is_null()
+            {
+                let host = unsafe { &*host_ptr };
+                let owner = host
+                    .owner_dispatch_scope_for_node(handle)
+                    .expect("prefetch owner scope");
+                let policy = host
+                    .document_connect_policy_snapshot_for_owner(owner)
+                    .expect("prefetch has a current Document policy owner");
+                policy.has_policies().then(|| {
+                    let context = crate::network_host::WindowCspRequestContext::capture_resource_for_owner(
+                        host,
+                        owner,
+                        crate::content_security_policy::ContentSecurityPolicyResourceKind::DocumentPrefetch,
+                    ).expect("prefetch has a current Document request owner");
+                    (context, host.resource_completion_sender())
+                })
+            } else {
+                None
+            };
             resource_loader.spawn_resource_task(async move {
                 let cancel = moli_fetch::FetchCancelHandle::new();
                 let mut timing = crate::context_bootstrap::FetchResourceTiming::from_start(
@@ -1449,6 +1471,7 @@ impl DocumentRuntime {
                     fetch_options,
                     service_worker_context,
                     cancel.clone(),
+                    prefetch_policy,
                 )
                 .await;
                 let completed = std::time::Instant::now();
@@ -2708,8 +2731,27 @@ async fn fetch_connected_link_readiness_with_service_worker(
     options: ConnectedLinkReadinessFetchOptions,
     service_worker_context: Option<ServiceWorkerConnectedLinkContext>,
     cancel: moli_fetch::FetchCancelHandle,
+    prefetch_policy: Option<(
+        crate::network_host::WindowCspRequestContext,
+        crate::page_task_queue::RendererResourceCompletionSender,
+    )>,
 ) -> Result<ConnectedLinkReadinessFetchResponse, String> {
-    let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
+    let mut request =
+        connected_link_readiness_request(&document_url, &request_origin, &url, &options);
+    if let Some((context, completion)) = &prefetch_policy {
+        context.check_request(&document_url, &url, completion.clone())?;
+        if let Some(check) = crate::network_host::window_csp_redirect_check(
+            &context.policy,
+            &context.redirect_state,
+            &context.report_context,
+            &document_url,
+            &url,
+            ContentSecurityPolicySourceLocation::default(),
+            completion.clone(),
+        ) {
+            request = request.with_redirect_check(check);
+        }
+    }
     let integrity = options
         .link_preload
         .then(|| options.link_fetch_options.integrity())
@@ -2733,6 +2775,15 @@ async fn fetch_connected_link_readiness_with_service_worker(
             .await
         {
             Ok(Some(response)) => {
+                if let Some((context, completion)) = &prefetch_policy {
+                    context.check_response(
+                        &document_url,
+                        &url,
+                        &response.response.head(),
+                        completion.clone(),
+                        "prefetch",
+                    )?;
+                }
                 let load_event_successful = connected_link_load_event_successful(
                     &response.response,
                     response.response_filter.clone(),
@@ -2755,9 +2806,18 @@ async fn fetch_connected_link_readiness_with_service_worker(
         }
     }
     let request_mode = options.request_mode;
-    fetch_connected_link_readiness_with_request(loader, url, &options, request, cancel)
+    fetch_connected_link_readiness_with_request(loader, url.clone(), &options, request, cancel)
         .await
-        .map(|response| {
+        .and_then(|response| {
+            if let Some((context, completion)) = &prefetch_policy {
+                context.check_response(
+                    &document_url,
+                    &url,
+                    &response.head(),
+                    completion.clone(),
+                    "prefetch",
+                )?;
+            }
             let load_event_successful = connected_link_load_event_successful(&response, None);
             let response_filter = crate::network_host::network_response_filter(
                 &request_origin,
@@ -2765,14 +2825,14 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 request_mode,
                 moli_fetch::RequestRedirectMode::Follow,
             );
-            ConnectedLinkReadinessFetchResponse::from_response(
+            Ok(ConnectedLinkReadinessFetchResponse::from_response(
                 response,
                 response_filter,
                 load_event_successful,
                 integrity,
                 false,
                 None,
-            )
+            ))
         })
 }
 
