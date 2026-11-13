@@ -403,6 +403,8 @@ impl PageScriptHost {
                     document_content_security_policies: refresh_policy_source
                         .map(|policy| policy.document_content_security_policies.clone())
                         .unwrap_or_default(),
+                    content_security_policy_self_url: refresh_policy_source
+                        .and_then(|policy| policy.content_security_policy_self_url.clone()),
                     credentialless: document_credentialless,
                     credentialless_storage_nonce,
                     sandbox: if attribute_bootstrap_changed || is_new {
