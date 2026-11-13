@@ -45,6 +45,36 @@ pub(crate) struct FrameOwnerStore {
     pending_parent_document_descendant_completions: VecDeque<FrameDocumentDescendantLoadCompletion>,
 }
 
+// A view into the authoritative owner indexes. Validation is shared with
+// snapshots, but synchronous readers need not clone settings or URLs.
+struct CurrentFrameOwner<'a> {
+    frame_id: &'a FrameId,
+    frame: &'a FrameRecord,
+    local_window: &'a LocalWindowRecord,
+    document: &'a DocumentRecord,
+}
+
+impl CurrentFrameOwner<'_> {
+    fn snapshot(&self) -> FrameOwnerSnapshot {
+        FrameOwnerSnapshot {
+            frame_id: self.frame_id.clone(),
+            kind: self.frame.kind,
+            parent_frame_id: self.frame.parent_frame_id.clone(),
+            owner_element_handle: self.frame.owner_element_handle,
+            #[cfg(test)]
+            window_proxy_id: self.frame.window_proxy_id,
+            scheduler_lane_id: self.frame.scheduler_lane_id,
+            local_window_id: self.local_window.id,
+            document_id: self.document.id,
+            document_handle: self.document.document_handle,
+            document_url: self.document.url.clone(),
+            document_base_url: self.document.base_url.clone(),
+            realm_id: self.local_window.realm_id,
+            settings: self.local_window.settings.clone(),
+        }
+    }
+}
+
 impl FrameOwnerStore {
     fn new_loading_document_lifecycle(
         &mut self,
@@ -1648,6 +1678,11 @@ impl FrameOwnerStore {
         &self,
         frame_id: &FrameId,
     ) -> Option<FrameOwnerSnapshot> {
+        self.current_frame_owner(frame_id)
+            .map(|owner| owner.snapshot())
+    }
+
+    fn current_frame_owner<'a>(&'a self, frame_id: &'a FrameId) -> Option<CurrentFrameOwner<'a>> {
         let frame = self.frames.get(frame_id)?;
         if frame.lifecycle != FrameLifecycleState::Attached {
             return None;
@@ -1700,21 +1735,11 @@ impl FrameOwnerStore {
             }
         }
 
-        Some(FrameOwnerSnapshot {
-            frame_id: frame_id.clone(),
-            kind: frame.kind,
-            parent_frame_id: frame.parent_frame_id.clone(),
-            owner_element_handle: frame.owner_element_handle,
-            #[cfg(test)]
-            window_proxy_id: frame.window_proxy_id,
-            scheduler_lane_id: frame.scheduler_lane_id,
-            local_window_id,
-            document_id,
-            document_handle: document.document_handle,
-            document_url: document.url.clone(),
-            document_base_url: document.base_url.clone(),
-            realm_id: local_window.realm_id,
-            settings: local_window.settings.clone(),
+        Some(CurrentFrameOwner {
+            frame_id,
+            frame,
+            local_window,
+            document,
         })
     }
 
@@ -1722,24 +1747,7 @@ impl FrameOwnerStore {
         &self,
         child_handle: DomHandle,
     ) -> Option<ChildFrameOwnerSnapshot> {
-        let frame_id = self.frame_ids_by_child_handle.get(&child_handle)?.clone();
-        let owner_element = self.frame_owner_elements.get(&child_handle)?;
-        if owner_element.owner_handle != child_handle
-            || owner_element.content_frame_id.as_ref() != Some(&frame_id)
-            || owner_element.lifecycle != FrameOwnerElementLifecycleState::Attached
-        {
-            return None;
-        }
-
-        let owner = self.current_frame_owner_snapshot(&frame_id)?;
-        if owner.kind != FrameKind::ChildIframe
-            || owner.owner_element_handle != Some(child_handle)
-            || owner.frame_id != frame_id
-            || owner_element.parent_frame_id != owner.parent_frame_id
-        {
-            return None;
-        }
-
+        let owner = self.current_child_owner(child_handle)?.snapshot();
         Some(ChildFrameOwnerSnapshot {
             owner_handle: child_handle,
             frame_id: owner.frame_id,
@@ -1753,6 +1761,36 @@ impl FrameOwnerStore {
             realm_id: owner.realm_id,
             settings: owner.settings,
         })
+    }
+
+    fn current_child_owner(&self, child_handle: DomHandle) -> Option<CurrentFrameOwner<'_>> {
+        let frame_id = self.frame_ids_by_child_handle.get(&child_handle)?;
+        let owner_element = self.frame_owner_elements.get(&child_handle)?;
+        if owner_element.owner_handle != child_handle
+            || owner_element.content_frame_id.as_ref() != Some(frame_id)
+            || owner_element.lifecycle != FrameOwnerElementLifecycleState::Attached
+        {
+            return None;
+        }
+
+        let owner = self.current_frame_owner(frame_id)?;
+        if owner.frame.kind != FrameKind::ChildIframe
+            || owner.frame.owner_element_handle != Some(child_handle)
+            || owner.frame_id != frame_id
+            || owner_element.parent_frame_id != owner.frame.parent_frame_id
+        {
+            return None;
+        }
+
+        Some(owner)
+    }
+
+    pub(crate) fn current_child_document(
+        &self,
+        child_handle: DomHandle,
+    ) -> Option<(DomHandle, &Url)> {
+        let owner = self.current_child_owner(child_handle)?;
+        Some((owner.document.document_handle, &owner.document.url))
     }
 
     pub(crate) fn current_child_document_owner(

@@ -27,18 +27,18 @@ impl HtmlEmbeddedDocumentProvider for PageScriptHost {
         if !self.child_browsing_context_host_is_active(owner) {
             return None;
         }
-        let current = self.frame_owner_current_child_snapshot(owner)?;
-        if document != current.document_handle
+        let (current_document, url) = self.frame_owner_store.current_child_document(owner)?;
+        if document != current_document
             || !self
                 .dom_host()
-                .node(current.document_handle)
+                .node(current_document)
                 .is_some_and(crate::dom::native::Node::is_document)
         {
             return None;
         }
         Some(HtmlEmbeddedDocument {
-            document: current.document_handle,
-            url: Cow::Owned(current.document_url.into()),
+            document: current_document,
+            url: Cow::Borrowed(url.as_str()),
         })
     }
 }

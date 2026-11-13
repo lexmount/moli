@@ -1879,6 +1879,65 @@ fn stale_realm_clear_does_not_clear_replacement_child_realm() {
 }
 
 #[test]
+fn borrowed_child_document_tracks_current_owner_without_retaining_a_snapshot() {
+    let mut store = FrameOwnerStore::default();
+    let child = handle(403);
+    let owner = commit_test_child_document(
+        &mut store,
+        child,
+        handle(404),
+        "borrowed-document",
+        Some("main"),
+    );
+    let (document, document_url) = store.current_child_document(child).unwrap();
+    let record = store.documents.get(&owner.document_id).unwrap();
+    assert_eq!(document, record.document_handle);
+    assert!(std::ptr::eq(document_url, &record.url));
+
+    assert!(store.update_current_child_document_urls(
+        child,
+        url("https://borrowed-document.test/updated"),
+        url("https://borrowed-document.test/base/"),
+    ));
+    assert_eq!(
+        store.current_child_document(child).unwrap().1.as_str(),
+        "https://borrowed-document.test/updated",
+    );
+    store
+        .scheduler_lanes
+        .get_mut(&owner.scheduler_lane_id)
+        .unwrap()
+        .lifecycle = FrameSchedulerLaneLifecycleState::Detached;
+    assert!(store.current_child_document(child).is_none());
+    store
+        .scheduler_lanes
+        .get_mut(&owner.scheduler_lane_id)
+        .unwrap()
+        .lifecycle = FrameSchedulerLaneLifecycleState::Active;
+    assert!(store.current_child_document(child).is_some());
+
+    let realm = materialize_test_child_realm(&mut store, child, 403);
+    let valid_document = store.realms.get(&realm).unwrap().document_id;
+    store.realms.get_mut(&realm).unwrap().document_id = main_document_id();
+    assert!(store.current_child_document(child).is_none());
+    store.realms.get_mut(&realm).unwrap().document_id = valid_document;
+    assert!(store.current_child_document(child).is_some());
+    store.detach_current_child_document(child);
+    assert!(store.current_child_document(child).is_none());
+    commit_test_child_document(
+        &mut store,
+        child,
+        handle(405),
+        "borrowed-replacement",
+        Some("main"),
+    );
+    assert_eq!(
+        store.current_child_document(child),
+        Some((handle(405), &url("https://borrowed-replacement.test/"))),
+    );
+}
+
+#[test]
 fn frame_scheduler_lane_is_required_for_current_owner_snapshot() {
     let mut store = FrameOwnerStore::default();
     let child_handle = handle(29);
