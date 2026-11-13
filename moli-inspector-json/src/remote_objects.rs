@@ -172,7 +172,7 @@ fn finish(mut ids: Vec<String>) -> Vec<String> {
 struct RawWalker {
     ids: Vec<String>,
     #[cfg(test)]
-    scanned_bytes: usize,
+    walk_input_bytes: usize,
 }
 
 impl RawWalker {
@@ -187,10 +187,11 @@ impl RawWalker {
         let mut work = vec![(source, role, depth)];
         let mut frames: Vec<Frame<'_>> = Vec::new();
         while let Some((source, root_role, root_depth)) = work.pop() {
-            // Meter whole cursor passes, including deferred untyped values.
+            // Sum work-item input lengths, including deferred untyped values.
+            // This excludes reads within string searches and serde value skips.
             #[cfg(test)]
             {
-                self.scanned_bytes += source.len();
+                self.walk_input_bytes += source.len();
             }
             let mut cursor = Cursor {
                 source,
@@ -410,7 +411,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deep_serialized_and_unknown_values_do_not_rescan_nested_subtrees() {
+    fn deep_serialized_and_unknown_values_do_not_add_deferred_walks() {
         for depth in [0, 10, 20, 40, 80, 499, 500, 1000, 2000] {
             let leaf = "x".repeat(1024 * 1024);
             let deep = format!(
@@ -423,7 +424,11 @@ mod tests {
                 let raw: Box<RawValue> = serde_json::from_str(&source).unwrap();
                 let mut walker = RawWalker::default();
                 walker.scan(raw.get(), Role::RemoteObject, 1000).unwrap();
-                assert_eq!(walker.scanned_bytes, source.len(), "{field}, depth {depth}");
+                assert_eq!(
+                    walker.walk_input_bytes,
+                    source.len(),
+                    "{field}, depth {depth}"
+                );
                 let expected = if depth <= 499 {
                     vec!["deep", "root"]
                 } else {
