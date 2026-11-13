@@ -23,6 +23,17 @@ use crate::automation::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType}
 use crate::conn::DocumentBodySource;
 use moli_fetch::url_pattern_matches;
 
+/// Requests transferred out of a target's pause maps for finite cleanup.
+#[derive(Debug, Default)]
+pub(crate) struct DrainedFetchRequests {
+    pub(crate) navigations: Vec<PendingFetchNavigation>,
+    pub(crate) auth_navigations: Vec<PendingFetchAuthNavigation>,
+    pub(crate) response_transfers: Vec<PausedDocumentTransfer>,
+    pub(crate) subresource_requests: Vec<(String, PendingSubresourceFetchRequest)>,
+    pub(crate) subresource_auth_requests: Vec<(String, PendingSubresourceFetchAuthRequest)>,
+    pub(crate) subresource_responses: Vec<(String, PendingSubresourceFetchResponseRequest)>,
+}
+
 #[derive(Debug, Default)]
 pub struct TargetFetchState {
     pending_fetch_request_ids: HashSet<String>,
@@ -371,17 +382,7 @@ impl TargetFetchState {
         }
     }
 
-    fn drain_pending_request_maps(
-        &mut self,
-        clear_in_flight: bool,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    fn drain_pending_request_maps(&mut self, clear_in_flight: bool) -> DrainedFetchRequests {
         let pending_navigations = std::mem::take(&mut self.pending_fetch_navigations)
             .into_values()
             .collect::<Vec<_>>();
@@ -435,14 +436,14 @@ impl TargetFetchState {
         {
             self.pending_fetch_request_ids.remove(fetch_request_id);
         }
-        (
-            pending_navigations,
-            pending_auth_navigations,
-            pending_response_navigations,
-            pending_subresource_fetches,
-            pending_subresource_auths,
-            pending_subresource_responses,
-        )
+        DrainedFetchRequests {
+            navigations: pending_navigations,
+            auth_navigations: pending_auth_navigations,
+            response_transfers: pending_response_navigations,
+            subresource_requests: pending_subresource_fetches,
+            subresource_auth_requests: pending_subresource_auths,
+            subresource_responses: pending_subresource_responses,
+        }
     }
 
     pub(crate) fn register_pending_fetch_navigation_request(
@@ -940,30 +941,14 @@ impl TargetFetchState {
         Some(pending)
     }
 
-    pub(crate) fn drain_pending_requests(
-        &mut self,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    pub(crate) fn drain_pending_requests(&mut self) -> DrainedFetchRequests {
         self.drain_pending_request_maps(true)
     }
 
     pub(crate) fn drain_pending_requests_for_disable_session(
         &mut self,
         session_id: Option<&str>,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    ) -> DrainedFetchRequests {
         let pending_navigations = self.drain_pending_fetch_navigations_for_session(session_id);
         let pending_auth_navigations =
             self.drain_pending_fetch_auth_navigations_for_session(session_id);
@@ -987,14 +972,14 @@ impl TargetFetchState {
         self.prune_auth_stage_chains_for_session(session_id);
         self.clear_orphan_pending_request_ids_for_disable(session_id);
 
-        (
-            pending_navigations,
-            pending_auth_navigations,
-            pending_response_navigations,
-            pending_subresource_fetches,
-            pending_subresource_auths,
-            pending_subresource_responses,
-        )
+        DrainedFetchRequests {
+            navigations: pending_navigations,
+            auth_navigations: pending_auth_navigations,
+            response_transfers: pending_response_navigations,
+            subresource_requests: pending_subresource_fetches,
+            subresource_auth_requests: pending_subresource_auths,
+            subresource_responses: pending_subresource_responses,
+        }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -2367,30 +2352,14 @@ impl TargetFetchOwner {
             .active_body_stream_request_id(handle)
     }
 
-    pub(crate) fn drain_pending_requests(
-        &mut self,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    pub(crate) fn drain_pending_requests(&mut self) -> DrainedFetchRequests {
         self.pending.drain_pending_requests()
     }
 
     pub(crate) fn drain_pending_requests_for_disable_session(
         &mut self,
         session_id: Option<&str>,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    ) -> DrainedFetchRequests {
         self.pending
             .drain_pending_requests_for_disable_session(session_id)
     }
@@ -2777,14 +2746,14 @@ mod tests {
             ResponseStageUrlMatchPolicy::MatchFinalUrl,
         );
 
-        let (
-            pending_navigations,
-            pending_auth_navigations,
-            pending_response_navigations,
-            pending_fetches,
-            pending_auths,
-            pending_responses,
-        ) = owner.drain_pending_requests_for_disable_session(Some("SID-A"));
+        let DrainedFetchRequests {
+            navigations: pending_navigations,
+            auth_navigations: pending_auth_navigations,
+            response_transfers: pending_response_navigations,
+            subresource_requests: pending_fetches,
+            subresource_auth_requests: pending_auths,
+            subresource_responses: pending_responses,
+        } = owner.drain_pending_requests_for_disable_session(Some("SID-A"));
 
         assert!(pending_navigations.is_empty());
         assert!(pending_auth_navigations.is_empty());
@@ -2861,8 +2830,10 @@ mod tests {
         }));
         owner.register_pending_fetch_auth_navigation("AUTH-B".to_owned(), pending);
 
-        let (_, pending_auth_navigations, _, _, _, _) =
-            owner.drain_pending_requests_for_disable_session(Some("SID-A"));
+        let DrainedFetchRequests {
+            auth_navigations: pending_auth_navigations,
+            ..
+        } = owner.drain_pending_requests_for_disable_session(Some("SID-A"));
 
         assert!(
             pending_auth_navigations.is_empty(),
@@ -2966,8 +2937,12 @@ mod tests {
             ResponseStageUrlMatchPolicy::MatchFinalUrl,
         );
 
-        let (_, _, _, pending_fetches, pending_auths, pending_responses) =
-            owner.drain_pending_requests_for_disable_session(Some("SID-A"));
+        let DrainedFetchRequests {
+            subresource_requests: pending_fetches,
+            subresource_auth_requests: pending_auths,
+            subresource_responses: pending_responses,
+            ..
+        } = owner.drain_pending_requests_for_disable_session(Some("SID-A"));
 
         assert_eq!(pending_fetches.len(), 1);
         assert_eq!(pending_fetches[0].0, "FETCH-OWNED");

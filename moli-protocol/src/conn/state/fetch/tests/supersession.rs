@@ -352,13 +352,13 @@ async fn disabling_fetch_drains_in_progress_stream_reads_only_for_the_owner_sess
     assert!(
         fetch
             .drain_pending_requests_for_disable_session(Some("SID-other"))
-            .2
+            .response_transfers
             .is_empty()
     );
     assert!(!stream.cancellation.is_cancelled());
     let mut drained = fetch
         .drain_pending_requests_for_disable_session(Some("SID-A"))
-        .2;
+        .response_transfers;
     assert_eq!(drained.len(), 1);
     assert_eq!(drained.pop().unwrap().into_navigation().0, Some(token));
     assert!(stream.cancellation.is_cancelled());

@@ -1,6 +1,7 @@
+use crate::conn::DrainedFetchRequests;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
-    PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
 use crate::domains::network;
@@ -70,25 +71,9 @@ impl PageTargetTerminationOwnerAction {
 fn take_pending_fetch_state_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-) -> (
-    Vec<PendingFetchNavigation>,
-    Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
-    Vec<(String, PendingSubresourceFetchRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
-) {
+) -> DrainedFetchRequests {
     conn.take_pending_fetch_state_for_owner(owner)
-        .unwrap_or_else(|| {
-            (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            )
-        })
+        .unwrap_or_default()
 }
 
 /// Completes protocol-owned subresource pauses after the renderer has crashed.
@@ -335,9 +320,9 @@ impl PreparedPageCrash {
             &mut subresource_failures,
             owner,
             "Page crashed",
-            std::mem::take(&mut pending.3),
-            std::mem::take(&mut pending.4),
-            std::mem::take(&mut pending.5),
+            std::mem::take(&mut pending.subresource_requests),
+            std::mem::take(&mut pending.subresource_auth_requests),
+            std::mem::take(&mut pending.subresource_responses),
         );
         let cleanup = crate::domains::fetch::prepare_page_crash(conn, owner, pending);
         let page = conn.take_crashed_page_for_owner(owner);

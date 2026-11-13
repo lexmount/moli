@@ -1,3 +1,4 @@
+use crate::conn::DrainedFetchRequests;
 use anyhow::Result;
 
 use super::*;
@@ -15,9 +16,7 @@ use crate::conn::{
     DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, InstalledNavigationPage,
     LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL,
-    NetworkErrorPageNavigation, PausedDocumentTransfer, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
+    NetworkErrorPageNavigation, PendingFetchNavigation, RuntimeBindingDefinition,
 };
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 #[cfg(test)]
@@ -47,22 +46,8 @@ pub(super) struct TargetSessionOwnerRef<'a> {
     pub(super) session_key: DevToolsSessionKey,
 }
 
-type FetchDisableStateWithSubresourceConfig = (
-    super::fetch_owner::SessionOwnerPendingFetchState,
-    SubresourceInterceptionClasses,
-    bool,
-);
-
-fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchState {
-    (
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-    )
-}
+type FetchDisableStateWithSubresourceConfig =
+    (DrainedFetchRequests, SubresourceInterceptionClasses, bool);
 
 pub(crate) struct PendingPageTargetClose {
     target: PageTargetHost,
@@ -883,7 +868,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 .fetch_owner
                 .drain_pending_requests_for_disable_session(session_id)
         } else {
-            empty_pending_fetch_state()
+            DrainedFetchRequests::default()
         };
         let page_update_required = removed && previous_subresource_config != subresource_config;
         (pending, subresource_config, page_update_required)
@@ -900,16 +885,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         (pending, config, previous != config)
     }
 
-    pub(super) fn drain_fetch_pending_state(
-        &mut self,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
+    pub(super) fn drain_fetch_pending_state(&mut self) -> DrainedFetchRequests {
         self.target_mut().fetch_owner.drain_pending_requests()
     }
 
@@ -3247,7 +3223,7 @@ mod tests {
                 owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"));
             assert_eq!(subresource_config, SubresourceInterceptionClasses::NONE);
             assert!(page_update_required);
-            assert_eq!(pending.3.len(), 1);
+            assert_eq!(pending.subresource_requests.len(), 1);
         }
         assert!(
             !active
@@ -3283,7 +3259,7 @@ mod tests {
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
             assert_eq!(subresource_config, SubresourceInterceptionClasses::NONE);
             assert!(page_update_required);
-            assert_eq!(pending.3.len(), 1);
+            assert_eq!(pending.subresource_requests.len(), 1);
         }
         assert!(
             background

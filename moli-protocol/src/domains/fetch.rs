@@ -1,3 +1,4 @@
+use crate::conn::DrainedFetchRequests;
 use anyhow::Result;
 
 mod auth;
@@ -105,7 +106,7 @@ pub(in crate::domains) fn prepare_target_close(
 pub(in crate::domains) fn prepare_page_close(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    pending: FetchDisablePendingState,
+    pending: DrainedFetchRequests,
 ) -> PreparedFetchCleanup {
     PreparedFetchCleanup::new(
         conn,
@@ -120,13 +121,13 @@ pub(in crate::domains) fn prepare_page_close(
 pub(in crate::domains) fn prepare_browser_context_disposal(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    mut pending: FetchDisablePendingState,
+    mut pending: DrainedFetchRequests,
 ) -> PreparedFetchCleanup {
     // The renderer lifetime retires subresource promises without synthetic
     // loadingFailed events; only main-document commands still owe terminals.
-    pending.3.clear();
-    pending.4.clear();
-    pending.5.clear();
+    pending.subresource_requests.clear();
+    pending.subresource_auth_requests.clear();
+    pending.subresource_responses.clear();
     PreparedFetchCleanup::new(
         conn,
         owner,
@@ -140,7 +141,7 @@ pub(in crate::domains) fn prepare_browser_context_disposal(
 pub(in crate::domains) fn prepare_page_stop_loading(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    pending: FetchDisablePendingState,
+    pending: DrainedFetchRequests,
 ) -> PreparedFetchCleanup {
     PreparedFetchCleanup::new(
         conn,
@@ -155,7 +156,7 @@ pub(in crate::domains) fn prepare_page_stop_loading(
 pub(in crate::domains) fn prepare_page_crash(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    pending: FetchDisablePendingState,
+    pending: DrainedFetchRequests,
 ) -> PreparedFetchCleanup {
     PreparedFetchCleanup::new(
         conn,
@@ -240,15 +241,6 @@ enum CompletedFetchCommandOperation {
     },
     MaterializeResponseBody(Box<body_stream::CompletedFetchBodyRead>),
 }
-
-type FetchDisablePendingState = (
-    Vec<crate::conn::PendingFetchNavigation>,
-    Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
-    Vec<(String, crate::conn::PendingSubresourceFetchRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
-    Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
-);
 
 #[derive(Default)]
 pub(super) struct FetchCommandOutput {

@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::{FetchDisablePendingState, navigation::NavigationTermination};
+use super::{DrainedFetchRequests, navigation::NavigationTermination};
 use crate::conn::{
     CdpConnection, CommandOwnerScope, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, ProtocolStateHandle,
@@ -95,12 +95,19 @@ impl PreparedFetchCleanup {
     pub(super) fn new(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
-        pending: FetchDisablePendingState,
+        pending: DrainedFetchRequests,
         policy: Option<Result<PendingPageCommand>>,
         reason: FetchCleanupReason,
         preserve_document: bool,
     ) -> Self {
-        let (requests, auths, responses, subrequests, subauths, subresponses) = pending;
+        let DrainedFetchRequests {
+            navigations: requests,
+            auth_navigations: auths,
+            response_transfers: responses,
+            subresource_requests: subrequests,
+            subresource_auth_requests: subauths,
+            subresource_responses: subresponses,
+        } = pending;
         let subresource_error = match reason {
             FetchCleanupReason::NavigationStopped => {
                 moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned()
