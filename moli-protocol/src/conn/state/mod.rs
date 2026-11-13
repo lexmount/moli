@@ -73,7 +73,9 @@ pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBinding
 pub(crate) use runtime_slot::{FinishedRendererDocumentNavigation, TargetRuntimeSlot};
 
 pub use fetch::TargetFetchConfig;
-pub(crate) use fetch::{TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot};
+pub(crate) use fetch::{
+    DrainedFetchRequests, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
+};
 
 pub(crate) use inspector::InspectorCommandDispatch;
 pub(crate) use javascript_dialog::{

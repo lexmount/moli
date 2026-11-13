@@ -1,3 +1,4 @@
+use crate::conn::DrainedFetchRequests;
 use anyhow::{Context as _, Result};
 
 use super::target_session_owner::TargetSessionOwnerMut;
@@ -18,15 +19,6 @@ use crate::conn::{
 #[derive(Debug, thiserror::Error)]
 #[error("RequestNotFound")]
 struct SubresourceRequestNotFound;
-
-pub(crate) type SessionOwnerPendingFetchState = (
-    Vec<PendingFetchNavigation>,
-    Vec<PendingFetchAuthNavigation>,
-    Vec<PausedDocumentTransfer>,
-    Vec<(String, PendingSubresourceFetchRequest)>,
-    Vec<(String, PendingSubresourceFetchAuthRequest)>,
-    Vec<(String, PendingSubresourceFetchResponseRequest)>,
-);
 
 struct SessionPendingFetchOwner<'a>(&'a mut TargetFetchOwner);
 
@@ -1190,7 +1182,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<(
-        SessionOwnerPendingFetchState,
+        DrainedFetchRequests,
         Option<Result<moli_core::page::PendingPageCommand>>,
     )> {
         let owner = CommandOwnerScope::capture(self, session_id);
@@ -1201,7 +1193,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &CommandOwnerScope,
     ) -> Option<(
-        SessionOwnerPendingFetchState,
+        DrainedFetchRequests,
         Option<Result<moli_core::page::PendingPageCommand>>,
     )> {
         let (pending, classes, update_required) = self
@@ -1216,7 +1208,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &CommandOwnerScope,
     ) -> Option<(
-        SessionOwnerPendingFetchState,
+        DrainedFetchRequests,
         Option<Result<moli_core::page::PendingPageCommand>>,
     )> {
         let (pending, classes, update_required) = self
@@ -1231,7 +1223,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         update_required: bool,
-        pending: &SessionOwnerPendingFetchState,
+        pending: &DrainedFetchRequests,
         classes: moli_core::page::SubresourceInterceptionClasses,
     ) -> Option<Result<moli_core::page::PendingPageCommand>> {
         if !update_required {
@@ -1240,7 +1232,12 @@ impl CdpConnection {
         // A native pause already carries the target's shared eligibility.
         // Update that fact without queuing an ACK behind another session's
         // still-paused synchronous load. Legacy Page APIs read this same fact.
-        let (_, _, _, requests, auths, responses) = pending;
+        let DrainedFetchRequests {
+            subresource_requests: requests,
+            subresource_auth_requests: auths,
+            subresource_responses: responses,
+            ..
+        } = pending;
         let mut native = false;
         for (_, request) in requests {
             if let Some(target) = request.document_command_target() {
@@ -1275,7 +1272,7 @@ impl CdpConnection {
     pub(crate) fn take_pending_fetch_state_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Option<SessionOwnerPendingFetchState> {
+    ) -> Option<DrainedFetchRequests> {
         Some(
             self.target_session_owner_mut_for_owner(owner)?
                 .drain_fetch_pending_state(),
