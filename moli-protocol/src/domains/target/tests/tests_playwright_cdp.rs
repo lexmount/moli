@@ -1522,7 +1522,26 @@ async fn playwright_over_cdp_nested_siblings_commit_parent_before_attaching_chil
                     && event["params"]["frameId"] == container_id
             })
             .unwrap();
-        assert!(parent_response < parent_commit, "{events:?}");
+        let parent_start = events
+            .iter()
+            .position(|event| {
+                event["method"] == "Page.frameRequestedNavigation"
+                    && event["params"]["frameId"] == container_id
+            })
+            .unwrap();
+        let parent_request = events
+            .iter()
+            .position(|event| {
+                event["method"] == "Network.requestWillBeSent"
+                    && event["params"]["frameId"] == container_id
+            })
+            .unwrap();
+        assert!(
+            parent_start < parent_request
+                && parent_request < parent_response
+                && parent_response < parent_commit,
+            "{events:?}"
+        );
         ctx.process_async(json!({
             "id": 53207,
             "method": "Page.createIsolatedWorld",

@@ -78,8 +78,8 @@ pub(crate) mod native;
 mod navigation;
 pub(crate) use navigation::{
     AutomationNavigationResult, CompletedContinueNavigationWithoutRequestPauseCommand,
-    CompletedNavigateLoadCommand, prepare_automation_navigation,
-    superseded_intercepted_navigation_events,
+    CompletedNavigateLoadCommand, emit_navigation_started_for_session_owner,
+    prepare_automation_navigation, superseded_intercepted_navigation_events,
 };
 mod output;
 use capture::*;
@@ -122,7 +122,7 @@ pub(crate) use child_frame_activity::{
     PagePreparedChildFrameActivity, PagePreparedChildFrameTreeEvent,
 };
 pub(crate) use lifecycle::{
-    emit_bound_renderer_document_lifecycle_background_events,
+    NavigationStartInitiator, emit_bound_renderer_document_lifecycle_background_events,
     emit_navigation_frame_commit_background_events,
     emit_navigation_frame_stop_after_download_background_events,
     emit_navigation_frame_stopped_loading_background_events,

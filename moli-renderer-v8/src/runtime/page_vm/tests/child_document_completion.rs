@@ -105,6 +105,14 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
             &loader,
             Url::parse(&format!("{base_url}/page.html")).expect("page URL"),
         );
+        let output_journal = crate::runtime::RendererTurnOutputJournal::new(
+            crate::runtime::RendererOutputStreamIdentity::new_page_for_protocol_test(
+                page_vm.page_id,
+            ),
+        );
+        page_vm
+            .vm_mut()
+            .bind_renderer_output_journal_for_test(output_journal.clone());
         let root_document = page_vm.document_lifecycle.identity().document;
         let child_url = format!("{base_url}/typed-child.html");
         let (handle, target) =
@@ -147,9 +155,31 @@ async fn production_child_document_fetch_reaches_stable_typed_turn_and_commits()
             )?,
             "typed child"
         );
-        let networks = page_vm.take_completed_child_document_networks();
-        assert_eq!(networks.len(), 1);
-        assert_eq!(networks[0].snapshot.request_url, child_url);
+        let publication = output_journal.settle().expect("child commit publication");
+        let mut commits = Vec::new();
+        for record in publication.into_records() {
+            match record.into_parts().1 {
+                crate::runtime::RendererOutputItem::OwnerAction(
+                    crate::runtime::RendererOwnerAction::ChildFrameCommit {
+                        event,
+                        document_network,
+                        ..
+                    },
+                ) => {
+                    let network =
+                        document_network.expect("current navigation co-publishes Network");
+                    assert_eq!(network.snapshot.request_url, child_url);
+                    assert_eq!(Some(network.loader_id), event.loader_id);
+                    assert_eq!(network.frame_id, event.frame_id);
+                    commits.push(event);
+                }
+                crate::runtime::RendererOutputItem::OwnerAction(
+                    crate::runtime::RendererOwnerAction::ChildFrameDocumentNetwork { .. },
+                ) => panic!("current navigation must not emit a detached Network batch"),
+                _ => {}
+            }
+        }
+        assert_eq!(commits.len(), 1);
         assert!(!queue.has_ready_completion());
 
         server.await.expect("typed child server should finish");
