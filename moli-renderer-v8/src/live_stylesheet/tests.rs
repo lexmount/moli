@@ -19,6 +19,149 @@ fn serialized_stylesheet_text(stylesheet: &LiveStylesheetRef) -> StdArc<str> {
         .serialized_css_text()
 }
 
+fn stylesheet_keyframe_index(stylesheet: &LiveStylesheetRef) -> StdArc<StylesheetKeyframeIndex> {
+    crate::style_engine::StyloStylesheetSource::from_live_stylesheet(stylesheet)
+        .keyframe_index()
+        .expect("live stylesheet must have a keyframe index")
+}
+
+#[test]
+fn keyframe_index_reuses_native_rules_and_lazy_snapshots_in_source_order() {
+    let registry = LiveStylesheetRegistry::default();
+    let stylesheet = registry.create(
+        r#"
+        .unrelated { color: red; }
+        @keyframes pulse { from { left: 0px; } to { left: 10px; } }
+        @media all { @supports (display: block) {
+          @keyframes move { from { left: 0px; } to { left: 20px; } }
+          @keyframes pulse { from { left: 0px; } to { left: 30px; } }
+        } }
+        @keyframes unused { from { left: 0px; } to { left: 40px; } }
+        "#,
+        url::Url::parse("https://example.test/keyframes.css").unwrap(),
+        QuirksMode::NoQuirks,
+        AllowImportRules::Yes,
+        SharedRwLock::new(),
+    );
+    reset_keyframe_index_metrics_for_test();
+    let index = stylesheet_keyframe_index(&stylesheet);
+    assert!(index.rule_snapshots(&["missing".into()]).is_empty());
+    assert_eq!(keyframe_index_metrics_for_test().snapshots, 0);
+    let names = ["move".into(), "PULSE".into(), "pulse".into()];
+    let rules = index.rule_snapshots(&names);
+    assert_eq!(
+        rules.len(),
+        3,
+        "duplicate query names must not duplicate rules"
+    );
+    for (rule, endpoint) in rules.iter().zip(["10px", "20px", "30px"]) {
+        assert!(
+            rule.css_text.contains(endpoint),
+            "preserve stylesheet order"
+        );
+    }
+    let metrics = keyframe_index_metrics_for_test();
+    assert_eq!(metrics.builds, 1);
+    assert_eq!(metrics.snapshots, 3, "unqueried keyframes must stay native");
+    for _ in 0..64 {
+        let next = stylesheet_keyframe_index(&stylesheet);
+        assert!(StdArc::ptr_eq(&index, &next));
+        for (original, cached) in rules.iter().zip(next.rule_snapshots(&names)) {
+            assert!(StdArc::ptr_eq(original, &cached));
+        }
+        assert!(next.rule_snapshots(&["missing".into()]).is_empty());
+    }
+    assert_eq!(
+        keyframe_index_metrics_for_test(),
+        metrics,
+        "positive and negative lookups must not revisit the native rule tree"
+    );
+}
+
+#[test]
+fn keyframe_index_invalidates_for_cssom_edits_without_affecting_shared_owners() {
+    let registry = LiveStylesheetRegistry::default();
+    let shared_lock = SharedRwLock::new();
+    let base_url = url::Url::parse("https://example.test/keyframes.css").unwrap();
+    let css = "@keyframes move { from { left: 0px; } to { left: 20px; } }";
+    let first = registry.create_inline_with_shared_initial_contents(
+        css,
+        base_url.clone(),
+        QuirksMode::NoQuirks,
+        shared_lock.clone(),
+    );
+    let second = registry.create_inline_with_shared_initial_contents(
+        css,
+        base_url,
+        QuirksMode::NoQuirks,
+        shared_lock,
+    );
+    let names = ["move".into()];
+    let original_index = stylesheet_keyframe_index(&first);
+    let original = original_index.rule_snapshots(&names);
+    let other_index = stylesheet_keyframe_index(&second);
+    assert!(original[0].css_text.contains("20px"));
+    // Warm a negative lookup too: inserting that name must not reuse absence.
+    assert!(
+        original_index
+            .rule_snapshots(&["inserted".into()])
+            .is_empty()
+    );
+
+    first
+        .set_keyframe_rule_declarations(&[0], 1, "left: 40px;")
+        .unwrap();
+    let edited_index = stylesheet_keyframe_index(&first);
+    assert!(!StdArc::ptr_eq(&original_index, &edited_index));
+    assert!(
+        edited_index.rule_snapshots(&names)[0]
+            .css_text
+            .contains("40px")
+    );
+    assert!(
+        original[0].css_text.contains("20px"),
+        "old snapshots remain immutable"
+    );
+    assert!(StdArc::ptr_eq(
+        &other_index,
+        &stylesheet_keyframe_index(&second)
+    ));
+    assert!(
+        other_index.rule_snapshots(&names)[0]
+            .css_text
+            .contains("20px")
+    );
+
+    first.set_keyframes_rule_name(&[0], "renamed").unwrap();
+    let renamed = stylesheet_keyframe_index(&first);
+    assert!(renamed.rule_snapshots(&names).is_empty());
+    assert_eq!(renamed.rule_snapshots(&["renamed".into()]).len(), 1);
+
+    first
+        .insert_rule(
+            "@keyframes inserted { from { left: 1px; } to { left: 2px; } }",
+            1,
+        )
+        .unwrap();
+    assert_eq!(
+        stylesheet_keyframe_index(&first)
+            .rule_snapshots(&["inserted".into()])
+            .len(),
+        1
+    );
+    first.delete_rule(1).unwrap();
+    assert!(
+        stylesheet_keyframe_index(&first)
+            .rule_snapshots(&["inserted".into()])
+            .is_empty()
+    );
+
+    first.replace_from_text("@keyframes replaced { from { left: 3px; } to { left: 4px; } }");
+    let replaced = stylesheet_keyframe_index(&first);
+    assert!(replaced.rule_snapshots(&["renamed".into()]).is_empty());
+    assert_eq!(replaced.rule_snapshots(&["replaced".into()]).len(), 1);
+}
+
 #[test]
 fn native_import_edges_own_distinct_children_and_propagate_cascade_changes() {
     let registry = LiveStylesheetRegistry::default();
