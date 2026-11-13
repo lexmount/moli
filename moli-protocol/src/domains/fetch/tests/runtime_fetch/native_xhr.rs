@@ -1,6 +1,8 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+mod body_gated;
+
 fn xhr_expression(url: &str, worker: bool, synchronous: bool) -> String {
     let send = format!(
         r#"

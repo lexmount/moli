@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use crate::{
     document_runtime::DocumentConnectPolicySnapshot,
     network::{
-        ResourceRequestClient,
+        ResourceInterceptionBody, ResourceRequestClient,
         interception_control::{
             InterceptionPhase, ResourceInterceptionDecision, ResourceInterceptionPause,
         },
@@ -40,6 +40,86 @@ pub(crate) struct ControlledXhrResponse {
     pub(crate) result: Result<Response, String>,
     pub(crate) synthetic: bool,
     pub(crate) info: PendingSubresourceFetchInfo,
+}
+
+/// A hop is complete at headers. Its owner cancels any unread body on redirect,
+/// authentication retry, fail or replacement, even if a protocol read holds a
+/// clone of the body capability.
+pub(super) struct LoadedXhrResponse {
+    head: ResponseHead,
+    body: ResourceInterceptionBody,
+}
+
+impl LoadedXhrResponse {
+    pub(super) fn from_response(response: Response) -> Self {
+        Self {
+            head: response.head(),
+            body: ResourceInterceptionBody::from_complete(
+                SubresourceResponseBody::from_fetch_response(&response),
+            ),
+        }
+    }
+
+    pub(super) fn from_stream(
+        response: moli_fetch::StreamingRawResponse,
+        disk_pool: Option<moli_disk_pool::DiskPool>,
+    ) -> Self {
+        Self {
+            head: response.head(),
+            body: ResourceInterceptionBody::new(response, disk_pool),
+        }
+    }
+
+    async fn deliver(
+        &self,
+        info: &PendingSubresourceFetchInfo,
+        stream: Option<&mut ControlledXhrStream>,
+        network_request_headers: Option<Vec<(String, String)>>,
+    ) -> Result<ControlledXhrBody, String> {
+        if let Some(stream) = stream {
+            stream.start(info, self.head.clone(), network_request_headers)?;
+            let mut offset = 0;
+            loop {
+                let (bytes, eof) = self
+                    .body
+                    .read_chunk(offset, 64 * 1024)
+                    .await
+                    .map_err(|error| format!("{error:#}"))?;
+                if !bytes.is_empty() {
+                    offset += bytes.len();
+                    stream.chunk(bytes)?;
+                }
+                if eof {
+                    break;
+                }
+            }
+            return Ok(ControlledXhrBody::Streamed {
+                head: self.head.clone(),
+                body: self
+                    .body
+                    .capture(usize::MAX)
+                    .await
+                    .map_err(|error| format!("{error:#}"))?,
+            });
+        }
+        let body = self
+            .body
+            .capture(usize::MAX)
+            .await
+            .map_err(|error| format!("{error:#}"))?;
+        let bytes = body
+            .materialize_bytes()
+            .map_err(|error| error.to_string())?;
+        Ok(ControlledXhrBody::Buffered(
+            Response::from_head_and_lossy_body_bytes(self.head.clone(), bytes),
+        ))
+    }
+}
+
+impl Drop for LoadedXhrResponse {
+    fn drop(&mut self) {
+        self.body.cancel();
+    }
 }
 
 impl ControlledXhrLoad {
@@ -344,7 +424,7 @@ impl ControlledXhrLoad {
             let loader: ResourceRequestClient = self.load.request_client();
             let hop_cancel = self.cancel.child_for_subrequest();
             let (response, mut is_synthetic, network_request_headers) = match synthetic.take() {
-                Some(response) => (ControlledXhrBody::Buffered(response), true, None),
+                Some(response) => (LoadedXhrResponse::from_response(response), true, None),
                 None => {
                     let observed = super::async_fetch::fetch_controlled_subresource_hop(
                         &loader,
@@ -352,12 +432,6 @@ impl ControlledXhrLoad {
                         hop_cancel.clone(),
                         self.preflight_headers.clone(),
                         &preflight_observer,
-                        if intercept_response {
-                            None
-                        } else {
-                            stream.as_deref_mut().map(|stream| (stream, &self.info))
-                        },
-                        handle_auth_requests,
                     )
                     .await?;
                     let (response, observation) = observed.into_parts();
@@ -365,25 +439,15 @@ impl ControlledXhrLoad {
                     (response, false, headers)
                 }
             };
-            let mut response = match response {
-                ControlledXhrBody::Buffered(response) => response,
-                ControlledXhrBody::Streamed { mut head, body } => {
-                    head.redirect_chain = self.request.redirect_chain().to_vec();
-                    head.redirected = !head.redirect_chain.is_empty();
-                    self.cancel.adopt_response_progress(&hop_cancel);
-                    return Ok((
-                        ControlledXhrBody::Streamed { head, body },
-                        false,
-                        network_request_headers,
-                    ));
-                }
-            };
+            let mut response = response;
             if handle_auth_requests
-                && matches!(response.status, 401 | 407)
-                && let Some(challenge) =
-                    crate::protocol_types::extract_subresource_auth_challenge(&response.headers)
+                && matches!(response.head.status, 401 | 407)
+                && let Some(challenge) = crate::protocol_types::extract_subresource_auth_challenge(
+                    &response.head.headers,
+                )
             {
                 let (pause, rx) = self.pause(InterceptionPhase::Auth);
+                let pause = pause.with_response_body(response.body.clone());
                 if !self
                     .output
                     .publish(RendererOwnerAction::SubresourceContinue {
@@ -396,18 +460,16 @@ impl ControlledXhrLoad {
                                 request_headers: self.request.request_headers.clone(),
                                 request_body: self.info.request_body.clone(),
                                 resource_type: self.info.resource_type,
-                                request_cookie_report: response.request_cookie_report.clone(),
+                                request_cookie_report: response.head.request_cookie_report.clone(),
                                 network_request_headers: network_request_headers.clone(),
                                 challenge,
                                 intercept_response,
-                                response_final_url: response.final_url.clone(),
-                                response_status: response.status,
-                                response_headers: response.headers.clone(),
-                                response_body: SubresourceResponseBody::from_fetch_response(
-                                    &response,
-                                ),
-                                response_from_cache: response.from_cache,
-                                response_cache_state: response.cache_state,
+                                response_final_url: response.head.final_url.clone(),
+                                response_status: response.head.status,
+                                response_headers: response.head.headers.clone(),
+                                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                                response_from_cache: response.head.from_cache,
+                                response_cache_state: response.head.cache_state,
                             },
                         )),
                         network_pause: Some(pause),
@@ -431,6 +493,7 @@ impl ControlledXhrLoad {
             }
             if intercept_response {
                 let (pause, rx) = self.pause(InterceptionPhase::Response);
+                let pause = pause.with_response_body(response.body.clone());
                 if !self
                     .output
                     .publish(RendererOwnerAction::SubresourceContinue {
@@ -439,20 +502,18 @@ impl ControlledXhrLoad {
                             PendingSubresourceResponseInfo {
                                 internal_id: self.info.internal_id,
                                 url: self.request.url.clone(),
-                                final_url: response.final_url.clone(),
+                                final_url: response.head.final_url.clone(),
                                 method: self.request.method.clone(),
                                 request_headers: self.request.request_headers.clone(),
                                 request_body: self.info.request_body.clone(),
                                 resource_type: self.info.resource_type,
-                                request_cookie_report: response.request_cookie_report.clone(),
+                                request_cookie_report: response.head.request_cookie_report.clone(),
                                 network_request_headers: network_request_headers.clone(),
-                                response_status: response.status,
-                                response_headers: response.headers.clone(),
-                                response_body: SubresourceResponseBody::from_fetch_response(
-                                    &response,
-                                ),
-                                from_cache: response.from_cache,
-                                cache_state: response.cache_state,
+                                response_status: response.head.status,
+                                response_headers: response.head.headers.clone(),
+                                response_body: SubresourceResponseBody::from_bytes(Vec::new()),
+                                from_cache: response.head.from_cache,
+                                cache_state: response.head.cache_state,
                             },
                         )),
                         network_pause: Some(pause),
@@ -463,11 +524,11 @@ impl ControlledXhrLoad {
                 match self.decision(rx).await? {
                     D::ContinueResponse { status, headers } => {
                         if let Some(status) = status {
-                            response.status = status;
-                            response.status_text = None;
+                            response.head.status = status;
+                            response.head.status_text = None;
                         }
                         if let Some(headers) = headers {
-                            response.headers = headers;
+                            response.head.headers = headers;
                         }
                     }
                     D::Fulfill {
@@ -475,7 +536,9 @@ impl ControlledXhrLoad {
                         headers,
                         body,
                     } => {
-                        response = self.synthetic_response(status, headers, body);
+                        response = LoadedXhrResponse::from_response(
+                            self.synthetic_response(status, headers, body),
+                        );
                         is_synthetic = true;
                     }
                     D::Fail(error) => return Err(error),
@@ -483,10 +546,12 @@ impl ControlledXhrLoad {
                 }
             }
             if !is_synthetic {
-                self.request
-                    .validate_cors_response_for_url(&response.final_url, &response.headers)?;
+                self.request.validate_cors_response_for_url(
+                    &response.head.final_url,
+                    &response.head.headers,
+                )?;
             }
-            let head = response.head();
+            let head = response.head.clone();
             self.request.observe_redirect_requests(&head.redirect_chain);
             let Some(url) = crate::network_host::next_redirect_url(
                 &head.final_url,
@@ -495,16 +560,23 @@ impl ControlledXhrLoad {
                 self.request.redirect_count(),
             )?
             else {
-                response.redirect_chain = self.request.redirect_chain().to_vec();
-                response.redirected = !response.redirect_chain.is_empty();
+                response.head.redirect_chain = self.request.redirect_chain().to_vec();
+                response.head.redirected = !response.head.redirect_chain.is_empty();
                 if !is_synthetic {
                     self.cancel.adopt_response_progress(&hop_cancel);
                 }
-                return Ok((
-                    ControlledXhrBody::Buffered(response),
-                    is_synthetic,
-                    network_request_headers,
-                ));
+                let delivered = response
+                    .deliver(
+                        &self.info,
+                        if is_synthetic {
+                            None
+                        } else {
+                            stream.as_deref_mut()
+                        },
+                        network_request_headers.clone(),
+                    )
+                    .await?;
+                return Ok((delivered, is_synthetic, network_request_headers));
             };
             self.request
                 .follow_redirect(moli_fetch::RedirectInfo {

@@ -105,12 +105,7 @@ pub(super) async fn fetch_controlled_subresource_hop(
     cancel: FetchCancelHandle,
     preflight_headers: Vec<(String, String)>,
     observer: &CorsPreflightNetworkObserver,
-    stream: Option<(
-        &mut super::controlled_xhr::ControlledXhrStream,
-        &PendingSubresourceFetchInfo,
-    )>,
-    handle_auth_requests: bool,
-) -> Result<NetworkFetchResult<super::controlled_xhr::ControlledXhrBody>, String> {
+) -> Result<NetworkFetchResult<super::controlled_xhr::LoadedXhrResponse>, String> {
     run_cors_preflight_if_needed(
         loader,
         &request,
@@ -119,70 +114,27 @@ pub(super) async fn fetch_controlled_subresource_hop(
         Some(observer),
     )
     .await?;
-    use super::controlled_xhr::ControlledXhrBody;
-    let Some((stream, info)) = stream.filter(|_| !request.auth_requires_buffered_transport())
-    else {
+    if request.auth_requires_buffered_transport() {
+        // Preserve libcurl's existing multi-round credential negotiation for
+        // Digest/NTLM/Negotiate. Ordinary hops, response interception and the
+        // initial authentication challenge must use the head-first path below.
         return fetch_once_with_network_metadata_unvalidated(
             loader,
             request.with_single_hop(),
             Some(cancel),
         )
         .await
-        .map(|observed| observed.map_response(ControlledXhrBody::Buffered));
-    };
+        .map(|observed| {
+            observed.map_response(super::controlled_xhr::LoadedXhrResponse::from_response)
+        });
+    }
     let observed = loader
-        .fetch_raw_stream_with_cancel_and_network_metadata(
-            request.clone().with_single_hop(),
-            cancel,
-        )
+        .fetch_raw_stream_with_cancel_and_network_metadata(request.with_single_hop(), cancel)
         .await
         .map_err(format_network_error)?;
-    let (mut response, observation) = observed.into_parts();
-    let mut head = response.head();
-    head.redirect_chain = request.redirect_chain().to_vec();
-    head.redirected = !head.redirect_chain.is_empty();
-    let redirects = next_redirect_url(
-        &head.final_url,
-        head.status,
-        &head.headers,
-        request.redirect_count(),
-    )?
-    .is_some();
-    let authenticates = handle_auth_requests
-        && matches!(head.status, 401 | 407)
-        && crate::protocol_types::extract_subresource_auth_challenge(&head.headers).is_some();
-    if redirects || authenticates {
-        let response = response
-            .into_lossy_materialized_text_response()
-            .await
-            .map_err(format_network_error)?;
-        return Ok(NetworkFetchResult::new(
-            ControlledXhrBody::Buffered(response),
-            observation,
-        ));
-    }
-    request.validate_cors_response_for_url(&head.final_url, &head.headers)?;
-    stream.start(
-        info,
-        head.clone(),
-        observation
-            .as_ref()
-            .map(|observation| observation.clone().into_headers()),
-    )?;
-    let mut body =
-        crate::protocol_types::SubresourceResponseBodyWriter::with_disk_pool(loader.disk_pool());
-    while let Some(chunk) = response.next_chunk().await {
-        body.append(&chunk);
-        stream.chunk(chunk)?;
-    }
-    response.finish().await.map_err(format_network_error)?;
-    Ok(NetworkFetchResult::new(
-        ControlledXhrBody::Streamed {
-            head,
-            body: body.finish(),
-        },
-        observation,
-    ))
+    Ok(observed.map_response(|response| {
+        super::controlled_xhr::LoadedXhrResponse::from_stream(response, loader.disk_pool())
+    }))
 }
 
 pub(crate) fn browser_request_needs_manual_preflight_redirects(

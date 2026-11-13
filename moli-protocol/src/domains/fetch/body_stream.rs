@@ -19,7 +19,7 @@ pub(super) struct BufferedFetchBody {
     request_id: String,
     action_session_id: Option<String>,
     host: Option<crate::conn::ProtocolPageHostScope>,
-    body: crate::conn::CapturedBody,
+    body: crate::conn::ProtocolResponseBody,
 }
 
 impl BufferedFetchBody {
@@ -46,7 +46,7 @@ impl BufferedFetchBody {
             request_id: request_id.to_owned(),
             action_session_id: owner.session_id().map(str::to_owned),
             host: crate::conn::ProtocolPageHostScope::capture(conn, owner).ok(),
-            body: pending.response_body,
+            body: response_body_source(&pending),
         }))
     }
 
@@ -60,8 +60,21 @@ impl BufferedFetchBody {
             )
             .is_some_and(|pending| {
                 !pending.response_body_taken_as_stream
-                    && pending.response_body.same_storage(&self.body)
+                    && response_body_source(&pending).same_storage(&self.body)
             })
+    }
+}
+
+fn response_body_source(
+    pending: &crate::conn::PendingSubresourceFetchResponseRequest,
+) -> crate::conn::ProtocolResponseBody {
+    match pending
+        .command_target
+        .as_ref()
+        .and_then(|target| target.native_response_body())
+    {
+        Some(body) => crate::conn::ProtocolResponseBody::Network(body.clone()),
+        None => pending.response_body.clone().into(),
     }
 }
 
@@ -108,7 +121,7 @@ impl PreparedFetchBodyRead {
                     .as_ref()
                     .ok()
                     .and_then(|body| body.as_ref())
-                    .map(|body| body.body.clone());
+                    .and_then(|body| body.body.captured().cloned());
                 let completed = read
                     .materialize(limit)
                     .await
@@ -133,13 +146,15 @@ impl PreparedFetchBodyRead {
                 }
             }
             Self::Buffered { body, limit } => {
-                let result = body
-                    .body
-                    .clone()
-                    .process_in_worker(move |body| {
-                        Ok(response_body_result(body.materialize_bytes_limited(limit)?))
-                    })
-                    .await;
+                let result = match body.body.clone().materialize(limit).await {
+                    Ok(body) => {
+                        body.process_in_worker(move |body| {
+                            Ok(response_body_result(body.materialize_bytes_limited(limit)?))
+                        })
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
                 CompletedFetchBodyRead::Buffered { body, result }
             }
         }
@@ -291,9 +306,10 @@ pub(super) fn take_response_body_as_stream_command(
                 RESPONSE_BODY_NOT_AVAILABLE_AFTER_STREAM_TAKEN,
             );
         }
-        match conn
-            .open_io_stream_body_source_for_session_owner(cmd.session_id, pending.response_body)
-        {
+        match conn.open_io_stream_body_source_for_session_owner(
+            cmd.session_id,
+            response_body_source(&pending),
+        ) {
             Ok(handle) => {
                 mark_pending_subresource_response_body_taken_as_stream_for_action_session(
                     conn,

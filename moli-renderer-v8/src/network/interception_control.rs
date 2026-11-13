@@ -22,6 +22,7 @@ pub struct ResourceInterceptionPause {
     phase: InterceptionPhase,
     target_policy: crate::network::PageNetworkPolicy,
     request_redirect: Option<Arc<moli_fetch::RedirectInfo>>,
+    response_body: Option<super::ResourceInterceptionBody>,
     sender: Arc<Mutex<Option<oneshot::Sender<ResourceInterceptionDecision>>>>,
 }
 
@@ -76,6 +77,7 @@ impl ResourceInterceptionPause {
                 phase,
                 target_policy,
                 request_redirect: None,
+                response_body: None,
                 sender: Arc::new(Mutex::new(Some(tx))),
             },
             rx,
@@ -92,6 +94,15 @@ impl ResourceInterceptionPause {
 
     pub fn request_redirect(&self) -> Option<&moli_fetch::RedirectInfo> {
         self.request_redirect.as_deref()
+    }
+
+    pub(crate) fn with_response_body(mut self, body: super::ResourceInterceptionBody) -> Self {
+        self.response_body = Some(body);
+        self
+    }
+
+    pub fn response_body(&self) -> Option<&super::ResourceInterceptionBody> {
+        self.response_body.as_ref()
     }
 
     /// Releasing an interceptor changes native eligibility immediately. It
