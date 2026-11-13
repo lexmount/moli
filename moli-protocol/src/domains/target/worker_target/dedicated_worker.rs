@@ -93,6 +93,7 @@ pub(super) fn register_dedicated_worker_target(
             false,
             None,
             &[],
+            true,
         );
         if !events.is_empty() {
             outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerEvents {

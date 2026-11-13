@@ -279,6 +279,9 @@ pub(crate) fn emit_request_will_be_sent(
     redirect_has_extra_info: bool,
     cookie_access_report: Option<&moli_cookie_jar::StoredCookieQueryReport>,
     blocked_intercepts: &[DevToolsNetworkInterceptId],
+    // False when the caller emits the request's single ExtraInfo later, once
+    // the wire headers are known.
+    emit_cookie_extra_info: bool,
 ) {
     if redirect_response.is_some_and(|(_, _, _, from_cache, _)| from_cache) {
         emit_request_served_from_cache(out, session_id, request_id);
@@ -343,7 +346,7 @@ pub(crate) fn emit_request_will_be_sent(
         }),
         session_id,
     );
-    if let Some(cookie_access_report) = cookie_access_report {
+    if let Some(cookie_access_report) = cookie_access_report.filter(|_| emit_cookie_extra_info) {
         emit_request_will_be_sent_extra_info(
             out,
             session_id,
@@ -1549,6 +1552,7 @@ mod tests {
             false,
             None,
             &[],
+            true,
         );
 
         assert_eq!(events.len(), 2);

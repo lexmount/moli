@@ -19,6 +19,7 @@ pub(crate) struct TargetNetworkOutputQueue {
     websocket_event_count: usize,
     next_delivery_order_index: usize,
     completed_subresource_handles: HashSet<SubresourceNetworkRequestHandle>,
+    subresource_request_extra_info_handles: HashSet<SubresourceNetworkRequestHandle>,
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
@@ -2690,6 +2691,7 @@ impl TargetNetworkOutputQueue {
                     *subresource_index,
                     response.handle(),
                     response.network_request_headers(),
+                    !response.redirect_chain().is_empty(),
                     None,
                 );
                 if self.append_subresource_response_started(*subresource_index, response) {
@@ -2705,6 +2707,15 @@ impl TargetNetworkOutputQueue {
                 *subresource_index += 1;
             }
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                // A request that fails before any response still reports its
+                // staged headers and cookie report once.
+                self.append_missing_subresource_request_extra_info(
+                    *subresource_index,
+                    body.handle(),
+                    None,
+                    false,
+                    None,
+                );
                 if self.append_subresource_body_finished(*subresource_index, body) {
                     *subresource_index += 1;
                 }
@@ -2815,10 +2826,15 @@ impl TargetNetworkOutputQueue {
         handle: SubresourceNetworkRequestHandle,
         record: &SubresourceNetworkRecord,
     ) {
+        let redirected = matches!(
+            record.outcome(),
+            SubresourceNetworkOutcome::Success { redirect_chain, .. } if !redirect_chain.is_empty()
+        );
         self.append_missing_subresource_request_extra_info(
             index,
             handle,
             record.network_request_headers(),
+            redirected,
             record.request_cookie_report(),
         );
         match record.outcome() {
@@ -2926,6 +2942,7 @@ impl TargetNetworkOutputQueue {
             request_headers,
             request_cookie_report,
         );
+        self.subresource_request_extra_info_handles.insert(handle);
         self.delivery_outputs
             .push_subresource(TargetSubresourcePlanOutput::RequestExtraInfo(output));
         self.subresource_record_count = index + 1;
@@ -2937,22 +2954,36 @@ impl TargetNetworkOutputQueue {
         index: usize,
         handle: SubresourceNetworkRequestHandle,
         network_request_headers: Option<&[(String, String)]>,
+        redirected: bool,
         request_cookie_report: Option<&StoredCookieQueryReport>,
     ) {
         let Some(request) = self.staged_subresource_requests.get(&handle) else {
             return;
         };
-        if request.request_cookie_report().is_some() {
+        if self
+            .subresource_request_extra_info_handles
+            .contains(&handle)
+        {
             return;
         }
+        // Observed headers belong to the final hop. A redirected request with
+        // a first-hop cookie report keeps its staged headers, so that report
+        // is not paired with another hop's Host and Cookie.
         let request_headers = network_request_headers
+            .filter(|_| !(redirected && request.request_cookie_report().is_some()))
             .unwrap_or_else(|| request.request_headers())
             .to_vec();
-        let Some(request_cookie_report) = request_cookie_report.cloned().or_else(|| {
-            network_request_headers
-                .is_some()
-                .then(StoredCookieQueryReport::default)
-        }) else {
+        // The staged request's cookie report is reported here, with the wire
+        // headers when known, as the request's single ExtraInfo.
+        let Some(request_cookie_report) = request_cookie_report
+            .or(request.request_cookie_report())
+            .cloned()
+            .or_else(|| {
+                network_request_headers
+                    .is_some()
+                    .then(StoredCookieQueryReport::default)
+            })
+        else {
             return;
         };
         self.append_subresource_request_extra_info(
