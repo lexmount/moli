@@ -2,7 +2,7 @@ use super::*;
 use moli_inspector_json::{response_remote_object_ids_in_value, response_result_remote_object_ids};
 
 impl CdpConnection {
-    pub(super) fn register_runtime_remote_object_ids_from_response_for_owner(
+    pub(crate) fn register_runtime_remote_object_ids_from_response_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         message: &InspectorJson,
@@ -20,7 +20,7 @@ impl CdpConnection {
         self.register_runtime_remote_object_ids_for_owner(owner, object_ids, object_group);
     }
 
-    pub(super) fn register_runtime_remote_object_ids_from_response_result_for_owner(
+    pub(crate) fn register_runtime_remote_object_ids_from_response_result_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         result: &Value,
@@ -149,6 +149,8 @@ impl CdpConnection {
             .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
     }
 
+    // For notifications and native RemoteObject fragments. Inspector command
+    // responses must use the response entry points above to keep values opaque.
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
