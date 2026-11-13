@@ -103,10 +103,7 @@ pub(super) fn layout_content(
         };
         pending.extend(
             host.dom()
-                .child_ids(node)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
+                .html_serialization_child_ids_reversed(node)
                 .map(|node| (node, parent)),
         );
     }

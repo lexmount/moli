@@ -123,6 +123,35 @@ impl std::fmt::Display for HtmlSerializationLimitExceeded {
 impl std::error::Error for HtmlSerializationLimitExceeded {}
 
 impl NativeDom {
+    /// Children emitted by HTML serialization, in stack-push order.
+    ///
+    /// Template contents replace ordinary children, and void HTML elements
+    /// emit no children. Derived consumers that associate identities with
+    /// serialized elements must use these rules rather than DOM childNodes.
+    pub fn html_serialization_child_ids_reversed(
+        &self,
+        node_id: NativeNodeId,
+    ) -> impl Iterator<Item = NativeNodeId> + '_ {
+        self.html_serialization_children_root(node_id)
+            .into_iter()
+            .flat_map(|root| self.child_ids_reversed(root))
+    }
+
+    fn html_serialization_children_root(&self, node_id: NativeNodeId) -> Option<NativeNodeId> {
+        let element = self.element(node_id);
+        if element.is_some_and(|element| {
+            engine::is_void_html_element(element.namespace(), element.local_name())
+        }) {
+            None
+        } else {
+            Some(
+                element
+                    .and_then(|element| element.template_contents())
+                    .unwrap_or(node_id),
+            )
+        }
+    }
+
     pub fn serialize_document(&self) -> String {
         self.serialize_document_with_scripting_enabled(true)
     }

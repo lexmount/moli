@@ -1,12 +1,54 @@
 from __future__ import annotations
 
 import base64
+import math
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record_contract
 from ..config import REPO_ROOT
 from ..diagnostics import new_cdp_session
 from ..png_image import decode_png
+
+
+async def _check_svg_scene_inputs(page: Any, results: list[dict[str, Any]], kind: str) -> None:
+    fixture = (REPO_ROOT / "moli-renderer-v8/tests/fixtures/inline-svg-scene-inputs.js").read_text()
+    metadata = await page.evaluate(f"{fixture}\ninstallSvgSceneInputs('{kind}')")
+    await page.set_viewport_size({"width": metadata["width"], "height": metadata["height"]})
+    session = await new_cdp_session(page.context, page)
+    try:
+        response = await session.send("Page.captureScreenshot", {"format": "png"})
+        image = decode_png(base64.b64decode(response["data"]))
+        for case in metadata["cases"]:
+            name, top = case["name"], case["top"]
+            observed = await page.evaluate("name => svgSceneInputRects(name)", name)
+            if kind == "units":
+                if observed["target"][2] <= 0 or not all(
+                    math.isclose(target, reference, abs_tol=0.01)
+                    for target, reference in zip(observed["target"], observed["reference"], strict=True)
+                ):
+                    raise SmokeError(f"{name}: SVG zoom differs from equivalent outer scaling: {observed!r}")
+                ink = 0
+                for y in range(top, top + 140):
+                    for x in range(200):
+                        target, reference = image.pixel(x, y), image.pixel(x + 240, y)
+                        if target != reference:
+                            raise SmokeError(f"{name} pixel ({x},{y}): {target!r} != {reference!r}")
+                        ink += 255 - reference[0]
+                if ink <= 1000:
+                    raise SmokeError(f"{name}: the scaling reference has no visible ink")
+            else:
+                assert_equal(observed["children"], 0, name + " ordinary template children")
+                if observed["content"] <= 0:
+                    raise SmokeError(f"{name}: missing template content")
+                assert_equal(observed["rects"], [[0, top, 20, 20], [40, top, 20, 20]], name + " graphics identities")
+                assert_equal(image.pixel(10, top + 10), (255, 0, 0, 255), name + " preceding paint")
+                assert_equal(image.pixel(50, top + 10), (0, 0, 255, 255), name + " following paint")
+            record_contract(results, "svg/scene_inputs/" + name, observed=observed,
+                            contract="Scene lengths stay in SVG user units and source mapping follows serialized template contents.",
+                            source="Chromium 145.0.7632.116 executable comparison (2026-11-13)",
+                            commands=["Runtime.evaluate", "Page.captureScreenshot", "Emulation.setDeviceMetricsOverride"])
+    finally:
+        await session.detach()
 
 
 async def _check_inline_svg(page: Any, results: list[dict[str, Any]]) -> None:
@@ -120,5 +162,6 @@ async def run_svg_rect_group(
             observed=observed,
         )
         await _check_inline_svg(page, results)
+        await _check_svg_scene_inputs(page, results, "template")
     finally:
         await context.close()

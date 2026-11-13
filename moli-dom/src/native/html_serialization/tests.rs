@@ -106,6 +106,12 @@ fn template_contents_require_the_exact_html_element_identity() {
             };
             assert!(host.append_child(root, child));
             assert_eq!(
+                host.dom()
+                    .html_serialization_child_ids_reversed(element)
+                    .collect::<Vec<_>>(),
+                vec![child]
+            );
+            assert_eq!(
                 host.dom().inner_html(element).as_deref(),
                 Some("<probe></probe>")
             );
@@ -140,6 +146,10 @@ fn html_serializers_share_the_complete_void_element_set() {
         let element = dom.create_element(local_name);
         let ignored_child = dom.create_element("span");
         assert!(dom.append_child(element, ignored_child));
+        assert_eq!(
+            dom.html_serialization_child_ids_reversed(element).count(),
+            0
+        );
         assert_eq!(dom.outer_html(element), Some(format!("<{local_name}>")));
         assert_eq!(dom.inner_html(element).as_deref(), Some(""));
         assert!(dom.append_child(container, element));
@@ -174,6 +184,33 @@ fn html_serializers_share_the_complete_void_element_set() {
             Some("")
         );
     }
+}
+
+#[test]
+fn serialized_template_children_keep_document_order_including_nested_contents() {
+    let mut dom = NativeDom::new_html(test_url());
+    let outer = dom.create_element("template");
+    let inner = dom.create_element("template");
+    let before = dom.create_element("span");
+    let after = dom.create_element("strong");
+    let nested = dom.create_element("b");
+    let outer_contents = dom.element(outer).unwrap().template_contents().unwrap();
+    let inner_contents = dom.element(inner).unwrap().template_contents().unwrap();
+    assert!(dom.append_child(outer_contents, before));
+    assert!(dom.append_child(outer_contents, inner));
+    assert!(dom.append_child(outer_contents, after));
+    assert!(dom.append_child(inner_contents, nested));
+    let mut stack = vec![outer];
+    let mut elements = Vec::new();
+    while let Some(node) = stack.pop() {
+        elements.push(node);
+        stack.extend(dom.html_serialization_child_ids_reversed(node));
+    }
+    assert_eq!(elements, vec![outer, before, inner, nested, after]);
+    assert_eq!(
+        dom.outer_html(outer).unwrap(),
+        "<template><span></span><template><b></b></template><strong></strong></template>"
+    );
 }
 
 #[test]

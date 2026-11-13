@@ -775,3 +775,65 @@ async fn screenshot_inline_svg_variant_faces_isolate_system_fonts() -> anyhow::R
     println!("{COMPLETED}");
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn inline_svg_template_contents_preserve_neighboring_graphics_identity() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/svg-template-mapping.html")?,
+        );
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/inline-svg-scene-inputs.js"
+        ));
+        let metadata = page_vm.vm_mut().eval(&format!(
+            "{fixture}\nJSON.stringify(installSvgSceneInputs('template'))"
+        ))?;
+        let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(
+                metadata["width"].as_u64().unwrap() as u32,
+                metadata["height"].as_u64().unwrap() as u32,
+                1.0,
+            ))?
+            .unwrap();
+        assert_eq!(
+            snapshot.svg_images.len(),
+            2,
+            "inert HTML contents must not discard the SVG scene"
+        );
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        for case in metadata["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let top = case["top"].as_u64().unwrap();
+            let observed = page_vm.vm_mut().eval(&format!(
+                "JSON.stringify(svgSceneInputRects({}))",
+                serde_json::to_string(name)?
+            ))?;
+            let observed: serde_json::Value = serde_json::from_str(&observed)?;
+            assert_eq!(observed["children"], 0);
+            assert!(observed["content"].as_u64().unwrap() > 0);
+            assert_eq!(
+                observed["rects"],
+                json!([[0, top, 20, 20], [40, top, 20, 20]]),
+                "{name}"
+            );
+            for (x, color) in [(10, [255, 0, 0, 255]), (50, [0, 0, 255, 255])] {
+                let offset = (((top as usize + 10) * raster.width as usize) + x) * 4;
+                assert_eq!(
+                    &raster.rgba[offset..offset + 4],
+                    color,
+                    "{name}: neighboring SVG styles must keep their identities"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("SVG element mapping must follow serializer template traversal");
+}
