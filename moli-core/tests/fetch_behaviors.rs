@@ -1560,7 +1560,7 @@ async fn fetch_with_domstable_waits_for_async_scripts_iframes_and_workers() -> R
     let browser = Browser::new(AppConfig::default())?;
 
     for kind in ["async", "frame", "worker"] {
-        let page = browser
+        let mut page = browser
             .fetch_with_wait_until(
                 &server.url(&format!("/wait-until-domstable-pending-load?kind={kind}")),
                 RenderedDomWaitUntil::DomStable,
