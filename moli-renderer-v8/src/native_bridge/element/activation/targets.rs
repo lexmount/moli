@@ -86,12 +86,16 @@ fn navigate_target_window_location(
 fn queue_top_level_location_navigation(
     _scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
+    source_handle: DomHandle,
     resolved_url: &str,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
         return false;
     };
-    unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+    let runtime = unsafe { &mut *runtime_ptr };
+    let link_policy = runtime.hyperlink_referrer_policy(source_handle);
+    runtime.record_pending_location_navigation(url, None);
+    runtime.set_pending_location_navigation_document_initiator(link_policy);
     true
 }
 
@@ -722,7 +726,12 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         ) {
             return true;
         }
-        return queue_top_level_location_navigation(scope, runtime_ptr, resolved_url);
+        return queue_top_level_location_navigation(
+            scope,
+            runtime_ptr,
+            source_handle,
+            resolved_url,
+        );
     }
     navigate_target_window_location(scope, target_window, resolved_url)
 }

@@ -2443,6 +2443,7 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             return false;
         };
         unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        unsafe { &mut *runtime_ptr }.set_pending_location_navigation_document_initiator(None);
         crate::context_bootstrap::web_mcp::bind_root_navigation(
             unsafe { &mut *runtime_ptr },
             form_handle,

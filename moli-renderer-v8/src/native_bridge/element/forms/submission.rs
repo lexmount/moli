@@ -1047,6 +1047,7 @@ fn submit_post_form_to_top_level_browsing_context(
         None,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
     );
+    unsafe { &mut *runtime_ptr }.set_pending_location_navigation_document_initiator(None);
     crate::context_bootstrap::web_mcp::bind_root_navigation(
         unsafe { &mut *runtime_ptr },
         form_handle,
