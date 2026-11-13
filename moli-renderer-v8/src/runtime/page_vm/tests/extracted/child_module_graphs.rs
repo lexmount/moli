@@ -2851,16 +2851,21 @@ parent.__childModuleDependencyFailureEvents.push("root:" + depValue);
                     PageResourceCompletionOutputEffect::CaptureRequired
                 );
 
-                let (dependency_network_records, _, _) =
-                    split_network_output_items(page_vm.vm_mut().take_network_output());
-                assert_eq!(dependency_network_records.len(), 1);
-                assert_eq!(
-                    dependency_network_records[0].url().as_str(),
-                    dependency_url
-                );
+                let network = page_vm.vm_mut().take_network_output().into_items().collect::<Vec<_>>();
+                let [ScriptNetworkOutputItem::SubresourceRequestStarted(request),
+                     ScriptNetworkOutputItem::SubresourceResponseStarted(response),
+                     ScriptNetworkOutputItem::SubresourceBodyFinished(body)] = network.as_slice() else {
+                    panic!("HTTP error script must retain its response before failure: {network:?}");
+                };
+                assert_eq!(request.url().as_str(), dependency_url);
+                assert_eq!(request.resource_type(), SubresourceResourceType::Script);
+                assert_eq!(response.final_url().as_str(), dependency_url);
+                assert_eq!(response.status(), 404);
+                assert_eq!(request.handle(), response.handle());
+                assert_eq!(request.handle(), body.handle());
                 assert!(matches!(
-                    dependency_network_records[0].outcome(),
-                    SubresourceNetworkOutcome::Success { status: 404, .. }
+                    body.result(),
+                    SubresourceBodyFinishedResult::Failed(error) if error == "net::ERR_ABORTED"
                 ));
                 let events_after_dependency_completion = page_vm
                     .vm_mut()

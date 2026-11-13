@@ -1,6 +1,7 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+mod http_errors;
 mod stylesheets;
 
 async fn intercepted_parser_script_has_one_network_terminal(

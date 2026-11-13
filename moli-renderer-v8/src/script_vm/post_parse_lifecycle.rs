@@ -29,7 +29,6 @@ use crate::host::{
 use crate::module_script_continuation::{
     ModuleScriptContinuation, ModuleScriptEvaluationContinuation, ModuleScriptEvaluationUpdate,
 };
-use crate::native_bridge::PageScriptHost;
 use crate::network::ResourceRequestClient;
 use crate::page_task_queue::PageTaskQueue;
 use crate::page_task_queue::{
@@ -2805,21 +2804,17 @@ impl ScriptVm {
                     ));
             }
         }
-        let mut record = PageScriptHost::get_subresource_network_record_with_initiator(
-            None,
-            document_url,
-            request_url,
-            SubresourceResourceType::Script,
-            request_initiator_type,
-            result,
-            None,
-        );
-        if let Some(handle) = request_handle {
-            record = record.with_request_handle(handle);
-        }
         self._context_host
             .borrow_mut()
-            .record_subresource_network(record);
+            .record_get_subresource_network_result_with_handle(
+                None,
+                document_url,
+                request_url,
+                SubresourceResourceType::Script,
+                request_initiator_type,
+                result,
+                request_handle,
+            );
         self.record_resource_performance_entries(vec![performance_entry]);
     }
 
