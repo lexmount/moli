@@ -543,7 +543,19 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     let source = host
         .pending_joint_history_step(&model)
         .unwrap_or_else(|| model.current_step());
-    if model.step_by_delta_from(source, delta).is_none() {
+    let Some(plan) = model
+        .step_by_delta_from(source, delta)
+        .and_then(|step| model.plan_traversal(step))
+    else {
+        return;
+    };
+    if !super::session_history::sandbox_allows_traversal_plan(
+        scope,
+        host,
+        owner,
+        &plan,
+        binding.popup,
+    ) {
         return;
     }
     let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);

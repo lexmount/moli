@@ -3002,3 +3002,45 @@ fn sandbox_directive_allows_popups_to_escape_only_when_all_active_sandboxes_allo
         "sandbox allow-scripts"
     ]));
 }
+
+#[test]
+fn sandbox_top_navigation_permissions_intersect_with_activation_requirements() {
+    for (policies, without_activation, with_activation) in [
+        (vec![], true, true),
+        (vec!["sandbox"], false, false),
+        (vec!["sandbox allow-top-navigation"], true, true),
+        (
+            vec!["sandbox allow-top-navigation-by-user-activation"],
+            false,
+            true,
+        ),
+        (
+            vec![
+                "sandbox allow-top-navigation",
+                "sandbox allow-top-navigation-by-user-activation",
+            ],
+            false,
+            true,
+        ),
+        (
+            vec!["sandbox allow-top-navigation", "sandbox allow-scripts"],
+            false,
+            false,
+        ),
+    ] {
+        let policies = policies
+            .into_iter()
+            .map(ContentSecurityPolicy::from)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            content_security_policy_sandbox_allows_top_navigation(&policies, false),
+            without_activation,
+            "{policies:?}"
+        );
+        assert_eq!(
+            content_security_policy_sandbox_allows_top_navigation(&policies, true),
+            with_activation,
+            "{policies:?}"
+        );
+    }
+}

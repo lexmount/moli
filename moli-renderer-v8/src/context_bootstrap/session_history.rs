@@ -416,6 +416,55 @@ pub(super) fn plan_traversal<'s>(
         .plan_traversal(step)
 }
 
+/// Check the initiating Document against every changing live target before
+/// either renderer projection or browser-owned traversal fallback.
+pub(super) fn sandbox_allows_traversal_plan<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &mut JsContextHost,
+    owner: v8::Local<'s, v8::Object>,
+    plan: &SessionHistoryTraversalPlan,
+    popup: Option<u64>,
+) -> bool {
+    let Some(source) =
+        super::navigation_window::window_task_target_for_runtime_owner(scope, host, owner)
+    else {
+        return false;
+    };
+    let root = popup.map_or(
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup,
+    );
+    for (&context, entry) in plan.target_entries() {
+        let Some(target_owner) = owner_for_context(scope, host, context, popup) else {
+            continue;
+        };
+        let is_current = window_history_for_holder(scope, target_owner).is_some_and(|history| {
+            let index = history_index(scope, history);
+            history_entries(scope, history)
+                .and_then(|entries| entries.get(index as usize).cloned())
+                .is_some_and(|current| current.borrow().key == entry.key)
+        });
+        if is_current {
+            continue;
+        }
+        let Some(target) = super::navigation_window::window_task_target_for_runtime_owner(
+            scope,
+            host,
+            target_owner,
+        ) else {
+            return false;
+        };
+        if !host.sandbox_allows_history_traversal(
+            source.dispatch_scope(),
+            target.dispatch_scope(),
+            root,
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
 pub(super) fn project_traversal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -428,6 +477,9 @@ pub(super) fn project_traversal<'s>(
         .get_mut(binding.popup)
         .is_traversal_plan_current(plan)
     {
+        return None;
+    }
+    if !sandbox_allows_traversal_plan(scope, host, owner, plan, binding.popup) {
         return None;
     }
     let entries = plan.target_entries();
