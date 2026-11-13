@@ -131,16 +131,6 @@ struct ServiceWorkerFetchEventDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     default_prevented: bool,
     #[webapi(data_property, enumerable)]
-    handled: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    preload_response: v8::Local<'scope, v8::Promise>,
-    #[webapi(data_property, enumerable)]
-    request: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property, enumerable)]
-    client_id: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    resulting_client_id: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
     is_reload: bool,
     #[webapi(method, enumerable, callback = worker_event_prevent_default_callback)]
     prevent_default: (),
@@ -1341,32 +1331,32 @@ fn new_service_worker_fetch_event<'s>(
     handled: v8::Local<'s, v8::Promise>,
     preload_response: v8::Local<'s, v8::Promise>,
 ) -> v8::Local<'s, v8::Object> {
-    let client_id = v8::String::new(
-        scope,
-        &service_worker_exposed_client_id(event.request.client_id),
-    )
-    .unwrap_or_else(|| v8::String::empty(scope));
+    let client_id = service_worker_exposed_client_id(event.request.client_id);
     let resulting_client_id = event
         .request
         .resulting_client_id
         .map(service_worker_exposed_client_id)
-        .and_then(|client_id| v8::String::new(scope, &client_id))
-        .unwrap_or_else(|| v8::String::empty(scope));
-    ServiceWorkerFetchEventDeclaration {
+        .unwrap_or_default();
+    let object = ServiceWorkerFetchEventDeclaration {
         r#type: v8::String::new(scope, "fetch").unwrap(),
         default_prevented: false,
-        handled,
-        preload_response,
-        request,
-        client_id,
-        resulting_client_id,
         is_reload: event.request.is_reload,
         prevent_default: (),
         wait_until: (),
         respond_with: (),
     }
     .bind(scope)
-    .expect("service worker fetch event declaration should bind")
+    .expect("service worker fetch event declaration should bind");
+    super::super::global_scope::initialize_native_fetch_event(
+        scope,
+        object,
+        request,
+        handled,
+        preload_response,
+        &client_id,
+        &resulting_client_id,
+    );
+    object
 }
 
 fn new_service_worker_preload_response_promise<'s>(
@@ -2418,7 +2408,7 @@ fn service_worker_wait_until_settled_for_event(
     }
 }
 
-fn service_worker_respond_with_callback<'s>(
+pub(in crate::worker) fn service_worker_respond_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,

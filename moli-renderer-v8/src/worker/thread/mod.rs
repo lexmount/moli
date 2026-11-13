@@ -45,6 +45,7 @@ mod runtime_inspector;
 
 pub(crate) use dispatch::dispatch_current_worker_callback_exception;
 pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
+pub(in crate::worker) use dispatch::service_worker_respond_with_callback;
 
 use super::networking_tasks::WorkerNetworkingTaskQueue;
 use dispatch::{
