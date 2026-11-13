@@ -1174,7 +1174,7 @@ fn materialized_legacy_performance_timing_uses_integer_milliseconds() {
         .expect("initial legacy PerformanceTiming probe should evaluate");
     assert_eq!(
         before,
-        r#"{"timeOrigin":1700000000000.75,"navigationStart":1700000000000,"allInteger":true}"#
+        r#"{"timeOrigin":1700000000000.7,"navigationStart":1700000000000,"allInteger":true}"#
     );
 
     vm.dispatch_document_lifecycle_event("DOMContentLoaded")
@@ -1254,7 +1254,7 @@ fn lazily_materialized_legacy_performance_timing_uses_integer_milliseconds() {
         .expect("lazy legacy PerformanceTiming probe should evaluate");
     assert_eq!(
         result,
-        r#"{"timeOrigin":1700000000000.75,"navigationStart":1700000000000,"allInteger":true,"legacyLoadEndInteger":true,"navigationHighResolution":true,"withinIntegerQuantization":true}"#
+        r#"{"timeOrigin":1700000000000.7,"navigationStart":1700000000000,"allInteger":true,"legacyLoadEndInteger":true,"navigationHighResolution":true,"withinIntegerQuantization":true}"#
     );
 }
 

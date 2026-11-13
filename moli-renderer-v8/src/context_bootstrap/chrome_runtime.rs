@@ -169,7 +169,7 @@ fn chrome_load_times<'s>(
         return;
     };
     let result = v8::Object::new(scope);
-    let start_seconds = timing.time_origin_millis / 1_000.0;
+    let start_seconds = moli_time::coarsened_dom_time_millis(timing.time_origin_millis) / 1_000.0;
     let finish_document_seconds = completed_epoch_seconds(
         timing.time_origin_millis,
         timing.dom_content_loaded_end_millis,
@@ -237,7 +237,11 @@ fn chrome_csi<'s>(
     let properties = [
         (
             "startE",
-            v8::Number::new(scope, timing.time_origin_millis).into(),
+            v8::Number::new(
+                scope,
+                moli_time::coarsened_dom_time_millis(timing.time_origin_millis),
+            )
+            .into(),
         ),
         ("onloadT", v8::Number::new(scope, onload_millis).into()),
         (
@@ -264,7 +268,7 @@ fn completed_epoch_seconds(time_origin_millis: f64, relative_millis: Option<f64>
 
 fn completed_epoch_millis(time_origin_millis: f64, relative_millis: Option<f64>) -> f64 {
     relative_millis
-        .map(|relative| time_origin_millis + relative)
+        .map(|relative| moli_time::coarsened_dom_time_millis(time_origin_millis) + relative)
         .unwrap_or(0.0)
 }
 
