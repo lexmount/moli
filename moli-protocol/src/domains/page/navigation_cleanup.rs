@@ -33,6 +33,18 @@ impl PreparedNavigationFailureCleanup {
                 ),
             );
         }
+        // The superseded or stopped request ends as aborted, like Chromium.
+        let mut events = Vec::new();
+        let mut progress = network::failed_navigation_progress_gate(
+            conn,
+            &state,
+            moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
+        );
+        network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
+            &mut events,
+            &mut progress,
+        );
+        output.extend_background_events_after_messages(events);
         super::push_superseded_navigation_result(output, &state);
         Self {
             page: None,
