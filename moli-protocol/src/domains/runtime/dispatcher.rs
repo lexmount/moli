@@ -95,9 +95,8 @@ mod node_values;
 mod page_completion;
 mod remote_values;
 pub(crate) use remote_values::{
-    register_devtools_script_result_remote_object,
-    register_devtools_script_result_remote_object_realm,
-    validate_protocol_neutral_runtime_handle_realms,
+    export_devtools_script_result_handles, resolve_protocol_neutral_runtime_handles,
+    validate_protocol_neutral_node_references,
 };
 mod runtime_command_flow;
 pub(crate) use page_completion::{PageRuntimeCommandContinuation, PageRuntimeCompletion};
@@ -1401,18 +1400,6 @@ struct BidiLocalValueDescriptorContext<'a> {
     preload_channel_error: Option<anyhow::Error>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum RuntimeRemoteReferenceKind {
-    Object,
-    Node,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct RuntimeRemoteReference {
-    object_id: String,
-    kind: RuntimeRemoteReferenceKind,
-}
-
 enum BidiWindowRemoteResult {
     TargetWindow,
     Context(DevToolsTargetId),
@@ -1758,15 +1745,6 @@ mod protocol_neutral_tests {
             object_ids.clear();
             super::collect_devtools_remote_object_ids(&deep_value, &mut object_ids);
             assert!(object_ids.is_empty());
-
-            let mut references = Vec::new();
-            super::collect_devtools_remote_references(
-                &json!({ "outer": [{ "type": "node", "sharedId": "NODE-1" }] }),
-                &mut references,
-            );
-            assert_eq!(references.len(), 1);
-            assert_eq!(references[0].object_id, "NODE-1");
-            assert_eq!(references[0].kind, super::RuntimeRemoteReferenceKind::Node);
         });
     }
 

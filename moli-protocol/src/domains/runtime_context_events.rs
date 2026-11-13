@@ -793,45 +793,42 @@ mod tests {
         assert_eq!(message["params"], json!({}));
     }
 
-    #[test]
-    fn runtime_context_destroyed_clears_matching_remote_object_realm() {
-        let mut conn = CdpConnection::new();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-            "BID-runtime-context",
-            "TID-runtime-context",
-        ));
-        conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-            None,
-            vec!["object-realm-1".to_owned()],
-            "realm-1",
-        );
-        conn.register_runtime_remote_object_alias_for_session_owner_with_realm(
-            None,
-            "alias-realm-1".to_owned(),
-            "object-realm-1".to_owned(),
-            "realm-1",
-        );
-        conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-            None,
-            vec!["object-realm-2".to_owned()],
-            "realm-2",
-        );
+    #[tokio::test]
+    async fn runtime_context_destroyed_clears_matching_remote_object_realm() {
+        let mut context = crate::testing::TestContext::new();
+        let mut browser = BrowserContext::new("BID-runtime-context".into());
+        browser.set_active_target_id("TID-runtime-context");
+        context.with_fixture(|conn| conn.install_browser_context_fixture_for_test(browser));
+        context
+            .install_navigation_fixture_for_session_owner("about:blank", None)
+            .await;
+        context.with_fixture(|conn| {
+            let owner = crate::conn::CommandOwnerScope::capture(conn, None);
+            let first = conn
+                .export_bidi_handle(&owner, "object-realm-1".into(), "realm-1")
+                .unwrap();
+            let second = conn
+                .export_bidi_handle(&owner, "object-realm-2".into(), "realm-2")
+                .unwrap();
 
-        super::apply_runtime_context_protocol_event_side_effects(
-            &mut conn,
-            &json!({
-                "method": "Runtime.executionContextDestroyed",
-                "params": {
-                    "executionContextId": 7,
-                    "executionContextUniqueId": "realm-1"
-                }
-            }),
-            None,
-        );
+            super::apply_runtime_context_protocol_event_side_effects(
+                conn,
+                &json!({
+                    "method": "Runtime.executionContextDestroyed",
+                    "params": {
+                        "executionContextId": 7,
+                        "executionContextUniqueId": "realm-1"
+                    }
+                }),
+                None,
+            );
 
-        assert!(!conn.runtime_remote_object_id_known_for_session_owner(None, "object-realm-1"));
-        assert!(!conn.runtime_remote_object_id_known_for_session_owner(None, "alias-realm-1"));
-        assert!(conn.runtime_remote_object_id_known_for_session_owner(None, "object-realm-2"));
+            assert!(conn.resolve_bidi_handle(&owner, &first, None).is_none());
+            assert_eq!(
+                conn.resolve_bidi_handle(&owner, &second, Some("realm-2")),
+                Some("object-realm-2".into())
+            );
+        });
     }
 
     #[test]

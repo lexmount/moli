@@ -579,7 +579,6 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
         if let Some(remote) =
             bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value)
         {
-            workflow.register_node_reference(&owner, &object_id, realm_id, None);
             workflow.register_node_reference(
                 &owner,
                 &object_id,
@@ -607,7 +606,6 @@ pub(super) async fn materialize_bidi_dom_collection_entries_using(
         let Some(object_snapshot) = object_snapshot else {
             continue;
         };
-        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         let Some(shared_id) = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot) else {
             continue;
         };
@@ -663,7 +661,6 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
         .as_ref()
         .map(|shared_id| shared_id.as_str().to_owned())?;
     if let Some(remote) = bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value) {
-        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         workflow.register_node_reference(
             &owner,
             &object_id,
@@ -690,7 +687,6 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
     };
 
     if let Some(object_snapshot) = object_snapshot {
-        workflow.register_node_reference(&owner, &object_id, realm_id, None);
         let shared_id = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot)?;
         register_bidi_node_bindings_for_snapshot_tree_using(
             workflow,
@@ -734,10 +730,10 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
                 return None;
             }
         };
-        workflow.register_node_reference(&owner, &object_id, realm_id, None);
+        let shared_id = workflow.export_node_reference(&owner, &object_id, realm_id)?;
         return Some(json!({
             "type": "node",
-            "sharedId": object_id,
+            "sharedId": shared_id,
             "value": detached_value,
         }));
     }
@@ -756,10 +752,10 @@ pub(super) async fn materialize_devtools_script_deep_serialized_node_remote_valu
                 return None;
             }
         };
-    workflow.register_node_reference(&owner, &object_id, realm_id, None);
+    let shared_id = workflow.export_node_reference(&owner, &object_id, realm_id)?;
     Some(json!({
         "type": "node",
-        "sharedId": object_id,
+        "sharedId": shared_id,
         "value": attribute_value,
     }))
 }

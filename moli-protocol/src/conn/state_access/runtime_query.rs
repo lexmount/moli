@@ -223,13 +223,42 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
-    pub(crate) fn validate_runtime_automation_handles(
+    pub(crate) fn validate_runtime_node_references(
         self,
         owner: &CommandOwnerScope,
         command: &crate::automation::AutomationCommand,
+    ) -> Result<(), crate::automation::DevToolsError> {
+        crate::domains::runtime::validate_protocol_neutral_node_references(
+            self.connection,
+            owner,
+            command,
+        )
+    }
+
+    pub(crate) fn resolve_runtime_node_reference(
+        &self,
+        owner: &CommandOwnerScope,
+        shared_id: &str,
+    ) -> Option<String> {
+        self.connection.bidi_node_alias(owner, shared_id)
+    }
+
+    pub(crate) fn resolve_runtime_handle(
+        &self,
+        owner: &CommandOwnerScope,
+        handle: &str,
+        realm: Option<&str>,
+    ) -> Option<String> {
+        self.connection.resolve_bidi_handle(owner, handle, realm)
+    }
+
+    pub(crate) fn resolve_runtime_automation_handles(
+        self,
+        owner: &CommandOwnerScope,
+        command: &mut crate::automation::AutomationCommand,
         realm: Option<&crate::automation::DevToolsRealmId>,
     ) -> Result<(), crate::automation::DevToolsError> {
-        crate::domains::runtime::validate_protocol_neutral_runtime_handle_realms(
+        crate::domains::runtime::resolve_protocol_neutral_runtime_handles(
             self.connection,
             owner,
             command,
@@ -237,18 +266,13 @@ impl ProtocolWorkflowState<'_> {
         )
     }
 
-    pub(crate) fn register_runtime_script_result(
+    pub(crate) fn export_runtime_script_result(
         self,
         owner: &CommandOwnerScope,
-        result: &crate::automation::AutomationResult,
+        result: &mut crate::automation::AutomationResult,
         realm: Option<&crate::automation::DevToolsRealmId>,
     ) {
-        crate::domains::runtime::register_devtools_script_result_remote_object(
-            self.connection,
-            owner,
-            result,
-        );
-        crate::domains::runtime::register_devtools_script_result_remote_object_realm(
+        crate::domains::runtime::export_devtools_script_result_handles(
             self.connection,
             owner,
             result,
@@ -262,27 +286,21 @@ impl ProtocolWorkflowState<'_> {
         object_id: String,
         realm: Option<crate::automation::DevToolsRealmId>,
         shared_id: Option<String>,
-    ) {
-        let Some(realm) = realm else {
-            return;
-        };
-        self.connection
-            .register_runtime_remote_object_ids_for_owner_with_realm(
+    ) -> Option<String> {
+        let realm = realm?;
+        if let Some(shared_id) = shared_id {
+            self.connection.register_bidi_node_alias(
                 owner,
-                vec![object_id.clone()],
-                realm.as_str(),
+                shared_id.clone(),
+                object_id,
+                realm.as_str().to_owned(),
             );
-        if let Some(shared_id) = shared_id
-            && shared_id != object_id
-            && !crate::automation::is_webdriver_bidi_node_shared_id(&object_id)
-        {
-            self.connection
-                .register_runtime_remote_object_alias_for_owner_with_realm(
-                    owner,
-                    shared_id,
-                    object_id,
-                    realm.as_str(),
-                );
+            Some(shared_id)
+        } else {
+            Some(
+                self.connection
+                    .export_bidi_node_reference(owner, object_id, realm.as_str()),
+            )
         }
     }
     pub(crate) fn runtime_route_candidates(
@@ -361,28 +379,17 @@ impl ProtocolWorkflowState<'_> {
         crate::domains::runtime::runtime_worker_realms(self.connection, route)
     }
 
-    pub(crate) fn runtime_object_matches_realm(
-        &self,
-        owner: &CommandOwnerScope,
-        object_id: &str,
-        realm: Option<&crate::automation::DevToolsRealmId>,
-    ) -> bool {
-        self.connection
-            .runtime_remote_object_id_known_for_owner(owner, object_id)
-            && realm.is_none_or(|realm| {
-                self.connection
-                    .runtime_remote_object_realm_for_owner(owner, object_id)
-                    .is_none_or(|actual| actual == realm.as_str())
-            })
-    }
-
-    pub(crate) fn unregister_runtime_objects(
+    pub(crate) fn disown_runtime_handle(
         self,
         owner: &CommandOwnerScope,
-        objects: Vec<String>,
-    ) {
-        self.connection
-            .unregister_runtime_remote_object_ids_for_owner(owner, &objects);
+        handle: &str,
+        realm: Option<&crate::automation::DevToolsRealmId>,
+    ) -> Option<String> {
+        self.connection.disown_bidi_handle(
+            owner,
+            handle,
+            realm.map(crate::automation::DevToolsRealmId::as_str),
+        )
     }
 
     pub(crate) fn finish_runtime_page_query<T: 'static>(

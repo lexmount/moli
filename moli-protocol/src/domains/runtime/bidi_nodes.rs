@@ -49,7 +49,9 @@ pub(super) async fn bidi_node_snapshot_for_shared_id_using(
         RendererDomBidiNodeBindingResolution::NotFound => {}
     }
     let owner = owner.clone();
-    let object_id = shared_id.to_owned();
+    let object_id = workflow
+        .state(|state| state.resolve_runtime_node_reference(&owner, shared_id))?
+        .unwrap_or_else(|| shared_id.to_owned());
     workflow
         .query(move |state| {
             state.prepare_runtime_object_node_query(&owner, object_id, depth, pierce)

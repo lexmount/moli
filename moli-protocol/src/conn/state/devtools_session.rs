@@ -62,6 +62,7 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) emulation_session_state: DevToolsEmulationSessionState,
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_binding_replay_pending: BTreeSet<(String, Option<String>)>,
+    pub(crate) bidi_handles: crate::conn::bidi_handles::BidiHandles,
     pub(crate) runtime_remote_object_ids: HashSet<String>,
     pub(crate) runtime_remote_object_groups: HashMap<String, String>,
     pub(crate) runtime_remote_object_realms: HashMap<String, String>,
@@ -1011,21 +1012,6 @@ impl DevToolsSessionState {
         }
     }
 
-    pub(crate) fn register_runtime_remote_object_alias_with_realm(
-        &mut self,
-        alias_id: String,
-        object_id: String,
-        realm_id: &str,
-    ) {
-        self.runtime_remote_object_ids.insert(object_id.clone());
-        self.runtime_remote_object_realms
-            .insert(object_id.clone(), realm_id.to_owned());
-        self.runtime_remote_object_aliases
-            .insert(alias_id.clone(), object_id);
-        self.runtime_remote_object_realms
-            .insert(alias_id, realm_id.to_owned());
-    }
-
     pub(crate) fn register_runtime_remote_object_ids_with_group<I>(
         &mut self,
         object_ids: I,
@@ -1078,6 +1064,7 @@ impl DevToolsSessionState {
     }
 
     pub(crate) fn clear_runtime_remote_object_tracking(&mut self) {
+        self.bidi_handles.clear();
         self.runtime_remote_object_ids.clear();
         self.runtime_remote_object_groups.clear();
         self.runtime_remote_object_realms.clear();
@@ -1116,6 +1103,7 @@ impl DevToolsSessionState {
     }
 
     pub(crate) fn clear_runtime_remote_objects_for_realm(&mut self, realm_id: &str) {
+        self.bidi_handles.clear_realm(realm_id);
         let object_ids = self
             .runtime_remote_object_realms
             .iter()
@@ -1138,23 +1126,6 @@ impl DevToolsSessionState {
     pub(crate) fn has_runtime_remote_object_id(&self, object_id: &str) -> bool {
         self.runtime_remote_object_ids.contains(object_id)
             || self.runtime_remote_object_aliases.contains_key(object_id)
-    }
-
-    pub(crate) fn runtime_remote_object_realm(&self, object_id: &str) -> Option<&str> {
-        self.runtime_remote_object_realms
-            .get(object_id)
-            .or_else(|| {
-                self.runtime_remote_object_aliases
-                    .get(object_id)
-                    .and_then(|object_id| self.runtime_remote_object_realms.get(object_id))
-            })
-            .map(String::as_str)
-    }
-
-    pub(crate) fn runtime_remote_object_alias(&self, object_id: &str) -> Option<&str> {
-        self.runtime_remote_object_aliases
-            .get(object_id)
-            .map(String::as_str)
     }
 
     pub(crate) fn take_runtime_remote_object_cleanup_plan(&mut self) -> (Vec<String>, Vec<String>) {

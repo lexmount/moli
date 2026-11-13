@@ -14,9 +14,8 @@ pub(crate) use dispatcher::{
     WorkerBindingReplayCall, finish_binding_dispatch, finish_binding_response,
 };
 pub(crate) use dispatcher::{
-    register_devtools_script_result_remote_object,
-    register_devtools_script_result_remote_object_realm,
-    validate_protocol_neutral_runtime_handle_realms,
+    export_devtools_script_result_handles, resolve_protocol_neutral_runtime_handles,
+    validate_protocol_neutral_node_references,
 };
 mod evaluate;
 mod native;

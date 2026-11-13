@@ -54,6 +54,7 @@ pub(crate) struct DocumentNavigationInProgress;
 mod activity_source;
 mod automation_command;
 mod bidi_channel_work;
+mod bidi_handles;
 mod body_spool;
 mod browser_context;
 mod command_owner_scope;

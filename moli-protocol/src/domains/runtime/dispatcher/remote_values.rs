@@ -54,27 +54,6 @@ pub(super) fn devtools_call_function_remote_object_ids(
     object_ids
 }
 
-pub(super) fn devtools_call_function_remote_references(
-    command: &DevToolsCallFunctionCommand,
-) -> Vec<RuntimeRemoteReference> {
-    let mut references = Vec::new();
-    if let Some(object_id) = command.object_id.as_ref() {
-        references.push(RuntimeRemoteReference {
-            object_id: object_id.as_str().to_owned(),
-            kind: RuntimeRemoteReferenceKind::Object,
-        });
-    }
-    if let Some(this_parameter) = &command.this_parameter {
-        collect_devtools_remote_references(this_parameter, &mut references);
-    }
-    for argument in &command.arguments {
-        collect_devtools_remote_references(argument, &mut references);
-    }
-    references.sort();
-    references.dedup();
-    references
-}
-
 pub(super) fn collect_devtools_remote_object_ids(value: &Value, out: &mut Vec<String>) {
     let mut stack = vec![(value, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
     while let Some((value, remaining_tree_depth)) = stack.pop() {
@@ -90,61 +69,6 @@ pub(super) fn collect_devtools_remote_object_ids(value: &Value, out: &mut Vec<St
                 }
                 if let Some(object_id) = bidi_remote_reference_object_id(map) {
                     out.push(object_id.to_owned());
-                }
-                for child in map.values() {
-                    stack.push((child, next_tree_depth));
-                }
-            }
-            Value::Array(values) => {
-                for child in values {
-                    stack.push((child, next_tree_depth));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
-}
-
-pub(super) fn collect_devtools_remote_references(
-    value: &Value,
-    out: &mut Vec<RuntimeRemoteReference>,
-) {
-    let mut stack = vec![(value, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
-    while let Some((value, remaining_tree_depth)) = stack.pop() {
-        let Some(next_tree_depth) = remaining_tree_depth.checked_sub(1) else {
-            continue;
-        };
-        match value {
-            Value::Object(map) => {
-                let mut found_cdp_remote_reference = false;
-                for key in ["objectId", "promiseObjectId"] {
-                    if let Some(object_id) = map.get(key).and_then(Value::as_str) {
-                        out.push(RuntimeRemoteReference {
-                            object_id: object_id.to_owned(),
-                            kind: RuntimeRemoteReferenceKind::Object,
-                        });
-                        found_cdp_remote_reference = true;
-                    }
-                }
-                if found_cdp_remote_reference {
-                    continue;
-                }
-                if let Some(shared_id) = map.get("sharedId").and_then(Value::as_str) {
-                    out.push(RuntimeRemoteReference {
-                        object_id: shared_id.to_owned(),
-                        kind: if map.get("type").and_then(Value::as_str) == Some("node") {
-                            RuntimeRemoteReferenceKind::Node
-                        } else {
-                            RuntimeRemoteReferenceKind::Object
-                        },
-                    });
-                    continue;
-                } else if let Some(handle) = map.get("handle").and_then(Value::as_str) {
-                    out.push(RuntimeRemoteReference {
-                        object_id: handle.to_owned(),
-                        kind: RuntimeRemoteReferenceKind::Object,
-                    });
-                    continue;
                 }
                 for child in map.values() {
                     stack.push((child, next_tree_depth));
@@ -200,10 +124,49 @@ pub(super) fn devtools_empty_result_from_response(
     Ok(AutomationResult::Empty)
 }
 
-pub(crate) fn validate_protocol_neutral_runtime_handle_realms(
+pub(crate) fn validate_protocol_neutral_node_references(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
     command: &AutomationCommand,
+) -> Result<(), DevToolsError> {
+    let AutomationCommand::CallFunction(command) = command else {
+        return Ok(());
+    };
+    if command.context.protocol != FrontendProtocol::WebDriverBidi {
+        return Ok(());
+    }
+    let mut stack = command
+        .this_parameter
+        .iter()
+        .chain(command.arguments.iter())
+        .collect::<Vec<_>>();
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Object(map) => {
+                if let Some(shared_id) = map.get("sharedId").and_then(Value::as_str) {
+                    if !is_webdriver_bidi_node_shared_id(shared_id)
+                        && conn.bidi_node_alias(owner, shared_id).is_none()
+                    {
+                        return Err(DevToolsError::new(
+                            DevToolsErrorKind::NoSuchNode,
+                            "Could not find node with given id",
+                        ));
+                    }
+                } else if !map.contains_key("handle") {
+                    stack.extend(map.values());
+                }
+            }
+            Value::Array(values) => stack.extend(values.iter()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_protocol_neutral_runtime_handles(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    command: &mut AutomationCommand,
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
     let AutomationCommand::CallFunction(command) = command else {
@@ -212,85 +175,78 @@ pub(crate) fn validate_protocol_neutral_runtime_handle_realms(
     if command.context.protocol != FrontendProtocol::WebDriverBidi {
         return Ok(());
     }
-
-    let references = devtools_call_function_remote_references(command);
-
-    for reference in references {
-        if !conn.runtime_remote_object_id_known_for_owner(owner, &reference.object_id) {
-            return Err(match reference.kind {
-                RuntimeRemoteReferenceKind::Node => DevToolsError::new(
-                    DevToolsErrorKind::NoSuchNode,
-                    "Could not find node with given id",
-                ),
-                RuntimeRemoteReferenceKind::Object => DevToolsError::new(
+    let resolve = |handle: &str| {
+        conn.resolve_bidi_handle(owner, handle, target_realm.map(DevToolsRealmId::as_str))
+            .ok_or_else(|| {
+                DevToolsError::new(
                     DevToolsErrorKind::NoSuchHandle,
                     "Cannot find object with given id",
-                ),
-            });
-        }
-        if reference.kind == RuntimeRemoteReferenceKind::Object
-            && let Some(target_realm) = target_realm
-            && let Some(owner_realm) =
-                conn.runtime_remote_object_realm_for_owner(owner, &reference.object_id)
-            && owner_realm != target_realm.as_str()
-        {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchHandle,
-                "Cannot find object with given id",
-            ));
+                )
+            })
+    };
+    if let Some(handle) = &mut command.object_id {
+        *handle = resolve(handle.as_str())?.into();
+    }
+    let mut stack = command
+        .this_parameter
+        .iter_mut()
+        .chain(command.arguments.iter_mut())
+        .collect::<Vec<_>>();
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Object(map) => {
+                // sharedId resolution is a separate Document/node operation;
+                // it must retain stale-node and cross-realm remapping semantics.
+                if let Some(shared) = map.get_mut("sharedId") {
+                    if let Some(native) = shared
+                        .as_str()
+                        .and_then(|id| conn.bidi_node_alias(owner, id))
+                    {
+                        *shared = Value::String(native);
+                    }
+                    continue;
+                }
+                if let Some(handle) = map.get_mut("handle") {
+                    let Some(id) = handle.as_str() else {
+                        continue;
+                    };
+                    *handle = Value::String(resolve(id)?);
+                } else {
+                    stack.extend(map.values_mut());
+                }
+            }
+            Value::Array(values) => stack.extend(values.iter_mut()),
+            _ => {}
         }
     }
     Ok(())
 }
 
-pub(crate) fn register_devtools_script_result_remote_object_realm(
+pub(crate) fn export_devtools_script_result_handles(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    result: &AutomationResult,
-    realm_id: Option<&DevToolsRealmId>,
+    result: &mut AutomationResult,
+    realm: Option<&DevToolsRealmId>,
 ) {
-    let (AutomationResult::Script(result), Some(realm_id)) = (result, realm_id) else {
+    let Some(value) = devtools_script_result_remote_value_mut(result) else {
         return;
     };
-    let DevToolsScriptResult::Value(value) = result.as_ref() else {
+    let Some(realm) = realm.or(value.realm.as_ref()) else {
         return;
     };
-    let Some(remote_object_id) = value.handle.as_ref().or(value.shared_id.as_ref()) else {
-        return;
-    };
-    if let Some(object_id) =
-        conn.runtime_remote_object_alias_for_owner(owner, remote_object_id.as_str())
+    if value.remote_subtype.as_deref() == Some("node")
+        && let Some(shared) = &mut value.shared_id
+        && !is_webdriver_bidi_node_shared_id(shared.as_str())
     {
-        conn.register_runtime_remote_object_alias_for_owner_with_realm(
-            owner,
-            remote_object_id.as_str().to_owned(),
-            object_id,
-            realm_id.as_str(),
-        );
-        return;
+        *shared = conn
+            .export_bidi_node_reference(owner, shared.as_str().to_owned(), realm.as_str())
+            .into();
     }
-    conn.register_runtime_remote_object_ids_for_owner_with_realm(
-        owner,
-        vec![remote_object_id.as_str().to_owned()],
-        realm_id.as_str(),
-    );
-}
-
-pub(crate) fn register_devtools_script_result_remote_object(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    result: &AutomationResult,
-) {
-    let Some(value) = devtools_script_result_remote_value(result) else {
-        return;
-    };
-    let Some(remote_object_id) = value.handle.as_ref().or(value.shared_id.as_ref()) else {
-        return;
-    };
-    conn.register_runtime_remote_object_ids_from_value_for_owner(
-        owner,
-        &json!({ "objectId": remote_object_id.as_str() }),
-    );
+    if let Some(native) = value.handle.take() {
+        value.handle = conn
+            .export_bidi_handle(owner, native.as_str().to_owned(), realm.as_str())
+            .map(Into::into);
+    }
 }
 
 pub(super) fn materialize_devtools_script_window_remote_value(

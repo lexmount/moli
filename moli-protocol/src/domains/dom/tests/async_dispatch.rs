@@ -75,11 +75,11 @@ async fn native_dom_commands_preserve_remote_object_aliases() {
         .to_owned();
     let owner = ctx.with_fixture(|conn| crate::conn::CommandOwnerScope::capture(conn, None));
     ctx.with_fixture(|conn| {
-        conn.register_runtime_remote_object_alias_for_owner_with_realm(
+        conn.register_bidi_node_alias(
             &owner,
             "native-node-alias".to_owned(),
             object,
-            "alias-realm",
+            "alias-realm".into(),
         )
     });
     ctx.process_async(json!({"id": 9, "method": "DOM.getDocument"}))

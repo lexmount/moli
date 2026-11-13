@@ -298,19 +298,6 @@ impl SharedWorkerTargetState {
         state.register_runtime_remote_object_ids_with_group(object_ids, object_group);
     }
 
-    pub(crate) fn register_runtime_remote_object_alias_with_realm(
-        &mut self,
-        session_id: &str,
-        alias_id: String,
-        object_id: String,
-        realm_id: &str,
-    ) {
-        let Some(state) = self.session_state_mut(session_id) else {
-            return;
-        };
-        state.register_runtime_remote_object_alias_with_realm(alias_id, object_id, realm_id);
-    }
-
     pub(crate) fn unregister_runtime_remote_object_ids(
         &mut self,
         session_id: &str,
@@ -383,24 +370,6 @@ impl SharedWorkerTargetState {
         self.sessions
             .values()
             .any(|session| session.devtools.has_runtime_remote_object_id(object_id))
-    }
-
-    pub(crate) fn runtime_remote_object_realm(
-        &self,
-        session_id: &str,
-        object_id: &str,
-    ) -> Option<&str> {
-        self.session_state(session_id)?
-            .runtime_remote_object_realm(object_id)
-    }
-
-    pub(crate) fn runtime_remote_object_alias(
-        &self,
-        session_id: &str,
-        object_id: &str,
-    ) -> Option<&str> {
-        self.session_state(session_id)?
-            .runtime_remote_object_alias(object_id)
     }
 
     pub(crate) fn take_runtime_remote_object_cleanup_plan(
@@ -743,11 +712,14 @@ impl SharedWorkerTargetState {
             .unwrap_or_default()
     }
 
-    fn session_state(&self, session_id: &str) -> Option<&DevToolsSessionState> {
+    pub(crate) fn session_state(&self, session_id: &str) -> Option<&DevToolsSessionState> {
         self.sessions.get(session_id).map(|state| &state.devtools)
     }
 
-    fn session_state_mut(&mut self, session_id: &str) -> Option<&mut DevToolsSessionState> {
+    pub(crate) fn session_state_mut(
+        &mut self,
+        session_id: &str,
+    ) -> Option<&mut DevToolsSessionState> {
         self.sessions
             .get_mut(session_id)
             .map(|state| &mut state.devtools)
