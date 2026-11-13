@@ -2870,7 +2870,7 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
             name => panic!("unexpected popup name {name}"),
         }
     }
-    let mut child = child_page.unwrap();
+    let _child = child_page.unwrap();
     let mut sibling = sibling_page.unwrap();
     assert_eq!(
         evaluate_window_name_probe(
@@ -2889,8 +2889,10 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
             .len(),
         targets.len()
     );
+    // Observe the close through the sibling's retained reference. The closing
+    // child's own transport may retire before its final evaluation replies.
     assert_eq!(
-        evaluate_window_name_probe(&mut child, 2, "close(); 'closed'").await,
+        evaluate_window_name_probe(&mut sibling, 3, "other.close(); 'closed'").await,
         "closed"
     );
     wait_for_target_list(addr, "shared child target closed", |current| {
@@ -2898,7 +2900,7 @@ async fn named_popup_references_from_sibling_pages_share_the_close_lifetime() {
     })
     .await;
     assert_eq!(
-        evaluate_window_name_probe(&mut sibling, 3, "other.closed").await,
+        evaluate_window_name_probe(&mut sibling, 4, "other.closed").await,
         true
     );
     assert_eq!(

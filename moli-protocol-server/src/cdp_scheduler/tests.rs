@@ -95,6 +95,54 @@ fn navigation_wait_maps_only_observable_document_milestones() {
     assert_eq!(devtools_navigation_lifecycle_milestone(None), None);
 }
 
+#[tokio::test]
+async fn dialog_handling_reaches_its_owner_during_pending_document_admission() {
+    let mut conn = CdpConnection::new();
+    let navigation = arm_background_navigation_request(&mut conn, "LOADER-dialog-control");
+    let target = navigation.target_id().to_owned();
+    let (mut scheduler, protocol_work_completion_rx) = CdpScheduler::new(conn);
+    let mut receivers = super::CdpSchedulerEventReceivers {
+        state_events_ready: Default::default(),
+        protocol_work_completion_rx,
+        document_activity_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
+        background_event_rx: tokio::sync::mpsc::unbounded_channel().1,
+        background_navigation_completion_rx: tokio::sync::mpsc::unbounded_channel().1,
+        renderer_publication_rx: moli_core::renderer_output_transport_channel().1,
+    };
+    let (ready, _ready_rx) = tokio::sync::mpsc::unbounded_channel();
+    let command = AutomationCommand::HandleJavaScriptDialog(
+        moli_protocol::automation::DevToolsHandleJavaScriptDialogCommand {
+            context: AutomationContext {
+                protocol: FrontendProtocol::WebDriverBidi,
+                session_id: None,
+                target_id: Some(target.clone().into()),
+                browser_context_id: None,
+            },
+            accept: true,
+            prompt_text: Some(String::new()),
+        },
+    );
+    let progress = scheduler
+        .start_owned_automation_command_progress(&mut receivers, &ready, command, None)
+        .await
+        .expect("handling an existing dialog must not wait for a replacement Document");
+    let super::AutomationCommandProgress::Complete(execution) = progress else {
+        panic!("dialog handling is a finite owner operation");
+    };
+    assert_eq!(
+        execution.result.unwrap_err().kind,
+        moli_protocol::automation::DevToolsErrorKind::NoSuchAlert,
+        "the real handler must check the target's dialog even while navigation is pending"
+    );
+    assert!(
+        scheduler
+            .state
+            .with_state(|state| state.has_inflight_background_navigation_for_target(&target))
+            .unwrap()
+    );
+    assert!(!navigation.is_cancelled());
+}
+
 fn navigation_started_automation_event() -> AutomationEvent {
     AutomationEvent::NavigationFrame(NavigationFrameEvent {
         target_id: DevToolsTargetId::from("TID-output"),
