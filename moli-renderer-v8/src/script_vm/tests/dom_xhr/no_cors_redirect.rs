@@ -20,7 +20,11 @@ async fn check_no_cors_redirect_before_interception(worker: bool) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm =
         new_page_task_executor_test_vm_with_loader("https://redirect-filter.test/page", &loader);
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Fetch,
+        ),
+    );
     let probe = r#"(async () => {
       const url = 'https://remote.redirect-filter.test/response';
       const assert = (value, label) => { if (!value) throw new Error(label); };

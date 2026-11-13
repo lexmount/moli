@@ -1041,11 +1041,8 @@ impl PageVm {
             RendererPageCommand::PendingSubresourceRequestCount => {
                 Ok(RendererPageReply::Usize(self.pending_subresource_request_count()))
             }
-            RendererPageCommand::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            } => {
-                self.set_fetch_subresource_interception(enabled, resource_type);
+            RendererPageCommand::SetFetchSubresourceInterception { classes } => {
+                self.set_fetch_subresource_interception(classes);
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::ReplaceBrowserResourceRuntime {

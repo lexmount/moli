@@ -189,7 +189,11 @@ xhr.open('GET','/old');xhr.send();
 #[test]
 fn window_xhr_open_retires_intercepted_request_without_abort_events() {
     let mut vm = new_storage_test_vm("https://xhr-reopen-intercept.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Xhr,
+        ),
+    );
     vm.eval(r#"
 globalThis.events=[];globalThis.xhr=new XMLHttpRequest();
 for (const type of ['abort','error','load','loadend']) xhr.addEventListener(type,()=>events.push(type));

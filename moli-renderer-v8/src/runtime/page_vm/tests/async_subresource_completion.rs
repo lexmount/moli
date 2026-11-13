@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 use crate::{
     page_resource_completion::{
@@ -13,9 +14,9 @@ use crate::{
 };
 
 fn register_intercepted_fetch(page_vm: &mut PageVm, request_url: &Url) -> u64 {
-    page_vm
-        .vm_mut()
-        .set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+    page_vm.vm_mut().set_fetch_subresource_interception(
+        SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+    );
     page_vm
         .vm_mut()
         .eval(&format!(
@@ -197,9 +198,9 @@ async fn selected_streaming_chunk_settles_reader_reaction_at_its_own_task_end() 
         let request_url = Url::parse("https://example.com/typed-stream-checkpoint").unwrap();
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
-        page_vm
-            .vm_mut()
-            .set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+        page_vm.vm_mut().set_fetch_subresource_interception(
+            SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+        );
         page_vm.vm_mut().eval(&format!(
             r#"
 globalThis.__typedStreamState = "pending";

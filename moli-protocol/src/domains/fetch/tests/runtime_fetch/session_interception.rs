@@ -1946,7 +1946,7 @@ async fn unmatched_substring_pattern_keeps_synchronous_xhr_on_the_network_path()
         .count();
     assert_eq!(
         paused, 0,
-        "synchronous XHR interception is unsupported, so the send must not pause: {:?}",
+        "an unmatched synchronous XHR must not publish a Fetch pause: {:?}",
         ctx.sent
     );
     // Bind the lifecycle assertions to the trap request itself so a fixture
@@ -2538,5 +2538,82 @@ async fn popup_synchronous_xhr_does_not_inherit_parent_interception() {
         1,
         "only the popup reaches /api/data"
     );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn heterogeneous_fetch_enable_patterns_keep_synchronous_xhr_on_the_network_path() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn api() -> impl IntoResponse {
+        ([(CONTENT_TYPE.as_str(), "text/plain")], "sync-xhr-body")
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/api", get(api)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    enable_runtime_async(&mut ctx, "SID-1", 38_500).await;
+    ctx.process_async(json!({
+        "id": 38_501,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Image" },
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Media" },
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Font" }
+            ]
+        }
+    }))
+    .await;
+    ctx.expect_result(38_501, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 38_502,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', '/api', false);
+  let error = null;
+  try { xhr.send(); } catch (caught) { error = caught && caught.name; }
+  return JSON.stringify({ error, status: xhr.status, text: xhr.responseText });
+})()"#
+        }
+    }))
+    .await;
+    let observed = take_response_by_id(&mut ctx, 38_502);
+    assert_eq!(
+        observed["result"]["result"]["value"],
+        json!(r#"{"error":null,"status":200,"text":"sync-xhr-body"}"#),
+        "synchronous XHR must keep its ordinary network path when its class is outside the pattern set"
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != "Fetch.requestPaused"),
+        "unmatched synchronous XHR must not pause: {:?}",
+        ctx.sent
+    );
+
     server.abort();
 }

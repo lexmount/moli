@@ -26,7 +26,7 @@ use crate::{
         context_bootstrap::{
             SharedStorageBucketStore, SharedWebStorageStore, WeakIndexedDbManager,
         },
-        types::SubresourceResourceType,
+        types::{SubresourceInterceptionClasses, SubresourceResourceType},
     },
 };
 use dom::ElementState as StyloElementState;
@@ -2749,20 +2749,18 @@ impl PageScriptHost {
 
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
+        classes: SubresourceInterceptionClasses,
     ) {
         if let Some(loader) = self.current_main_document_resource_loader() {
             loader
                 .request_client()
                 .page_network_policy()
-                .set_subresource_interception(enabled, resource_type);
+                .set_subresource_interception(classes);
         }
-        self.fetch_subresource_interception_enabled = enabled;
-        self.fetch_subresource_interception_resource_type = resource_type;
+        self.fetch_subresource_interception_classes = classes;
         for worker in self.workers.values() {
             if let super::workers::WorkerExecutionState::Running { handle } = &worker.execution {
-                handle.set_fetch_subresource_interception(enabled, resource_type);
+                handle.set_fetch_subresource_interception(classes);
             }
         }
     }
@@ -2771,12 +2769,9 @@ impl PageScriptHost {
         &self,
         resource_type: SubresourceResourceType,
     ) -> bool {
-        let fallback = self.fetch_subresource_interception_enabled
-            && self
-                .fetch_subresource_interception_resource_type
-                .is_none_or(|expected| {
-                    expected.has_same_cdp_fetch_interception_type(resource_type)
-                });
+        let fallback = self
+            .fetch_subresource_interception_classes
+            .intercepts(resource_type);
         self.current_main_document_resource_loader()
             .map_or(fallback, |loader| {
                 loader
@@ -2786,20 +2781,8 @@ impl PageScriptHost {
             })
     }
 
-    pub(crate) fn fetch_subresource_interception_enabled(&self) -> bool {
-        self.subresource_interception_config().0
-    }
-
-    pub(crate) fn fetch_subresource_interception_resource_type(
-        &self,
-    ) -> Option<SubresourceResourceType> {
-        self.subresource_interception_config().1
-    }
-    fn subresource_interception_config(&self) -> (bool, Option<SubresourceResourceType>) {
-        let fallback = (
-            self.fetch_subresource_interception_enabled,
-            self.fetch_subresource_interception_resource_type,
-        );
+    pub(crate) fn fetch_subresource_interception_classes(&self) -> SubresourceInterceptionClasses {
+        let fallback = self.fetch_subresource_interception_classes;
         self.current_main_document_resource_loader()
             .map_or(fallback, |loader| {
                 loader

@@ -180,7 +180,7 @@ pub use fetch_support::{
     PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
     PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
     PendingSubresourceFetchResponseStageChain, ResponseStageUrlMatchPolicy,
-    fetch_subresource_interception_config, fetch_subresource_interception_config_for_patterns,
+    fetch_subresource_interception_config_for_patterns,
 };
 pub use moli_protocol_cdp::{
     CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,

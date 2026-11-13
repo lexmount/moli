@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 use crate::{
     PendingSubresourceContinueOutcome, RendererPageCommand, RendererPageReply,
     RendererSetDocumentContentResult, types::PendingSubresourceContinueEvent,
@@ -201,9 +202,9 @@ new MutationObserver(records => {
 async fn fetch_interception_command_completes_window_reactions_without_runtime_drain() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
-        page_vm
-            .vm_mut()
-            .set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+        page_vm.vm_mut().set_fetch_subresource_interception(
+            SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+        );
         page_vm.vm_mut().eval(
             r#"
 globalThis.__fetchCommandState = "pending";
@@ -268,9 +269,9 @@ Promise.resolve().then(() => __fetchCommandCheckpoint += 1);
 async fn offline_fetch_continue_publishes_completed_after_window_command_checkpoint() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
-        page_vm
-            .vm_mut()
-            .set_fetch_subresource_interception(true, Some(SubresourceResourceType::Fetch));
+        page_vm.vm_mut().set_fetch_subresource_interception(
+            SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+        );
         page_vm.vm_mut().eval(
             r#"
 globalThis.__offlineContinueState = "pending";

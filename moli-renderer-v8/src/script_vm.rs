@@ -681,7 +681,10 @@ use super::{
         RendererPageContextCancelSender, RendererPageDiagnosticsSnapshot,
         RendererRuntimeObservableSourceQueue, renderer_page_context_cancel_channel,
     },
-    types::{JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceResourceType},
+    types::{
+        JsValueSnapshot, ScriptKind, ScriptMode, ScriptSourceKind, SubresourceInterceptionClasses,
+        SubresourceResourceType,
+    },
     util::v8_string,
 };
 

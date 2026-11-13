@@ -6,7 +6,7 @@ use crate::{
         RendererInspectorSessionRestoreSnapshot, RendererMainDocumentCommit,
         RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
         RendererPendingDownloadActivation, RuntimeBindingRegistration,
-        RuntimeIsolatedWorldDefinition, SubresourceAuthCredentials, SubresourceResourceType,
+        RuntimeIsolatedWorldDefinition, SubresourceAuthCredentials, SubresourceInterceptionClasses,
         ViewportSurface,
     },
     renderer::ExternalRawDocumentBodyStream,
@@ -58,8 +58,7 @@ struct DocumentPageLoadOptions {
     pub viewport_surface: Option<ViewportSurface>,
     pub network_offline: bool,
     pub blocked_url_patterns: Vec<String>,
-    pub fetch_subresource_interception_enabled: bool,
-    pub fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+    pub fetch_subresource_interception_classes: SubresourceInterceptionClasses,
 }
 
 /// Explicit resource authority source for a newly committed top-level Document.
@@ -240,7 +239,7 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub bypass_service_worker: bool,
     pub cache_disabled: bool,
     pub blocked_url_patterns: Vec<String>,
-    pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
+    pub fetch_subresource_interception: SubresourceInterceptionClasses,
 }
 
 impl PreparedDocumentPageCommitConfiguration {
@@ -263,8 +262,7 @@ impl PreparedDocumentPageCommitConfiguration {
             bypass_service_worker: self.bypass_service_worker,
             cache_disabled: self.cache_disabled,
             blocked_url_patterns: self.blocked_url_patterns,
-            fetch_subresource_interception_enabled: self.fetch_subresource_interception.0,
-            fetch_subresource_interception_resource_type: self.fetch_subresource_interception.1,
+            fetch_subresource_interception_classes: self.fetch_subresource_interception,
         }
     }
 }
@@ -953,11 +951,10 @@ impl NavigationEngine {
 
     pub fn set_subresource_interception(
         &mut self,
-        enabled: bool,
-        resource_type: Option<crate::page::SubresourceResourceType>,
+        classes: crate::page::SubresourceInterceptionClasses,
     ) {
         self.page_network_policy
-            .set_subresource_interception(enabled, resource_type);
+            .set_subresource_interception(classes);
     }
 
     fn ensure_resource_runtime(
@@ -1427,8 +1424,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<BuiltDocumentPage> {
@@ -1461,8 +1457,7 @@ impl NavigationEngine {
                     viewport_surface,
                     network_offline,
                     blocked_url_patterns,
-                    fetch_subresource_interception_enabled,
-                    fetch_subresource_interception_resource_type,
+                    fetch_subresource_interception_classes,
                 },
             )
             .await?;
@@ -1488,8 +1483,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
     ) -> Result<BuiltDocumentPage> {
         self.build_inline_html_document_page_with_storage_and_inspector_session_restores_best_effort_async(
             storage,
@@ -1505,8 +1499,7 @@ impl NavigationEngine {
             viewport_surface,
             network_offline,
             blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             None,
             None,
         )
@@ -1529,8 +1522,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<BuiltDocumentPage> {
@@ -1553,8 +1545,7 @@ impl NavigationEngine {
             viewport_surface,
             network_offline,
             blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             root_frame_id,
             main_document_commit,
         )
@@ -1587,8 +1578,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<BuiltDocumentPage> {
@@ -1620,8 +1610,7 @@ impl NavigationEngine {
                 viewport_surface,
                 network_offline,
                 blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
             },
         )
         .await
@@ -1650,8 +1639,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<BuiltDocumentPage> {
@@ -1681,8 +1669,7 @@ impl NavigationEngine {
             viewport_surface,
             network_offline,
             blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             root_frame_id,
             main_document_commit,
         )
@@ -1723,8 +1710,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
@@ -1766,8 +1752,7 @@ impl NavigationEngine {
                 },
                 network_offline,
                 blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
                 runtime_inspector_session_restore_snapshots,
                 root_frame_id,
                 main_document_commit,
@@ -1800,8 +1785,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
@@ -1833,8 +1817,7 @@ impl NavigationEngine {
             viewport_surface,
             network_offline,
             blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             root_frame_id,
             top_level_storage_key,
             main_document_commit,
@@ -1868,8 +1851,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         stage: PageVmInitStage,
         reply_boundary: moli_renderer_v8::RendererReplyBoundary,
         root_frame_id: Option<String>,
@@ -1926,8 +1908,7 @@ impl NavigationEngine {
                     },
                     network_offline,
                     blocked_url_patterns,
-                    fetch_subresource_interception_enabled,
-                    fetch_subresource_interception_resource_type,
+                    fetch_subresource_interception_classes,
                     runtime_inspector_session_restore_snapshots,
                     root_frame_id,
                     main_document_commit,
@@ -1962,8 +1943,7 @@ impl NavigationEngine {
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses,
         stage: PageVmInitStage,
         reply_boundary: moli_renderer_v8::RendererReplyBoundary,
         root_frame_id: Option<String>,
@@ -1998,8 +1978,7 @@ impl NavigationEngine {
             viewport_surface,
             network_offline,
             blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             stage,
             reply_boundary,
             root_frame_id,
@@ -2064,10 +2043,8 @@ impl NavigationEngine {
                     },
                     network_offline: options.network_offline,
                     blocked_url_patterns: options.blocked_url_patterns,
-                    fetch_subresource_interception_enabled: options
-                        .fetch_subresource_interception_enabled,
-                    fetch_subresource_interception_resource_type: options
-                        .fetch_subresource_interception_resource_type,
+                    fetch_subresource_interception_classes: options
+                        .fetch_subresource_interception_classes,
                     runtime_inspector_session_restore_snapshots: options
                         .runtime_inspector_session_restore_snapshots,
                     root_frame_id: options.root_frame_id,

@@ -86,7 +86,11 @@ async fn worker_xhr_json_decodes_utf8_bom_and_preserves_binary_responses() {
 #[test]
 fn streaming_xhr_json_decodes_a_bom_split_across_chunks() {
     let mut vm = new_storage_test_vm("https://xhr-json-stream.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Xhr,
+        ),
+    );
     vm.eval(
         r#"
 globalThis.__jsonStream = new XMLHttpRequest();

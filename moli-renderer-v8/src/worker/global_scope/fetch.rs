@@ -1993,8 +1993,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         extra_http_headers,
         network_offline,
         blocked_url_patterns,
-        fetch_subresource_interception_enabled,
-        fetch_subresource_interception_resource_type,
+        fetch_subresource_interception_classes,
         policy_context,
     ) = {
         let state = state.borrow();
@@ -2008,8 +2007,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.extra_http_headers.clone(),
             state.network_offline,
             state.blocked_url_patterns.clone(),
-            state.subresource_interception_config().0,
-            state.subresource_interception_config().1,
+            state.subresource_interception_config(),
             state.policy_context,
         )
     };
@@ -2162,10 +2160,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
 
     // Local URLs are resolved by the worker fetch task without interception.
     if !matches!(resolved_url.scheme(), "blob" | "data")
-        && fetch_subresource_interception_enabled
-        && fetch_subresource_interception_resource_type.is_none_or(|expected| {
-            expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Fetch)
-        })
+        && fetch_subresource_interception_classes.intercepts(SubresourceResourceType::Fetch)
     {
         let Some(resolver) = v8::PromiseResolver::new(scope) else {
             rv.set_undefined();

@@ -3532,3 +3532,111 @@ fetch('/worker-api')
 
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn heterogeneous_fetch_enable_patterns_keep_worker_synchronous_xhr_on_the_network_path() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>worker sync xhr heterogeneous patterns</body></html>",
+        )
+    }
+
+    async fn worker() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/javascript")],
+            r#"
+const xhr = new XMLHttpRequest();
+xhr.open('GET', '/worker-api', false);
+let error = null;
+try { xhr.send(); } catch (caught) { error = caught && caught.name; }
+postMessage(JSON.stringify({ error, status: xhr.status, text: xhr.responseText }));
+"#,
+        )
+    }
+
+    async fn api() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/plain")],
+            "worker-sync-xhr-body",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/worker.js", get(worker))
+                .route("/worker-api", get(api)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 37_080,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(37_080, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 37_081,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Image" },
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Media" },
+                { "urlPattern": "*", "requestStage": "Request", "resourceType": "Font" }
+            ]
+        }
+    }))
+    .await;
+    ctx.expect_result(37_081, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 37_082).await;
+
+    ctx.process_async(json!({
+        "id": 37_083,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": r#"(() => {
+  globalThis.__lm_worker_sync_xhr_result = "pending";
+  const worker = new Worker('/worker.js');
+  worker.onmessage = event => { globalThis.__lm_worker_sync_xhr_result = event.data; };
+  return "scheduled";
+})()"#
+        }
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 37_083);
+
+    evaluate_until_value_async(
+        &mut ctx,
+        "SID-1",
+        37_084,
+        "globalThis.__lm_worker_sync_xhr_result",
+        &json!(r#"{"error":null,"status":200,"text":"worker-sync-xhr-body"}"#),
+        "worker synchronous XHR must bypass heterogeneous pattern interception",
+    )
+    .await;
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message["method"] != "Fetch.requestPaused"),
+        "unmatched worker synchronous XHR must not pause: {:?}",
+        ctx.sent
+    );
+
+    server.abort();
+}

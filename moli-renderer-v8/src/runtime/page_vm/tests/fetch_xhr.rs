@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 use moli_browser_profile::DEFAULT_SEC_CH_UA_PLATFORM;
 
 fn synchronous_xhr_failure_probe_expression(url: &str) -> String {
@@ -653,7 +654,11 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                 .run(async move {
                     page_vm
                         .vm_mut()
-                        .set_fetch_subresource_interception(interception, None);
+                        .set_fetch_subresource_interception(if interception {
+                            SubresourceInterceptionClasses::ALL
+                        } else {
+                            SubresourceInterceptionClasses::NONE
+                        });
                     page_vm.vm_mut().eval(&script)?;
                     drive_websocket_until_done(
                         &mut page_vm,

@@ -283,11 +283,10 @@ impl ScriptVm {
         &self,
         resource_type: crate::types::SubresourceResourceType,
     ) -> bool {
-        let host = self._context_host.borrow();
-        host.fetch_subresource_interception_enabled()
-            && host
-                .fetch_subresource_interception_resource_type()
-                .is_none_or(|intercepted| intercepted == resource_type)
+        self._context_host
+            .borrow()
+            .fetch_subresource_interception_classes()
+            .intercepts(resource_type)
     }
 
     pub(crate) fn set_viewport_surface(
@@ -409,12 +408,11 @@ impl ScriptVm {
 
     pub(crate) fn set_fetch_subresource_interception(
         &mut self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
+        classes: SubresourceInterceptionClasses,
     ) {
         self._context_host
             .borrow_mut()
-            .set_fetch_subresource_interception(enabled, resource_type);
+            .set_fetch_subresource_interception(classes);
     }
 }
 

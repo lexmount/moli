@@ -40,7 +40,7 @@ use crate::{
             PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
-            StreamingSubresourceFetchState, SubresourceResourceType,
+            StreamingSubresourceFetchState, SubresourceInterceptionClasses,
         },
         util::{
             string_from_utf16_units_lossy, utf16_units, utf16_units_contain_unpaired_surrogate,
@@ -1093,8 +1093,7 @@ pub(crate) struct PageScriptHost {
     focus_change_epoch: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
-    fetch_subresource_interception_enabled: bool,
-    fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
+    fetch_subresource_interception_classes: SubresourceInterceptionClasses,
     active_subresource_requests: usize,
     pending_subresource_fetches: HashMap<u64, PendingSubresourceFetchState>,
     pending_subresource_auths: HashMap<u64, PendingSubresourceAuthState>,

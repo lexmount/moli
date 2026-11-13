@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[test]
 fn parser_document_fragment_face_insertion_dispatches_form_reactions_like_js() {
@@ -1146,8 +1147,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,

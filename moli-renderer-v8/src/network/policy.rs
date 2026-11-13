@@ -7,7 +7,10 @@ use anyhow::{Result, anyhow};
 use moli_fetch::{Request, RequestCacheMode, url_pattern_matches};
 use parking_lot::Mutex;
 
-use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
+use crate::{
+    protocol_types::OptionalResourceFetchMask,
+    types::{SubresourceInterceptionClasses, SubresourceResourceType},
+};
 
 const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 static NEXT_MEMORY_CACHE_PARTITION_ID: AtomicU64 = AtomicU64::new(0);
@@ -92,7 +95,7 @@ impl PageNetworkConditionsState {
 pub struct PageNetworkPolicy {
     state: Arc<Mutex<PageNetworkPolicyState>>,
     network_conditions: Arc<Mutex<PageNetworkConditionsState>>,
-    subresource_interception: Arc<Mutex<Option<(bool, Option<SubresourceResourceType>)>>>,
+    subresource_interception: Arc<Mutex<Option<SubresourceInterceptionClasses>>>,
 }
 
 impl Default for PageNetworkPolicy {
@@ -314,18 +317,14 @@ impl PageNetworkPolicy {
 
     /// Live target eligibility only. Protocol rules and session ordering stay
     /// with their canonical protocol owner, rather than being copied to XHR.
-    pub fn set_subresource_interception(
-        &self,
-        enabled: bool,
-        resource_type: Option<SubresourceResourceType>,
-    ) {
-        *self.subresource_interception.lock() = Some((enabled, resource_type));
+    pub fn set_subresource_interception(&self, classes: SubresourceInterceptionClasses) {
+        *self.subresource_interception.lock() = Some(classes);
     }
 
     pub(crate) fn subresource_interception_config(
         &self,
-        fallback: (bool, Option<SubresourceResourceType>),
-    ) -> (bool, Option<SubresourceResourceType>) {
+        fallback: SubresourceInterceptionClasses,
+    ) -> SubresourceInterceptionClasses {
         self.subresource_interception.lock().unwrap_or(fallback)
     }
 
@@ -336,12 +335,7 @@ impl PageNetworkPolicy {
     ) -> bool {
         self.subresource_interception
             .lock()
-            .map_or(fallback, |(enabled, expected)| {
-                enabled
-                    && expected.is_none_or(|expected| {
-                        expected.has_same_cdp_fetch_interception_type(resource_type)
-                    })
-            })
+            .map_or(fallback, |classes| classes.intercepts(resource_type))
     }
 
     pub fn set_optional_resource_fetch_mask(&self, mask: OptionalResourceFetchMask) {
@@ -539,14 +533,14 @@ mod tests {
         let page = PageNetworkPolicy::default();
         let document = page.isolated_same_page_copy();
         let worker = page.frozen_request_view();
-        page.set_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+        page.set_subresource_interception(SubresourceInterceptionClasses::FETCH_LIKE);
         let target = page.isolated_copy();
         for view in [&page, &document, &worker] {
             assert!(view.should_intercept_subresource(SubresourceResourceType::Xhr, false));
             assert!(!view.should_intercept_subresource(SubresourceResourceType::Image, false));
         }
         assert!(!target.should_intercept_subresource(SubresourceResourceType::Xhr, false));
-        page.set_subresource_interception(false, None);
+        page.set_subresource_interception(SubresourceInterceptionClasses::NONE);
         for view in [&page, &document, &worker] {
             assert!(!view.should_intercept_subresource(SubresourceResourceType::Xhr, true));
         }

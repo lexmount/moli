@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn response_url_getters_exclude_fragments_without_changing_request_urls() {
@@ -1413,10 +1414,7 @@ async fn window_fetch_file_url_rejects_before_interception_or_transport() {
 
         let (observed, pending_count, network_output) = local_executor
             .run(async move {
-                page_vm.vm_mut().set_fetch_subresource_interception(
-                    true,
-                    Some(SubresourceResourceType::Fetch),
-                );
+                page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch));
                 page_vm.vm_mut().eval(
                     r#"
                     (() => {
@@ -2609,10 +2607,7 @@ async fn window_xhr_file_url_rejects_before_interception_or_transport() {
 
         let (observed, pending_count, network_output) = local_executor
             .run(async move {
-                page_vm.vm_mut().set_fetch_subresource_interception(
-                    true,
-                    Some(SubresourceResourceType::Xhr),
-                );
+                page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Xhr));
                 page_vm.vm_mut().eval(
                     r#"
                     (() => {

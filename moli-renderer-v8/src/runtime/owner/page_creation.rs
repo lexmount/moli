@@ -626,8 +626,7 @@ impl RendererOwnerHandle {
         extra_http_headers: moli_fetch::RequestHeaders,
         network_offline: bool,
         blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
+        fetch_subresource_interception_classes: crate::SubresourceInterceptionClasses,
         stage: PageVmInitStage,
     ) -> RendererCreateHtmlPageRequest {
         self.build_create_html_page_request_with_env(
@@ -650,8 +649,7 @@ impl RendererOwnerHandle {
                 extra_http_headers,
                 network_offline,
                 blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
+                fetch_subresource_interception_classes,
                 ..Default::default()
             },
         )
@@ -704,9 +702,7 @@ impl RendererOwnerHandle {
             blocked_url_patterns: options.blocked_url_patterns,
             indexed_db_manager: options.indexed_db_manager,
             storage_bucket_store: options.storage_bucket_store,
-            fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type: options
-                .fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes: options.fetch_subresource_interception_classes,
             layout_configuration,
             wpt_extensions_enabled: false,
             stage,
@@ -765,9 +761,7 @@ impl RendererOwnerHandle {
             blocked_url_patterns: options.blocked_url_patterns,
             indexed_db_manager: options.indexed_db_manager,
             storage_bucket_store: options.storage_bucket_store,
-            fetch_subresource_interception_enabled: options.fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type: options
-                .fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes: options.fetch_subresource_interception_classes,
             layout_configuration,
             wpt_extensions_enabled: false,
             stage,
@@ -835,8 +829,7 @@ impl RendererOwnerHandle {
             blocked_url_patterns,
             indexed_db_manager,
             storage_bucket_store,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes,
             layout_configuration,
             wpt_extensions_enabled,
             stage,
@@ -930,8 +923,7 @@ impl RendererOwnerHandle {
                     blocked_url_patterns,
                     indexed_db_manager,
                     storage_bucket_store,
-                    fetch_subresource_interception_enabled,
-                    fetch_subresource_interception_resource_type,
+                    fetch_subresource_interception_classes,
                     layout_configuration,
                     wpt_extensions_enabled,
                     root_frame_id,

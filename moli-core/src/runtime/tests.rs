@@ -12,7 +12,8 @@ use crate::{
         DocumentNodeClientRectResolution, Page, PendingPageCommand,
         PendingSubresourceContinueOutcome, PendingSubresourceFetchInfo,
         RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
-        RendererRuntimeInspectorMessage, SubresourceResourceType, SubresourceResponseWaitCriteria,
+        RendererRuntimeInspectorMessage, SubresourceInterceptionClasses, SubresourceResourceType,
+        SubresourceResponseWaitCriteria,
     },
     renderer::RendererPageCommand,
     renderer::{PageId, RendererOwnerCommand, RendererOwnerHandle, materialize_page_created_reply},
@@ -280,8 +281,7 @@ async fn page_creation_diagnostics_only_report_materialized_runtime_contexts() -
             Default::default(),
             false,
             Vec::new(),
-            false,
-            None,
+            SubresourceInterceptionClasses::NONE,
             super::PageVmInitStage::Load,
         );
 
@@ -378,8 +378,7 @@ async fn page_creation_diagnostics_fence_initial_runtime_observable_output() -> 
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -1681,8 +1680,7 @@ async fn navigation_engine_keeps_network_runtime_when_web_storage_changes() -> R
             None,
             false,
             Vec::new(),
-            false,
-            None,
+            SubresourceInterceptionClasses::NONE,
         )
         .await?
         .page;
@@ -1715,8 +1713,7 @@ async fn navigation_engine_keeps_network_runtime_when_web_storage_changes() -> R
             None,
             false,
             Vec::new(),
-            false,
-            None,
+            SubresourceInterceptionClasses::NONE,
         )
         .await?
         .page;
@@ -2279,8 +2276,10 @@ async fn networkidle_times_out_while_intercepted_fetch_request_is_paused() -> Re
         )
         .await?;
 
-    page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
-        .await?;
+    page.set_fetch_subresource_interception_async(
+        SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+    )
+    .await?;
     page.evaluate_runtime_expression_async(
         "fetch('/wait-until-data').then(r => r.text()).then(text => { document.body.setAttribute('data-state', text); }); 'scheduled';",
     )
@@ -2317,8 +2316,10 @@ async fn networkidle_recovers_after_continuing_intercepted_fetch_request() -> Re
         )
         .await?;
 
-    page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
-        .await?;
+    page.set_fetch_subresource_interception_async(
+        SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+    )
+    .await?;
     page.evaluate_runtime_expression_async(
         "fetch('/wait-until-data').then(r => r.text()).then(text => { document.body.setAttribute('data-state', text); }); 'scheduled';",
     )
@@ -4010,8 +4011,7 @@ async fn renderer_owner_create_page_command_produces_page() -> Result<()> {
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -4072,8 +4072,7 @@ async fn renderer_owner_created_page_runs_common_page_commands() -> Result<()> {
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5060,8 +5059,7 @@ async fn renderer_owner_created_page_runs_runtime_protocol_commands() -> Result<
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5125,8 +5123,7 @@ async fn renderer_owner_created_page_runs_document_start_commands() -> Result<()
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5305,8 +5302,7 @@ async fn renderer_owner_created_page_runs_input_commands() -> Result<()> {
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5380,8 +5376,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5480,8 +5475,7 @@ async fn renderer_owner_created_page_reports_real_client_rect_for_positioned_nod
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5567,8 +5561,7 @@ async fn renderer_owner_created_page_resolves_backend_node_runtime_object() -> R
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5652,8 +5645,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5787,8 +5779,7 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5901,8 +5892,7 @@ async fn renderer_owner_created_page_runs_subresource_interception_commands() ->
         Default::default(),
         false,
         Vec::new(),
-        false,
-        None,
+        SubresourceInterceptionClasses::NONE,
         super::PageVmInitStage::Load,
     );
 
@@ -5911,8 +5901,10 @@ async fn renderer_owner_created_page_runs_subresource_interception_commands() ->
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
-    page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
-        .await?;
+    page.set_fetch_subresource_interception_async(
+        SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Fetch),
+    )
+    .await?;
     page.evaluate_runtime_expression_async(
         "fetch('/wait-until-data').then(r => r.text()).then(text => { document.body.setAttribute('data-state', text); }); 'scheduled';",
     )

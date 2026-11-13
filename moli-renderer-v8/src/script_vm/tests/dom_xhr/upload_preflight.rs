@@ -91,8 +91,9 @@ async fn xhr_upload_listener_preflight_reaches_transport_in_page_realms() {
                 );
             if mode == "intercept" {
                 vm.set_fetch_subresource_interception(
-                    true,
-                    Some(crate::types::SubresourceResourceType::Xhr),
+                    crate::types::SubresourceInterceptionClasses::for_resource_type(
+                        crate::types::SubresourceResourceType::Xhr,
+                    ),
                 );
             }
             vm.eval(&format!(

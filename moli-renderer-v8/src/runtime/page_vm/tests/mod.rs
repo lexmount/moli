@@ -1,3 +1,4 @@
+use crate::types::SubresourceInterceptionClasses;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -687,8 +688,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,
             storage_bucket_store: None,
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: crate::real_layout_test_policy(),
                 scrollbars_hidden: false,

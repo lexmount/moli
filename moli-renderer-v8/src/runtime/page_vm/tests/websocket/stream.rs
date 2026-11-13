@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 const NATIVE_PROMISE_PROBE: &str =
     include_str!("../../../../script_vm/tests/fixtures/websocket-stream-native-promises.js");
@@ -279,10 +280,7 @@ async fn websocket_stream_pending_write_resolvers_ignore_public_spoofing() {
 
         let events = local_executor
             .run(async move {
-                page_vm.vm_mut().set_fetch_subresource_interception(
-                    true,
-                    Some(SubresourceResourceType::WebSocket),
-                );
+                page_vm.vm_mut().set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::WebSocket));
                 let setup = page_vm.vm_mut().eval(
                     r#"
                     (() => {

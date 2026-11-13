@@ -24,7 +24,7 @@ use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use moli_core::page::RendererServiceWorkerVersionStatus;
 use moli_core::page::{
     BidiPreloadChannelHandoff, Page, RendererInspectorSessionRestoreSnapshot,
-    RendererMainDocumentCommit, RendererPageCreationArtifacts, SubresourceResourceType,
+    RendererMainDocumentCommit, RendererPageCreationArtifacts, SubresourceInterceptionClasses,
 };
 use moli_core::runtime::RendererBrowserContextRuntimeOwnerAccess;
 use moli_fetch::BrowserNavigationRequestKind;
@@ -49,7 +49,7 @@ pub(super) struct TargetSessionOwnerRef<'a> {
 
 type FetchDisableStateWithSubresourceConfig = (
     super::fetch_owner::SessionOwnerPendingFetchState,
-    (bool, Option<SubresourceResourceType>),
+    SubresourceInterceptionClasses,
     bool,
 );
 
@@ -205,8 +205,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) bypass_service_worker: bool,
     pub(crate) cache_disabled: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) fetch_subresource_interception:
-        (bool, Option<moli_core::page::SubresourceResourceType>),
+    pub(crate) fetch_subresource_interception: moli_core::page::SubresourceInterceptionClasses,
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
     session_history_position: Option<moli_session_history::SessionHistoryPosition>,
@@ -490,7 +489,7 @@ impl TargetNavigationLoadInputs {
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception: (false, None),
+            fetch_subresource_interception: SubresourceInterceptionClasses::NONE,
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
             session_history_position: None,
@@ -833,7 +832,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         command_session_id: Option<String>,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
+    ) -> moli_core::page::SubresourceInterceptionClasses {
         let target = self.target_mut();
         target
             .fetch_owner
@@ -848,7 +847,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         handle_auth_requests: bool,
         auth_url_patterns: Vec<String>,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
+    ) -> moli_core::page::SubresourceInterceptionClasses {
         let target = self.target_mut();
         target.fetch_owner.add_network_intercept(
             intercept_id,
@@ -863,7 +862,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) fn remove_network_intercept(
         &mut self,
         intercept_id: &str,
-    ) -> Option<(bool, Option<moli_core::page::SubresourceResourceType>)> {
+    ) -> Option<moli_core::page::SubresourceInterceptionClasses> {
         let target = self.target_mut();
         target
             .fetch_owner
@@ -3238,7 +3237,7 @@ mod tests {
             };
             assert_eq!(
                 owner.configure_fetch(Some("SID-active".to_owned()), true, patterns.clone()),
-                (true, None)
+                SubresourceInterceptionClasses::ALL
             );
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-active".to_owned(),
@@ -3246,7 +3245,7 @@ mod tests {
             ));
             let (pending, subresource_config, page_update_required) =
                 owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"));
-            assert_eq!(subresource_config, (false, None));
+            assert_eq!(subresource_config, SubresourceInterceptionClasses::NONE);
             assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
@@ -3274,7 +3273,7 @@ mod tests {
             };
             assert_eq!(
                 owner.configure_fetch(Some("SID-background".to_owned()), true, patterns),
-                (true, None)
+                SubresourceInterceptionClasses::ALL
             );
             assert!(owner.register_pending_subresource_fetch_request(
                 "FETCH-background".to_owned(),
@@ -3282,7 +3281,7 @@ mod tests {
             ));
             let (pending, subresource_config, page_update_required) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
-            assert_eq!(subresource_config, (false, None));
+            assert_eq!(subresource_config, SubresourceInterceptionClasses::NONE);
             assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
@@ -3742,7 +3741,10 @@ mod tests {
         assert_eq!(inputs.emulated_media.media.as_deref(), Some("print"));
         assert!(inputs.network_offline);
         assert_eq!(inputs.blocked_url_patterns, vec!["*.blocked.test"]);
-        assert_eq!(inputs.fetch_subresource_interception, (true, None));
+        assert_eq!(
+            inputs.fetch_subresource_interception,
+            SubresourceInterceptionClasses::ALL
+        );
     }
 
     #[test]
@@ -3840,7 +3842,10 @@ mod tests {
                 .secure_context_type(),
             "Secure"
         );
-        assert_eq!(inputs.fetch_subresource_interception, (true, None));
+        assert_eq!(
+            inputs.fetch_subresource_interception,
+            SubresourceInterceptionClasses::ALL
+        );
     }
 
     #[test]

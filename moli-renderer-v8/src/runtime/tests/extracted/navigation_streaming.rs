@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn external_raw_xml_document_decodes_response_bytes() {
@@ -203,8 +204,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
         })
         .await
         .expect("prepared XML should accept the lifecycle probe");
@@ -291,8 +291,7 @@ async fn streaming_document_start_script_exception_does_not_abort_commit() {
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
         })
         .await
         .expect("prepared document should accept the throwing scripts");
@@ -418,8 +417,7 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
         })
         .await
         .expect("prepared streaming XML should accept live commit configuration");
@@ -870,8 +868,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
         bypass_service_worker: false,
         cache_disabled: false,
         blocked_url_patterns: Vec::new(),
-        fetch_subresource_interception_enabled: false,
-        fetch_subresource_interception_resource_type: None,
+        fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
     };
 
     let permit = prepared.issue_commit_permit();

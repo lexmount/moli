@@ -167,8 +167,7 @@ pub struct RendererDocumentCommandTarget {
 #[derive(Clone, Debug)]
 pub enum RendererPageRequestPolicyUpdate {
     FetchInterception {
-        enabled: bool,
-        resource_type: Option<crate::SubresourceResourceType>,
+        classes: crate::SubresourceInterceptionClasses,
     },
     BlockedUrls(Vec<String>),
 }
@@ -176,13 +175,9 @@ pub enum RendererPageRequestPolicyUpdate {
 impl RendererPageRequestPolicyUpdate {
     pub(super) fn into_command(self) -> RendererPageCommand {
         match self {
-            Self::FetchInterception {
-                enabled,
-                resource_type,
-            } => RendererPageCommand::SetFetchSubresourceInterception {
-                enabled,
-                resource_type,
-            },
+            Self::FetchInterception { classes } => {
+                RendererPageCommand::SetFetchSubresourceInterception { classes }
+            }
             Self::BlockedUrls(patterns) => RendererPageCommand::SetBlockedUrlPatterns(patterns),
         }
     }

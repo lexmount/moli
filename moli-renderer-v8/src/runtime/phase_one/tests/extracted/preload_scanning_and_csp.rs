@@ -393,8 +393,9 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
             );
 
             page_vm.set_fetch_subresource_interception(
-                true,
-                Some(crate::types::SubresourceResourceType::Stylesheet),
+                crate::types::SubresourceInterceptionClasses::for_resource_type(
+                    crate::types::SubresourceResourceType::Stylesheet,
+                ),
             );
             assert_eq!(
                 page_vm.admit_scanned_stylesheet_preload(
@@ -411,8 +412,9 @@ fn scanned_stylesheet_admission_respects_media_and_fetch_interception() {
             );
 
             page_vm.set_fetch_subresource_interception(
-                true,
-                Some(crate::types::SubresourceResourceType::Script),
+                crate::types::SubresourceInterceptionClasses::for_resource_type(
+                    crate::types::SubresourceResourceType::Script,
+                ),
             );
             assert_eq!(
                 page_vm.admit_scanned_stylesheet_preload(
@@ -523,6 +525,31 @@ fn response_csp_defers_script_preloads_to_parser_admission() {
         "an enforced response policy must be evaluated by the parser policy owner before any script request starts"
     );
     assert_eq!(cache.pending_preload_counts_for_test(), (1, 0));
+}
+#[test]
+fn script_preload_admission_follows_the_interception_class_set_exactly() {
+    // Heterogeneous Fetch.enable patterns (Image+Media+Font) must not defer
+    // script preloads to the page owner: the script class is out of scope.
+    let heterogeneous = default_test_page_vm_env_config_with(|env| {
+        env.fetch_subresource_interception_classes =
+            crate::types::SubresourceInterceptionClasses::IMAGE
+                | crate::types::SubresourceInterceptionClasses::MEDIA
+                | crate::types::SubresourceInterceptionClasses::FONT;
+    });
+    assert!(!script_preloads_require_owner_admission(&heterogeneous));
+
+    let script_scoped = default_test_page_vm_env_config_with(|env| {
+        env.fetch_subresource_interception_classes =
+            crate::types::SubresourceInterceptionClasses::SCRIPT;
+    });
+    assert!(script_preloads_require_owner_admission(&script_scoped));
+
+    // Type-less patterns collapse to every class and still defer preloads.
+    let type_less = default_test_page_vm_env_config_with(|env| {
+        env.fetch_subresource_interception_classes =
+            crate::types::SubresourceInterceptionClasses::ALL;
+    });
+    assert!(script_preloads_require_owner_admission(&type_less));
 }
 #[test]
 fn script_disabled_preload_scan_defers_every_script_to_the_page_owner() {

@@ -12,8 +12,9 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
     for streaming in [false, true] {
         let mut vm = new_storage_test_vm("https://xhr-response-headers.test/");
         vm.set_fetch_subresource_interception(
-            true,
-            Some(crate::types::SubresourceResourceType::Xhr),
+            crate::types::SubresourceInterceptionClasses::for_resource_type(
+                crate::types::SubresourceResourceType::Xhr,
+            ),
         );
         vm.eval(&format!(
             "{}\nglobalThis.headerResult = null; xhrResponseHeadersProbe('/response', {}).then(result => {{ headerResult = result; }}, error => {{ headerResult = {{error:String(error.stack || error)}}; }});",

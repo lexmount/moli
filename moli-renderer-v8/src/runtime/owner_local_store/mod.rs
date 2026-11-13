@@ -988,10 +988,8 @@ impl RendererOwnerLocalStore {
                     .loader
                     .set_cache_disabled(configuration.cache_disabled);
                 request.blocked_url_patterns = configuration.blocked_url_patterns;
-                request.fetch_subresource_interception_enabled =
-                    configuration.fetch_subresource_interception_enabled;
-                request.fetch_subresource_interception_resource_type =
-                    configuration.fetch_subresource_interception_resource_type;
+                request.fetch_subresource_interception_classes =
+                    configuration.fetch_subresource_interception_classes;
             }};
         }
         apply_configuration!(&mut residence.request);

@@ -426,10 +426,8 @@ fn shared_worker_constructor_context(
                 network_offline: host.network_offline(),
                 blocked_url_patterns: host.blocked_url_patterns().to_vec(),
                 network_partition_key,
-                fetch_subresource_interception_enabled: host
-                    .fetch_subresource_interception_enabled(),
-                fetch_subresource_interception_resource_type: host
-                    .fetch_subresource_interception_resource_type(),
+                fetch_subresource_interception_classes: host
+                    .fetch_subresource_interception_classes(),
             },
             policy_context,
             storage_key,

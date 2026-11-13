@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 pub(crate) struct OpenedRendererWindow<'s> {
     pub(crate) window_proxy: v8::Local<'s, v8::Object>,
@@ -265,8 +266,7 @@ impl PageScriptHost {
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: self.indexed_db_manager(),
             storage_bucket_store: Some(self.storage_bucket_store()),
-            fetch_subresource_interception_enabled: false,
-            fetch_subresource_interception_resource_type: None,
+            fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
             layout_configuration: Default::default(),
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,

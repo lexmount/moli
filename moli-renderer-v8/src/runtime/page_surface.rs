@@ -5389,8 +5389,7 @@ pub enum RendererPageCommand {
     },
     PendingSubresourceRequestCount,
     SetFetchSubresourceInterception {
-        enabled: bool,
-        resource_type: Option<crate::SubresourceResourceType>,
+        classes: crate::SubresourceInterceptionClasses,
     },
     ReplaceBrowserResourceRuntime {
         resource_runtime: crate::network::BrowserResourceRuntime,

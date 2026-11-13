@@ -107,13 +107,8 @@ impl ResourceInterceptionPause {
 
     /// Releasing an interceptor changes native eligibility immediately. It
     /// must not enqueue a Page policy turn behind another session's pause.
-    pub fn set_target_interception(
-        &self,
-        enabled: bool,
-        resource_type: Option<crate::SubresourceResourceType>,
-    ) {
-        self.target_policy
-            .set_subresource_interception(enabled, resource_type);
+    pub fn set_target_interception(&self, classes: crate::SubresourceInterceptionClasses) {
+        self.target_policy.set_subresource_interception(classes);
     }
 
     /// Adapter for the existing Fetch command surface. Only the exhaustive

@@ -16,13 +16,49 @@ fn bind_native_xhr_output(vm: &mut ScriptVm) {
 }
 
 #[test]
+fn unrelated_classes_do_not_create_a_native_xhr_controller() {
+    use crate::SubresourceInterceptionClasses as Classes;
+
+    let mut vm = new_storage_test_vm("https://xhr-route.test/");
+    vm.set_root_document_lifecycle(RendererDocumentLifecycleJournalHandle::new_initial(
+        PageId::new_for_testing(2729),
+    ));
+    bind_native_xhr_output(&mut vm);
+    vm.set_fetch_subresource_interception(Classes::IMAGE | Classes::MEDIA | Classes::FONT);
+    for owner in [
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup(u64::MAX),
+    ] {
+        assert!(matches!(
+            vm._context_host.borrow_mut().xhr_interception_route(owner),
+            Ok(XhrInterceptionRoute::Ordinary)
+        ));
+    }
+    assert_eq!(vm.take_pending_subresource_fetch_infos().len(), 0);
+
+    vm.set_fetch_subresource_interception(Classes::IMAGE | Classes::FETCH_LIKE);
+    assert!(matches!(
+        vm._context_host
+            .borrow_mut()
+            .xhr_interception_route(OwnerDispatchScope::Top),
+        Ok(XhrInterceptionRoute::Native(_))
+    ));
+    assert!(matches!(
+        vm._context_host
+            .borrow_mut()
+            .xhr_interception_route(OwnerDispatchScope::LightweightPopup(u64::MAX)),
+        Err("XHR interception Document policy is unavailable")
+    ));
+}
+
+#[test]
 fn native_xhr_route_rejects_missing_document_policy_instead_of_network_fallback() {
     let mut vm = new_storage_test_vm("https://xhr-route.test/");
     vm.set_root_document_lifecycle(RendererDocumentLifecycleJournalHandle::new_initial(
         PageId::new_for_testing(2729),
     ));
     bind_native_xhr_output(&mut vm);
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(crate::SubresourceInterceptionClasses::FETCH_LIKE);
     let mut host = vm._context_host.borrow_mut();
     assert!(matches!(
         host.xhr_interception_route(OwnerDispatchScope::Top),
@@ -39,7 +75,7 @@ fn native_xhr_route_rejects_missing_document_policy_instead_of_network_fallback(
 fn native_xhr_route_rejects_missing_document_identity() {
     let mut vm = new_storage_test_vm_without_page_residence("https://xhr-route.test/");
     bind_native_xhr_output(&mut vm);
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(crate::SubresourceInterceptionClasses::FETCH_LIKE);
     assert!(matches!(
         vm._context_host
             .borrow_mut()
@@ -51,7 +87,7 @@ fn native_xhr_route_rejects_missing_document_identity() {
 #[test]
 fn standalone_xhr_uses_explicit_async_compatibility_without_network_dispatch() {
     let mut vm = new_storage_test_vm("https://xhr-route.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Xhr));
+    vm.set_fetch_subresource_interception(crate::SubresourceInterceptionClasses::FETCH_LIKE);
     assert!(matches!(
         vm._context_host
             .borrow_mut()

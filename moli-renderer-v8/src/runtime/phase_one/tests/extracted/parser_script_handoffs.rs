@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[test]
 fn main_parser_blocking_completion_dispatches_load_before_later_inline_script() {
@@ -352,8 +353,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -476,8 +476,7 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -610,8 +609,7 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -779,8 +777,7 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -1094,8 +1091,7 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
@@ -1259,8 +1255,7 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                     blocked_url_patterns: Vec::new(),
                 indexed_db_manager: None,
             storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
+                    fetch_subresource_interception_classes: SubresourceInterceptionClasses::NONE,
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,

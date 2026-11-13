@@ -512,8 +512,9 @@ async fn csp_report_fetch_pause_continue_preserves_service_worker_dispatch() {
     .await;
 
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     vm.eval(
         r#"
@@ -690,8 +691,9 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
     .await;
 
     vm.set_fetch_subresource_interception(
-        true,
-        Some(crate::types::SubresourceResourceType::CspReport),
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::CspReport,
+        ),
     );
     vm.eval(
         r#"

@@ -1,5 +1,6 @@
 // Tests grouped by behavior. Shared fixtures live in the parent module.
 use super::*;
+use crate::types::SubresourceInterceptionClasses;
 
 #[tokio::test]
 async fn worker_filelist_interface_object_is_available() {
@@ -308,7 +309,9 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
             ..WorkerNetworkPolicy::default()
         },
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -387,7 +390,9 @@ async fn worker_sync_xhr_request_stage_interception_reports_explicit_failure() {
         "http://example.test/worker/main.js".into(),
         ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader"),
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let mut post = None;
@@ -462,7 +467,9 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -755,7 +762,9 @@ async fn worker_xhr_response_stage_continue_preserves_large_spooled_body() {
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -826,7 +835,9 @@ async fn worker_xhr_auth_required_then_continue_with_auth_resolves() {
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -912,7 +923,9 @@ async fn worker_xhr_auth_required_then_fail_errors_without_exposing_challenge_bo
         format!("{base_url}/worker/main.js"),
         loader,
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let pending = timeout(TIMEOUT, handle.recv())
@@ -1143,7 +1156,9 @@ async fn worker_xhr_upload_listener_preflight_survives_sync_and_interception() {
             loader,
         );
         if mode == "intercept" {
-            handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+            handle.set_fetch_subresource_interception(
+                SubresourceInterceptionClasses::for_resource_type(SubresourceResourceType::Xhr),
+            );
         }
         handle.post_message(serialize_test_string("go"));
         if mode == "intercept" {
@@ -1462,7 +1477,9 @@ async fn worker_xmlhttprequest_file_url_rejects_before_interception_or_transport
         "https://example.test/worker/main.js".into(),
         worker_test_request_client(),
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let mut post = None;
@@ -1529,7 +1546,9 @@ async fn synchronous_worker_xhr_file_url_throws_network_error_without_progress_e
         "https://example.test/worker/main.js".into(),
         worker_test_request_client(),
     );
-    handle.set_fetch_subresource_interception(true, Some(SubresourceResourceType::Xhr));
+    handle.set_fetch_subresource_interception(SubresourceInterceptionClasses::for_resource_type(
+        SubresourceResourceType::Xhr,
+    ));
     handle.post_message(serialize_test_string("go"));
 
     let mut post = None;

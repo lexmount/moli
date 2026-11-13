@@ -501,7 +501,11 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
 #[tokio::test(flavor = "current_thread")]
 async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_sender() {
     let mut vm = new_storage_test_vm("https://child-owner-beacon.test/");
-    vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Ping));
+    vm.set_fetch_subresource_interception(
+        crate::types::SubresourceInterceptionClasses::for_resource_type(
+            crate::types::SubresourceResourceType::Ping,
+        ),
+    );
     vm.eval(
         r#"
         (() => {

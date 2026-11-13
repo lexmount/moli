@@ -237,6 +237,113 @@ async def run_fetch_font_group(
         for action in ("continue", "fail"):
             await _verify_css_resource_interception(browser, fixture, results, action, resource_type)
 
+    for owner in ("window", "worker"):
+        await _verify_heterogeneous_sync_xhr(browser, fixture, results, owner)
+
+
+async def _verify_heterogeneous_sync_xhr(
+    browser: Any,
+    fixture: str,
+    results: list[dict[str, Any]],
+    owner: str,
+) -> None:
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        cdp = await new_cdp_session(context, page)
+        with attach_cdp_event_collector(cdp, [
+            "Fetch.requestPaused", "Network.requestWillBeSent",
+            "Network.loadingFinished", "Network.loadingFailed",
+        ]) as events:
+            await cdp.send("Network.enable")
+            # This URL matches the Font pattern, but the XHR class is outside
+            # the candidate set. It must not require a native interception
+            # controller followed by a protocol-side automatic continuation.
+            await cdp.send("Fetch.enable", {"patterns": [
+                {"urlPattern": "*fetch-font.woff2*", "resourceType": "Font"},
+                {"urlPattern": "*chromium-resource-image.png*", "resourceType": "Image"},
+                {"urlPattern": "*sample-audio.wav*", "resourceType": "Media"},
+            ]})
+            await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
+            case = f"heterogeneous-sync-xhr-{owner}"
+            xhr_url = f"{fixture}/fetch-font.woff2?case={case}"
+            expected = (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()
+            observed = await page.evaluate("""({url, owner}) => {
+              const send = (url, binary = false) => {
+                const xhr = new XMLHttpRequest(); xhr.open('GET', url, false);
+                if (binary) xhr.responseType = 'arraybuffer';
+                let error = null;
+                try { xhr.send(); } catch (caught) { error = caught && caught.name; }
+                const result = { error, status: xhr.status,
+                  nonempty: binary ? xhr.response.byteLength > 0 : xhr.responseText.length > 0 };
+                if (binary) result.body = btoa(String.fromCharCode(...new Uint8Array(xhr.response)));
+                return result;
+              };
+              if (owner === 'window') return send(url);
+              return new Promise((resolve, reject) => {
+                const script = 'onmessage = ({data}) => postMessage((' + send.toString() + ')(data, true))';
+                const blob = URL.createObjectURL(new Blob([script], {type: 'text/javascript'}));
+                const worker = new Worker(blob);
+                worker.onmessage = ({data}) => {
+                  worker.terminate(); URL.revokeObjectURL(blob); resolve(data);
+                };
+                worker.onerror = event => {
+                  worker.terminate(); URL.revokeObjectURL(blob); reject(new Error(event.message));
+                };
+                worker.postMessage(url);
+              });
+            }""", {"url": xhr_url, "owner": owner})
+            if owner == "worker":
+                assert_equal(base64.b64decode(observed.pop("body"), validate=True), expected,
+                             "Worker out-of-class XHR preserves binary bytes")
+            assert_equal(observed, {"error": None, "status": 200, "nonempty": True},
+                         "heterogeneous patterns synchronous XHR outcome")
+            xhr_pauses = [event["params"] for event in events
+                          if event["method"] == "Fetch.requestPaused"
+                          and event["params"]["request"]["url"] == xhr_url]
+            assert_equal(xhr_pauses, [], "synchronous XHR must not pause outside its class")
+            # Chromium publishes Worker Network events on the Worker target,
+            # not this Page session. Worker byte fidelity is checked above.
+            if owner == "window":
+                await wait_until(lambda: any(event["method"] == "Network.requestWillBeSent"
+                                             and event["params"]["request"]["url"] == xhr_url
+                                             for event in events), "out-of-class XHR request")
+                requests = [event["params"]["requestId"] for event in events
+                            if event["method"] == "Network.requestWillBeSent"
+                            and event["params"]["request"]["url"] == xhr_url]
+                assert_equal(len(requests), 1, "out-of-class XHR has one Network request")
+                request_id = requests[0]
+
+                def terminals() -> list[dict[str, Any]]:
+                    return [event for event in events
+                            if event["method"] in ("Network.loadingFinished", "Network.loadingFailed")
+                            and event["params"]["requestId"] == request_id]
+
+                await wait_until(lambda: len(terminals()) > 0, "out-of-class XHR terminal")
+                assert_equal([event["method"] for event in terminals()], ["Network.loadingFinished"],
+                             "out-of-class XHR has exactly one successful terminal")
+                body = await cdp.send("Network.getResponseBody", {"requestId": request_id})
+                decoded = (base64.b64decode(body["body"], validate=True)
+                           if body.get("base64Encoded") else body["body"].encode())
+                expected = (REPO_ROOT / "moli-layout/tests/fixtures/moli-ahem.woff2").read_bytes()
+                assert_equal(decoded, expected, "out-of-class XHR preserves binary bytes")
+            counts = await page.evaluate("url => fetch(url).then(response => response.json())",
+                                         f"{fixture}/fetch-font/status?case={case}")
+            assert_equal(counts["requests"], 1, "out-of-class XHR reaches the server once")
+            record_contract(
+                results,
+                f"fetch_font_heterogeneous_sync_xhr_{owner}",
+                contract=("Mixed Font/Image/Media patterns keep synchronous XHR on its ordinary "
+                          "network path: exact binary body, no requestPaused, one server hit "
+                          "and, for Window, one correlated Network terminal."),
+                source="Executable Chromium CDP oracle; resource-class admission regression",
+                commands=(["Fetch.enable", "Network.getResponseBody"] if owner == "window"
+                          else ["Fetch.enable"]),
+                observed=observed,
+            )
+    finally:
+        await context.close()
+
 
 async def _verify_css_resource_interception(
     browser: Any, fixture: str, results: list[dict[str, Any]], action: str, resource_type: str,

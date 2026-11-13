@@ -1435,9 +1435,7 @@ impl PageVm {
             blocked_url_patterns: self.blocked_url_patterns.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),
             storage_bucket_store: self.storage_bucket_store.clone(),
-            fetch_subresource_interception_enabled: self.fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type: self
-                .fetch_subresource_interception_resource_type,
+            fetch_subresource_interception_classes: self.fetch_subresource_interception_classes,
             layout_configuration: self.layout_configuration,
             wpt_extensions_enabled: self.wpt_extensions_enabled,
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
