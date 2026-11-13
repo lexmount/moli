@@ -19,6 +19,13 @@ async fn fixture() -> (TestContext, String, tokio::task::JoinHandle<()>) {
 }
 
 async fn fixture_with_path(page_path: &str) -> (TestContext, String, tokio::task::JoinHandle<()>) {
+    fixture_with_userinfo(page_path, "").await
+}
+
+async fn fixture_with_userinfo(
+    page_path: &str,
+    userinfo: &str,
+) -> (TestContext, String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -57,7 +64,13 @@ async fn fixture_with_path(page_path: &str) -> (TestContext, String, tokio::task
     });
     let origin = format!("http://{addr}");
     let mut ctx = TestContext::new();
-    with_loaded_http_document(&mut ctx, &format!("{origin}{page_path}"), "SID-1", "TID-1").await;
+    with_loaded_http_document(
+        &mut ctx,
+        &format!("http://{userinfo}{addr}{page_path}"),
+        "SID-1",
+        "TID-1",
+    )
+    .await;
     enable_runtime_async(&mut ctx, "SID-1", 41_000).await;
     command(&mut ctx, 41_001, "Network.enable", json!({})).await;
     command(&mut ctx, 41_002, "Fetch.enable", json!({})).await;
@@ -261,38 +274,84 @@ async fn fulfilled_window_fetch_redirect_limit_is_shared_across_pauses() {
 #[tokio::test(flavor = "multi_thread")]
 async fn fulfilled_window_fetch_redirect_keeps_original_abort_signal() {
     let (mut ctx, origin, server) = fixture().await;
-    command(&mut ctx, 44_000, "Runtime.evaluate", json!({"expression":
-        "globalThis.controller = new AbortController(); globalThis.redirectResult = fetch('/start', {signal:controller.signal}).then(() => 'unexpected response', e => e); 'started'"
-    })).await;
-    let first = wait_for_request_paused(&mut ctx, &format!("{origin}/start"), "abort source").await;
-    command(
-        &mut ctx,
-        44_001,
-        "Fetch.fulfillRequest",
-        json!({
-            "requestId":first["params"]["requestId"],"responseCode":302,
-            "responseHeaders":[{"name":"Location","value":"/next"}],
-        }),
-    )
-    .await;
-    wait_for_request_paused(&mut ctx, &format!("{origin}/next"), "abort next hop").await;
-    command(
-        &mut ctx,
-        44_002,
-        "Runtime.evaluate",
-        json!({"expression":"controller.abort('original reason'); 'aborted'"}),
-    )
-    .await;
-    let result = command(
-        &mut ctx,
-        44_003,
-        "Runtime.evaluate",
-        json!({
-            "expression":"redirectResult","awaitPromise":true,"returnByValue":true,
-        }),
-    )
-    .await;
-    assert_eq!(result["result"]["result"]["value"], "original reason");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let received = std::sync::Arc::new(tokio::sync::Notify::new());
+    let pending_request_received = received.clone();
+    let pending_server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/pending",
+                get(move || {
+                    let received = pending_request_received.clone();
+                    async move {
+                        received.notify_one();
+                        std::future::pending::<&'static str>().await
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    for (index, continue_to_network) in [false, true].into_iter().enumerate() {
+        let id = 44_000 + index as u64 * 10;
+        let source = format!("{origin}/abort-source-{index}");
+        let target = format!("http://{addr}/pending?case={index}");
+        command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.controller = new AbortController(); globalThis.redirectResult = fetch({source:?}, {{signal:controller.signal}}).then(() => 'unexpected response', e => e); 'started'"
+        )})).await;
+        let first = wait_for_request_paused(&mut ctx, &source, "abort source").await;
+        command(
+            &mut ctx,
+            id + 1,
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId":first["params"]["requestId"],"responseCode":302,
+                "responseHeaders":[{"name":"Location","value":target}],
+            }),
+        )
+        .await;
+        let next = wait_for_request_paused(&mut ctx, &target, "abort next hop").await;
+        if continue_to_network {
+            command(
+                &mut ctx,
+                id + 2,
+                "Fetch.continueRequest",
+                json!({"requestId":next["params"]["requestId"]}),
+            )
+            .await;
+            tokio::time::timeout(std::time::Duration::from_secs(10), received.notified())
+                .await
+                .expect("redirect target reached the network before cancellation");
+        }
+        command(
+            &mut ctx,
+            id + 3,
+            "Runtime.evaluate",
+            json!({"expression":"controller.abort('original reason'); 'aborted'"}),
+        )
+        .await;
+        let result = command(
+            &mut ctx,
+            id + 4,
+            "Runtime.evaluate",
+            json!({
+                "expression":format!(
+                    "(async () => ({{reason:await redirectResult,sourceEntries:performance.getEntriesByName({source:?}).filter(e => e.initiatorType === 'fetch').length,targetEntries:performance.getEntriesByName({target:?}).filter(e => e.initiatorType === 'fetch').length}}))()"
+                ),
+                "awaitPromise":true,"returnByValue":true,
+            }),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            json!({"reason":"original reason","sourceEntries":1,"targetEntries":0}),
+            "continued to network: {continue_to_network}"
+        );
+    }
+    pending_server.abort();
     server.abort();
 }
 
@@ -366,6 +425,13 @@ async fn fulfilled_window_fetch_redirect_rejects_disallowed_targets() {
             "cors",
             origin.replace("http://", "http://user:password@") + "/credentials",
         ),
+        (
+            "cors",
+            origin
+                .replace("127.0.0.1", "localhost")
+                .replace("http://", "http://user:password@")
+                + "/foreign-credentials",
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -397,6 +463,100 @@ async fn fulfilled_window_fetch_redirect_rejects_disallowed_targets() {
         .await;
         assert_eq!(result["result"]["result"]["value"], "TypeError");
     }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fulfilled_window_fetch_redirect_allows_matching_document_credentials() {
+    let (mut ctx, origin, server) = fixture_with_userinfo("/page", "user:password@").await;
+    let target = origin.replace("http://", "http://user:password@") + "/credentials";
+    for (index, mode) in ["cors", "same-origin", "no-cors"].into_iter().enumerate() {
+        let id = 49_000 + index as u64 * 10;
+        let source = format!("{origin}/credentials-source-{index}");
+        // An absolute, credentialless URL avoids Request constructor rejection
+        // while retaining the embedding document's inherited credentials.
+        command(&mut ctx, id, "Runtime.evaluate", json!({"expression":format!(
+            "globalThis.redirectResult = fetch({source:?}, {{mode:{mode:?}}}).then(async r => ({{status:r.status,url:r.url,redirected:r.redirected,body:await r.text()}})); 'started'"
+        )})).await;
+        let first = wait_for_request_paused(&mut ctx, &source, "credentialless source").await;
+        command(
+            &mut ctx,
+            id + 1,
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId":first["params"]["requestId"],"responseCode":302,
+                "responseHeaders":[{"name":"Location","value":target}],
+            }),
+        )
+        .await;
+        let next = wait_for_request_paused(&mut ctx, &target, "inherited credentials").await;
+        command(
+            &mut ctx,
+            id + 2,
+            "Fetch.fulfillRequest",
+            json!({"requestId":next["params"]["requestId"],"responseCode":200,"body":"b2s="}),
+        )
+        .await;
+        let result = command(
+            &mut ctx,
+            id + 3,
+            "Runtime.evaluate",
+            json!({"expression":"redirectResult","awaitPromise":true,"returnByValue":true}),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["result"]["value"],
+            json!({"status":200,"url":target,"redirected":true,"body":"ok"}),
+            "mode: {mode}"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fulfilled_window_fetch_redirect_rejects_credentials_after_return_to_origin() {
+    let (mut ctx, origin, server) = fixture_with_userinfo("/page", "user:password@").await;
+    let source = format!("{origin}/credentials-source");
+    let foreign = origin.replace("127.0.0.1", "localhost") + "/cross-origin";
+    let returned = format!("{origin}/returned");
+    let target = origin.replace("http://", "http://user:password@") + "/credentials";
+    command(&mut ctx, 50_000, "Runtime.evaluate", json!({"expression":format!(
+        "globalThis.redirectResult = fetch({source:?}).then(() => 'unexpected response', e => e.name); 'started'"
+    )})).await;
+    for (index, (from, to)) in [
+        (&source, &foreign),
+        (&foreign, &returned),
+        (&returned, &target),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let pause = wait_for_request_paused(&mut ctx, from, "credential redirect hop").await;
+        command(
+            &mut ctx,
+            50_001 + index as u64,
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId":pause["params"]["requestId"],"responseCode":302,
+                "responseHeaders":[
+                    {"name":"Location","value":to},
+                    {"name":"Access-Control-Allow-Origin","value":"*"},
+                ],
+            }),
+        )
+        .await;
+    }
+    let result = command(
+        &mut ctx,
+        50_004,
+        "Runtime.evaluate",
+        json!({"expression":"redirectResult","awaitPromise":true,"returnByValue":true}),
+    )
+    .await;
+    assert_eq!(result["result"]["result"]["value"], "TypeError");
+    assert!(!ctx.sent.iter().any(|message| {
+        message["method"] == "Fetch.requestPaused" && message["params"]["request"]["url"] == target
+    }));
     server.abort();
 }
 
